@@ -1,14 +1,14 @@
 "use client";
 import { Loader } from "lucide-react";
-import { useParams } from "next/navigation";
 import ReactFlowBuilder from "./ReactFlowBuilder";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Paper } from "@mui/material";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 function Builder() {
-  const { apiId } = useParams<{ apiId: string }>();
+  const { apiId } = useCustomParam();
   // const params = useSearchParams();
   // const version = params.get("version");
   const { apiDefinitions, isLoading,getApiDefintion, error: requestError } = useApiDefinitions(apiId);

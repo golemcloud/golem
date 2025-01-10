@@ -3,10 +3,9 @@ import RoutePage from "@/components/api-route-page";
 import DeploymentPage from "@/components/deployment";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Typography, Paper } from "@mui/material";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 export default function Overview() {
-  // const { apiId } = useParams<{ apiId: string }>();
   const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");

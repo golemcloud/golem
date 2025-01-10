@@ -7,7 +7,6 @@ import {
   Stack,
   List,
 } from "@mui/material";
-import { useParams } from "next/navigation";
 import useSWR from "swr";
 import { Code2Icon, Loader, MenuIcon } from "lucide-react";
 import { fetcher } from "@/lib/utils";
@@ -61,7 +60,6 @@ function DeploymentApiVersionDropDown({
 }
 
 export default function Page() {
-  // const { apiId } = useParams<{ apiId: string }>();
   const { apiId } = useCustomParam();
   const [open, setOpen] = useState<boolean>(false);
   

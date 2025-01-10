@@ -2,7 +2,7 @@
 
 import React, {useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { TextField, InputAdornment } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import useComponents from "@/lib/hooks/use-component";
@@ -24,7 +24,6 @@ const statuses = [
 export function StatusFilter() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
 
   // Using useRef to store selectedStatus
@@ -80,7 +79,6 @@ export function StatusFilter() {
 
 export function VersionFilter() {
   const router = useRouter();
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const searchParams = useSearchParams();
   const { components, isLoading } = useComponents(compId);
@@ -161,7 +159,6 @@ interface SearchProps {
 export const Search = ({ placeholder = "Worker Name..." }: SearchProps) => {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const [searchQuery, setSearchQuery] = useState("");
   const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -248,7 +245,6 @@ export function CustomDatePickFilter({label, searchKey}:{
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
 
   // Using useRef to store selectedStatus

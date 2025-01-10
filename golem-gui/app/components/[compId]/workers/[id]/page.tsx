@@ -3,7 +3,6 @@
 import React, { useState } from "react";
 import { Box, Tab, Tabs } from "@mui/material";
 import { useWorker } from "@/lib/hooks/use-worker";
-import { useParams } from "next/navigation";
 import InvokePage from "./invoke";
 import Overview from "./overview";
 import TerminalPage from "./live";
@@ -24,9 +23,7 @@ const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
 
   //TO DO: let show filters in url so that user can share the url to others.
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
-  // const { id: workerName } = useParams<{ id: string }>();
   const { id: workerName } = useCustomParam();
   //  need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { worker, isLoading, error } = useWorker(compId, workerName);

@@ -7,7 +7,7 @@ import { toast } from "react-toastify";
 const ROUTE_PATH = "v1/api/deployments";
 
 export async function addNewApiDeployment(
-  newDploy: ApiDeployment,
+  newDeploy: ApiDeployment,
   path?: string
 ): Promise<{
   success: boolean;
@@ -19,18 +19,23 @@ export async function addNewApiDeployment(
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(newDploy),
+    body: JSON.stringify(newDeploy),
   });
 
   if (error) {
     toast.error("Failed to deploy:" + error);
     return { success: false, error };
   }
-  toast.success("Successfully deployed");
   mutate(`${ROUTE_PATH}`);
+  const apiId = newDeploy?.apiDefinitions[0]?.id
+  if(apiId){
+    mutate(`${ROUTE_PATH}?api-definition-id=${encodeURIComponent(apiId)}`);
+  }
+
   if (path !== ROUTE_PATH) {
     mutate(path);
   }
+  toast.success("Successfully deployed");
   return { success: false, data: data };
 }
 
@@ -38,9 +43,9 @@ function useApiDeployments(defintionId?: string, version?: string | null) {
   defintionId = defintionId;
   let path =
     defintionId && !version
-      ? `${ROUTE_PATH}?api-definition-id=${defintionId}`
+      ? `${ROUTE_PATH}?api-definition-id=${encodeURIComponent(defintionId)}`
       : ROUTE_PATH;
-  path = defintionId && version ? `${path}/${defintionId}/${version}` : path;
+  path = defintionId && version ? `${path}/${encodeURIComponent(defintionId)}/${encodeURIComponent(version)}` : path;
   const { data, isLoading, error } = useSWR(path, fetcher);
 
   const apiDeployments = (

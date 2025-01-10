@@ -1,7 +1,6 @@
 "use client";
 import Sidebar from "@/components/ui/Sidebar";
 import {
-  useParams,
   usePathname,
   useSearchParams,
 } from "next/navigation";

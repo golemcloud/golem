@@ -8,7 +8,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import { useWorkerFind } from "@/lib/hooks/use-worker";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Crosshair, Loader } from "lucide-react";
 import { Worker } from "@/types/api";
 import CreateWorker from "@/components/create-worker";
@@ -24,7 +24,6 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 const WorkerListWithDropdowns = () => {
   const router = useRouter();
   //TO DO: let show filters in url so that user can share the url to others.
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const [open, setOpen] = useState(false);
 

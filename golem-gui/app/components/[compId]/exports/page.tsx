@@ -4,7 +4,6 @@ import React, { useMemo } from "react";
 import GenericTable from "@/components/ui/generic-table";
 import useComponents from "@/lib/hooks/use-component";
 import { ComponentExport } from "@/types/api";
-import { useParams } from "next/navigation";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import { Box } from "@mui/material";
 import ErrorBoundary from "@/components/erro-boundary";
@@ -18,7 +17,6 @@ type DataItem = {
 };
 
 export default function ExportsPage() {
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const { components, error } = useComponents(compId, "latest");
   const [latestComponent] = components;

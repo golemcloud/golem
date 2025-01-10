@@ -7,7 +7,6 @@ import {
 } from "@/lib/hooks/use-worker";
 import { Divider, Paper, Stack, Typography } from "@mui/material";
 import {Button2 as Button} from "@/components/ui/button";
-import { useParams } from "next/navigation";
 import React, { useMemo } from "react";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 

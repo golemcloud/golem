@@ -2,7 +2,6 @@ import useSWR, { mutate } from "swr";
 import { fetcher } from "../utils";
 import { Plugin } from "@/types/api";
 import { toast } from "react-toastify";
-import { useParams } from "next/navigation";
 import { useCustomParam } from "./use-custom-param";
 const PULGIN_PATH = "v1/plugins";
 
@@ -58,7 +57,6 @@ export function useAddPlugin() {
 }
 
 export default function usePlugins() {
-  // const { name, version } = useParams<{ name: string; version: string }>();
   const { name, version } = useCustomParam();
   let path = `${PULGIN_PATH}`;
   path = name ? `${path}/${name}` : path;
