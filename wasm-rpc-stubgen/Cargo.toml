@@ -27,8 +27,8 @@ harness = false
 [dependencies]
 anyhow = { workspace = true }
 blake3 = "1.5.5"
-cargo-component = "=0.13.2"
-cargo-component-core = "=0.13.2"
+cargo-component = "=0.20.0"
+cargo-component-core = "=0.20.0"
 cargo_toml = "0.21.0"
 clap = { workspace = true, features = ["derive"] }
 colored = "2.1.0"

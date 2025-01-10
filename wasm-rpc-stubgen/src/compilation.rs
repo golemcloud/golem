@@ -28,7 +28,8 @@ pub async fn compile(root: &Path, offline: bool) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let config = Config::new(Terminal::new(Verbosity::Verbose, Color::Auto))?;
+    let config = Config::new(Terminal::new(Verbosity::Verbose, Color::Auto), None).await?;
+    let client = config.client(None, offline).await?;
 
     let metadata = load_metadata(cargo_args.manifest_path.as_deref())?;
     let packages =
@@ -40,6 +41,7 @@ pub async fn compile(root: &Path, offline: bool) -> anyhow::Result<()> {
     }
 
     run_cargo_command(
+        client,
         &config,
         &metadata,
         &packages,
