@@ -18,7 +18,7 @@ import { DropdownV2 } from "@/components/ui/dropdown-button";
 
 const WorkerSettings = () => {
   const { compId } = useParams<{ compId: string }>();
-  const { components, error } = useComponents(compId);
+  const { components, error, isLoading } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
   const searchParams = useSearchParams();
   const activeTabFromQuery = Number(searchParams.get("activeTab")) || 0;
@@ -28,8 +28,8 @@ const WorkerSettings = () => {
   const component = components?.[version ?? components?.length - 1];
   const versionedComponentId = component?.versionedComponentId || {};
   useEffect(() => {
-    setVersion(components?.length - 1);
-  }, [components]);
+    setVersion(component?.versionedComponentId?.version ?? null);
+  }, [component]);
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setActiveTab(newValue);
   };
@@ -54,7 +54,7 @@ const WorkerSettings = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
-      {error && <ErrorBoundary message={error} />}
+      {error || (!isLoading && !component) && <ErrorBoundary message={error || "No Component Found!"} />}
       <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <div className="border rounded-b-lg">
@@ -120,7 +120,7 @@ const WorkerSettings = () => {
                             setVersion(Number(value));
                           },
                         }))}
-                        prefix={`v${version}`}
+                        prefix={version ? `v${version}`: ""}
                       />
                       <Button2
                         variant="primary"
@@ -144,7 +144,9 @@ const WorkerSettings = () => {
                       createdAt={component.createdAt}
                     />
                   ) : (
-                    <Typography>Loading component info...</Typography>
+                    <Stack direction="row" justifyContent={"center"}  mt={2}>
+                     <Typography>{isLoading ?"Loading component info..." : "No Component Found"}</Typography>
+                     </Stack>
                   )}
                 </div>
               )}

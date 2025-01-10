@@ -99,19 +99,19 @@ const Overview = () => {
         },
       },
     ];
-  }, [workers]);
+  }, [workers, isLoading, router, compId]);
 
   const stats = useMemo(() => {
     return [
       {
         label: "Latest Component Version",
-        value: error ?  "" : `v${latestComponent?.versionedComponentId?.version}`,
+        value: error ?  "0" : `v${latestComponent?.versionedComponentId?.version}`,
         icon: <InsertChart fontSize="small" />,
-        isLoading: !error && componentDataLoading,
+        isLoading: componentDataLoading,
         handleClick: () => {},
       },
     ];
-  }, [latestComponent]);
+  }, [error, latestComponent?.versionedComponentId?.version, componentDataLoading]);
 
   const exports = useMemo(() => {
     const metaExports = (latestComponent?.metadata?.exports ||
