@@ -50,7 +50,6 @@ export function ComponentSelect({
         render={({ field }) => (
           <Select
             {...field}
-            value={field.value || ""}
             onValueChange={(value) => field.onChange(value)}
             disabled={isLoading || options.length === 0}
           >
@@ -71,9 +70,9 @@ export function ComponentSelect({
                         component ? (
                         <SelectItem
                           key={`${option?.versionedComponentId?.componentId}__${option.versionedComponentId.version}`}
-                          value={option.versionedComponentId.version}
+                          value={`${option.versionedComponentId.version}`}
                         >
-                          {option.versionedComponentId.version}
+                          {`${option.versionedComponentId.version}`}
                         </SelectItem>
                       ) : null;
                     } else if (name === "component") {

@@ -61,7 +61,7 @@ const NewRouteForm = ({
       response: defaultRoute?.binding?.response || "",
       method: defaultRoute?.method || "Get",
       component: defaultRoute?.binding?.componentId.componentId || "",
-      version: defaultRoute?.binding?.componentId.version?.toString() || "",
+      version: defaultRoute?.binding?.componentId.version?.toString() ?? "",
     },
   });
 
@@ -117,6 +117,7 @@ const NewRouteForm = ({
       if (!success) {
         return setError(error!);
       }
+      setError("")
       onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);
