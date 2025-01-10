@@ -17,11 +17,12 @@ import useComponents from "@/lib/hooks/use-component";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import FooterLinks from "@/components/ui/footer-links";
 import Link from "next/link";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const Dashboard = () => {
   const router = useRouter();
-  const { components } = useComponents();
-  const { apiDefinitions } = useApiDefinitions();
+  const { components , error: componentError} = useComponents();
+  const { apiDefinitions, error } = useApiDefinitions();
 
   const buttonData = [
     {
@@ -74,6 +75,7 @@ const Dashboard = () => {
 
   return (
     <main className="container mx-auto flex flex-col gap-8 px-4 py-8 md:px-6 lg:px-8">
+      {(error|| componentError) && <ErrorBoundary message={error|| componentError}/>}
       <Paper
         elevation={2}
         className="border flex flex-col sm:flex-row justify-between items-center p-3 rounded-md gap-3"
