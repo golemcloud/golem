@@ -23,6 +23,8 @@ export default function Editors() {
     setSelectedEdge(null);
   };
 
+
+  console.log("trigger=======>", trigger);
   useEffect(() => {
     (async () => {
       if (trigger && trigger.operation === "download") {
@@ -33,7 +35,7 @@ export default function Editors() {
             break;
           default: //do nothing
         }
-        return setOpen(null);
+        return handleClose();
       }
       setOpen(trigger?.type || null);
     })();
