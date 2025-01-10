@@ -11,14 +11,15 @@ function Builder() {
   const { apiId } = useParams<{ apiId: string }>();
   // const params = useSearchParams();
   // const version = params.get("version");
-  const { apiDefinitions, isLoading, error } = useApiDefinitions(apiId);
+  const { apiDefinitions, isLoading,getApiDefintion, error: requestError } = useApiDefinitions(apiId);
   if (isLoading) {
     return <Loader />;
   }
+  const {error} = (!isLoading && getApiDefintion() || {});
 
   return (
     <Paper>
-      {error && <ErrorBoundary message={error} />}
+      {(error || requestError) && <ErrorBoundary message={requestError || error} />}
       {!isLoading && !error && (
         <ReactFlowProvider>
           <ReactFlowBuilder apiDefnitions={apiDefinitions} />

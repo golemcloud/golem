@@ -12,10 +12,12 @@ const ApiSettings = () => {
   const { apiId} = useParams<{apiId:string}>();
   const params = useSearchParams();
   const version = params.get("version");
-  const { apiDefinitions,error, isLoading } = useApiDefinitions(apiId, version)
-    const [open, setOpen] = useState<boolean>(false);
+  const { apiDefinitions, isLoading, getApiDefintion, error: requestError } = useApiDefinitions(apiId, version)
+
+  const [open, setOpen] = useState<boolean>(false);
   
   const handleClose = ()=>setOpen(false);
+  const {error} = (!isLoading && getApiDefintion() || {});
 
   const actions = [
     {
@@ -37,7 +39,8 @@ const ApiSettings = () => {
 
   return (
     <div>
-      {error && <ErrorBoundary message={error}/>}
+      
+      {(error ||requestError)  && <ErrorBoundary message={requestError || error}/>}
       <DangerZone
         title="API Settings"
         description="Manage your API settings."

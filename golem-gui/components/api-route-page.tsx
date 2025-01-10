@@ -7,15 +7,18 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useState } from "react";
 import CustomModal from "@/components/CustomModal";
 import NewRouteForm from "./new-route";
+import ErrorBoundary from "./erro-boundary";
 
 export function RouteList({
   apiDefintion,
   isLoading,
   limit,
+  error,
 }: {
   apiDefintion?: ApiDefinition;
   isLoading: boolean;
   limit?: number;
+  error?: string | null;
 }) {
   let routes = (apiDefintion?.routes || []) as ApiRoute[];
   routes = limit ? routes.slice(0, limit) : routes;
@@ -34,39 +37,42 @@ export function RouteList({
 
           {isLoading && <Loader className="self-center" />}
         </Stack>
-        {!isLoading && routes.length === 0 ? (
+        {!isLoading && !error && routes.length === 0 ? (
           <Typography variant="body2" className="text-muted-foreground">
             No routes defined for this API version.
           </Typography>
         ) : (
           //TODO: Add pagination List
-          <List className="space-y-4 p-2">
-            {apiDefintion &&
-              routes?.map((route: ApiRoute) => {
-                return (
-                  <Card
-                    key={`${apiDefintion.id}_${apiDefintion.version}_${route.method}_${route.path}`}
-                    className="px-4 py-6 flex border"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setRoute(route);
-                    }}
-                  >
-                    <Typography gutterBottom className="font-bold">
-                      {route.path}
-                    </Typography>
-
-                    <Typography
-                      border={1}
-                      borderRadius={2}
-                      className={"px-4 py-1 text-sm ml-auto self-center"}
+          <>
+            {error && <ErrorBoundary message={error} />}
+            <List className="space-y-4 p-2">
+              {apiDefintion &&
+                routes?.map((route: ApiRoute) => {
+                  return (
+                    <Card
+                      key={`${apiDefintion.id}_${apiDefintion.version}_${route.method}_${route.path}`}
+                      className="px-4 py-6 flex border"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setRoute(route);
+                      }}
                     >
-                      {route.method}
-                    </Typography>
-                  </Card>
-                );
-              })}
-          </List>
+                      <Typography gutterBottom className="font-bold">
+                        {route.path}
+                      </Typography>
+
+                      <Typography
+                        border={1}
+                        borderRadius={2}
+                        className={"px-4 py-1 text-sm ml-auto self-center"}
+                      >
+                        {route.method}
+                      </Typography>
+                    </Card>
+                  );
+                })}
+            </List>
+          </>
         )}
       </Box>
       <>
@@ -95,14 +101,17 @@ export default function RoutePage({
   limit?: number;
 }) {
   //TODO to move this do separate custom hook so that we can resuse.
-  const { isLoading, getApiDefintion } = useApiDefinitions(apiId, version);
-  const { data: apiDefintion } = getApiDefintion();
+  const { isLoading, getApiDefintion, error: requestError } = useApiDefinitions(apiId, version);
+  const { data: apiDefintion, error } = getApiDefintion();
 
   return (
-    <RouteList
-      isLoading={isLoading}
-      apiDefintion={apiDefintion}
-      limit={limit}
-    />
+    <>
+      <RouteList
+        isLoading={isLoading}
+        apiDefintion={apiDefintion}
+        limit={limit}
+        error={requestError || error}
+      />
+    </>
   );
 }
