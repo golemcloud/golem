@@ -13,11 +13,11 @@ import {
 import useSWR from "swr";
 import { fetcher } from "@/lib/utils";
 import { ApiRoute, Component } from "@/types/api";
-import { Loader } from "lucide-react";
+import { Info, Loader } from "lucide-react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { DeleteForever } from "@mui/icons-material";
 import { ComponentSelect } from "./new-route-select";
-import { Button2 } from "./ui/button";
+import { Button2 } from "@/components/ui/button";
 import { PopoverDemo } from "./interpolate-tooltip";
 import {
   InterpolationExpressions,
@@ -61,7 +61,7 @@ const NewRouteForm = ({
       response: defaultRoute?.binding?.response || "",
       method: defaultRoute?.method || "Get",
       component: defaultRoute?.binding?.componentId.componentId || "",
-      version: defaultRoute?.binding?.componentId.version?.toString() ?? "",
+      version: defaultRoute?.binding?.componentId.version?.toString() || "",
     },
   });
 
@@ -117,7 +117,6 @@ const NewRouteForm = ({
       if (!success) {
         return setError(error!);
       }
-      setError("")
       onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);
@@ -313,7 +312,7 @@ const NewRouteForm = ({
           )}
         </Box>
         <div className="mt-5 flex items-center">
-          <PopoverDemo>
+          <PopoverDemo Icon={<Info/>}>
             <InterpolationExpressions />
           </PopoverDemo>
           <p className="text-muted-foreground text-xs">
@@ -345,7 +344,7 @@ const NewRouteForm = ({
           )}
         />
         <div className="mt-5 flex items-center">
-          <PopoverDemo>
+          <PopoverDemo Icon={<Info/>}>
             <Box>
               <Typography variant="body2" gutterBottom>
                 Available Functions

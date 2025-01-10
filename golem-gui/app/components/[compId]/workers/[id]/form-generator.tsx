@@ -29,6 +29,7 @@ import {
 import { transform } from "@/lib/hooks/use-worker";
 import JsonEditor from "@/components/json-editor";
 import { RemoveCircle } from "@mui/icons-material";
+import { RecordDataType } from "@/components/interpolate-tooltip";
 
 type FormData = {
   [key: string]: unknown;
@@ -89,13 +90,17 @@ const generateField = (
   //   | AnalysedType_TypeResult
   //   | AnalysedType_TypeEnum // done but not tested
   //   | AnalysedType_TypeFlags // done but not tested
-  //   | AnalysedType_TypeHandle;
 
   switch (true) {
     case ["Handle"].includes(paramType):
       return (
         <>
-          <Typography>{parameter?.name}</Typography>
+          <Stack direction="row" gap={2} alignItems="center">
+            <Typography variant="body1">{parameter?.name}</Typography>
+            <Typography variant="caption" fontFamily="monospace">
+              {`handle<0, borrowed>`}
+            </Typography>
+          </Stack>
           <Controller
             key={index}
             name={finalRootKey}
@@ -103,7 +108,7 @@ const generateField = (
             render={({ field }) => (
               <TextField
                 {...field}
-                label={parameter.name}
+                size="small"
                 variant="outlined"
                 fullWidth
                 placeholder={parameter.name}
@@ -122,7 +127,12 @@ const generateField = (
     case ["Str", "S8", "S32", "Chr", "S64", "S16"].includes(paramType):
       return (
         <>
-          {/* <Typography>{parameter?.name}</Typography> */}
+          <Stack direction="row" gap={1} alignItems="center">
+            <Typography variant="body1">{parameter?.name}</Typography>
+            <Typography variant="caption" fontFamily="monospace">
+              {paramType.toLowerCase()}
+            </Typography>
+          </Stack>
           <Controller
             key={index}
             name={finalRootKey}
@@ -134,7 +144,7 @@ const generateField = (
               <TextField
                 size="small"
                 {..._field}
-                label={parameter.name}
+                // label={parameter.name}
                 variant="outlined"
                 fullWidth
                 placeholder={parameter.name}
@@ -153,7 +163,12 @@ const generateField = (
     case paramType == "Bool":
       return (
         <>
-          <Typography>{parameter?.name}</Typography>
+          <Stack direction="row" gap={1} alignItems="center">
+            <Typography variant="body1">{parameter?.name}</Typography>
+            <Typography variant="caption" fontFamily="monospace">
+              {paramType.toLowerCase()}
+            </Typography>
+          </Stack>
           <Controller
             key={index}
             name={finalRootKey}
@@ -180,7 +195,12 @@ const generateField = (
     case ["F32", "F64", "U32", "U64", "U16", "U8"].includes(paramType):
       return (
         <>
-          {/* <Typography>{parameter?.name}</Typography> */}
+          <Stack direction="row" gap={1} alignItems="center">
+            <Typography variant="body1">{parameter?.name}</Typography>
+            <Typography variant="caption" fontFamily="monospace">
+              {paramType.toLowerCase()}
+            </Typography>
+          </Stack>
           <Controller
             key={index}
             name={finalRootKey}
@@ -191,7 +211,7 @@ const generateField = (
             render={({ field: _field }) => (
               <TextField
                 {..._field}
-                label={parameter.name}
+                // label={parameter.name}
                 type="number"
                 variant="outlined"
                 className="mt-2"
@@ -215,7 +235,15 @@ const generateField = (
     case paramType === "Record":
       return (
         <>
-          <Typography variant="h6">{parameter.name}</Typography>
+          <Stack direction="row" gap={1} alignItems="center" my={2}>
+            <Typography variant="body1">{parameter?.name}</Typography>
+            <RecordDataType
+            record={parameter.typ?.fields?.reduce((obj, field) => {
+              obj[field.name] = field.typ?.type;
+              return obj;
+            }, {})}
+          />
+          </Stack>
           <Divider className="my-2 bg-border" />
           <Controller
             key={index}
@@ -596,7 +624,7 @@ const DynamicForm: React.FC<{
   useEffect(() => {
     reset(defaultValues || {}); // Reset with fresh default values
     setTab(0); // Reset tab to the initial state
-  }, [config, reset, defaultValues])
+  }, [config, reset, defaultValues]);
 
   const handleChange = (key: string, value: unknown) => {
     setValue(key, value, { shouldDirty: true });
@@ -686,7 +714,7 @@ const DynamicForm: React.FC<{
                     wordBreak: "break-word",
                   }}
                 >
-                  <JsonEditor json={config.length ? getValues(): {}} />
+                  <JsonEditor json={config.length ? getValues() : {}} />
                 </Box>
               </CardContent>
             </Card>
@@ -710,7 +738,12 @@ const DynamicForm: React.FC<{
                   }}
                 >
                   <JsonEditor
-                    json={{ params: transform(config, config.length ? getValues(): {}) }}
+                    json={{
+                      params: transform(
+                        config,
+                        config.length ? getValues() : {}
+                      ),
+                    }}
                   />
                 </Box>
               </CardContent>
@@ -723,3 +756,6 @@ const DynamicForm: React.FC<{
 };
 
 export default DynamicForm;
+
+
+
