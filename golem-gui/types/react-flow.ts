@@ -61,7 +61,7 @@ export type Trigger = {
   id?:string;
   type: string;
   operation: string;
-  meta?: {version: string}
+  meta?: {version: string, route?: ApiRoute}
 } | null
 
 

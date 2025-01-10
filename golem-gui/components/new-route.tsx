@@ -73,7 +73,7 @@ const NewRouteForm = ({
     isLoading: apiDefinitonLoading,
     upsertRoute,
     deleteRoute,
-  } = useApiDefinitions(apiId, version);
+  } = useApiDefinitions(apiId);
   const { error: apiDefintionError } = (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
   const components = (data?.data || null) as Component[];
   const selectedVersion = watch("version");
@@ -123,15 +123,17 @@ const NewRouteForm = ({
     }
   };
 
-  const handleDelete = async () => {
-    await deleteRoute(defaultRoute!);
+  const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const response = await deleteRoute(defaultRoute!, version);
+    console.log("response======>", response, defaultRoute);
     onSuccess?.();
   };
 
   return (
     <Box
       sx={{
-        width: isModal ? "50%" : "100%",
+        width: "100%",
         margin: "auto",
       }}
     >
@@ -147,21 +149,33 @@ const NewRouteForm = ({
       )}
 
       {/* Title */}
-      <Box className="flex justify-between">
-        <Typography variant="h5" gutterBottom>
+      {/* <Box className="flex justify-between">
+        {!isModal &&<Typography variant="h5" gutterBottom>
           {defaultRoute ? "Update" : "New"} Route
-        </Typography>
+        </Typography>}
         {defaultRoute && (
-          <Button onClick={handleDelete}>
+          <Button onClick={handleDelete} className="justify-end">
             <DeleteForever />
           </Button>
         )}
-      </Box>
+      </Box> */}
+      <Box className="flex justify-between items-center">
+  {!isModal && (
+    <Typography variant="h5" gutterBottom>
+      {defaultRoute ? "Update" : "New"} Route
+    </Typography>
+  )}
+  {defaultRoute && (
+    <Button onClick={handleDelete} className="ml-auto">
+      <DeleteForever />
+    </Button>
+  )}
+</Box>
 
-      <Divider sx={{ borderColor: "#555" }} />
+      {!isModal &&<Divider sx={{ borderColor: "#555" }} />}
 
       {/* HTTP Endpoint */}
-      <Box sx={{ marginTop: 4 }}>
+      <Box sx={{ marginTop: isModal  ? 1: 4 }}>
         <Typography variant="subtitle1" gutterBottom>
           HTTP Endpoint
         </Typography>

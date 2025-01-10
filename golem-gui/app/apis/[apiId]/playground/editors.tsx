@@ -9,6 +9,17 @@ import DeleteApiVersion from "@/components/api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { Typography } from "@mui/material";
 import JsonEditor from "@/components/json-editor";
+import DeploymentCreationPage from "@/components/deployment-creation";
+
+const operationMap = {
+  "new_route": "New Route",
+  "new_api": "New Version",
+  "update_api": "Update Api",
+  "delete_api": "Delete Api",
+  "download_api": "Download Api",
+  "update_route": "Update Route",
+  "delete_route": "Delete Route",
+} as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export default function Editors() {
@@ -27,7 +38,7 @@ export default function Editors() {
 
   useEffect(() => {
     (async () => {
-      if (trigger && trigger.operation === "download") {
+      if (trigger && trigger.operation === "download_api") {
         setOpen(trigger?.type || null);
         switch (trigger.type) {
           case "api":
@@ -48,7 +59,7 @@ export default function Editors() {
         onClose={handleClose}
         heading={`${
           trigger?.operation
-            ? trigger.operation.charAt(0).toUpperCase() +
+            ? operationMap[trigger.operation] || trigger.operation.charAt(0).toUpperCase() +
               trigger.operation.slice(1)
             : "Default Operation"
         } ${trigger?.type === "route" ? "Route" : "API"}`}
@@ -61,9 +72,10 @@ export default function Editors() {
                  apiId={apiId}
                  onSuccess={handleClose}
                  version={trigger?.meta?.version}
+                 isModal={true}
                />
               )}
-              {trigger?.operation === "create" && (
+              {trigger?.operation === "new_api" && (
                 <CreateNewApiVersion
                   onSuccess={({ version }: { version: string }) => {
                     handleClose();
@@ -74,7 +86,7 @@ export default function Editors() {
                   noRedirect={true}
                 />
               )}
-              {trigger?.operation === "delete" && (
+              {trigger?.operation === "delete_api" && (
                 <DeleteApiVersion
                   apiId={apiId}
                   version={trigger?.meta?.version}
@@ -82,10 +94,10 @@ export default function Editors() {
                   onSuccess={handleClose}
                 />
               )}
-              {trigger?.operation === "update" && (
+              {trigger?.operation === "download_api" && (
                 <Typography>Downloading....</Typography>
               )}
-              {trigger?.operation === "view" && (
+              {trigger?.operation === "view_api" && (
                 <JsonEditor
                   json={
                     nodes?.find(
@@ -95,40 +107,52 @@ export default function Editors() {
                   }
                 />
               )}
+              {trigger?.operation === "deploy_api" && (
+                <DeploymentCreationPage
+                  apiId={apiId}
+                  version={trigger?.meta?.version}
+                />
+              )}
             </>
           )}
           {trigger?.type === "route" && (
             <>
-              {trigger?.operation === "new_route" && (
-                <NewRouteForm
-                  apiId={apiId}
-                  onSuccess={handleClose}
-                  version={trigger?.meta?.version}
-                  // isExperimental={true}
-                />
+             {trigger?.operation === "new_route" && (
+                 <NewRouteForm
+                 apiId={apiId}
+                 onSuccess={handleClose}
+                 version={trigger?.meta?.version}
+                 isModal={true}
+               />
               )}
-              {trigger?.operation === "delete" && (
+              {trigger?.operation === "delete_route" && (
                 // Chnage it to delete modal. work in progress
                 <NewRouteForm
                   apiId={apiId}
                   onSuccess={handleClose}
-                  isExperimental={true}
+                  defaultRoute={trigger?.meta?.route}
+                  // isExperimental={true}
+                  version={trigger?.meta?.version}
+                  isModal={true}
                 />
               )}
-              {trigger?.operation === "update" && (
+              {trigger?.operation === "update_route" && (
                 // Chnage it to update modal. work in progress
                 <NewRouteForm
                   apiId={apiId}
                   onSuccess={handleClose}
-                  isExperimental={true}
+                  defaultRoute={trigger?.meta?.route}
+                  version={trigger?.meta?.version}
+                  isModal={true}
                 />
               )}
-              {trigger?.operation === "view" && (
+              {trigger?.operation === "view_route" && (
                 // Chnage it to view modal. work in progress
                 <NewRouteForm
                   apiId={apiId}
                   onSuccess={handleClose}
                   isExperimental={true}
+                  isModal={true}
                 />
               )}
             </>

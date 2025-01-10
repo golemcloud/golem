@@ -16,6 +16,7 @@ import {
 } from "@/lib/react-flow/utils";
 import DoneIcon from "@mui/icons-material/Done";
 import { Box, Paper, Stack, Typography, useTheme } from "@mui/material";
+import { ApiRoute } from "@/types/api";
 
 function CustomNode({ id, data }: FlowNode) {
   const { selectedNode, setSelectedNode, errorNode, synced, setTrigger } =
@@ -25,8 +26,10 @@ function CustomNode({ id, data }: FlowNode) {
   const isEmptyNode = !!data?.type?.includes("empty");
   const specialNodeCheck = ["start", "end"].includes(type);
   const Icon = getIconBasedOnType(data);
-  const status = getStatus(data);
   const triggerType = getTriggerType(id);
+  const {apiInfo, ...route} = data;
+
+  const status = getStatus(triggerType === "api" ? data: apiInfo || {});
 
   function handleNodeClick(e: React.MouseEvent<HTMLDivElement>) {
     e.stopPropagation();
@@ -85,7 +88,14 @@ function CustomNode({ id, data }: FlowNode) {
                 if(status!=="Draft"){
                   return alert("Can't perform this operation on published api");
                 }
-                setTrigger({ type: triggerType, operation: triggerType === "api" ? "create": "new_route"});
+                setTrigger({
+                   type: triggerType, operation: triggerType === "api" ? "new_api": "new_route",
+                   meta: {
+                    version: triggerType === "api" ? data.version : apiInfo?.version,
+                    ...(triggerType === "route"? {route: route as ApiRoute}: {})
+                   }
+
+                });
               }}
             >
               <GoPlus size={32} style={{ marginBottom: theme.spacing(1) }} />
