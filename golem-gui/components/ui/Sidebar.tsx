@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
 import Link from "next/link";
-import { usePathname,useRouter } from "next/navigation";
+import { usePathname,useRouter, useSearchParams } from "next/navigation";
 
 type SidebarProps = {
   id: string;
@@ -31,6 +31,8 @@ type NavigationLinks = {
 const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
   const pathname = usePathname();
   const router=useRouter();
+  const params = useSearchParams();
+  const version = params?.get("version");
   return (
     <Box
       sx={{
@@ -106,7 +108,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
       {variant === "apis" && (
         //TODO:for now handling for button. but needs to Link.(don't want to break the ui)
         <Button
-          onClick={(e) =>{e.preventDefault(); router.push(`/apis/${id}/new-route`)}}
+          onClick={(e) =>{e.preventDefault(); router.push(`/apis/${id}/new-route${version? `?version=${version}`: ''}`)}}
           variant="outlined"
           sx={{
             textTransform: "none",

@@ -74,7 +74,7 @@ const NewRouteForm = ({
     upsertRoute,
     deleteRoute,
   } = useApiDefinitions(apiId, version);
-  const { error: apiDefintionError } = getApiDefintion(apiId, version);
+  const { error: apiDefintionError } = (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
   const components = (data?.data || null) as Component[];
   const selectedVersion = watch("version");
 
