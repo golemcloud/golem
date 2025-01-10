@@ -280,6 +280,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rpc: Arc<dyn Rpc + Send + Sync>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
@@ -402,15 +403,9 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         let target_worker_id = owned_target_worker_id.worker_id.clone();
         let account_id = owned_target_worker_id.account_id.clone();
 
-        let source_worker_instance = Worker::get_or_create_suspended::<Self>(
-            &self,
-            &owned_source_worker_id,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await?;
+        let source_worker_instance =
+            Worker::get_or_create_suspended(self, &owned_source_worker_id, None, None, None, None)
+                .await?;
 
         let source_worker_metadata = source_worker_instance.get_metadata().await?;
 
