@@ -4,10 +4,11 @@ import { Box, Typography, Grid2 as Grid, Paper } from "@mui/material";
 import { Folder } from 'lucide-react';
 import { useWorkerFileContent } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
+import ErrorBoundary from "@/components/erro-boundary";
 
 const FileComponent = () => {
   const { compId } = useParams<{ compId: string }>();
-  const { data, isLoading } = useWorkerFileContent(
+  const { data, isLoading, error } = useWorkerFileContent(
     "test",
     compId,
     "file-service.wasm"
@@ -27,6 +28,7 @@ const FileComponent = () => {
             height: "80%",
           }}
         >
+          {error && <ErrorBoundary message={error}/>}
           <Grid
             container
             sx={{

@@ -29,7 +29,7 @@ const WorkerListWithDropdowns = () => {
   const handleClose = () => setOpen(false);
 
   //need to integrate pagination or scroll on lcomponentIdoad needs to implemented or addd show more at the end on click we need to next set of data
-  const { data, isLoading, error, triggerNext } = useWorkerFind(compId, 10);
+  const { data, isLoading, error, triggerNext } = useWorkerFind(compId, 10, true);
   const workers = !isLoading && !error ? data : []
 
   return (
