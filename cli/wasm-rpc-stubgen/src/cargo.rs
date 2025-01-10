@@ -126,7 +126,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
                 &def.source_package_name,
             )),
             target: Some(ComponentTarget {
-                world: Some(def.target_world_name()),
+                world: Some(def.client_world_name()),
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
             }),
@@ -134,7 +134,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     };
 
     let mut package =
-        cargo_toml::Package::new(def.target_crate_name(), &def.config.stub_crate_version);
+        cargo_toml::Package::new(def.client_crate_name(), &def.config.stub_crate_version);
     package.edition = Inheritable::Set(Edition::E2021);
     package.metadata = Some(metadata);
     manifest.package = Some(package);
@@ -209,10 +209,10 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         "Generating",
         format!(
             "Cargo.toml to {}",
-            def.target_cargo_path().log_color_highlight()
+            def.client_cargo_path().log_color_highlight()
         ),
     );
-    fs::write(def.target_cargo_path(), cargo_toml)?;
+    fs::write(def.client_cargo_path(), cargo_toml)?;
     Ok(())
 }
 

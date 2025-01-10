@@ -22,7 +22,9 @@ pub mod text;
 pub mod wave;
 
 use crate::cloud::AccountId;
+use crate::command::{ComponentRefSplit, ComponentRefsSplit};
 use crate::model::text::fmt::TextFormat;
+use crate::oss::model::OssContext;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
@@ -39,7 +41,7 @@ use golem_common::uri::oss::urn::WorkerUrn;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
@@ -51,73 +53,52 @@ use uuid::Uuid;
 
 pub enum GolemResult {
     Ok(Box<dyn PrintRes>),
-    Json(serde_json::value::Value),
+    Json(Value),
     Str(String),
+    Empty,
 }
 
 impl GolemResult {
     pub fn err(s: String) -> Result<GolemResult, GolemError> {
         Err(GolemError(s))
     }
+}
 
-    pub fn print(&self, format: Format) {
+impl PrintRes for GolemResult {
+    fn println(&self, format: Format) {
         match self {
-            GolemResult::Ok(r) => r.println(&format),
-            GolemResult::Str(s) => println!("{s}"),
+            GolemResult::Ok(value) => value.println(format),
             GolemResult::Json(json) => match format {
                 Format::Json | Format::Text => {
                     println!("{}", serde_json::to_string_pretty(&json).unwrap())
                 }
                 Format::Yaml => println!("{}", serde_yaml::to_string(&json).unwrap()),
             },
-        }
-    }
-
-    pub fn as_json_value(&self) -> Value {
-        match self {
-            GolemResult::Ok(r) => r.as_json_value(),
-            GolemResult::Str(s) => Value::String(s.clone()),
-            GolemResult::Json(json) => json.clone(),
-        }
-    }
-
-    pub fn merge(self, other: GolemResult) -> GolemResult {
-        GolemResult::Ok(Box::new(MergedGolemResult {
-            result1: self,
-            result2: other,
-        }))
-    }
-}
-
-struct MergedGolemResult {
-    result1: GolemResult,
-    result2: GolemResult,
-}
-
-impl PrintRes for MergedGolemResult {
-    fn println(&self, format: &Format) {
-        match format {
-            Format::Json => println!(
-                "{}",
-                serde_json::to_string_pretty(&self.as_json_value()).unwrap()
-            ),
-            Format::Yaml => println!("{}", serde_yaml::to_string(&self.as_json_value()).unwrap()),
-            Format::Text => {
-                self.result1.print(*format);
-                println!();
-                self.result2.print(*format);
+            GolemResult::Str(string) => println!("{}", string),
+            GolemResult::Empty => {
+                // NOP
             }
         }
     }
 
-    fn as_json_value(&self) -> Value {
-        json! {[self.result1.as_json_value(), self.result2.as_json_value()]}
+    fn streaming_print(&self, format: Format) {
+        match self {
+            GolemResult::Ok(value) => value.streaming_print(format),
+            GolemResult::Json(json) => match format {
+                Format::Json | Format::Text => {
+                    println!("{}", serde_json::to_string(&json).unwrap())
+                }
+                Format::Yaml => println!("---\n{}", serde_yaml::to_string(&json).unwrap()),
+            },
+            GolemResult::Str(string) => println!("{}", string),
+            GolemResult::Empty => (), // NOP
+        }
     }
 }
 
 pub trait PrintRes {
-    fn println(&self, format: &Format);
-    fn as_json_value(&self) -> serde_json::Value;
+    fn println(&self, format: Format);
+    fn streaming_print(&self, format: Format);
 }
 
 impl<T> PrintRes for T
@@ -125,7 +106,7 @@ where
     T: Serialize,
     T: TextFormat,
 {
-    fn println(&self, format: &Format) {
+    fn println(&self, format: Format) {
         match format {
             Format::Json => println!("{}", serde_json::to_string_pretty(self).unwrap()),
             Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
@@ -133,8 +114,12 @@ where
         }
     }
 
-    fn as_json_value(&self) -> Value {
-        serde_json::to_value(self).unwrap()
+    fn streaming_print(&self, format: Format) {
+        match format {
+            Format::Json => println!("{}", serde_json::to_string(self).unwrap()),
+            Format::Yaml => println!("---\n{}", serde_yaml::to_string(self).unwrap()),
+            Format::Text => self.print(),
+        }
     }
 }
 
@@ -255,25 +240,14 @@ pub trait HasFormatConfig {
 
 impl FromArgMatches for ComponentUriArg {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        ComponentUriOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
+        ComponentUriOrNameArgs::from_arg_matches(matches).map(Into::into)
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        let prc0: ComponentUriOrNameArgs = (&self.clone()).into();
-        let mut prc = prc0.clone();
-        let res = ComponentUriOrNameArgs::update_from_arg_matches(&mut prc, matches);
-        *self = (&prc).into();
-        res
-    }
-}
-
-impl clap::Args for ComponentUriArg {
-    fn augment_args(cmd: clap::Command) -> clap::Command {
-        ComponentUriOrNameArgs::augment_args(cmd)
-    }
-
-    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        ComponentUriOrNameArgs::augment_args_for_update(cmd)
+        let mut args: ComponentUriOrNameArgs = self.clone().into();
+        ComponentUriOrNameArgs::update_from_arg_matches(&mut args, matches).map(|()| {
+            *self = args.into();
+        })
     }
 }
 
@@ -295,34 +269,29 @@ struct ComponentUriOrNameArgs {
     component_name: Option<String>,
 }
 
-impl From<&ComponentUriOrNameArgs> for ComponentUriArg {
-    fn from(value: &ComponentUriOrNameArgs) -> ComponentUriArg {
-        if let Some(uri) = &value.component {
+impl From<ComponentUriOrNameArgs> for ComponentUriArg {
+    fn from(value: ComponentUriOrNameArgs) -> ComponentUriArg {
+        if let Some(uri) = value.component {
             ComponentUriArg {
-                uri: uri.clone(),
+                uri,
                 explicit_name: false,
             }
         } else {
-            let name = value.component_name.as_ref().unwrap().to_string();
-
             ComponentUriArg {
-                uri: ComponentUri::URL(ComponentUrl { name }),
+                uri: ComponentUri::URL(ComponentUrl {
+                    name: value.component_name.unwrap(),
+                }),
                 explicit_name: true,
             }
         }
     }
 }
 
-impl From<&ComponentUriArg> for ComponentUriOrNameArgs {
-    fn from(value: &ComponentUriArg) -> ComponentUriOrNameArgs {
-        let name = if let ComponentUri::URL(url) = &value.uri {
-            if value.explicit_name {
-                Some(&url.name)
-            } else {
-                None
-            }
-        } else {
-            None
+impl From<ComponentUriArg> for ComponentUriOrNameArgs {
+    fn from(value: ComponentUriArg) -> ComponentUriOrNameArgs {
+        let name = match &value.uri {
+            ComponentUri::URL(url) if value.explicit_name => Some(&url.name),
+            _ => None,
         };
 
         match name {
@@ -338,6 +307,87 @@ impl From<&ComponentUriArg> for ComponentUriOrNameArgs {
     }
 }
 
+impl From<ComponentUriOrNamesArgs> for ComponentUrisArg {
+    fn from(value: ComponentUriOrNamesArgs) -> ComponentUrisArg {
+        if let Some(uri) = value.component {
+            ComponentUrisArg {
+                uris: vec![uri],
+                explicit_name: false,
+            }
+        } else {
+            ComponentUrisArg {
+                uris: value
+                    .component_name
+                    .into_iter()
+                    .map(|component_name| {
+                        ComponentUri::URL(ComponentUrl {
+                            name: component_name,
+                        })
+                    })
+                    .collect(),
+                explicit_name: true,
+            }
+        }
+    }
+}
+
+impl From<ComponentUrisArg> for ComponentUriOrNamesArgs {
+    fn from(mut value: ComponentUrisArg) -> ComponentUriOrNamesArgs {
+        if value.explicit_name {
+            ComponentUriOrNamesArgs {
+                component: None,
+                component_name: value
+                    .uris
+                    .into_iter()
+                    .map(|uri| match uri {
+                        ComponentUri::URN(_) => {
+                            panic!("Unexpected URN")
+                        }
+                        ComponentUri::URL(url) => url.name,
+                    })
+                    .collect(),
+            }
+        } else {
+            if value.uris.len() != 1 {
+                panic!("Expected exactly one URI");
+            }
+            ComponentUriOrNamesArgs {
+                component: Some(value.uris.swap_remove(0)),
+                component_name: vec![],
+            }
+        }
+    }
+}
+
+impl FromArgMatches for ComponentUrisArg {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        ComponentUriOrNamesArgs::from_arg_matches(matches).map(Into::into)
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        let mut args: ComponentUriOrNamesArgs = self.clone().into();
+        ComponentUriOrNamesArgs::update_from_arg_matches(&mut args, matches).map(|()| {
+            *self = args.into();
+        })
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct ComponentUriOrNamesArgs {
+    /// Component URI. Either URN or URL.
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "URI",
+        conflicts_with_all = vec!["component_name"],
+    )]
+    component: Option<ComponentUri>,
+
+    /// Name of the component(s). When used with application manifest then multiple ones can be defined.
+    #[arg(short, long)]
+    component_name: Vec<String>,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
 pub struct ComponentName(pub String); // TODO: Validate
 
@@ -345,6 +395,44 @@ pub struct ComponentName(pub String); // TODO: Validate
 pub struct ComponentUriArg {
     pub uri: ComponentUri,
     pub explicit_name: bool,
+}
+
+impl ComponentRefSplit<OssContext> for ComponentUriArg {
+    fn split(self) -> (ComponentUri, Option<OssContext>) {
+        (self.uri, None)
+    }
+}
+
+impl clap::Args for ComponentUriArg {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        ComponentUriOrNameArgs::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        ComponentUriOrNameArgs::augment_args_for_update(cmd)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ComponentUrisArg {
+    pub uris: Vec<ComponentUri>,
+    pub explicit_name: bool,
+}
+
+impl ComponentRefsSplit<OssContext> for ComponentUrisArg {
+    fn split(self) -> Option<(Vec<ComponentUri>, Option<OssContext>)> {
+        Some((self.uris, None))
+    }
+}
+
+impl clap::Args for ComponentUrisArg {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        ComponentUriOrNamesArgs::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        ComponentUriOrNamesArgs::augment_args_for_update(cmd)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, derive_more::Display, derive_more::FromStr)]
@@ -464,7 +552,7 @@ pub struct ApiDefinitionVersion(pub String); // TODO: Validate
 pub struct JsonValueParser;
 
 impl TypedValueParser for JsonValueParser {
-    type Value = serde_json::value::Value;
+    type Value = Value;
 
     fn parse_ref(
         &self,
@@ -474,7 +562,7 @@ impl TypedValueParser for JsonValueParser {
     ) -> Result<Self::Value, Error> {
         let inner = StringValueParser::new();
         let val = inner.parse_ref(cmd, arg, value)?;
-        let parsed = <serde_json::Value as std::str::FromStr>::from_str(&val);
+        let parsed = <Value as FromStr>::from_str(&val);
 
         match parsed {
             Ok(value) => Ok(value),

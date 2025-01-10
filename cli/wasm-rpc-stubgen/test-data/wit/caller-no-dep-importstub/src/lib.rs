@@ -7,7 +7,7 @@ struct Component;
 
 impl Guest for Component {
     fn run() {
-        let _api = crate::bindings::test::main_stub::stub_api::Iface1::new(&Uri { value: "TODO".to_string() });
+        let _api = crate::bindings::test::main_client::api_client::Iface1::new(&Uri { value: "TODO".to_string() });
     }
 }
 

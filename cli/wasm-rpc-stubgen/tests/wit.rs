@@ -17,7 +17,7 @@
 use test_r::test;
 
 use fs_extra::dir::CopyOptions;
-use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
+use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
@@ -33,15 +33,15 @@ fn all_wit_types() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: target_root.path().to_path_buf(),
+        client_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
+    let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -124,15 +124,15 @@ fn many_ways_to_export() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: target_root.path().to_path_buf(),
+        client_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
+    let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:exports-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");

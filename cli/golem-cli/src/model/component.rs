@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -30,6 +31,7 @@ use golem_wasm_ast::analysis::{
 };
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracing::info;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +72,22 @@ impl From<golem_client::model::Component> for Component {
     }
 }
 
+pub enum ComponentUpsertResult {
+    Skipped,
+    Added(Component),
+    Updated(Component),
+}
+
+impl ComponentUpsertResult {
+    pub fn into_component(self) -> Option<Component> {
+        match self {
+            ComponentUpsertResult::Skipped => None,
+            ComponentUpsertResult::Added(component) => Some(component),
+            ComponentUpsertResult::Updated(component) => Some(component),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
@@ -82,6 +100,7 @@ pub struct ComponentView {
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
+    pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl TrimDateTime for ComponentView {
@@ -125,6 +144,23 @@ impl From<&Component> for ComponentView {
                     AnalysedExport::Function(f) => {
                         vec![show_exported_function(None, f)]
                     }
+                })
+                .collect(),
+            dynamic_linking: value
+                .metadata
+                .dynamic_linking
+                .iter()
+                .map(|(name, link)| {
+                    (
+                        name.clone(),
+                        match link {
+                            DynamicLinkedInstance::WasmRpc(links) => links
+                                .target_interface_name
+                                .iter()
+                                .map(|(resource, interface)| (resource.clone(), interface.clone()))
+                                .collect::<BTreeMap<String, String>>(),
+                        },
+                    )
                 })
                 .collect(),
         }
