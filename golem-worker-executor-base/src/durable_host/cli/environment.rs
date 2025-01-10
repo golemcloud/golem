@@ -16,7 +16,6 @@ use async_trait::async_trait;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::bindings::cli::environment::Host;
@@ -24,38 +23,53 @@ use wasmtime_wasi::bindings::cli::environment::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
-        record_host_function_call("cli::environment", "get_environment");
-        Durability::<Ctx, (), Vec<(String, String)>, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Vec<(String, String)>, SerializableError>::new(
             self,
+            "golem_environment",
+            "get_environment",
             WrappedFunctionType::ReadLocal,
-            "golem_environment::get_environment",
-            (),
-            |ctx| Box::pin(async { Host::get_environment(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::get_environment(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
-        record_host_function_call("cli::environment", "get_arguments");
-        Durability::<Ctx, (), Vec<String>, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
             self,
+            "golem_environment",
+            "get_arguments",
             WrappedFunctionType::ReadLocal,
-            "golem_environment::get_arguments",
-            (),
-            |ctx| Box::pin(async { Host::get_arguments(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::get_arguments(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
-        record_host_function_call("cli::environment", "initial_cwd");
-        Durability::<Ctx, (), Option<String>, SerializableError>::wrap(
+        let durability = Durability::<Ctx, Option<String>, SerializableError>::new(
             self,
+            "golem_environment",
+            "get_arguments", // TODO: fix in 2.0 - for backward compatibility with Golem 1.0
             WrappedFunctionType::ReadLocal,
-            "golem_environment::get_arguments", // NOTE: for backward compatibility with Golem 1.0
-            (),
-            |ctx| Box::pin(async { Host::initial_cwd(&mut ctx.as_wasi_view()).await }),
         )
-        .await
+        .await?;
+
+        if durability.is_live() {
+            let result = Host::initial_cwd(&mut self.as_wasi_view()).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 }

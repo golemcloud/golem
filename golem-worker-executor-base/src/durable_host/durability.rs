@@ -14,568 +14,208 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
+use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
+use golem_common::serialization::try_deserialize;
 use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::marker::PhantomData;
 use tracing::error;
 
-#[async_trait]
-pub trait Durability<Ctx: WorkerCtx, SerializableInput, SerializableSuccess, SerializableErr> {
-    /// A version of `wrap` allowing conversion between the success value and the serialized value within the mutable worker context.
-    ///
-    /// This can be used to fetch/register resources.
-    ///
-    /// Live mode:
-    ///   value|error <- function()
-    ///   serialized|serialized_err <- get_serializable(value) | error.into()
-    ///   write_to_oplog(serialized|serialized_err)
-    ///   return value|error
-    ///
-    /// Replay mode:
-    ///   serialized|serialized_err <- read_from_oplog(serialized|serialized_err)
-    ///   value|error <- put_serializable(serialized) | serialized_err.into()
-    ///   return value|error
-    async fn custom_wrap<Success, Err, AsyncFn, ToSerializable, FromSerializable>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        to_serializable: ToSerializable,
-        from_serializable: FromSerializable,
-    ) -> Result<Success, Err>
-    where
-        Success: Send + Sync,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        ToSerializable:
-            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializableSuccess, Err> + Send,
-        FromSerializable: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-                SerializableSuccess,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send
-            + 'static,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync;
-
-    /// A version of `wrap` allowing conversion between the success value and the serialized value within the mutable worker context.
-    /// Deserialization from oplog is also fully customizable, which makes this version suitable to implement
-    /// backward compatibility tricks.
-    ///
-    /// Live mode:
-    ///   value|error <- function()
-    ///   serialized|serialized_err <- get_serializable(value) | error.into()
-    ///   write_to_oplog(serialized|serialized_err)
-    ///   return value|error
-    ///
-    /// Replay mode:
-    ///   value|error <- load(oplog)
-    ///   return value|error
-    async fn full_custom_wrap<
-        Intermediate,
-        Success,
-        Err,
-        AsyncFn,
-        ToSerializable,
-        ToResult,
-        FromSerialized,
-    >(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        to_serializable: ToSerializable,
-        to_result: ToResult,
-        from_serialized: FromSerialized,
-    ) -> Result<Success, Err>
-    where
-        Intermediate: Send + Sync,
-        Success: Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Intermediate, Err>> + 'b + Send>>
-            + Send,
-        ToSerializable: FnOnce(&mut DurableWorkerCtx<Ctx>, &Intermediate) -> Result<SerializableSuccess, Err>
-            + Send,
-        ToResult: FnOnce(&mut DurableWorkerCtx<Ctx>, Intermediate) -> Result<Success, Err> + Send,
-        FromSerialized: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-                Arc<dyn Oplog + Send + Sync>,
-                &'b OplogEntry,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync;
-
-    /// Wrap a WASI call with durability handling
-    ///
-    /// The function checks if the execution is live, and if so performs the function and then
-    /// saves its results into the oplog. If the execution is not live, it reads the previously
-    /// saved results from the oplog and returns them.
-    ///
-    /// Type parameters:
-    /// - `AsyncFn`: the async WASI function to perform, expected to return with a Result of `Success` or `Err`
-    /// - `Success`: The type of the success value returned by the WASI function
-    /// - `Err`: The type of the error value returned by the WASI function. There need to be a conversion from `GolemError`
-    ///    to `Err` to be able to return internal failures.
-    /// - `SerializedSuccess`: The type of the success value serialized into the oplog. It has to be encodeable/decodeable
-    ///   and convertable from/to `Success`
-    /// - `SerializedErr`: The type of the error value serialized into the oplog. It has to be encodeable/decodeable and
-    ///    convertable from/to `Err`
-    ///
-    /// Parameters:
-    /// - `wrapped_function_type`: The type of the wrapped function, it is a combination of being local or remote, and
-    ///   being read or write
-    /// - `function_name`: The name of the function, used for logging
-    /// - `function`: The async WASI function to perform
-    async fn wrap<Success, Err, AsyncFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone + Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess:
-            Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync + 'static,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync
-            + 'static;
-
-    async fn wrap_conditionally<Success, Err, AsyncFn, ConditionFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        persist: ConditionFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone + Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync;
+pub enum OplogEntryVersion {
+    V1,
+    V2,
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx, SerializableInput, SerializableSuccess, SerializableErr>
-    Durability<Ctx, SerializableInput, SerializableSuccess, SerializableErr>
-    for DurableWorkerCtx<Ctx>
-{
-    async fn custom_wrap<Success, Err, AsyncFn, ToSerializable, FromSerializable>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        to_serializable: ToSerializable,
-        from_serializable: FromSerializable,
-    ) -> Result<Success, Err>
-    where
-        Success: Send + Sync,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        ToSerializable:
-            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializableSuccess, Err> + Send,
-        FromSerializable: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-                SerializableSuccess,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send
-            + 'static,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync,
-    {
-        <DurableWorkerCtx<Ctx> as Durability<
-            Ctx,
-            SerializableInput,
-            SerializableSuccess,
-            SerializableErr,
-        >>::full_custom_wrap::<Success, Success, Err, AsyncFn, ToSerializable, _, _>(
-            self,
-            wrapped_function_type,
-            function_name,
-            input,
-            function,
-            to_serializable,
-            |_, result| Ok(result),
-            |ctx, oplog, entry| {
-                Box::pin(async move {
-                    let response: Result<SerializableSuccess, SerializableErr> =
-                        DurableWorkerCtx::<Ctx>::default_load(oplog, entry).await;
-                    match response {
-                        Ok(serialized_success) => {
-                            let success: Success =
-                                from_serializable(ctx, serialized_success).await?;
-                            Ok(success)
-                        }
-                        Err(serialized_err) => Err(serialized_err.into()),
-                    }
-                })
-            },
-        )
-        .await
-    }
-
-    async fn full_custom_wrap<
-        Intermediate,
-        Success,
-        Err,
-        AsyncFn,
-        ToSerializable,
-        ToResult,
-        FromSerialized,
-    >(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        to_serializable: ToSerializable,
-        to_result: ToResult,
-        from_serialized: FromSerialized,
-    ) -> Result<Success, Err>
-    where
-        Intermediate: Send + Sync,
-        Success: Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Intermediate, Err>> + 'b + Send>>
-            + Send,
-        ToSerializable: FnOnce(&mut DurableWorkerCtx<Ctx>, &Intermediate) -> Result<SerializableSuccess, Err>
-            + Send,
-        ToResult: FnOnce(&mut DurableWorkerCtx<Ctx>, Intermediate) -> Result<Success, Err> + Send,
-        FromSerialized: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-                Arc<dyn Oplog + Send + Sync>,
-                &'b OplogEntry,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync,
-    {
-        let begin_index = self
-            .state
-            .begin_function(&wrapped_function_type.clone())
-            .await?;
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
-            let intermediate = function(self).await;
-            let serializable_result: Result<SerializableSuccess, SerializableErr> = intermediate
-                .as_ref()
-                .map_err(|err| err.into())
-                .and_then(|result| to_serializable(self, result).map_err(|err| (&err).into()));
-
-            self.write_to_oplog(
-                &wrapped_function_type,
-                function_name,
-                begin_index,
-                &input,
-                &serializable_result,
-            )
-            .await?;
-
-            intermediate.and_then(|value| to_result(self, value))
-        } else {
-            let (_, oplog_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked,
-                OplogEntry::ImportedFunctionInvokedV1
-            )?;
-            DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
-
-            let oplog = self.state.oplog.clone();
-            let result = from_serialized(self, oplog, &oplog_entry).await;
-
-            self.state
-                .end_function(&wrapped_function_type, begin_index)
-                .await?;
-
-            result
-        }
-    }
-
-    async fn wrap<Success, Err, AsyncFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone + Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess:
-            Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync + 'static,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync
-            + 'static,
-    {
-        <DurableWorkerCtx<Ctx> as Durability<
-            Ctx,
-            SerializableInput,
-            SerializableSuccess,
-            SerializableErr,
-        >>::wrap_conditionally::<Success, Err, AsyncFn, _>(
-            self,
-            wrapped_function_type,
-            function_name,
-            input,
-            function,
-            |_: &Result<Success, Err>| true,
-        )
-        .await
-    }
-
-    async fn wrap_conditionally<Success, Err, AsyncFn, ConditionFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        input: SerializableInput,
-        function: AsyncFn,
-        persist: ConditionFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone + Send,
-        Err: From<GolemError> + Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
-        SerializableInput: Encode + Debug + Send + Sync + 'static,
-        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
-        SerializableErr: Encode
-            + Decode
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send
-            + Sync,
-    {
-        let begin_index = self
-            .state
-            .begin_function(&wrapped_function_type.clone())
-            .await?;
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
-            let result = function(self).await;
-            if persist(&result) {
-                let serializable_result: Result<SerializableSuccess, SerializableErr> = result
-                    .as_ref()
-                    .map(|result| result.clone().into())
-                    .map_err(|err| err.into());
-
-                self.write_to_oplog(
-                    &wrapped_function_type,
-                    function_name,
-                    begin_index,
-                    &input,
-                    &serializable_result,
-                )
-                .await?;
-            }
-            result
-        } else {
-            let (_, oplog_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked,
-                OplogEntry::ImportedFunctionInvokedV1
-            )?;
-            DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
-            let response: Result<SerializableSuccess, SerializableErr> =
-                DurableWorkerCtx::<Ctx>::default_load(self.state.oplog.clone(), &oplog_entry).await;
-
-            self.state
-                .end_function(&wrapped_function_type, begin_index)
-                .await?;
-
-            response
-                .map(|serialized_success| serialized_success.into())
-                .map_err(|serialized_err| serialized_err.into())
-        }
-    }
+pub struct Durability<Ctx, SOk, SErr> {
+    package: &'static str,
+    function: &'static str,
+    function_type: WrappedFunctionType,
+    begin_index: OplogIndex,
+    is_live: bool,
+    persistence_level: PersistenceLevel,
+    _ctx: PhantomData<Ctx>,
+    _sok: PhantomData<SOk>,
+    _serr: PhantomData<SErr>,
 }
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub async fn default_load<SerializableSuccess, SerializableErr>(
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        entry: &OplogEntry,
-    ) -> Result<SerializableSuccess, SerializableErr>
-    where
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode + Decode + Debug + From<GolemError> + Send + Sync,
-    {
-        oplog
-            .get_payload_of_entry::<Result<SerializableSuccess, SerializableErr>>(entry)
-            .await
-            .map_err(|err| {
-                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-            })?
-            .unwrap()
+impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
+    pub async fn new(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        package: &'static str,
+        function: &'static str,
+        function_type: WrappedFunctionType,
+    ) -> Result<Self, GolemError> {
+        record_host_function_call(package, function);
+
+        let begin_index = ctx.state.begin_function(&function_type).await?;
+
+        Ok(Self {
+            package,
+            function,
+            function_type,
+            begin_index,
+            is_live: ctx.state.is_live(),
+            persistence_level: ctx.state.persistence_level.clone(),
+            _ctx: PhantomData,
+            _sok: PhantomData,
+            _serr: PhantomData,
+        })
     }
 
-    pub async fn try_default_load<SerializableSuccess, SerializableErr>(
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        entry: &OplogEntry,
-    ) -> Result<Result<SerializableSuccess, SerializableErr>, GolemError>
-    where
-        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializableErr: Encode + Decode + Debug + From<GolemError> + Send + Sync,
-    {
-        oplog
-            .get_payload_of_entry::<Result<SerializableSuccess, SerializableErr>>(entry)
-            .await
-            .map_err(|err| {
-                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-            })
-            .map(|result| result.unwrap())
+    pub fn is_live(&self) -> bool {
+        self.is_live || self.persistence_level == PersistenceLevel::PersistNothing
     }
 
-    async fn write_to_oplog<SerializedInput, SerializedSuccess, Err, SerializedErr>(
-        &mut self,
-        wrapped_function_type: &WrappedFunctionType,
-        function_name: &str,
-        begin_index: OplogIndex,
-        serializable_input: &SerializedInput,
-        serializable_result: &Result<SerializedSuccess, SerializedErr>,
-    ) -> Result<(), Err>
+    pub async fn persist<SIn, Ok, Err>(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        input: SIn,
+        result: Result<Ok, Err>,
+    ) -> Result<Ok, Err>
     where
-        Err: Send,
-        SerializedInput: Encode + Debug + Send + Sync,
-        SerializedSuccess: Encode + Debug + Send + Sync,
-        SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send + Sync,
+        Ok: Clone,
+        Err: From<SErr> + From<GolemError> + Send + Sync,
+        SIn: Debug + Encode + Send + Sync,
+        SErr: Debug + Encode + for<'a> From<&'a Err> + From<GolemError> + Send + Sync,
+        SOk: Debug + Encode + From<Ok> + Send + Sync,
     {
-        if self.state.persistence_level != PersistenceLevel::PersistNothing {
-            self.state
+        let serializable_result: Result<SOk, SErr> = result
+            .as_ref()
+            .map(|result| result.clone().into())
+            .map_err(|err| err.into());
+
+        self.persist_serializable(ctx, input, serializable_result)
+            .await
+            .map_err(|err| {
+                let err: SErr = err.into();
+                let err: Err = err.into();
+                err
+            })?;
+        result
+    }
+
+    pub async fn persist_serializable<SIn>(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        input: SIn,
+        serializable_result: Result<SOk, SErr>,
+    ) -> Result<(), GolemError>
+    where
+        SIn: Debug + Encode + Send + Sync,
+        SOk: Debug + Encode + Send + Sync,
+        SErr: Debug + Encode + Send + Sync,
+    {
+        let function_name = self.function_name();
+        if ctx.state.persistence_level != PersistenceLevel::PersistNothing {
+            ctx.state
                 .oplog
                 .add_imported_function_invoked(
                     function_name.to_string(),
-                    &serializable_input,
+                    &input,
                     &serializable_result,
-                    wrapped_function_type.clone(),
+                    self.function_type.clone(),
                 )
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
                         "failed to serialize and store function request ({:?}) and response ({:?}): {err}",
-                        serializable_input,
+                        input,
                         serializable_result
                     )
                 });
-            self.state
-                .end_function(wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            if *wrapped_function_type == WrappedFunctionType::WriteRemote
+            ctx.state
+                .end_function(&self.function_type, self.begin_index)
+                .await?;
+            if self.function_type == WrappedFunctionType::WriteRemote
                 || matches!(
-                    *wrapped_function_type,
+                    self.function_type,
                     WrappedFunctionType::WriteRemoteBatched(_)
                 )
             {
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                ctx.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
         }
         Ok(())
+    }
+
+    pub async fn replay_raw(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(Bytes, OplogEntryVersion), GolemError> {
+        let (_, oplog_entry) = crate::get_oplog_entry!(
+            ctx.state.replay_state,
+            OplogEntry::ImportedFunctionInvoked,
+            OplogEntry::ImportedFunctionInvokedV1
+        )?;
+
+        let version = if matches!(oplog_entry, OplogEntry::ImportedFunctionInvokedV1 { .. }) {
+            OplogEntryVersion::V1
+        } else {
+            OplogEntryVersion::V2
+        };
+
+        let function_name = self.function_name();
+        Self::validate_oplog_entry(&oplog_entry, &function_name)?;
+
+        let bytes = ctx
+            .state
+            .oplog
+            .get_raw_payload_of_entry(&oplog_entry)
+            .await
+            .map_err(|err| {
+                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+            })?
+            .unwrap();
+
+        ctx.state
+            .end_function(&self.function_type, self.begin_index)
+            .await?;
+
+        Ok((bytes, version))
+    }
+
+    pub async fn replay_serializable(
+        &self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<Result<SOk, SErr>, GolemError>
+    where
+        SOk: Decode,
+        SErr: Decode,
+    {
+        let (bytes, _) = self.replay_raw(ctx).await?;
+        let result: Result<SOk, SErr> = try_deserialize(&bytes)
+            .map_err(|err| {
+                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+            })?
+            .expect("Payload is empty");
+        Ok(result)
+    }
+
+    pub async fn replay<Ok, Err>(&self, ctx: &mut DurableWorkerCtx<Ctx>) -> Result<Ok, Err>
+    where
+        Ok: From<SOk>,
+        Err: From<SErr> + From<GolemError>,
+        SErr: Debug + Encode + Decode + From<GolemError> + Send + Sync,
+        SOk: Debug + Encode + Decode + Send + Sync,
+    {
+        Self::replay_serializable(self, ctx)
+            .await?
+            .map(|sok| sok.into())
+            .map_err(|serr| serr.into())
+    }
+
+    fn function_name(&self) -> String {
+        if self.package.is_empty() {
+            // For backward compatibility - some of the recorded function names were not following the pattern
+            self.function.to_string()
+        } else {
+            format!("{}::{}", self.package, self.function)
+        }
     }
 
     fn validate_oplog_entry(
