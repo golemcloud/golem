@@ -2429,7 +2429,8 @@ fn check_test_results<T: RdbmsType + Clone>(
                             );
                         }
                     }
-                    _ => {
+                    v => {
+                        println!("execute result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
                         check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2446,7 +2447,8 @@ fn check_test_results<T: RdbmsType + Clone>(
                             check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} do not match");
                         }
                     }
-                    _ => {
+                    v => {
+                        println!("query result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
                         check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2463,7 +2465,8 @@ fn check_test_results<T: RdbmsType + Clone>(
                             check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} do not match");
                         }
                     }
-                    _ => {
+                    v => {
+                        println!("query stream result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
                         check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
