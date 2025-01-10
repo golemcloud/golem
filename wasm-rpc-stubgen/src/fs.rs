@@ -67,7 +67,7 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
         .context("Failed to transform source content")
         .with_context(context)?;
 
-    let bytes_count = transformed_content.as_bytes().len();
+    let bytes_count = transformed_content.len();
 
     write(&to, transformed_content.as_bytes())
         .context("Failed to write transformed content")

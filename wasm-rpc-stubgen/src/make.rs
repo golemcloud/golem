@@ -105,7 +105,8 @@ impl CargoMakeConfig {
         if let Value::Table(table) = value {
             let default_to_workspace = table
                 .get("default_to_workspace")
-                .map_or(false, |v| v.as_bool().unwrap_or(false));
+                .is_some_and(|v| v.as_bool().unwrap_or(false));
+
             let mut unknown = table.clone();
             unknown.retain(|k, _| k != "default_to_workspace");
             Ok(Self {
