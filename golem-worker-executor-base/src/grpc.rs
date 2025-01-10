@@ -430,7 +430,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let account_id = account_id_proto.into();
 
-        // Check if target worker id exists already and if so fail
         let target_worker_id_proto = request
             .target_worker_id
             .clone()
