@@ -11,6 +11,7 @@ import { Button2 as Button } from "@/components/ui/button";
 import { canDelete as checkForDeletion } from "@/lib/react-flow/utils";
 import { FlowNode } from "@/types/react-flow";
 import useStore from "@/lib/hooks/use-react-flow-store";
+import { ApiRoute } from "@/types/api";
 
 export default function NodeMenu({
   data,
@@ -55,6 +56,7 @@ export default function NodeMenu({
 
   // return focus to the button when we transitioned from !open -> open
   const prevOpen = React.useRef(open);
+  const {apiInfo, ...route} = data;
   React.useEffect(() => {
     if (prevOpen.current === true && open === false) {
       anchorRef.current!.focus();
@@ -110,7 +112,7 @@ export default function NodeMenu({
                           type: triggerType,
                           operation: "new_route",
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version}
                         });
                         handleClose(e);
                       }}
@@ -121,14 +123,28 @@ export default function NodeMenu({
                       onClick={(e) => {
                         setTrigger({
                           type: triggerType,
-                          operation: "create",
+                          operation: "new_api",
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version}
                         });
                         handleClose(e);
                       }}
                     >
                       New Version
+                    </MenuItem>}
+
+                    {triggerType !== "route" &&  <MenuItem
+                      onClick={(e) => {
+                        setTrigger({
+                          type: triggerType,
+                          operation: "deploy_api",
+                          id,
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version}
+                        });
+                        handleClose(e);
+                      }}
+                    >
+                      Deploy Api
                     </MenuItem>}
                     <MenuItem
                       disabled={!canDelete}
@@ -138,9 +154,13 @@ export default function NodeMenu({
                         }
                         setTrigger({
                           type: triggerType,
-                          operation: "delete",
+                          operation: `delete_${triggerType}`,
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {
+                            version: triggerType=="api" ? data.version: apiInfo?.version,
+                            ...(triggerType=="route" ? {route: route as ApiRoute}: {})
+
+                          }
                         });
                         handleClose(e);
                       }}
@@ -151,9 +171,11 @@ export default function NodeMenu({
                       onClick={(e) => {
                         setTrigger({
                           type: triggerType,
-                          operation: "view",
+                          operation: `view_${triggerType}`,
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version,
+                            ...(triggerType=="route" ? {route: route as ApiRoute}: {})
+                          }
                         });
                         setSelectedNode(id);
                         handleClose(e);
@@ -168,9 +190,11 @@ export default function NodeMenu({
                         }
                         setTrigger({
                           type: triggerType,
-                          operation: "update",
+                          operation: `update_${triggerType}`,
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version,
+                            ...(triggerType=="route" ? {route: route as ApiRoute}: {})
+                          }
                         });
                         setSelectedNode(id);
                         handleClose(e);
@@ -183,9 +207,9 @@ export default function NodeMenu({
                       onClick={(e) => {
                         setTrigger({
                           type: triggerType,
-                          operation: "download",
+                          operation: `download_${triggerType}`,
                           id,
-                          meta: {version: triggerType=="api" ? data.version: data?.apiInfo?.version}
+                          meta: {version: triggerType=="api" ? data.version: apiInfo?.version}
                         });
                         setSelectedNode(id);
                         handleClose(e);

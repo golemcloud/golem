@@ -33,6 +33,7 @@ export default function DeploymentCreationPage({
   addDeployment,
   apiId,
   onSuccess,
+  version,
 }: {
   onSuccess?: () => void;
   apiId?: string;
@@ -41,9 +42,10 @@ export default function DeploymentCreationPage({
     data?: ApiDeployment | null;
     error?: string | null;
   }>;
+  version?:string;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId);
+  const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId, version);
   const apiDefinitions = data.filter((api) => api.draft);
 
   const uniqueApiDefintions = Object.values(apiDefinitions?.reduce<Record<string,ApiDefinition>>((obj, apiDefinition:ApiDefinition)=>{
