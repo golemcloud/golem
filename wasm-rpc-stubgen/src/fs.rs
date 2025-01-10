@@ -252,6 +252,7 @@ impl<P: AsRef<Path>> AsRef<Path> for PathExtra<P> {
     }
 }
 
+// TODO: we most probably do not need this anymore
 pub enum OverwriteSafeAction {
     CopyFile {
         source: PathBuf,

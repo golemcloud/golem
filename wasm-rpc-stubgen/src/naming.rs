@@ -1,43 +1,60 @@
 pub mod wit {
     use crate::log::LogColorize;
+    use crate::stub::FunctionStub;
     use anyhow::{anyhow, bail};
     use std::path::{Path, PathBuf};
 
     pub static DEPS_DIR: &str = "deps";
     pub static WIT_DIR: &str = "wit";
 
-    pub static STUB_WIT_FILE_NAME: &str = "stub.wit";
-    pub static INTERFACE_WIT_FILE_NAME: &str = "interface.wit";
+    pub static CLIENT_WIT_FILE_NAME: &str = "client.wit";
+    pub static EXPORTS_WIT_FILE_NAME: &str = "exports.wit";
 
-    pub fn stub_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
-        wit_parser::PackageName {
-            namespace: package_name.namespace.clone(),
-            name: format!("{}-stub", package_name.name),
-            version: package_name.version.clone(),
-        }
-    }
-
-    pub fn interface_parser_package_name(
+    pub fn client_parser_package_name(
         package_name: &wit_parser::PackageName,
     ) -> wit_parser::PackageName {
         wit_parser::PackageName {
             namespace: package_name.namespace.clone(),
-            name: format!("{}-interface", package_name.name),
+            name: format!("{}-client", package_name.name),
             version: package_name.version.clone(),
         }
     }
 
-    pub fn interface_encoder_package_name(
+    pub fn client_encoder_package_name(
+        package_name: &wit_parser::PackageName,
+    ) -> wit_encoder::PackageName {
+        wit_encoder::PackageName::new(
+            package_name.namespace.clone(),
+            format!("{}-client", package_name.name),
+            package_name.version.clone(),
+        )
+    }
+
+    pub fn client_interface_name(source_world: &wit_parser::World) -> String {
+        format!("{}-client", source_world.name)
+    }
+
+    pub fn exports_parser_package_name(
+        package_name: &wit_parser::PackageName,
+    ) -> wit_parser::PackageName {
+        wit_parser::PackageName {
+            namespace: package_name.namespace.clone(),
+            name: format!("{}-exports", package_name.name),
+            version: package_name.version.clone(),
+        }
+    }
+
+    pub fn exports_encoder_package_name(
         package_name: &wit_encoder::PackageName,
     ) -> wit_encoder::PackageName {
         wit_encoder::PackageName::new(
             package_name.namespace(),
-            format!("{}-interface", package_name.name()),
+            format!("{}-exports", package_name.name()),
             package_name.version().cloned(),
         )
     }
 
-    pub fn interface_package_world_inline_interface_name(
+    pub fn exports_package_world_inline_interface_name(
         world_name: &wit_encoder::Ident,
         interface_name: &wit_encoder::Ident,
     ) -> String {
@@ -50,31 +67,31 @@ pub mod wit {
         format!("{}-inline-functions", world_name.raw_name())
     }
 
-    pub fn stub_target_package_name(
-        stub_package_name: &wit_parser::PackageName,
+    pub fn client_target_package_name(
+        client_package_name: &wit_parser::PackageName,
     ) -> wit_parser::PackageName {
         wit_parser::PackageName {
-            namespace: stub_package_name.namespace.clone(),
-            name: stub_package_name
+            namespace: client_package_name.namespace.clone(),
+            name: client_package_name
                 .name
-                .strip_suffix("-stub")
-                .expect("Unexpected stub package name")
+                .strip_suffix("-client")
+                .expect("Unexpected client package name")
                 .to_string(),
-            version: stub_package_name.version.clone(),
+            version: client_package_name.version.clone(),
         }
     }
 
-    pub fn stub_import_name(stub_package: &wit_parser::Package) -> anyhow::Result<String> {
-        let package_name = &stub_package.name;
+    pub fn client_import_name(client_package: &wit_parser::Package) -> anyhow::Result<String> {
+        let package_name = &client_package.name;
 
-        if stub_package.interfaces.len() != 1 {
+        if client_package.interfaces.len() != 1 {
             bail!(
-                "Expected exactly one interface in stub package, package name: {}",
+                "Expected exactly one interface in client package, package name: {}",
                 package_name.to_string().log_color_highlight()
             );
         }
 
-        let interface_name = stub_package.interfaces.first().unwrap().0;
+        let interface_name = client_package.interfaces.first().unwrap().0;
 
         Ok(format!(
             "{}:{}/{}{}",
@@ -89,19 +106,19 @@ pub mod wit {
         ))
     }
 
-    pub fn stub_import_interface_prefix_from_stub_package_name(
-        stub_package: &wit_parser::PackageName,
+    pub fn client_import_exports_prefix_from_client_package_name(
+        client_package: &wit_parser::PackageName,
     ) -> anyhow::Result<String> {
         Ok(format!(
-            "{}:{}-interface/",
-            stub_package.namespace,
-            stub_package
+            "{}:{}-exports/",
+            client_package.namespace,
+            client_package
                 .name
                 .clone()
-                .strip_suffix("-stub")
+                .strip_suffix("-client")
                 .ok_or_else(|| anyhow!(
-                    "Expected \"-stub\" suffix in stub package name: {}",
-                    stub_package.to_string()
+                    "Expected \"-client\" suffix in client package name: {}",
+                    client_package.to_string()
                 ))?
         ))
     }
@@ -128,5 +145,54 @@ pub mod wit {
 
     pub fn package_wit_dep_dir_from_encode(package_name: &wit_encoder::PackageName) -> PathBuf {
         package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name_from_encoder(package_name))
+    }
+
+    pub fn blocking_function_name(function: &FunctionStub) -> String {
+        format!("blocking-{}", function.name)
+    }
+}
+
+pub mod rust {
+    use crate::stub::{FunctionStub, InterfaceStub};
+    use heck::{ToSnakeCase, ToUpperCamelCase};
+    use proc_macro2::{Ident, Span};
+    use wit_bindgen_rust::to_rust_ident;
+
+    pub static CARGO_TOML: &str = "Cargo.toml";
+    pub static SRC: &str = "src/lib.rs";
+
+    pub fn root_namespace(source_package_name: &wit_parser::PackageName) -> String {
+        source_package_name.namespace.to_snake_case()
+    }
+
+    pub fn client_root_name(source_package_name: &wit_parser::PackageName) -> String {
+        format!("{}_client", source_package_name.name.to_snake_case())
+    }
+
+    pub fn client_crate_name(source_world: &wit_parser::World) -> String {
+        format!("{}-client", source_world.name)
+    }
+
+    pub fn client_interface_name(source_world: &wit_parser::World) -> String {
+        to_rust_ident(&format!("{}-client", source_world.name)).to_snake_case()
+    }
+
+    pub fn client_world_name(source_world: &wit_parser::World) -> String {
+        format!("wasm-rpc-client-{}", source_world.name)
+    }
+
+    pub fn result_wrapper_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+        Ident::new(
+            &to_rust_ident(&function.async_result_type(owner)).to_upper_camel_case(),
+            Span::call_site(),
+        )
+    }
+
+    pub fn result_wrapper_interface_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+        Ident::new(
+            &to_rust_ident(&format!("guest-{}", function.async_result_type(owner)))
+                .to_upper_camel_case(),
+            Span::call_site(),
+        )
     }
 }

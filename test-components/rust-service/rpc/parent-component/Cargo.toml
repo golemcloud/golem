@@ -6,19 +6,22 @@ homepage = "https://golem.cloud"
 license = "Apache-2.0"
 
 [package.metadata.component.target]
-path = "wit"
+path = "wit-generated"
 
-[package.metadata.component.target.dependencies."golem:it"]
-path = "wit/deps/golem_it"
+[package.metadata.component.target.dependencies."golem:it-client"]
+path = "wit-generated/deps/golem_it-client"
 
-[package.metadata.component.target.dependencies."golem:it-stub"]
-path = "wit/deps/golem_it-stub"
+[package.metadata.component.target.dependencies."golem:it-exports"]
+path = "wit-generated/deps/golem_it-exports"
+
+[package.metadata.component.target.dependencies."golem:itrpc-exports"]
+path = "wit-generated/deps/golem_itrpc-exports"
 
 [package.metadata.component.target.dependencies."golem:rpc"]
-path = "wit/deps/wasm-rpc"
+path = "wit-generated/deps/wasm-rpc"
 
 [package.metadata.component.target.dependencies."wasi:io"]
-path = "wit/deps/io"
+path = "wit-generated/deps/io"
 
 [dependencies]
 once_cell = "1.17.1"

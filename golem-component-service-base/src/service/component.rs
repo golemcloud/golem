@@ -659,7 +659,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             owner.clone(),
         )?;
 
-        info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports);
+        info!(
+            owner = %owner,
+            exports = ?component.metadata.exports,
+            dynamic_linking = ?component.metadata.dynamic_linking,
+            "Uploaded component",
+        );
 
         let transformed_data = self.apply_transformations(&component, data.clone()).await?;
         let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
@@ -716,7 +721,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             }
         }
 
-        info!(owner = %owner, "Uploaded component - exports {:?}", metadata.exports);
+        info!(
+            owner = %owner,
+            exports = ?metadata.exports,
+            dynamic_linking = ?metadata.dynamic_linking,
+            "Uploaded component",
+        );
 
         let files = files.map(|files| {
             files

@@ -17,7 +17,9 @@ impl<T: Type> Payload for JsonOrYaml<T> {
     fn check_content_type(content_type: &str) -> bool {
         matches!(content_type.parse::<mime::Mime>(), Ok(content_type) if content_type.type_() == "application"
                 && (content_type.subtype() == "yaml" || content_type.subtype() == "json"
-                || content_type.suffix().is_some_and(|v| v == "yaml" || v == "json")))
+                || content_type
+                    .suffix()
+                    .is_some_and(|v| v == "yaml" || v == "json")))
     }
 
     fn schema_ref() -> MetaSchemaRef {

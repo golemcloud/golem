@@ -3,23 +3,40 @@ name = "caller"
 version = "0.0.1"
 edition = "2021"
 
-[lib]
-path = "src/lib.rs"
-crate-type = ["cdylib"]
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies."golem:rpc"]
+path = "wit-generated/deps/wasm-rpc"
+
+[package.metadata.component.target.dependencies."rpc:caller-exports"]
+path = "wit-generated/deps/rpc_caller-exports"
+
+[package.metadata.component.target.dependencies."rpc:counters-client"]
+path = "wit-generated/deps/rpc_counters-client"
+
+[package.metadata.component.target.dependencies."rpc:counters-exports"]
+path = "wit-generated/deps/rpc_counters-exports"
+
+[package.metadata.component.target.dependencies."rpc:ephemeral-client"]
+path = "wit-generated/deps/rpc_ephemeral-client"
+
+[package.metadata.component.target.dependencies."wasi:io"]
+path = "wit-generated/deps/io"
 
 [dependencies]
 once_cell = "1.19.0"
 rand = "0.8.5"
-uuid = { version = "1.7.0", features = ["v4", "serde"] }
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 
-[package.metadata.component.target]
-path = "wit"
+[dependencies.uuid]
+version = "1.7.0"
+features = ["v4", "serde"]
 
-[package.metadata.component.target.dependencies]
-"golem:rpc" = { path = "wit/deps/wasm-rpc" }
-"rpc:counters" = { path = "wit/deps/rpc_counters" }
-"rpc:counters-stub" = { path = "wit/deps/counters-stub" }
-"rpc:ephemeral" = { path = "wit/deps/rpc_ephemeral" }
-"rpc:ephemeral-stub" = { path = "wit/deps/ephemeral-stub" }
-"wasi:io" = { path = "wit/deps/io" }
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []

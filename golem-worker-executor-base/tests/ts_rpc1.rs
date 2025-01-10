@@ -50,10 +50,18 @@ async fn counter_resource_test_1(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
@@ -85,14 +93,22 @@ async fn counter_resource_test_1_with_restart(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
     let executor = common::start(deps, &context).await.unwrap();
 
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
@@ -130,7 +146,11 @@ async fn context_inheritance(
         .await;
 
     let result = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test3}",
+            vec![],
+        )
         .await;
 
     drop(executor);

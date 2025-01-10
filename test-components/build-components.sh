@@ -100,7 +100,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    cp -v $(find target/wasm32-wasi/release -name '*.wasm' -maxdepth 1) "$target"
+    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -354,22 +354,14 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
-
-    if [ "$update_wit" = true ] && [ -f "update-deps.sh" ]; then
-      ./update-deps.sh
+    if [ "$update_wit" = true ]; then
+      golem-cli app update-wit-deps
     fi
 
     if [ "$rebuild" = true ]; then
-      rm *.wasm
-      rm package-lock.json
-      rm -rf node_modules
+      golem-cli app build
+      golem-cli app copy
     fi
-
-    ./componentize.sh
-    cp *.wasm ..
 
     popd || exit
   done

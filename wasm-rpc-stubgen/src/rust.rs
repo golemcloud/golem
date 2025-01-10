@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
 use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
+use crate::{fs, naming};
 use anyhow::anyhow;
-use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use wit_bindgen_rust::to_rust_ident;
@@ -26,20 +26,9 @@ use wit_parser::{
 };
 
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
-    let root_ns = Ident::new(
-        &def.source_package_name.namespace.to_snake_case(),
-        Span::call_site(),
-    );
-
-    let root_name = Ident::new(
-        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
-        Span::call_site(),
-    );
-    let stub_interface_name = format!("stub-{}", def.source_world_name());
-    let stub_interface_name = Ident::new(
-        &to_rust_ident(&stub_interface_name).to_snake_case(),
-        Span::call_site(),
-    );
+    let root_ns = def.rust_root_namespace();
+    let root_name = def.rust_client_root_name();
+    let stub_interface_name = def.rust_client_interface_name();
 
     let mut struct_defs = Vec::new();
     let mut exports = Vec::new();
@@ -88,7 +77,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
         for function in &interface.functions {
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -102,7 +91,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         }
         for function in &interface.static_functions {
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -135,8 +124,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function, interface);
-                let result_wrapper_interface = result_wrapper_interface_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper_interface =
+                    naming::rust::result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
@@ -171,8 +161,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function, interface);
-                let result_wrapper_interface = result_wrapper_interface_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper_interface =
+                    naming::rust::result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
@@ -284,14 +275,14 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
-    let target_rust_path = PathExtra::new(def.target_rust_path());
+    let target_rust_path = PathExtra::new(def.client_rust_path());
 
     log_action(
         "Generating",
         format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
     fs::create_dir_all(target_rust_path.parent()?)?;
-    fs::write(def.target_rust_path(), src)?;
+    fs::write(def.client_rust_path(), src)?;
     Ok(())
 }
 
@@ -301,21 +292,6 @@ enum FunctionMode {
     Static,
     Method,
     Constructor,
-}
-
-fn result_wrapper_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
-    Ident::new(
-        &to_rust_ident(&function.async_result_type(owner)).to_upper_camel_case(),
-        Span::call_site(),
-    )
-}
-
-fn result_wrapper_interface_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
-    Ident::new(
-        &to_rust_ident(&format!("guest-{}", function.async_result_type(owner)))
-            .to_upper_camel_case(),
-        Span::call_site(),
-    )
 }
 
 fn generate_result_wrapper_get_source(
@@ -471,20 +447,10 @@ fn generate_function_stub_source(
                 }
             }
         } else {
-            let root_ns = Ident::new(
-                &def.source_package_name.namespace.to_snake_case(),
-                Span::call_site(),
-            );
-            let root_name = Ident::new(
-                &format!("{}_stub", def.source_package_name.name.to_snake_case()),
-                Span::call_site(),
-            );
-            let stub_interface_name = format!("stub-{}", def.source_world_name());
-            let stub_interface_name = Ident::new(
-                &to_rust_ident(&stub_interface_name).to_snake_case(),
-                Span::call_site(),
-            );
-            let result_wrapper = result_wrapper_ident(function, owner);
+            let root_ns = def.rust_root_namespace();
+            let root_name = def.rust_client_root_name();
+            let stub_interface_name = def.rust_client_interface_name();
+            let result_wrapper = naming::rust::result_wrapper_ident(function, owner);
             quote! {
                 fn #function_name(#(#params),*) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper {
                     #init
@@ -658,19 +624,9 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                         Handle::Borrow(type_id) => (type_id, true),
                     };
 
-                    let root_ns = Ident::new(
-                        &def.source_package_name.namespace.to_snake_case(),
-                        Span::call_site(),
-                    );
-                    let root_name = Ident::new(
-                        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
-                        Span::call_site(),
-                    );
-                    let stub_interface_name = format!("stub-{}", def.source_world_name());
-                    let stub_interface_name = Ident::new(
-                        &to_rust_ident(&stub_interface_name).to_snake_case(),
-                        Span::call_site(),
-                    );
+                    let root_ns = def.rust_root_namespace();
+                    let root_name = def.rust_client_root_name();
+                    let stub_interface_name = def.rust_client_interface_name();
 
                     let ident = resource_type_ident(def.get_type_def(*type_id)?)?;
                     if is_ref {
@@ -921,8 +877,8 @@ fn wit_value_builder(
                     let ident = match handle {
                         Handle::Own(type_id) =>
                             resource_type_ident(def.get_type_def(*type_id)?)?,
-                            Handle::Borrow(type_id) =>
-                                resource_type_ident(def.get_type_def(*type_id)?)?,
+                        Handle::Borrow(type_id) =>
+                            resource_type_ident(def.get_type_def(*type_id)?)?,
                     };
                     Ok(quote! {
                         #builder_expr.handle(#name.get::<#ident>().uri.clone(), #name.get::<#ident>().id)
@@ -1496,19 +1452,9 @@ fn extract_from_handle_value(
     def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let root_ns = Ident::new(
-        &def.source_package_name.namespace.to_snake_case(),
-        Span::call_site(),
-    );
-    let root_name = Ident::new(
-        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
-        Span::call_site(),
-    );
-    let stub_interface_name = format!("stub-{}", def.source_world_name());
-    let stub_interface_name = Ident::new(
-        &to_rust_ident(&stub_interface_name).to_snake_case(),
-        Span::call_site(),
-    );
+    let root_ns = def.rust_root_namespace();
+    let root_name = def.rust_client_root_name();
+    let stub_interface_name = def.rust_client_interface_name();
 
     match handle {
         Handle::Own(type_id) => {
