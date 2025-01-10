@@ -216,6 +216,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -285,6 +289,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -334,6 +342,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -371,6 +383,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
@@ -413,6 +429,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -452,6 +472,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install fontconfig
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
