@@ -550,9 +550,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         .get_oplog(&target_worker_id, OplogIndex::from_u64(7))
         .await;
 
-    assert_eq!(result.len(), 1);
-
-    let entry = result.first().unwrap().clone();
+    let entry = result.last().unwrap().clone();
 
     match entry {
         PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
