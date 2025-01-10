@@ -181,9 +181,6 @@ export default function NodeMenu({
                     </MenuItem>}
                     {triggerType !== "route" && <MenuItem
                       onClick={(e) => {
-                        if (!canDelete) {
-                          return handleClose(e);
-                        }
                         setTrigger({
                           type: triggerType,
                           operation: "download",
