@@ -76,7 +76,7 @@ const CreateAPI = ({
               <TextField size="small" fullWidth {...field} placeholder="Enter API Name" />
             )}
           />
-          <Typography variant="caption" className="text-muted-foreground">Must be unique per project</Typography>
+          <Typography variant="caption" className="text-muted-foreground">Must be unique</Typography>
           <Typography variant="caption" color="error">
             {getFormErrorMessage("apiName", errors)}
           </Typography>

@@ -33,7 +33,7 @@ const ApiSettings = () => {
       buttonText: "Delete All Versions",
       disabled: !!error || isLoading,
       // I don't see any api for this at one go. if it really needed we need to perform this batch wise one by one. for now skipping it
-      onClick: (e:React.MouseEvent<HTMLButtonElement>) =>{e?.preventDefault(); if(error){return} alert("All versions deleted!")},
+      onClick: (e:React.MouseEvent<HTMLButtonElement>) =>{e?.preventDefault(); if(error){return} alert("All versions deleted (coming soon)!")},
     },
   ];
 

@@ -157,7 +157,7 @@ export default function SecondaryHeader({
       list: [
         {
           label: "Delete All Routes",
-          onClick: () => router.push(`/apis/${apiId}/delete-routes`),
+          onClick: () => alert("delete all routes (coming soon)"),
         },
         {
           label: "Delete Version",
@@ -165,7 +165,7 @@ export default function SecondaryHeader({
         },
         {
           label: "Delete All Versions",
-          onClick: () => router.push(`/apis/${apiId}/delete-all-versions`),
+          onClick: () => alert("delete all versions (coming soon)"),
         },
       ],
     },

@@ -121,7 +121,7 @@ export default function DeploymentCreationPage({
               rules={{ required: "Subdomain is required.",
                 pattern: {
                   value:  /^(?!-)[a-zA-Z0-9-]{1,63}(?<!-)$/,
-                  message: "Subdomain can only contain alphanumeric characters and dashes, cannot start or end with a dash, and must be at most 63 characters long.",
+                  message: "Invalid Subdomain",
                 }
                }}
               render={({ field }) => <TextField size="small" {...field} />}
