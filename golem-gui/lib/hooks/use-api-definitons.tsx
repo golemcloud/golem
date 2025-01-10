@@ -26,7 +26,7 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
 
   //if version is not given. we are providing the current working latest version routes
   const getApiDefintion = (
-    id?: string,
+    id?: string | null,
     version?: string | null
   ): { success: boolean; error?: string | null; data?: ApiDefinition } => {
     if(isLoading){
@@ -35,13 +35,12 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
 
     if (!version && !id) {
       return {
-        success: false,
+        success: true,
         data: apiDefinitions[apiDefinitions.length - 1] || apiDefinitions[0],
         error: apiDefinitions.length == 0 ? "No Api defintions found!" : null,
       };
     }
-
-    const filteredDefintions = apiDefinitions?.filter((api) => api.id === id);
+    const filteredDefintions = (id || defintionId) ? apiDefinitions?.filter((api) => (api.id === id) ||(api.id === defintionId)): [];
 
     if (filteredDefintions.length === 0) {
       return { success: false, error: "No Api defintions found!" };
@@ -212,14 +211,16 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
   };
 
  
-  const deleteRoute = async (defaultRoute: ApiRoute) => {
+  const deleteRoute = async (defaultRoute: ApiRoute, version?: string|null) => {
     try {
       if (defaultRoute) {
-        const { data, error } = getApiDefintion();
+        const { data, error } = getApiDefintion(null, version);
         if (error || !data) {
           return { success: false, error };
         }
         const routes = data.routes || [];
+
+        console.log("routes======>", data);
         const index = routes.findIndex(
           (route) =>
             route.path === defaultRoute.path &&
@@ -254,6 +255,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         mutate(`${ROUTE_PATH}`);
         toast.success("Route deleted Successfully");
         return response;
+      }else {
+        toast.error("No route Found!")
       }
     } catch (error) {
       console.error("Error deleting route:", error);
