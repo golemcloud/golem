@@ -48,6 +48,7 @@ const ReactApiFlowBuilder = ({
   } = useApiInitialization(finalApiDefintions);
 
   const isPublished = useMemo(()=>!!apiDefnitions?.find((api)=>api.draft!==true), [apiDefnitions])
+  const isDraftFound = useMemo(()=>!!apiDefnitions?.find((api)=>api.draft ==true), [apiDefnitions])
 
   return (
     <Paper
@@ -67,10 +68,12 @@ const ReactApiFlowBuilder = ({
         {
           label: "Published Only", value:"Published", 
         onClick:()=>{if(isPublished){setShow("Published")}},
-        disabled: isPublished
+        disabled: !isPublished
 
       },
-        {label: "Draft Only", value:"Draft", onClick:()=>setShow("Draft")}]}
+        {label: "Draft Only", value:"Draft", onClick:()=>setShow("Draft"),
+          disabled: !isDraftFound
+        }]}
        prefix={show}
       />
       </Box>
