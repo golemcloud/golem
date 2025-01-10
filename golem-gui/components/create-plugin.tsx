@@ -120,9 +120,9 @@ const CreatePluginForm = () => {
               fullWidth
               disabled={isSubmitting}
             >
-              <MenuItem value="OplogProcessor">OplogProcessor</MenuItem>
+              <MenuItem value="OplogProcessor">Oplog Processor</MenuItem>
               <MenuItem value="ComponentTransformer">
-                ComponentTransformer
+                Component Transformer
               </MenuItem>
             </Select>
           )}
