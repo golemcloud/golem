@@ -409,7 +409,6 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 
         let source_worker_metadata = source_worker_instance.get_metadata().await?;
 
-        // Not sure if we should copy the metadata or not, or stick on to just default
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
             account_id,
