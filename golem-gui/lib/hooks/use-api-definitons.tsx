@@ -29,6 +29,10 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
     id?: string,
     version?: string | null
   ): { success: boolean; error?: string | null; data?: ApiDefinition } => {
+    if(isLoading){
+      return {success: false};
+    }
+
     if (!version && !id) {
       return {
         success: false,

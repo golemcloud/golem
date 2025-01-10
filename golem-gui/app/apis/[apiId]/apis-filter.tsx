@@ -10,9 +10,9 @@ export function VersionFilter() {
     const params = useSearchParams();
     const pathname = usePathname();
 
-    const { apiDefinitions, getApiDefintion } = useApiDefinitions(apiId);
+    const { apiDefinitions, getApiDefintion, isLoading } = useApiDefinitions(apiId);
 
-    const {data: apiDefinition} = getApiDefintion(apiId, params.get("version"))
+    const {data: apiDefinition} = (!isLoading && getApiDefintion(apiId, params.get("version"))) || {}
     
 
     const versions = useMemo(() => {

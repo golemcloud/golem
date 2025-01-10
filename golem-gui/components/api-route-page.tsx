@@ -102,7 +102,7 @@ export default function RoutePage({
 }) {
   //TODO to move this do separate custom hook so that we can resuse.
   const { isLoading, getApiDefintion, error: requestError } = useApiDefinitions(apiId, version);
-  const { data: apiDefintion, error } = getApiDefintion();
+  const { data: apiDefintion, error } = (!isLoading &&getApiDefintion()) || {};
 
   return (
     <>
