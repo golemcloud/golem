@@ -668,6 +668,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         map.remove(key);
     }
 
+    pub fn component_type(&self) -> ComponentType {
+        self.execution_status.read().unwrap().component_type()
+    }
+
     pub async fn update_status(&self, status_value: WorkerStatusRecord) {
         // Need to make sure the oplog is committed, because the updated status stores the current
         // last oplog index as reference.
@@ -2020,6 +2024,7 @@ where
         .unwrap_or_default();
 
     let last_oplog_index = this.oplog_service().get_last_index(owned_worker_id).await;
+
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {

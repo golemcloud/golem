@@ -21,22 +21,23 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     activate_plugin_response, complete_promise_response, deactivate_plugin_response,
-    delete_worker_response, get_oplog_response, get_worker_metadata_response,
+    delete_worker_response, fork_worker_response, get_oplog_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
     invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
     launch_new_worker_response, resume_worker_response, search_oplog_response,
     update_worker_response, worker_error, worker_execution_error, ActivatePluginRequest,
     ActivatePluginResponse, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
     DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    ForkWorkerRequest, ForkWorkerResponse, GetOplogRequest, GetOplogResponse,
+    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse,
+    SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError as GrpcWorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::v1::{list_directory_response, GetFileContentsResponse};
 use golem_api_grpc::proto::golem::worker::{
@@ -654,6 +655,34 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn fork_worker(
+        &self,
+        request: Request<ForkWorkerRequest>,
+    ) -> Result<Response<ForkWorkerResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "fork_worker",
+            source_worker_id = proto_worker_id_string(&request.source_worker_id),
+            target_worker_id = proto_worker_id_string(&request.target_worker_id),
+        );
+
+        let response = match self
+            .fork_worker(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(fork_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                fork_worker_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ForkWorkerResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -700,6 +729,23 @@ impl WorkerGrpcApi {
 
         self.worker_service
             .delete(&worker_id, empty_worker_metadata())
+            .await?;
+
+        Ok(())
+    }
+
+    async fn fork_worker(&self, request: ForkWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let source_worker_id = validate_protobuf_worker_id(request.source_worker_id)?;
+        let target_worker_id = validate_protobuf_worker_id(request.target_worker_id)?;
+        let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
+
+        self.worker_service
+            .fork_worker(
+                &source_worker_id,
+                &target_worker_id,
+                oplog_idx,
+                empty_worker_metadata(),
+            )
             .await?;
 
         Ok(())
@@ -936,7 +982,11 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
-            .resume(&worker_id, empty_worker_metadata())
+            .resume(
+                &worker_id,
+                empty_worker_metadata(),
+                request.force.unwrap_or(false),
+            )
             .await?;
 
         Ok(())
