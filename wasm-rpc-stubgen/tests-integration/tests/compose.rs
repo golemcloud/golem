@@ -31,8 +31,6 @@ use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
 test_r::enable!();
 
-// TODO: disabled until getting newer glibc on CI
-#[ignore]
 #[test]
 async fn compose_with_single_stub() {
     let (_source_dir, stub_dir, stub_wasm) = init_stub("all-wit-types").await;
