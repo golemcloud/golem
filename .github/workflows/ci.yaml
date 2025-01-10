@@ -207,6 +207,8 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
@@ -374,6 +376,8 @@ jobs:
           detailed_summary: true
           include_passed: true
   integration-tests:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
@@ -463,6 +467,8 @@ jobs:
           detailed_summary: true
           include_passed: true
   sharding-tests:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
