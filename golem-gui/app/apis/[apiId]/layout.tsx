@@ -9,13 +9,14 @@ import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import { useMemo } from "react";
 import SecondaryHeader from "@/components/ui/secondary-header";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export default function APISLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { apiId } = useParams<{ apiId: string }>();
+  const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");
   const pathname = usePathname();

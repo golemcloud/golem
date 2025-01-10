@@ -14,6 +14,7 @@ import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
 import EnvironmentTab from "./environment-tab";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -23,8 +24,10 @@ const WorkerListWithDropdowns = () => {
   const [activeTab, setActiveTab] = useState(0);
 
   //TO DO: let show filters in url so that user can share the url to others.
-  const { compId } = useParams<{ compId: string }>();
-  const { id: workerName } = useParams<{ id: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
+  // const { id: workerName } = useParams<{ id: string }>();
+  const { id: workerName } = useCustomParam();
   //  need to integrate the filter logic here. and pagination or scroll on load needs to implemented or addd show more at the end on click we need to next set of data
   const { worker, isLoading, error } = useWorker(compId, workerName);
 

@@ -8,6 +8,7 @@ import { useParams } from "next/navigation";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import { Box } from "@mui/material";
 import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 type DataItem = {
   package: string;
@@ -17,7 +18,8 @@ type DataItem = {
 };
 
 export default function ExportsPage() {
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const { components, error } = useComponents(compId, "latest");
   const [latestComponent] = components;
 

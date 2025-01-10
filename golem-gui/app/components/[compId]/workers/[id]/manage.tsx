@@ -9,12 +9,10 @@ import { Divider, Paper, Stack, Typography } from "@mui/material";
 import {Button2 as Button} from "@/components/ui/button";
 import { useParams } from "next/navigation";
 import React, { useMemo } from "react";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export default function Manage() {
-  const { compId, id: workerName } = useParams<{
-    compId: string;
-    id: string;
-  }>();
+  const { compId, id: workerName } = useCustomParam();
 
   const { deleteWorker } = useDeleteWorker(compId, workerName);
 

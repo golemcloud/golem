@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import CodeIcon from '@mui/icons-material/Code';
 import ArticleIcon from '@mui/icons-material/Article';
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 
 
@@ -15,7 +16,8 @@ export default function ComponentsLayout({
   children: React.ReactNode;
 }) {
 
-  const { compId } = useParams<{compId:string}>();
+  // const { compId } = useParams<{compId:string}>();
+   const { compId } = useCustomParam();
 
    const navigationLinks = [
     { name: "Overview", href: `/components/${compId}/overview`, icon: <Home fontSize="small" /> },

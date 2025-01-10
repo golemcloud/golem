@@ -11,6 +11,7 @@ import {
   Alert,
   Paper,
 } from "@mui/material";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 //this type is temporary for now as we haven't worked on logs yet
 
@@ -42,8 +43,10 @@ type Log = {
 
 
 export default function WorkerLogs() {
-  const { compId } = useParams<{ compId: string }>();
-  const { id: workerName } = useParams<{ id: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
+  // const { id: workerName } = useParams<{ id: string }>();
+  const { id: workerName } = useCustomParam();
   const { logs, error, isLoading } = useWorkerLogs(compId, workerName, {
     count: 1,
   });

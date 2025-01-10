@@ -7,9 +7,11 @@ import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "@/components/erro-boundary";
 import CustomModal from "@/components/CustomModal";
 import DeleteApiVersion from "@/components/api-version-deletion";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const ApiSettings = () => {
-  const { apiId} = useParams<{apiId:string}>();
+  // const { apiId} = useParams<{apiId:string}>();
+  const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");
   const { apiDefinitions, isLoading, getApiDefintion, error: requestError } = useApiDefinitions(apiId, version)

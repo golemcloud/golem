@@ -5,10 +5,12 @@ import { Dropdown } from "./ui/dropdown-button";
 import { Worker } from "@/types/api";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { useParams } from "next/navigation";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 
 export default function WorkerInfoCard({ worker, onClick }: { worker: Worker; onClick: () => void }) {
-  const {compId} = useParams<{compId:string}>()
+  // const {compId} = useParams<{compId:string}>()
+  const { compId } = useCustomParam();
   const workerInfo = [
     `v${worker.componentVersion}`,
     `Env: ${Object.values(worker.env).length}`,

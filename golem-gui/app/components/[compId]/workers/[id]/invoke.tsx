@@ -14,6 +14,7 @@ import {
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
 import JsonEditor from "@/components/json-editor";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export function InvokeForm({
   invoke,
@@ -70,7 +71,8 @@ export function InvokeForm({
 }
 
 export default function InvokePage({ worker }: { worker: Worker }) {
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const { components, isLoading } = useComponents(
     compId,
     worker?.componentVersion ?? "latest"

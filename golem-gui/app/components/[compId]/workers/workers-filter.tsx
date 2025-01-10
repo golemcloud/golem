@@ -7,6 +7,7 @@ import { TextField, InputAdornment } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import useComponents from "@/lib/hooks/use-component";
 import { DatePicker } from "@/components/ui/date-picker";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const statuses = [
   { value: "Running", label: "Running" },
@@ -23,7 +24,8 @@ const statuses = [
 export function StatusFilter() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
 
   // Using useRef to store selectedStatus
   const selectedStatusRef = useRef<string[]>(["Running"]);
@@ -78,7 +80,8 @@ export function StatusFilter() {
 
 export function VersionFilter() {
   const router = useRouter();
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const searchParams = useSearchParams();
   const { components, isLoading } = useComponents(compId);
 
@@ -158,7 +161,8 @@ interface SearchProps {
 export const Search = ({ placeholder = "Worker Name..." }: SearchProps) => {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const [searchQuery, setSearchQuery] = useState("");
   const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -244,7 +248,8 @@ export function CustomDatePickFilter({label, searchKey}:{
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
 
   // Using useRef to store selectedStatus
   const selectedDateRef = useRef<Date>();

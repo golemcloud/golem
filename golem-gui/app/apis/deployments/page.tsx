@@ -23,6 +23,7 @@ import { Card } from "@/components/ui/card";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import { useState } from "react";
 import CustomModal from "@/components/CustomModal";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 function DeploymentApiVersionDropDown({
   deployments,
@@ -60,7 +61,8 @@ function DeploymentApiVersionDropDown({
 }
 
 export default function Page() {
-  const { apiId } = useParams<{ apiId: string }>();
+  // const { apiId } = useParams<{ apiId: string }>();
+  const { apiId } = useCustomParam();
   const [open, setOpen] = useState<boolean>(false);
   
   //TODO to move this do separate custom hook so that we can resuse.

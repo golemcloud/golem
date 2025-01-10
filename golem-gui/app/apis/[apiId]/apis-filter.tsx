@@ -2,13 +2,17 @@ import { useParams, useRouter,usePathname, useSearchParams } from "next/navigati
 import { MultiSelect } from "@/components/ui/multi-select";
 import React, { useMemo } from "react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 
 export function VersionFilter() {
     const router = useRouter();
-    const { apiId } = useParams<{ apiId: string }>();
+    // const { apiId } = useParams<{ apiId: string }>();
+    const { apiId } = useCustomParam();
     const params = useSearchParams();
     const pathname = usePathname();
+
+    console.log("apiId=>>>>>>>>>>>", apiId);
 
     const { apiDefinitions, getApiDefintion, isLoading } = useApiDefinitions(apiId);
 

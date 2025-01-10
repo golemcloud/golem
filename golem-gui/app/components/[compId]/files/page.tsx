@@ -6,9 +6,11 @@ import { useWorkerFileContent } from "@/lib/hooks/use-worker";
 import { useParams } from "next/navigation";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const FileComponent = () => {
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const { data, isLoading, error } = useWorkerFileContent(
     "test",
     compId,

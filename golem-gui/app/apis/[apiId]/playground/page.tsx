@@ -18,7 +18,7 @@ function Builder() {
   const {error} = (!isLoading && getApiDefintion() || {});
 
   return (
-    <Paper>
+    <Paper className="">
       {(error || requestError) && <ErrorBoundary message={requestError || error} />}
       {!isLoading && !error && (
         <ReactFlowProvider>

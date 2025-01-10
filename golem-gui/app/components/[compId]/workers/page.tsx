@@ -18,12 +18,14 @@ import { Button2 } from "@/components/ui/button";
 import WorkerInfoCard from "@/components/worker-info-card";
 import {StatusFilter, VersionFilter, Search, CustomDatePickFilter} from "./workers-filter";
 import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 
 const WorkerListWithDropdowns = () => {
   const router = useRouter();
   //TO DO: let show filters in url so that user can share the url to others.
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const [open, setOpen] = useState(false);
 
   const handleClose = () => setOpen(false);

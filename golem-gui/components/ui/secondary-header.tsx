@@ -34,6 +34,7 @@ import NewRouteForm from "../new-route";
 import DeleteApiVersion from "../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import CreateComponentForm from '@/components/new-component';
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const actionsMap = {
   new_version: "Create New Version",
@@ -54,12 +55,17 @@ export default function SecondaryHeader({
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
-  const { compId } = useParams<{ compId: string }>();
-  const { id: workerName } = useParams<{ id: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
+  // const { id: workerName } = useParams<{ id: string }>();
+  const { id: workerName } = useCustomParam();
 
-  const { apiId } = useParams<{ apiId: string }>();
+  // const { apiId } = useParams<{ apiId: string }>();
+  const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");
+
+  console.log(apiId)
 
   const [open, setOpen] = useState<string | null>(null);
 

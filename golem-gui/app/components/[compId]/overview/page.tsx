@@ -26,10 +26,12 @@ import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const router = useRouter();
 
   const { components, isLoading: componentDataLoading, error } = useComponents(

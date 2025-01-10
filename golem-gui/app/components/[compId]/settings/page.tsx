@@ -15,9 +15,11 @@ import ErrorBoundary from "@/components/erro-boundary";
 import { Button2 } from "@/components/ui/button";
 import { DownloadIcon } from "lucide-react";
 import { DropdownV2 } from "@/components/ui/dropdown-button";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const WorkerSettings = () => {
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const { components, error, isLoading } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
   const searchParams = useSearchParams();

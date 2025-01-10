@@ -13,6 +13,7 @@ import { toast } from "react-toastify";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { WorkerFilter } from "../../types/api";
+import { useCustomParam } from "./use-custom-param";
 const ROUTE_PATH = "v1/components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
@@ -71,10 +72,11 @@ export function useWorkerInvocation(invoke: {
   fun?: WorkerFunction;
   instanceName?: string | null;
 }) {
-  const { compId, id: workerName } = useParams<{
-    compId: string;
-    id: string;
-  }>();
+  // const { compId, id: workerName } = useParams<{
+  //   compId: string;
+  //   id: string;
+  // }>();
+  const { compId, id: workerName } = useCustomParam();
 
   const instanceName = invoke?.instanceName;
   const functionName = invoke?.fun?.name;
@@ -430,7 +432,8 @@ export default function useWorkers(
   componentId?: string,
   version?: string | number
 ) {
-  const { compId } = useParams<{ compId: string }>();
+  // const { compId } = useParams<{ compId: string }>();
+  const { compId } = useCustomParam();
   const path = `${ROUTE_PATH}/${componentId || compId}/workers${
     version ? `?filter=version = ${version}` : ""
   }`;
