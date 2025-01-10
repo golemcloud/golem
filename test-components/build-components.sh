@@ -100,7 +100,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    cp -v $(find target/wasm32-wasi/release -name '*.wasm' -maxdepth 1) "$target"
+    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
