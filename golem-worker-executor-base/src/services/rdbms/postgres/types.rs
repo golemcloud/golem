@@ -359,6 +359,7 @@ pub enum DbColumnType {
     Domain(DomainType),
     Range(RangeType),
     Array(Box<DbColumnType>),
+    Null,
 }
 
 impl DbColumnType {
@@ -433,6 +434,7 @@ impl Display for DbColumnType {
                 write!(f, "range: {}", v)
             }
             DbColumnType::Money => write!(f, "money"),
+            DbColumnType::Null => write!(f, "null"),
         }
     }
 }

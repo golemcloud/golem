@@ -26,7 +26,6 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures_util::stream::BoxStream;
-use itertools::Itertools;
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
@@ -134,956 +133,448 @@ impl<'q> QueryParamsBinder<'q, PostgresType, sqlx::Postgres>
 }
 
 fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result<(), String> {
-    match value {
-        DbValue::Character(v) => setter.try_set_value(v),
-        DbValue::Int2(v) => setter.try_set_value(v),
-        DbValue::Int4(v) => setter.try_set_value(v),
-        DbValue::Int8(v) => setter.try_set_value(v),
-        DbValue::Float4(v) => setter.try_set_value(v),
-        DbValue::Float8(v) => setter.try_set_value(v),
-        DbValue::Numeric(v) => setter.try_set_value(v),
-        DbValue::Boolean(v) => setter.try_set_value(v),
-        DbValue::Text(v) => setter.try_set_value(v),
-        DbValue::Varchar(v) => setter.try_set_value(v),
-        DbValue::Bpchar(v) => setter.try_set_value(v),
-        DbValue::Bytea(v) => setter.try_set_value(v),
-        DbValue::Uuid(v) => setter.try_set_value(v),
-        DbValue::Json(v) => setter.try_set_value(v),
-        DbValue::Jsonb(v) => setter.try_set_value(v),
-        DbValue::Jsonpath(v) => setter.try_set_value(PgJsonPath(v)),
-        DbValue::Xml(v) => setter.try_set_value(PgXml(v)),
-        DbValue::Timestamp(v) => setter.try_set_value(v),
-        DbValue::Timestamptz(v) => setter.try_set_value(v),
-        DbValue::Time(v) => setter.try_set_value(v),
-        DbValue::Timetz(v) => setter.try_set_value(PgTimeTz::from(v)),
-        DbValue::Date(v) => setter.try_set_value(v),
-        DbValue::Interval(v) => setter.try_set_value(PgInterval::from(v)),
-        DbValue::Inet(v) => setter.try_set_value(v),
-        DbValue::Cidr(v) => setter.try_set_value(v),
-        DbValue::Macaddr(v) => setter.try_set_value(v),
-        DbValue::Bit(v) => setter.try_set_value(v),
-        DbValue::Varbit(v) => setter.try_set_value(v),
-        DbValue::Int4range(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Int8range(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Numrange(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Tsrange(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Tstzrange(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Daterange(v) => setter.try_set_value(PgRange::from(v)),
-        DbValue::Money(v) => setter.try_set_value(PgMoney(v)),
-        DbValue::Oid(v) => setter.try_set_value(Oid(v)),
-        DbValue::Enum(v) => setter.try_set_value(v),
-        DbValue::Composite(v) => setter.try_set_value(v),
-        DbValue::Domain(v) => setter.try_set_value(v),
-        DbValue::Range(v) => set_value_range(setter, v),
-        DbValue::Array(vs) => set_value_array(setter, vs),
-        DbValue::Null => setter.try_set_value(PgNull {}),
-    }
-}
-
-fn set_value_array<'a, S: PgValueSetter<'a>>(
-    setter: &mut S,
-    values: Vec<DbValue>,
-) -> Result<(), String> {
-    if values.is_empty() {
-        setter.try_set_value(PgNull {})
-    } else {
-        let first = &values[0];
-        match first {
-            DbValue::Character(_) => {
-                let values: Vec<i8> = get_plain_values(values, |v| {
-                    if let DbValue::Character(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Int2(_) => {
-                let values: Vec<i16> = get_plain_values(values, |v| {
-                    if let DbValue::Int2(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Int4(_) => {
-                let values: Vec<i32> = get_plain_values(values, |v| {
-                    if let DbValue::Int4(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Int8(_) => {
-                let values: Vec<i64> = get_plain_values(values, |v| {
-                    if let DbValue::Int8(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Numeric(_) => {
-                let values: Vec<BigDecimal> = get_plain_values(values, |v| {
-                    if let DbValue::Numeric(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Float4(_) => {
-                let values: Vec<f32> = get_plain_values(values, |v| {
-                    if let DbValue::Float4(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Float8(_) => {
-                let values: Vec<f64> = get_plain_values(values, |v| {
-                    if let DbValue::Float8(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Boolean(_) => {
-                let values: Vec<bool> = get_plain_values(values, |v| {
-                    if let DbValue::Boolean(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Text(_) => {
-                let values: Vec<String> = get_plain_values(values, |v| {
-                    if let DbValue::Text(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Varchar(_) => {
-                let values: Vec<String> = get_plain_values(values, |v| {
-                    if let DbValue::Varchar(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Bpchar(_) => {
-                let values: Vec<String> = get_plain_values(values, |v| {
-                    if let DbValue::Bpchar(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Bytea(_) => {
-                let values: Vec<Vec<u8>> = get_plain_values(values, |v| {
-                    if let DbValue::Bytea(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Uuid(_) => {
-                let values: Vec<Uuid> = get_plain_values(values, |v| {
-                    if let DbValue::Uuid(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Json(_) => {
-                let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
-                    if let DbValue::Json(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Jsonb(_) => {
-                let values: Vec<serde_json::Value> = get_plain_values(values, |v| {
-                    if let DbValue::Jsonb(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Jsonpath(_) => {
-                let values: Vec<PgJsonPath> = get_plain_values(values, |v| {
-                    if let DbValue::Jsonpath(v) = v {
-                        Some(PgJsonPath(v))
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Xml(_) => {
-                let values: Vec<PgXml> = get_plain_values(values, |v| {
-                    if let DbValue::Xml(v) = v {
-                        Some(PgXml(v))
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Timestamptz(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Timestamptz(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Timestamp(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Timestamp(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Date(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Date(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Time(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Time(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Timetz(_) => {
-                let values: Vec<PgTimeTz> = get_plain_values(values, |v| {
-                    if let DbValue::Timetz(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Interval(_) => {
-                let values: Vec<PgInterval> = get_plain_values(values, |v| {
-                    if let DbValue::Interval(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Inet(_) => {
-                let values: Vec<IpAddr> = get_plain_values(values, |v| {
-                    if let DbValue::Inet(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Cidr(_) => {
-                let values: Vec<IpAddr> = get_plain_values(values, |v| {
-                    if let DbValue::Cidr(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Macaddr(_) => {
-                let values: Vec<MacAddress> = get_plain_values(values, |v| {
-                    if let DbValue::Macaddr(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Bit(_) => {
-                let values: Vec<BitVec> = get_plain_values(values, |v| {
-                    if let DbValue::Bit(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Varbit(_) => {
-                let values: Vec<BitVec> = get_plain_values(values, |v| {
-                    if let DbValue::Varbit(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Int4range(_) => {
-                let values: Vec<PgRange<i32>> = get_plain_values(values, |v| {
-                    if let DbValue::Int4range(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Int8range(_) => {
-                let values: Vec<PgRange<i64>> = get_plain_values(values, |v| {
-                    if let DbValue::Int8range(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Numrange(_) => {
-                let values: Vec<PgRange<BigDecimal>> = get_plain_values(values, |v| {
-                    if let DbValue::Numrange(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Tsrange(_) => {
-                let values: Vec<PgRange<chrono::NaiveDateTime>> = get_plain_values(values, |v| {
-                    if let DbValue::Tsrange(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Tstzrange(_) => {
-                let values: Vec<PgRange<chrono::DateTime<chrono::Utc>>> =
-                    get_plain_values(values, |v| {
-                        if let DbValue::Tstzrange(v) = v {
-                            Some(v.into())
+    let db_column_type = get_value_db_column_type(&value)?;
+    match &db_column_type {
+        DbColumnType::Enum(_) => {
+            let v = if let DbValue::Enum(v) = value {
+                Some(v)
+            } else {
+                None
+            };
+            setter.try_set_value(v)
+        }
+        DbColumnType::Composite(_) => {
+            let v = if let DbValue::Composite(v) = value {
+                Some(v)
+            } else {
+                None
+            };
+            setter.try_set_value(v)
+        }
+        DbColumnType::Domain(_) => {
+            let v = if let DbValue::Domain(v) = value {
+                Some(v)
+            } else {
+                None
+            };
+            setter.try_set_value(v)
+        }
+        DbColumnType::Array(t) => {
+            let base_type: DbColumnType = *t.clone();
+            match base_type {
+                DbColumnType::Enum(_) => {
+                    let values: Vec<_> = get_array_plain_values(value, |v| {
+                        if let DbValue::Enum(v) = v {
+                            Some(v)
                         } else {
                             None
                         }
                     })?;
-                setter.try_set_value(values)
+                    setter.try_set_value(PgEnums(values))
+                }
+                DbColumnType::Composite(_) => {
+                    let values: Vec<_> = get_array_plain_values(value, |v| {
+                        if let DbValue::Composite(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    setter.try_set_value(PgComposites(values))
+                }
+                DbColumnType::Domain(_) => {
+                    let values: Vec<_> = get_array_plain_values(value, |v| {
+                        if let DbValue::Domain(v) = v {
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    })?;
+                    setter.try_set_value(PgDomains(values))
+                }
+                DbColumnType::Range(v) => {
+                    set_value_helper(setter, &v.base_type, value, DbValueType::RangeArray)
+                }
+                _ => set_value_helper(setter, &base_type, value, DbValueType::Array),
             }
-            DbValue::Daterange(_) => {
-                let values: Vec<PgRange<chrono::NaiveDate>> = get_plain_values(values, |v| {
-                    if let DbValue::Daterange(v) = v {
-                        Some(v.into())
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Oid(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Oid(v) = v {
-                        Some(Oid(v))
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Money(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Money(v) = v {
-                        Some(PgMoney(v))
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(values)
-            }
-            DbValue::Enum(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Enum(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(PgEnums(values))
-            }
-            DbValue::Composite(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Composite(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(PgComposites(values))
-            }
-            DbValue::Domain(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Domain(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(PgDomains(values))
-            }
-            DbValue::Range(_) => {
-                let values: Vec<_> = get_plain_values(values, |v| {
-                    if let DbValue::Range(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                set_value_range_array(setter, values)
-            }
-            DbValue::Array(_) => Err("Array of arrays is not supported".to_string()),
-            DbValue::Null => Err(format!(
-                "Array param element '{}' with index 0 is not supported",
-                first
-            )),
         }
+        DbColumnType::Range(t) => set_value_helper(setter, &t.base_type, value, DbValueType::Range),
+        _ => set_value_helper(setter, &db_column_type, value, DbValueType::Primitive),
     }
 }
 
-fn set_value_range<'a, S: PgValueSetter<'a>>(setter: &mut S, value: Range) -> Result<(), String> {
-    let v = (*value.value).start_value().or((*value.value).end_value());
-    if let Some(v) = v {
-        match v {
-            DbValue::Float4(_) => {
-                let v: PgCustomRange<f32> = get_pg_range(value, |v| {
-                    if let DbValue::Float4(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(v)
-            }
-            DbValue::Float8(_) => {
-                let v: PgCustomRange<f64> = get_pg_range(value, |v| {
-                    if let DbValue::Float8(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(v)
-            }
-            _ => Err(format!("Range of '{}' is not supported", v))?,
-        }
-    } else {
-        let v: PgCustomRange<PgNull> = get_pg_range(value, |_| None)?;
-        setter.try_set_value(v)
-    }
-}
-
-fn set_value_range_array<'a, S: PgValueSetter<'a>>(
+fn set_value_helper<'a, S: PgValueSetter<'a>>(
     setter: &mut S,
-    values: Vec<Range>,
+    column_type: &DbColumnType,
+    value: DbValue,
+    value_type: DbValueType,
 ) -> Result<(), String> {
-    let v = values
-        .iter()
-        .map(|value| (*value.value).start_value().or((*value.value).end_value()))
-        .find_or_first(|v| v.is_some())
-        .flatten();
-    if let Some(v) = v {
-        match v {
-            DbValue::Float4(_) => {
-                let vs: Vec<PgCustomRange<f32>> = get_pg_ranges(values, |v| {
-                    if let DbValue::Float4(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(PgCustomRanges(vs))
+    match column_type {
+        DbColumnType::Boolean => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Boolean(v) = v {
+                Some(v)
+            } else {
+                None
             }
-            DbValue::Float8(_) => {
-                let vs: Vec<PgCustomRange<f64>> = get_pg_ranges(values, |v| {
-                    if let DbValue::Float8(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
-                setter.try_set_value(PgCustomRanges(vs))
+        }),
+        DbColumnType::Character => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Character(v) = v {
+                Some(v)
+            } else {
+                None
             }
-            _ => Err(format!("Range of '{}' is not supported", v))?,
-        }
-    } else {
-        let vs: Vec<PgCustomRange<PgNull>> = get_pg_ranges(values, |_| None)?;
-        setter.try_set_value(PgCustomRanges(vs))
+        }),
+        DbColumnType::Int2 => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Int2(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Int4 => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Int4(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Int8 => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Int8(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Float4 => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Float4(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Float8 => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Float8(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Numeric => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Numeric(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Text => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Text(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Varchar => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Varchar(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Bpchar => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Bpchar(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Bytea => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Bytea(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Uuid => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Uuid(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Json => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Json(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Jsonb => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Jsonb(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Jsonpath => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Jsonpath(v) = v {
+                Some(PgJsonPath(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Xml => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Xml(v) = v {
+                Some(PgXml(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Timestamptz => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Timestamptz(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Timestamp => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Timestamp(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Date => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Date(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Time => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Time(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Timetz => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Timetz(v) = v {
+                Some(PgTimeTz::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Interval => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Interval(v) = v {
+                Some(PgInterval::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Inet => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Inet(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Cidr => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Cidr(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Macaddr => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Macaddr(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Bit => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Bit(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Varbit => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Varbit(v) = v {
+                Some(v)
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Int4range => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Int4range(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Int8range => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Int8range(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Numrange => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Numrange(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Tsrange => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Tsrange(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Tstzrange => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Tstzrange(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Daterange => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Daterange(v) = v {
+                Some(PgRange::from(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Oid => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Oid(v) = v {
+                Some(Oid(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Money => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Money(v) = v {
+                Some(PgMoney(v))
+            } else {
+                None
+            }
+        }),
+        DbColumnType::Null => setter.try_set_db_value(value, value_type, |v| {
+            if let DbValue::Null = v {
+                Some(PgNull {})
+            } else {
+                None
+            }
+        }),
+        _ => Err(format!(
+            "{} do not support '{}' value",
+            value_type, column_type
+        )),
     }
 }
 
-// fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result<(), String> {
-//     match value.clone() {
-//         DbValue::Enum(v) => setter.try_set_value(v),
-//         DbValue::Composite(v) => setter.try_set_value(v),
-//         DbValue::Domain(v) => setter.try_set_value(v),
-//         DbValue::Range(r) => {
-//             let v = (*r.value).start_value().or((*r.value).end_value());
-//             if let Some(v) = v {
-//                 set_value_helper(setter, v, value, DbValueType::Range)
-//             } else {
-//                 let v: PgCustomRange<PgNull> = get_pg_range(r, |_| None)?;
-//                 setter.try_set_value(v)
-//             }
-//         }
-//         DbValue::Array(vs) => {
-//             if vs.is_empty() {
-//                 setter.try_set_value(PgNull {})
-//             } else {
-//                 let item = &vs[0];
-//                 match item {
-//                     DbValue::Enum(_) => {
-//                         let values: Vec<_> = get_plain_values(vs, |v| {
-//                             if let DbValue::Enum(v) = v {
-//                                 Some(v)
-//                             } else {
-//                                 None
-//                             }
-//                         })?;
-//                         setter.try_set_value(PgEnums(values))
-//                     }
-//                     DbValue::Composite(_) => {
-//                         let values: Vec<_> = get_plain_values(vs, |v| {
-//                             if let DbValue::Composite(v) = v {
-//                                 Some(v)
-//                             } else {
-//                                 None
-//                             }
-//                         })?;
-//                         setter.try_set_value(PgComposites(values))
-//                     }
-//                     DbValue::Domain(_) => {
-//                         let values: Vec<_> = get_plain_values(vs, |v| {
-//                             if let DbValue::Domain(v) = v {
-//                                 Some(v)
-//                             } else {
-//                                 None
-//                             }
-//                         })?;
-//                         setter.try_set_value(PgDomains(values))
-//                     }
-//                     DbValue::Range(_) => {
-//                         let ranges: Vec<_> = get_plain_values(vs, |v| {
-//                             if let DbValue::Range(v) = v {
-//                                 Some(v)
-//                             } else {
-//                                 None
-//                             }
-//                         })?;
-//
-//                         let item = ranges
-//                             .iter()
-//                             .map(|value| {
-//                                 (*value.value).start_value().or((*value.value).end_value())
-//                             })
-//                             .find_or_first(|v| v.is_some())
-//                             .flatten();
-//                         if let Some(item) = item {
-//                             set_value_helper(setter, item, value, DbValueType::RangeArray)
-//                         } else {
-//                             let vs: Vec<PgCustomRange<PgNull>> =
-//                                 get_pg_ranges(ranges, |_| Some(PgNull {}))?;
-//                             setter.try_set_value(PgCustomRanges(vs))
-//                         }
-//                     }
-//                     _ => set_value_helper(setter, item, value, DbValueType::Array),
-//                 }
-//             }
-//         }
-//         DbValue::Null => setter.try_set_value(PgNull {}),
-//         v => set_value_helper(setter, &v, value, DbValueType::Primitive),
-//     }
-// }
-//
-// fn set_value_helper<'a, S: PgValueSetter<'a>>(
-//     setter: &mut S,
-//     item_value: &DbValue,
-//     value: DbValue,
-//     value_type: DbValueType,
-// ) -> Result<(), String> {
-//     match item_value {
-//         DbValue::Boolean(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Boolean(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Character(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Character(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Int2(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Int2(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Int4(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Int4(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Int8(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Int8(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Float4(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Float4(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Float8(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Float8(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Numeric(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Numeric(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Text(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Text(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Varchar(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Varchar(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Bpchar(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Bpchar(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Uuid(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Uuid(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Json(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Json(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Jsonb(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Jsonb(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Jsonpath(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Jsonpath(v) = v {
-//                 Some(PgJsonPath(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Xml(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Xml(v) = v {
-//                 Some(PgXml(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Timestamptz(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Timestamptz(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Timestamp(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Timestamp(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Date(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Date(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Time(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Time(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Timetz(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Timetz(v) = v {
-//                 Some(PgTimeTz::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Interval(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Interval(v) = v {
-//                 Some(PgInterval::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Inet(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Inet(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Cidr(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Cidr(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Macaddr(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Macaddr(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Bit(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Bit(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Varbit(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Varbit(v) = v {
-//                 Some(v)
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Int4range(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Int4range(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Int8range(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Int8range(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Numrange(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Numrange(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Tsrange(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Tsrange(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Tstzrange(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Tstzrange(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Daterange(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Daterange(v) = v {
-//                 Some(PgRange::from(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Oid(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Oid(v) = v {
-//                 Some(Oid(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         DbValue::Money(_) => setter.try_set_db_value(value, value_type, |v| {
-//             if let DbValue::Money(v) = v {
-//                 Some(PgMoney(v))
-//             } else {
-//                 None
-//             }
-//         }),
-//         // DbValue::Null => setter.try_set_db_value(value, value_type, |v| {
-//         //     if let DbValue::Null = v {
-//         //         Some(PgNull {})
-//         //     } else {
-//         //         None
-//         //     }
-//         // }),
-//         _ => Err(format!("{} do not support '{}' value", value_type, value,)),
-//     }
-// }
+fn get_value_db_column_type(value: &DbValue) -> Result<DbColumnType, String> {
+    match value {
+        DbValue::Character(_) => Ok(DbColumnType::Character),
+        DbValue::Int2(_) => Ok(DbColumnType::Int2),
+        DbValue::Int4(_) => Ok(DbColumnType::Int4),
+        DbValue::Int8(_) => Ok(DbColumnType::Int8),
+        DbValue::Float4(_) => Ok(DbColumnType::Float4),
+        DbValue::Float8(_) => Ok(DbColumnType::Float8),
+        DbValue::Numeric(_) => Ok(DbColumnType::Numeric),
+        DbValue::Boolean(_) => Ok(DbColumnType::Boolean),
+        DbValue::Text(_) => Ok(DbColumnType::Text),
+        DbValue::Varchar(_) => Ok(DbColumnType::Varchar),
+        DbValue::Bpchar(_) => Ok(DbColumnType::Bpchar),
+        DbValue::Bytea(_) => Ok(DbColumnType::Bytea),
+        DbValue::Uuid(_) => Ok(DbColumnType::Uuid),
+        DbValue::Json(_) => Ok(DbColumnType::Json),
+        DbValue::Jsonb(_) => Ok(DbColumnType::Jsonb),
+        DbValue::Jsonpath(_) => Ok(DbColumnType::Jsonpath),
+        DbValue::Xml(_) => Ok(DbColumnType::Xml),
+        DbValue::Timestamp(_) => Ok(DbColumnType::Timestamp),
+        DbValue::Timestamptz(_) => Ok(DbColumnType::Timestamptz),
+        DbValue::Time(_) => Ok(DbColumnType::Time),
+        DbValue::Timetz(_) => Ok(DbColumnType::Timetz),
+        DbValue::Date(_) => Ok(DbColumnType::Date),
+        DbValue::Interval(_) => Ok(DbColumnType::Interval),
+        DbValue::Inet(_) => Ok(DbColumnType::Inet),
+        DbValue::Cidr(_) => Ok(DbColumnType::Cidr),
+        DbValue::Macaddr(_) => Ok(DbColumnType::Macaddr),
+        DbValue::Bit(_) => Ok(DbColumnType::Bit),
+        DbValue::Varbit(_) => Ok(DbColumnType::Varbit),
+        DbValue::Int4range(_) => Ok(DbColumnType::Int4range),
+        DbValue::Int8range(_) => Ok(DbColumnType::Int8range),
+        DbValue::Numrange(_) => Ok(DbColumnType::Numrange),
+        DbValue::Tsrange(_) => Ok(DbColumnType::Tsrange),
+        DbValue::Tstzrange(_) => Ok(DbColumnType::Tstzrange),
+        DbValue::Daterange(_) => Ok(DbColumnType::Daterange),
+        DbValue::Money(_) => Ok(DbColumnType::Money),
+        DbValue::Oid(_) => Ok(DbColumnType::Oid),
+        DbValue::Enum(v) => Ok(DbColumnType::Enum(EnumType::new(v.name.clone()))),
+        DbValue::Composite(v) => Ok(DbColumnType::Composite(CompositeType::new(
+            v.name.clone(),
+            vec![],
+        ))),
+        DbValue::Domain(v) => {
+            let t = get_value_db_column_type(&v.value)?;
+            Ok(DbColumnType::Domain(DomainType::new(v.name.clone(), t)))
+        }
+        DbValue::Range(r) => {
+            let v = (*r.value).start_value().or((*r.value).end_value());
+            let t = if let Some(v) = v {
+                get_value_db_column_type(v)?
+            } else {
+                DbColumnType::Null
+            };
+            Ok(DbColumnType::Range(RangeType::new(r.name.clone(), t)))
+        }
+        DbValue::Array(vs) => {
+            let t = if !vs.is_empty() {
+                let t = get_value_db_column_type(&vs[0])?;
+                match t {
+                    DbColumnType::Range(r) if *r.base_type == DbColumnType::Null => {
+                        let v = vs
+                            .iter()
+                            .map(|v| {
+                                if let DbValue::Range(v) = v {
+                                    (*v.value).start_value().or((*v.value).end_value())
+                                } else {
+                                    None
+                                }
+                            })
+                            .find(|v| v.is_some())
+                            .flatten();
+                        let t = if let Some(v) = v {
+                            get_value_db_column_type(v)?
+                        } else {
+                            DbColumnType::Null
+                        };
+                        DbColumnType::Range(RangeType::new(r.name, t))
+                    }
+                    _ => t,
+                }
+            } else {
+                DbColumnType::Null
+            };
+            Ok(DbColumnType::Array(Box::new(t)))
+        }
+        DbValue::Null => Ok(DbColumnType::Null),
+    }
+}
 
-// fn get_value_db_column_type(value: &DbValue) -> Result<DbColumnType, String> {
-//     match value {
-//         DbValue::Character(_) => Ok(DbColumnType::Character),
-//         DbValue::Int2(_) => Ok(DbColumnType::Int2),
-//         DbValue::Int4(_) => Ok(DbColumnType::Int4),
-//         DbValue::Int8(_) => Ok(DbColumnType::Int8),
-//         DbValue::Float4(_) => Ok(DbColumnType::Float4),
-//         DbValue::Float8(_) => Ok(DbColumnType::Float8),
-//         DbValue::Numeric(_) => Ok(DbColumnType::Numeric),
-//         DbValue::Boolean(_) => Ok(DbColumnType::Boolean),
-//         DbValue::Text(_) => Ok(DbColumnType::Text),
-//         DbValue::Varchar(_) => Ok(DbColumnType::Varchar),
-//         DbValue::Bpchar(_) => Ok(DbColumnType::Bpchar),
-//         DbValue::Bytea(_) => Ok(DbColumnType::Bytea),
-//         DbValue::Uuid(_) => Ok(DbColumnType::Uuid),
-//         DbValue::Json(_) => Ok(DbColumnType::Json),
-//         DbValue::Jsonb(_) => Ok(DbColumnType::Jsonb),
-//         DbValue::Jsonpath(_) => Ok(DbColumnType::Jsonpath),
-//         DbValue::Xml(_) => Ok(DbColumnType::Xml),
-//         DbValue::Timestamp(_) => Ok(DbColumnType::Timestamp),
-//         DbValue::Timestamptz(_) => Ok(DbColumnType::Timestamptz),
-//         DbValue::Time(_) => Ok(DbColumnType::Time),
-//         DbValue::Timetz(_) => Ok(DbColumnType::Timetz),
-//         DbValue::Date(_) => Ok(DbColumnType::Date),
-//         DbValue::Interval(_) => Ok(DbColumnType::Interval),
-//         DbValue::Inet(_) => Ok(DbColumnType::Inet),
-//         DbValue::Cidr(_) => Ok(DbColumnType::Cidr),
-//         DbValue::Macaddr(_) => Ok(DbColumnType::Macaddr),
-//         DbValue::Bit(_) => Ok(DbColumnType::Bit),
-//         DbValue::Varbit(_) => Ok(DbColumnType::Varbit),
-//         DbValue::Int4range(_) => Ok(DbColumnType::Int4range),
-//         DbValue::Int8range(_) => Ok(DbColumnType::Int8range),
-//         DbValue::Numrange(_) => Ok(DbColumnType::Numrange),
-//         DbValue::Tsrange(_) => Ok(DbColumnType::Tstzrange),
-//         DbValue::Tstzrange(_) => Ok(DbColumnType::Tstzrange),
-//         DbValue::Daterange(_) => Ok(DbColumnType::Daterange),
-//         DbValue::Money(_) => Ok(DbColumnType::Money),
-//         DbValue::Oid(_) => Ok(DbColumnType::Oid),
-//         DbValue::Enum(v) => Ok(DbColumnType::Enum(EnumType::new(v.name.clone()))),
-//         DbValue::Composite(v) => Ok(DbColumnType::Composite(CompositeType::new(
-//             v.name.clone(),
-//             vec![],
-//         ))),
-//         DbValue::Domain(v) => {
-//             let t = get_value_db_column_type(&v.value)?;
-//             Ok(DbColumnType::Domain(DomainType::new(v.name.clone(), t)))
-//         }
-//         DbValue::Range(r) => {
-//             let v = (*r.value).start_value().or((*r.value).end_value());
-//
-//             let t = if let Some(v) = v {
-//                 get_value_db_column_type(v)?
-//             } else {
-//                 todo!()
-//                 // get_value_db_column_type(v)?
-//             };
-//
-//             Ok(DbColumnType::Range(RangeType::new(r.name.clone(), t)))
-//         }
-//         DbValue::Array(_) => {
-//             // if vs.len() > 0 {
-//             //     get_value_db_column_type(&vs[0])?
-//             // }
-//             todo!()
-//         }
-//         DbValue::Null => todo!(),
-//     }
-// }
+fn get_array_plain_values<T>(
+    value: DbValue,
+    f: impl Fn(DbValue) -> Option<T>,
+) -> Result<Vec<T>, String> {
+    match value {
+        DbValue::Array(vs) => get_plain_values(vs, f),
+        v => Err(format!("'{}' is not array", v)),
+    }
+}
 
 fn get_plain_values<T>(
     values: Vec<DbValue>,
@@ -1115,7 +606,7 @@ fn get_pg_range<T: Clone>(
             Err(format!(
                 "Bound element '{}' has different type than expected",
                 v
-            ))?
+            ))
         }
     }
 
@@ -1233,103 +724,90 @@ fn get_db_value<G: PgValueGetter>(
 }
 
 fn get_db_value_helper<G: PgValueGetter>(
-    db_type: &DbColumnType,
-    db_value_type: DbValueType,
+    column_type: &DbColumnType,
+    value_type: DbValueType,
     getter: &mut G,
 ) -> Result<DbValue, String> {
-    let value = match db_type {
-        DbColumnType::Boolean => {
-            getter.try_get_db_value::<bool>(db_value_type, DbValue::Boolean)?
-        }
-        DbColumnType::Character => {
-            getter.try_get_db_value::<i8>(db_value_type, DbValue::Character)?
-        }
-        DbColumnType::Int2 => getter.try_get_db_value::<i16>(db_value_type, DbValue::Int2)?,
-        DbColumnType::Int4 => getter.try_get_db_value::<i32>(db_value_type, DbValue::Int4)?,
-        DbColumnType::Int8 => getter.try_get_db_value::<i64>(db_value_type, DbValue::Int8)?,
-        DbColumnType::Float4 => getter.try_get_db_value::<f32>(db_value_type, DbValue::Float4)?,
-        DbColumnType::Float8 => getter.try_get_db_value::<f64>(db_value_type, DbValue::Float8)?,
+    let value = match column_type {
+        DbColumnType::Boolean => getter.try_get_db_value::<bool>(value_type, DbValue::Boolean)?,
+        DbColumnType::Character => getter.try_get_db_value::<i8>(value_type, DbValue::Character)?,
+        DbColumnType::Int2 => getter.try_get_db_value::<i16>(value_type, DbValue::Int2)?,
+        DbColumnType::Int4 => getter.try_get_db_value::<i32>(value_type, DbValue::Int4)?,
+        DbColumnType::Int8 => getter.try_get_db_value::<i64>(value_type, DbValue::Int8)?,
+        DbColumnType::Float4 => getter.try_get_db_value::<f32>(value_type, DbValue::Float4)?,
+        DbColumnType::Float8 => getter.try_get_db_value::<f64>(value_type, DbValue::Float8)?,
         DbColumnType::Numeric => {
-            getter.try_get_db_value::<BigDecimal>(db_value_type, DbValue::Numeric)?
+            getter.try_get_db_value::<BigDecimal>(value_type, DbValue::Numeric)?
         }
-        DbColumnType::Uuid => getter.try_get_db_value::<Uuid>(db_value_type, DbValue::Uuid)?,
-        DbColumnType::Text => getter.try_get_db_value::<String>(db_value_type, DbValue::Text)?,
-        DbColumnType::Varchar => {
-            getter.try_get_db_value::<String>(db_value_type, DbValue::Varchar)?
-        }
-        DbColumnType::Bpchar => {
-            getter.try_get_db_value::<String>(db_value_type, DbValue::Bpchar)?
-        }
+        DbColumnType::Uuid => getter.try_get_db_value::<Uuid>(value_type, DbValue::Uuid)?,
+        DbColumnType::Text => getter.try_get_db_value::<String>(value_type, DbValue::Text)?,
+        DbColumnType::Varchar => getter.try_get_db_value::<String>(value_type, DbValue::Varchar)?,
+        DbColumnType::Bpchar => getter.try_get_db_value::<String>(value_type, DbValue::Bpchar)?,
         DbColumnType::Json => {
-            getter.try_get_db_value::<serde_json::Value>(db_value_type, DbValue::Json)?
+            getter.try_get_db_value::<serde_json::Value>(value_type, DbValue::Json)?
         }
         DbColumnType::Jsonb => {
-            getter.try_get_db_value::<serde_json::Value>(db_value_type, DbValue::Jsonb)?
+            getter.try_get_db_value::<serde_json::Value>(value_type, DbValue::Jsonb)?
         }
         DbColumnType::Jsonpath => {
-            getter.try_get_db_value::<PgJsonPath>(db_value_type, |v| DbValue::Jsonpath(v.0))?
+            getter.try_get_db_value::<PgJsonPath>(value_type, |v| DbValue::Jsonpath(v.0))?
         }
-        DbColumnType::Xml => {
-            getter.try_get_db_value::<PgXml>(db_value_type, |v| DbValue::Xml(v.0))?
-        }
+        DbColumnType::Xml => getter.try_get_db_value::<PgXml>(value_type, |v| DbValue::Xml(v.0))?,
         DbColumnType::Timestamp => {
-            getter.try_get_db_value::<chrono::NaiveDateTime>(db_value_type, DbValue::Timestamp)?
+            getter.try_get_db_value::<chrono::NaiveDateTime>(value_type, DbValue::Timestamp)?
         }
-        DbColumnType::Timestamptz => getter.try_get_db_value::<chrono::DateTime<chrono::Utc>>(
-            db_value_type,
-            DbValue::Timestamptz,
-        )?,
+        DbColumnType::Timestamptz => getter
+            .try_get_db_value::<chrono::DateTime<chrono::Utc>>(value_type, DbValue::Timestamptz)?,
         DbColumnType::Date => {
-            getter.try_get_db_value::<chrono::NaiveDate>(db_value_type, DbValue::Date)?
+            getter.try_get_db_value::<chrono::NaiveDate>(value_type, DbValue::Date)?
         }
         DbColumnType::Time => {
-            getter.try_get_db_value::<chrono::NaiveTime>(db_value_type, DbValue::Time)?
+            getter.try_get_db_value::<chrono::NaiveTime>(value_type, DbValue::Time)?
         }
         DbColumnType::Timetz => getter
             .try_get_db_value::<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>(
-                db_value_type,
+                value_type,
                 |v| DbValue::Timetz(v.into()),
             )?,
         DbColumnType::Interval => {
-            getter.try_get_db_value::<PgInterval>(db_value_type, |v| DbValue::Interval(v.into()))?
+            getter.try_get_db_value::<PgInterval>(value_type, |v| DbValue::Interval(v.into()))?
         }
-        DbColumnType::Inet => getter.try_get_db_value::<IpAddr>(db_value_type, DbValue::Inet)?,
-        DbColumnType::Cidr => getter.try_get_db_value::<IpAddr>(db_value_type, DbValue::Cidr)?,
+        DbColumnType::Inet => getter.try_get_db_value::<IpAddr>(value_type, DbValue::Inet)?,
+        DbColumnType::Cidr => getter.try_get_db_value::<IpAddr>(value_type, DbValue::Cidr)?,
         DbColumnType::Macaddr => {
-            getter.try_get_db_value::<MacAddress>(db_value_type, DbValue::Macaddr)?
+            getter.try_get_db_value::<MacAddress>(value_type, DbValue::Macaddr)?
         }
-        DbColumnType::Bit => getter.try_get_db_value::<BitVec>(db_value_type, DbValue::Bit)?,
-        DbColumnType::Varbit => {
-            getter.try_get_db_value::<BitVec>(db_value_type, DbValue::Varbit)?
-        }
-        DbColumnType::Bytea => getter.try_get_db_value::<Vec<u8>>(db_value_type, DbValue::Bytea)?,
+        DbColumnType::Bit => getter.try_get_db_value::<BitVec>(value_type, DbValue::Bit)?,
+        DbColumnType::Varbit => getter.try_get_db_value::<BitVec>(value_type, DbValue::Varbit)?,
+        DbColumnType::Bytea => getter.try_get_db_value::<Vec<u8>>(value_type, DbValue::Bytea)?,
         DbColumnType::Tstzrange => getter
-            .try_get_db_value::<PgRange<chrono::DateTime<chrono::Utc>>>(db_value_type, |v| {
+            .try_get_db_value::<PgRange<chrono::DateTime<chrono::Utc>>>(value_type, |v| {
                 DbValue::Tstzrange(v.into())
             })?,
         DbColumnType::Tsrange => getter
-            .try_get_db_value::<PgRange<chrono::NaiveDateTime>>(db_value_type, |v| {
+            .try_get_db_value::<PgRange<chrono::NaiveDateTime>>(value_type, |v| {
                 DbValue::Tsrange(v.into())
             })?,
         DbColumnType::Numrange => getter
-            .try_get_db_value::<PgRange<BigDecimal>>(db_value_type, |v| {
-                DbValue::Numrange(v.into())
-            })?,
-        DbColumnType::Int4range => getter
-            .try_get_db_value::<PgRange<i32>>(db_value_type, |v| DbValue::Int4range(v.into()))?,
-        DbColumnType::Int8range => getter
-            .try_get_db_value::<PgRange<i64>>(db_value_type, |v| DbValue::Int8range(v.into()))?,
+            .try_get_db_value::<PgRange<BigDecimal>>(value_type, |v| DbValue::Numrange(v.into()))?,
+        DbColumnType::Int4range => {
+            getter.try_get_db_value::<PgRange<i32>>(value_type, |v| DbValue::Int4range(v.into()))?
+        }
+        DbColumnType::Int8range => {
+            getter.try_get_db_value::<PgRange<i64>>(value_type, |v| DbValue::Int8range(v.into()))?
+        }
         DbColumnType::Daterange => getter
-            .try_get_db_value::<PgRange<chrono::NaiveDate>>(db_value_type, |v| {
+            .try_get_db_value::<PgRange<chrono::NaiveDate>>(value_type, |v| {
                 DbValue::Daterange(v.into())
             })?,
         DbColumnType::Money => {
-            getter.try_get_db_value::<PgMoney>(db_value_type, |v| DbValue::Money(v.0))?
+            getter.try_get_db_value::<PgMoney>(value_type, |v| DbValue::Money(v.0))?
         }
-        DbColumnType::Oid => {
-            getter.try_get_db_value::<Oid>(db_value_type, |v| DbValue::Oid(v.0))?
-        }
-        _ => Err(format!("{} of {} is not supported", db_value_type, db_type))?,
+        DbColumnType::Oid => getter.try_get_db_value::<Oid>(value_type, |v| DbValue::Oid(v.0))?,
+        _ => Err(format!(
+            "{} of {} is not supported",
+            value_type, column_type
+        ))?,
     };
     Ok(value)
 }
@@ -1588,57 +1066,61 @@ trait PgValueSetter<'a> {
     where
         T: 'a + sqlx::Encode<'a, sqlx::Postgres> + Type<sqlx::Postgres>;
 
-    // fn try_set_db_value<T>(
-    //     &mut self,
-    //     value: DbValue,
-    //     value_type: DbValueType,
-    //     f: impl Fn(DbValue) -> Option<T> + Clone,
-    // ) -> Result<(), String>
-    // where
-    //     T: 'a
-    //         + sqlx::Encode<'a, sqlx::Postgres>
-    //         + Type<sqlx::Postgres>
-    //         + sqlx::postgres::PgHasArrayType
-    //         + Clone,
-    // {
-    //     match value_type {
-    //         DbValueType::Primitive => match value {
-    //             DbValue::Array(_) | DbValue::Range(_) => Err("Unexpected value".to_string()),
-    //             _ => {
-    //                 let v = f(value);
-    //                 self.try_set_value(v)
-    //             }
-    //         },
-    //         DbValueType::Array => match value {
-    //             DbValue::Array(vs) => {
-    //                 let vs: Vec<T> = get_plain_values(vs, f.clone())?;
-    //                 self.try_set_value(vs)
-    //             }
-    //             _ => Err("Unexpected value".to_string()),
-    //         },
-    //         DbValueType::Range => match value {
-    //             DbValue::Range(v) => {
-    //                 let v: PgCustomRange<T> = get_pg_range(v, f)?;
-    //                 self.try_set_value(v)
-    //             }
-    //             _ => Err("Unexpected value".to_string()),
-    //         },
-    //         DbValueType::RangeArray => match value {
-    //             DbValue::Array(vs) => {
-    //                 let ranges: Vec<_> = get_plain_values(vs, |v| {
-    //                     if let DbValue::Range(v) = v {
-    //                         Some(v)
-    //                     } else {
-    //                         None
-    //                     }
-    //                 })?;
-    //                 let vs: Vec<PgCustomRange<T>> = get_pg_ranges(ranges, f.clone())?;
-    //                 self.try_set_value(PgCustomRanges(vs))
-    //             }
-    //             _ => Err("Unexpected value".to_string()),
-    //         },
-    //     }
-    // }
+    fn try_set_db_value<T>(
+        &mut self,
+        value: DbValue,
+        value_type: DbValueType,
+        f: impl Fn(DbValue) -> Option<T> + Clone,
+    ) -> Result<(), String>
+    where
+        T: 'a
+            + sqlx::Encode<'a, sqlx::Postgres>
+            + Type<sqlx::Postgres>
+            + sqlx::postgres::PgHasArrayType
+            + Clone,
+    {
+        match value_type {
+            DbValueType::Primitive => match value {
+                DbValue::Array(_) | DbValue::Range(_) => {
+                    Err(format!("{} do not support '{}' value", value_type, value))
+                }
+                _ => {
+                    let v = f(value);
+                    self.try_set_value(v)
+                }
+            },
+            DbValueType::Array => {
+                let vs: Vec<T> = get_array_plain_values(value, f.clone())?;
+                if vs.is_empty() {
+                    self.try_set_value(PgNull {})
+                } else {
+                    self.try_set_value(vs)
+                }
+            }
+            DbValueType::Range => match value {
+                DbValue::Range(v) => {
+                    let v: PgCustomRange<T> = get_pg_range(v, f)?;
+                    self.try_set_value(v)
+                }
+                _ => Err(format!("{} do not support '{}' value", value_type, value)),
+            },
+            DbValueType::RangeArray => {
+                let ranges: Vec<_> = get_array_plain_values(value, |v| {
+                    if let DbValue::Range(v) = v {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })?;
+                if ranges.is_empty() {
+                    self.try_set_value(PgNull {})
+                } else {
+                    let vs: Vec<PgCustomRange<T>> = get_pg_ranges(ranges, f.clone())?;
+                    self.try_set_value(PgCustomRanges(vs))
+                }
+            }
+        }
+    }
 }
 
 impl<'a> PgValueSetter<'a> for sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
@@ -1847,12 +1329,12 @@ impl sqlx::types::Type<sqlx::Postgres> for PgNull {
     }
 }
 
-// impl sqlx::postgres::PgHasArrayType for PgNull {
-//     fn array_type_info() -> sqlx::postgres::PgTypeInfo {
-//         // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
-//         sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type array
-//     }
-// }
+impl sqlx::postgres::PgHasArrayType for PgNull {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+        sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type array
+    }
+}
 
 #[derive(Clone)]
 struct PgXml(String);

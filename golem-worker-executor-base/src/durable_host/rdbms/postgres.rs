@@ -1705,6 +1705,7 @@ fn from_db_column_type(
                 DbColumnTypeResourceRep::Range(new_resource_rep),
             ))
         }
+        postgres_types::DbColumnType::Null => Err("Type 'Null' is not supported".to_string()),
     }
 }
 
