@@ -21,7 +21,7 @@ import { PieChart, Pie,Cell, ResponsiveContainer } from "recharts";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
 import useComponents from "@/lib/hooks/use-component";
-import { useParams, useRouter } from "next/navigation";
+import {  useRouter } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
@@ -30,7 +30,6 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const router = useRouter();
 

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import DangerZone from "@/components/settings";
 import ComponentInfo from "@/components/component-info-card";
 import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/components/new-component";
 
 import { toast } from "react-toastify";
@@ -18,7 +18,6 @@ import { DropdownV2 } from "@/components/ui/dropdown-button";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const WorkerSettings = () => {
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const { components, error, isLoading } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);

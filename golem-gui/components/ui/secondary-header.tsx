@@ -17,9 +17,7 @@ import ArticleIcon from "@mui/icons-material/Article";
 import Link from "next/link";
 import {
   usePathname,
-  useParams,
   useSearchParams,
-  useRouter,
 } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
@@ -55,12 +53,8 @@ export default function SecondaryHeader({
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
-  // const { id: workerName } = useParams<{ id: string }>();
   const { id: workerName } = useCustomParam();
-
-  // const { apiId } = useParams<{ apiId: string }>();
   const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");
@@ -74,7 +68,6 @@ export default function SecondaryHeader({
   //   return parts[parts.length - 1] || "overview";
   // }, [pathname]);
 
-  const router = useRouter();
   const navigationLinks = useMemo(()=>{
     if (variant === "apis") {
       return [

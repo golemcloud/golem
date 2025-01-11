@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Worker, WorkerFunction } from "@/types/api";
 import useComponents from "@/lib/hooks/use-component";
-import { useParams } from "next/navigation";
 import { Loader } from "lucide-react";
 import {
   Paper,
@@ -71,7 +70,6 @@ export function InvokeForm({
 }
 
 export default function InvokePage({ worker }: { worker: Worker }) {
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
   const { components, isLoading } = useComponents(
     compId,

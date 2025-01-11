@@ -1,6 +1,5 @@
 import React from "react";
 import { useWorkerLogs } from "@/lib/hooks/use-worker";
-import { useParams } from "next/navigation";
 import {
   Typography,
   List,
@@ -43,9 +42,7 @@ type Log = {
 
 
 export default function WorkerLogs() {
-  // const { compId } = useParams<{ compId: string }>();
   const { compId } = useCustomParam();
-  // const { id: workerName } = useParams<{ id: string }>();
   const { id: workerName } = useCustomParam();
   const { logs, error, isLoading } = useWorkerLogs(compId, workerName, {
     count: 1,

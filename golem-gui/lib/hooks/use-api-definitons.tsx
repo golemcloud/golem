@@ -11,9 +11,9 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
   defintionId = defintionId;
   let path =
     defintionId && !version
-      ? `${ROUTE_PATH}?api-definition-id=${defintionId}`
+      ? `${ROUTE_PATH}?api-definition-id=${encodeURIComponent(defintionId)}`
       : ROUTE_PATH;
-  path = defintionId && version ? `${path}/${defintionId}/${version}` : path;
+  path = defintionId && version ? `${path}/${encodeURIComponent(defintionId)}/${encodeURIComponent(version)}` : path;
   const { data: apiData, isLoading, error } = useSWR(path, fetcher);
 
   const apiDefinitions = (
@@ -95,9 +95,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       return { success: false, error: requestError };
     }
     toast.success("Successfully created new version.");
-
-    mutate(`${ROUTE_PATH}?api-definition-id=${newData.id}`);
-    mutate(`${ROUTE_PATH}/${data.id}/${update.version}`);
+    mutate(`${ROUTE_PATH}?api-definition-id=${encodeURIComponent(newData.id)}`);
+    mutate(`${ROUTE_PATH}/${encodeURIComponent(data.id)}/${encodeURIComponent(update.version)}`);
     mutate(`${ROUTE_PATH}`);
     if (!noRedirect && update.version !== data.version) {
       router.push(`/apis/${newData.id}/overview?version=${newData.version}`);
@@ -131,8 +130,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         return { success: false, error: requestError };
       }
 
-      mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
-      mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
+      mutate(`${ROUTE_PATH}?api-definition-id=${encodeURIComponent(data.id)}`);
+      mutate(`${ROUTE_PATH}/${encodeURIComponent(data.id)}/${encodeURIComponent(data.version)}`);
       mutate(`${ROUTE_PATH}`);
       toast.success("Api version deleted");
 
@@ -195,8 +194,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
         return response;
       }
 
-      mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
-      mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
+      mutate(`${ROUTE_PATH}?api-definition-id=${encodeURIComponent(data.id)}`);
+      mutate(`${ROUTE_PATH}/${encodeURIComponent(data.id)}/${encodeURIComponent(data.version)}`);
       mutate(`${ROUTE_PATH}`);
       toast.success("Api definition added/updated");
       return response;
@@ -250,8 +249,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
           return response;
         }
 
-        mutate(`${ROUTE_PATH}?api-definition-id=${data.id}`);
-        mutate(`${ROUTE_PATH}/${data.id}/${data.version}`);
+        mutate(`${ROUTE_PATH}?api-definition-id=${encodeURIComponent(data.id)}`)
+        mutate(`${ROUTE_PATH}/${encodeURIComponent(data.id)}/${encodeURIComponent(data.version)}`);
         mutate(`${ROUTE_PATH}`);
         toast.success("Route deleted Successfully");
         return response;
@@ -296,8 +295,8 @@ export async function addNewApiDefinition(
     }
 
     mutate(ROUTE_PATH);
-    mutate(`${ROUTE_PATH}/${newData.id}/${newData.version}`);
-    mutate(`${ROUTE_PATH}/?api-definition-id=${newData.id}`);
+    mutate(`${ROUTE_PATH}/${encodeURIComponent(newData.id)}/${encodeURIComponent(newData.version)}`);
+    mutate(`${ROUTE_PATH}/?api-definition-id=${encodeURIComponent(newData.id)}`);
     toast.success(`Api successfully created/updated`);
     return response;
   } catch (err) {
@@ -310,7 +309,7 @@ export async function addNewApiDefinition(
 export const downloadApi = async(apiId:string, version?:string)=>{
 
     try{
-        const {data:apiDefinition,error} = await fetcher(`${ROUTE_PATH}${version ? `/${apiId}/${version}`: `?api-definition-id=${apiId}`}`);
+        const {data:apiDefinition,error} = await fetcher(`${ROUTE_PATH}${version ? `/${encodeURIComponent(apiId)}/${encodeURIComponent(version)}`: `?api-definition-id=${encodeURIComponent(apiId)}`}`);
         
         const api = Array.isArray(apiDefinition)? apiDefinition[apiDefinition.length-1]: apiDefinition
         if(!api || error){
