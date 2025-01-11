@@ -2,7 +2,7 @@
 import { Loader } from "lucide-react";
 import ReactFlowBuilder from "./ReactFlowBuilder";
 import { ReactFlowProvider } from "@xyflow/react";
-import { Paper } from "@mui/material";
+import { Box } from "@mui/material";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "@/components/erro-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
@@ -18,14 +18,14 @@ function Builder() {
   const {error} = (!isLoading && getApiDefintion() || {});
 
   return (
-    <Paper className="">
+    <Box className="absolute w-full left-0 top-28">
       {(error || requestError) && <ErrorBoundary message={requestError || error} />}
       {!isLoading && !error && (
         <ReactFlowProvider>
           <ReactFlowBuilder apiDefnitions={apiDefinitions} />
         </ReactFlowProvider>
       )}
-    </Paper>
+    </Box>
   );
 }
 
