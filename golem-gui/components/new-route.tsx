@@ -74,7 +74,8 @@ const NewRouteForm = ({
     upsertRoute,
     deleteRoute,
   } = useApiDefinitions(apiId);
-  const { error: apiDefintionError } = (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
+  const { error: apiDefintionError } =
+    (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
   const components = (data?.data || null) as Component[];
   const selectedVersion = watch("version");
 
@@ -112,7 +113,12 @@ const NewRouteForm = ({
           },
         },
       };
-      const { success, error } = await upsertRoute(apiId, newRoute, version);
+      const { success, error } = await upsertRoute(
+        apiId,
+        newRoute,
+        version,
+        defaultRoute?.path
+      );
 
       if (!success) {
         return setError(error!);
@@ -160,22 +166,22 @@ const NewRouteForm = ({
         )}
       </Box> */}
       <Box className="flex justify-between items-center">
-  {!isModal && (
-    <Typography variant="h5" gutterBottom>
-      {defaultRoute ? "Update" : "New"} Route
-    </Typography>
-  )}
-  {defaultRoute && (
-    <Button onClick={handleDelete} className="ml-auto">
-      <DeleteForever />
-    </Button>
-  )}
-</Box>
+        {!isModal && (
+          <Typography variant="h5" gutterBottom>
+            {defaultRoute ? "Update" : "New"} Route
+          </Typography>
+        )}
+        {defaultRoute && (
+          <Button onClick={handleDelete} className="ml-auto">
+            <DeleteForever />
+          </Button>
+        )}
+      </Box>
 
-      {!isModal &&<Divider sx={{ borderColor: "#555" }} />}
+      {!isModal && <Divider sx={{ borderColor: "#555" }} />}
 
       {/* HTTP Endpoint */}
-      <Box sx={{ marginTop: isModal  ? 1: 4 }}>
+      <Box sx={{ marginTop: isModal ? 1 : 4 }}>
         <Typography variant="subtitle1" gutterBottom>
           HTTP Endpoint
         </Typography>
@@ -235,12 +241,14 @@ const NewRouteForm = ({
           name="path"
           control={control}
           //we can add regex for path
-          rules={{ required: "path is mandatory!",
-            validate: (value:string)=>{
-              return value?.[0] !='/' ? 'Api path should always start with /': true
-            }
-           }}
-
+          rules={{
+            required: "path is mandatory!",
+            validate: (value: string) => {
+              return value?.[0] != "/"
+                ? "Api path should always start with /"
+                : true;
+            },
+          }}
           render={({ field }) => (
             <TextField
               size="small"
@@ -273,7 +281,9 @@ const NewRouteForm = ({
               options={components}
               isLoading={isLoading}
             />
-            <span className="text-muted-foreground text-xs mt-1">Select component</span>
+            <span className="text-muted-foreground text-xs mt-1">
+              Select component
+            </span>
             {errors && errors.component && (
               <Typography variant="inherit" color="error">
                 {errors.component.message?.toString()}
@@ -290,7 +300,9 @@ const NewRouteForm = ({
               options={components}
               isLoading={isLoading}
             />
-            <span className="text-muted-foreground text-xs mt-1">Select version</span>
+            <span className="text-muted-foreground text-xs mt-1">
+              Select version
+            </span>
             {errors && errors.version && (
               <Typography variant="inherit" color="error">
                 {errors.version.message?.toString()}
@@ -326,7 +338,7 @@ const NewRouteForm = ({
           )}
         </Box>
         <div className="mt-5 flex items-center">
-          <PopoverDemo Icon={<Info/>}>
+          <PopoverDemo Icon={<Info />}>
             <InterpolationExpressions />
           </PopoverDemo>
           <p className="text-muted-foreground text-xs">
@@ -358,7 +370,7 @@ const NewRouteForm = ({
           )}
         />
         <div className="mt-5 flex items-center">
-          <PopoverDemo Icon={<Info/>}>
+          <PopoverDemo Icon={<Info />}>
             <Box>
               <Typography variant="body2" gutterBottom>
                 Available Functions

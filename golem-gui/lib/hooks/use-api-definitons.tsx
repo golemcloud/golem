@@ -149,7 +149,8 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
   const upsertRoute = async (
     defintionId: string,
     updateRoute: ApiRoute,
-    version?: string | null
+    version?: string | null,
+    routePath? : string|null
   ): Promise<{
     success: boolean;
     error?: string | null;
@@ -168,9 +169,9 @@ function useApiDefinitions(defintionId?: string, version?: string | null) {
       let payload = [...(data?.routes || []), updateRoute] as ApiRoute[];
       const index = routes.findIndex(
         (route) =>
-          route.path === updateRoute.path && route.method === updateRoute.method
+          route.path === routePath && route.method === updateRoute.method
       );
-      if (index > -1) {
+      if (index > -1 && routePath) {
         routes[index] = updateRoute;
         payload = routes;
       }
