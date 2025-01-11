@@ -195,6 +195,12 @@ export default function SecondaryHeader({
 
   const ApiName = decodeURIComponent(apiId);
 
+  useEffect(()=>{
+    if(drawerOpen){
+      setDrawerOpen(false)
+    }
+  },[apiTab])
+
   return (
     <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-5 sm:pr-20">
       <Box className="flex items-center justify-between w-full">
