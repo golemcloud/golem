@@ -238,10 +238,10 @@ const generateField = (
           <Stack direction="row" gap={1} alignItems="center" my={2}>
             <Typography variant="body1">{parameter?.name}</Typography>
             <RecordDataType
-            record={parameter.typ?.fields?.reduce((obj, field) => {
+            record={parameter?.typ?.type === "Record" && parameter.typ?.fields?.reduce<Record<string,string>>((obj, field) => {
               obj[field.name] = field.typ?.type;
               return obj;
-            }, {})}
+            }, {}) || {}}
           />
           </Stack>
           <Divider className="my-2 bg-border" />

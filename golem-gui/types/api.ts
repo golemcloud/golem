@@ -131,6 +131,23 @@ export interface Worker {
   activePlugins: string[];
 }
 
+interface RibInputTypeInfo {
+  types: ({
+    "request": AnalysedType,
+  } & Record<string, AnalysedType>);
+}
+
+
+interface HttpCors {
+  allowOrigin: string;
+  allowMethods: string;
+  allowHeaders: string;
+  exposeHeaders?: string;
+  allowCredentials?: boolean;
+  maxAge?: number; // uint64 corresponds to `number` in TypeScript
+}
+
+
 // API Definition Types
 export interface ApiRoute {
   method: string;
@@ -142,18 +159,11 @@ export interface ApiRoute {
     idempotencyKey?: string | null;
     response: string;
     bindingType: string;
-    responseMappingInput?: Record<string, unknown>;
-    workerNameInput?: Record<string, unknown>;
-    idempotencyKeyInput?: Record<string, unknown> | null;
-    corsPreflight?: {
-      allowOrigin: string;
-      allowMethods: string;
-      allowHeaders: string;
-      exposeHeaders: string;
-      allowCredentials: boolean;
-      maxAge: number;
-    } | null;
-    responseMappingOutput?: Record<string, unknown>;
+    responseMappingInput?: RibInputTypeInfo | null;
+    workerNameInput?: RibInputTypeInfo | null;
+    idempotencyKeyInput?: RibInputTypeInfo | null;
+    corsPreflight?: HttpCors | null;
+    responseMappingOutput?: RibInputTypeInfo | null;
   };
 }
 

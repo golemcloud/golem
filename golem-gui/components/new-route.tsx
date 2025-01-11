@@ -23,6 +23,7 @@ import {
   InterpolationExpressions,
   AvailableFunctions,
 } from "./interpolate-tooltip";
+import TryItOut from "./try-it-out";
 
 type FormData = {
   path: string;
@@ -74,7 +75,7 @@ const NewRouteForm = ({
     upsertRoute,
     deleteRoute,
   } = useApiDefinitions(apiId);
-  const { error: apiDefintionError } =
+  const { error: apiDefintionError, data: apiDefintion } =
     (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
   const components = (data?.data || null) as Component[];
   const selectedVersion = watch("version");
@@ -103,14 +104,10 @@ const NewRouteForm = ({
           idempotencyKey: null,
           idempotencyKeyInput: null,
           response: formData.response,
-          responseMappingInput: {
-            types: {},
-          },
-          responseMappingOutput: {},
+          responseMappingInput: null,
+          responseMappingOutput: null,
           workerName: formData.workerName,
-          workerNameInput: {
-            types: {},
-          },
+          workerNameInput: null,
         },
       };
       const { success, error } = await upsertRoute(
@@ -417,6 +414,7 @@ const NewRouteForm = ({
           {defaultRoute ? "Update" : "Create"} Route
         </Button2>
       </Box>
+      {apiDefintion && apiDefintion?.draft!==true && defaultRoute&& <TryItOut route={defaultRoute}/>}
     </Box>
   );
 };
