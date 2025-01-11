@@ -27,12 +27,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeAndAwaitTypedResponse, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;

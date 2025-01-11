@@ -132,6 +132,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rdbms_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),

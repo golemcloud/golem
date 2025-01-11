@@ -31,10 +31,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
     GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ListDirectoryRequest,
-    ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
