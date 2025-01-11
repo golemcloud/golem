@@ -535,6 +535,10 @@ impl Display for DbValue {
 }
 
 impl DbValue {
+    pub(crate) fn from_opt(value: Option<DbValue>) -> Self {
+        value.unwrap_or(DbValue::Null)
+    }
+
     pub(crate) fn array_from<T>(value: Option<Vec<T>>, f: impl Fn(T) -> DbValue) -> Self {
         match value {
             Some(v) => DbValue::Array(v.into_iter().map(f).collect()),
@@ -542,11 +546,7 @@ impl DbValue {
         }
     }
 
-    pub(crate) fn primitive_from(value: Option<DbValue>) -> Self {
-        value.unwrap_or(DbValue::Null)
-    }
-
-    pub(crate) fn primitive_from_plain<T>(value: Option<T>, f: impl Fn(T) -> DbValue) -> Self {
+    pub(crate) fn primitive_from<T>(value: Option<T>, f: impl Fn(T) -> DbValue) -> Self {
         match value {
             Some(v) => f(v),
             None => DbValue::Null,

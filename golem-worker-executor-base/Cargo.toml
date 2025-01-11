@@ -87,6 +87,7 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
+try_match = "0.4.2"
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }

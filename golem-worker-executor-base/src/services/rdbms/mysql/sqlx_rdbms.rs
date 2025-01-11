@@ -166,7 +166,6 @@ fn bind_value(
             Ok(query.bind(value))
         }
         DbValue::Null => Ok(query.bind(None::<String>)),
-        // _ => Err(format!("Parameter type '{}' is not supported", value)),
     }
 }
 

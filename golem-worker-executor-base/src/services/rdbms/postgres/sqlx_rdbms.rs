@@ -35,6 +35,7 @@ use std::collections::Bound;
 use std::fmt::Display;
 use std::net::IpAddr;
 use std::sync::Arc;
+use try_match::try_match;
 use uuid::Uuid;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
@@ -136,60 +137,34 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
     let column_type = value.get_type();
     match &column_type {
         DbColumnType::Enum(_) => {
-            let v = if let DbValue::Enum(v) = value {
-                Some(v)
-            } else {
-                None
-            };
+            let v = try_match!(value, DbValue::Enum(v)).ok();
             setter.try_set_value(v)
         }
         DbColumnType::Composite(_) => {
-            let v = if let DbValue::Composite(v) = value {
-                Some(v)
-            } else {
-                None
-            };
+            let v = try_match!(value, DbValue::Composite(v)).ok();
             setter.try_set_value(v)
         }
         DbColumnType::Domain(_) => {
-            let v = if let DbValue::Domain(v) = value {
-                Some(v)
-            } else {
-                None
-            };
+            let v = try_match!(value, DbValue::Domain(v)).ok();
             setter.try_set_value(v)
         }
         DbColumnType::Array(t) => {
             let base_type: DbColumnType = *t.clone();
             match base_type {
                 DbColumnType::Enum(_) => {
-                    let values: Vec<_> = get_array_plain_values(value, |v| {
-                        if let DbValue::Enum(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })?;
+                    let values: Vec<_> =
+                        get_array_plain_values(value, |v| try_match!(v, DbValue::Enum(r)).ok())?;
                     setter.try_set_value(PgEnums(values))
                 }
                 DbColumnType::Composite(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        if let DbValue::Composite(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
+                        try_match!(v, DbValue::Composite(r)).ok()
                     })?;
                     setter.try_set_value(PgComposites(values))
                 }
                 DbColumnType::Domain(_) => {
-                    let values: Vec<_> = get_array_plain_values(value, |v| {
-                        if let DbValue::Domain(v) = v {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })?;
+                    let values: Vec<_> =
+                        get_array_plain_values(value, |v| try_match!(v, DbValue::Domain(r)).ok())?;
                     setter.try_set_value(PgDomains(values))
                 }
                 DbColumnType::Range(v) => {
@@ -211,110 +186,50 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
 ) -> Result<(), String> {
     match column_type {
         DbColumnType::Boolean => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Boolean(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Boolean(r)).ok()
         }),
         DbColumnType::Character => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Character(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Character(r)).ok()
         }),
-        DbColumnType::Int2 => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Int2(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Int4 => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Int4(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Int8 => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Int8(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Int2 => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Int2(r)).ok())
+        }
+        DbColumnType::Int4 => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Int4(r)).ok())
+        }
+        DbColumnType::Int8 => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Int8(r)).ok())
+        }
         DbColumnType::Float4 => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Float4(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Float4(r)).ok()
         }),
         DbColumnType::Float8 => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Float8(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Float8(r)).ok()
         }),
         DbColumnType::Numeric => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Numeric(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Numeric(r)).ok()
         }),
-        DbColumnType::Text => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Text(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Text => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Text(r)).ok())
+        }
         DbColumnType::Varchar => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Varchar(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Varchar(r)).ok()
         }),
         DbColumnType::Bpchar => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Bpchar(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Bpchar(r)).ok()
         }),
-        DbColumnType::Bytea => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Bytea(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Uuid => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Uuid(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Json => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Json(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Jsonb => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Jsonb(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Bytea => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Bytea(r)).ok())
+        }
+        DbColumnType::Uuid => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Uuid(r)).ok())
+        }
+        DbColumnType::Json => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Json(r)).ok())
+        }
+        DbColumnType::Jsonb => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Jsonb(r)).ok())
+        }
         DbColumnType::Jsonpath => setter.try_set_db_value(value, value_type, |v| {
             if let DbValue::Jsonpath(v) = v {
                 Some(PgJsonPath(v))
@@ -330,33 +245,17 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             }
         }),
         DbColumnType::Timestamptz => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Timestamptz(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Timestamptz(r)).ok()
         }),
         DbColumnType::Timestamp => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Timestamp(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Timestamp(r)).ok()
         }),
-        DbColumnType::Date => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Date(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Time => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Time(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Date => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Date(r)).ok())
+        }
+        DbColumnType::Time => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Time(r)).ok())
+        }
         DbColumnType::Timetz => setter.try_set_db_value(value, value_type, |v| {
             if let DbValue::Timetz(v) = v {
                 Some(PgTimeTz::from(v))
@@ -371,40 +270,20 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
                 None
             }
         }),
-        DbColumnType::Inet => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Inet(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
-        DbColumnType::Cidr => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Cidr(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Inet => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Inet(r)).ok())
+        }
+        DbColumnType::Cidr => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Cidr(r)).ok())
+        }
         DbColumnType::Macaddr => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Macaddr(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Macaddr(r)).ok()
         }),
-        DbColumnType::Bit => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Bit(v) = v {
-                Some(v)
-            } else {
-                None
-            }
-        }),
+        DbColumnType::Bit => {
+            setter.try_set_db_value(value, value_type, |v| try_match!(v, DbValue::Bit(r)).ok())
+        }
         DbColumnType::Varbit => setter.try_set_db_value(value, value_type, |v| {
-            if let DbValue::Varbit(v) = v {
-                Some(v)
-            } else {
-                None
-            }
+            try_match!(v, DbValue::Varbit(r)).ok()
         }),
         DbColumnType::Int4range => setter.try_set_db_value(value, value_type, |v| {
             if let DbValue::Int4range(v) = v {
@@ -596,15 +475,15 @@ fn get_db_value<G: PgValueGetter>(
     let value = match db_type {
         DbColumnType::Enum(_) => {
             let v: Option<Enum> = getter.try_get_value()?;
-            DbValue::primitive_from(v.map(DbValue::Enum))
+            DbValue::from_opt(v.map(DbValue::Enum))
         }
         DbColumnType::Composite(_) => {
             let v: Option<Composite> = getter.try_get_value()?;
-            DbValue::primitive_from(v.map(DbValue::Composite))
+            DbValue::from_opt(v.map(DbValue::Composite))
         }
         DbColumnType::Domain(_) => {
             let v: Option<Domain> = getter.try_get_value()?;
-            DbValue::primitive_from(v.map(DbValue::Domain))
+            DbValue::from_opt(v.map(DbValue::Domain))
         }
         DbColumnType::Array(t) => {
             let base_type: DbColumnType = *t.clone();
@@ -949,7 +828,7 @@ trait PgValueGetter {
         match value_type {
             DbValueType::Primitive => {
                 let v: Option<T> = self.try_get_value()?;
-                Ok(DbValue::primitive_from_plain(v, f))
+                Ok(DbValue::primitive_from(v, f))
             }
             DbValueType::Array => {
                 let v: Option<Vec<T>> = self.try_get_value()?;
@@ -957,9 +836,7 @@ trait PgValueGetter {
             }
             DbValueType::Range => {
                 let v: Option<PgCustomRange<T>> = self.try_get_value()?;
-                Ok(DbValue::primitive_from_plain(v, |v| {
-                    get_range(v, f.clone())
-                }))
+                Ok(DbValue::primitive_from(v, |v| get_range(v, f.clone())))
             }
             DbValueType::RangeArray => {
                 let v: Option<PgCustomRanges<T>> = self.try_get_value()?;
@@ -1015,13 +892,8 @@ trait PgValueSetter<'a> {
                 _ => Err(format!("{} do not support '{}' value", value_type, value)),
             },
             DbValueType::RangeArray => {
-                let ranges: Vec<_> = get_array_plain_values(value, |v| {
-                    if let DbValue::Range(v) = v {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                })?;
+                let ranges: Vec<_> =
+                    get_array_plain_values(value, |v| try_match!(v, DbValue::Range(r)).ok())?;
                 if ranges.is_empty() {
                     self.try_set_value(PgNull {})
                 } else {
