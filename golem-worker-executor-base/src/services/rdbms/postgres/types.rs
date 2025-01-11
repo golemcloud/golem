@@ -559,6 +559,87 @@ impl DbValue {
             DbValue::Composite(_) | DbValue::Domain(_) | DbValue::Array(_) | DbValue::Range(_)
         )
     }
+
+    pub(crate) fn get_type(&self) -> DbColumnType {
+        match self {
+            DbValue::Character(_) => DbColumnType::Character,
+            DbValue::Int2(_) => DbColumnType::Int2,
+            DbValue::Int4(_) => DbColumnType::Int4,
+            DbValue::Int8(_) => DbColumnType::Int8,
+            DbValue::Float4(_) => DbColumnType::Float4,
+            DbValue::Float8(_) => DbColumnType::Float8,
+            DbValue::Numeric(_) => DbColumnType::Numeric,
+            DbValue::Boolean(_) => DbColumnType::Boolean,
+            DbValue::Text(_) => DbColumnType::Text,
+            DbValue::Varchar(_) => DbColumnType::Varchar,
+            DbValue::Bpchar(_) => DbColumnType::Bpchar,
+            DbValue::Bytea(_) => DbColumnType::Bytea,
+            DbValue::Uuid(_) => DbColumnType::Uuid,
+            DbValue::Json(_) => DbColumnType::Json,
+            DbValue::Jsonb(_) => DbColumnType::Jsonb,
+            DbValue::Jsonpath(_) => DbColumnType::Jsonpath,
+            DbValue::Xml(_) => DbColumnType::Xml,
+            DbValue::Timestamp(_) => DbColumnType::Timestamp,
+            DbValue::Timestamptz(_) => DbColumnType::Timestamptz,
+            DbValue::Time(_) => DbColumnType::Time,
+            DbValue::Timetz(_) => DbColumnType::Timetz,
+            DbValue::Date(_) => DbColumnType::Date,
+            DbValue::Interval(_) => DbColumnType::Interval,
+            DbValue::Inet(_) => DbColumnType::Inet,
+            DbValue::Cidr(_) => DbColumnType::Cidr,
+            DbValue::Macaddr(_) => DbColumnType::Macaddr,
+            DbValue::Bit(_) => DbColumnType::Bit,
+            DbValue::Varbit(_) => DbColumnType::Varbit,
+            DbValue::Int4range(_) => DbColumnType::Int4range,
+            DbValue::Int8range(_) => DbColumnType::Int8range,
+            DbValue::Numrange(_) => DbColumnType::Numrange,
+            DbValue::Tsrange(_) => DbColumnType::Tsrange,
+            DbValue::Tstzrange(_) => DbColumnType::Tstzrange,
+            DbValue::Daterange(_) => DbColumnType::Daterange,
+            DbValue::Money(_) => DbColumnType::Money,
+            DbValue::Oid(_) => DbColumnType::Oid,
+            DbValue::Enum(v) => DbColumnType::Enum(EnumType::new(v.name.clone())),
+            DbValue::Composite(v) => {
+                DbColumnType::Composite(CompositeType::new(v.name.clone(), vec![]))
+            }
+            DbValue::Domain(v) => {
+                let t = v.value.get_type();
+                DbColumnType::Domain(DomainType::new(v.name.clone(), t))
+            }
+            DbValue::Range(r) => {
+                let v = (*r.value).start_value().or((*r.value).end_value());
+                let t = v.map(|v| v.get_type()).unwrap_or(DbColumnType::Null);
+                DbColumnType::Range(RangeType::new(r.name.clone(), t))
+            }
+            DbValue::Array(vs) => {
+                let t = if !vs.is_empty() {
+                    let t = vs[0].get_type();
+                    match t {
+                        DbColumnType::Range(r) if *r.base_type == DbColumnType::Null => {
+                            let v = vs
+                                .iter()
+                                .map(|v| {
+                                    if let DbValue::Range(v) = v {
+                                        (*v.value).start_value().or((*v.value).end_value())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .find(|v| v.is_some())
+                                .flatten();
+                            let t = v.map(|v| v.get_type()).unwrap_or(DbColumnType::Null);
+                            DbColumnType::Range(RangeType::new(r.name, t))
+                        }
+                        _ => t,
+                    }
+                } else {
+                    DbColumnType::Null
+                };
+                DbColumnType::Array(Box::new(t))
+            }
+            DbValue::Null => DbColumnType::Null,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

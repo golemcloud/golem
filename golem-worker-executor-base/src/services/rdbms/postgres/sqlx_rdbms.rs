@@ -133,8 +133,8 @@ impl<'q> QueryParamsBinder<'q, PostgresType, sqlx::Postgres>
 }
 
 fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result<(), String> {
-    let db_column_type = get_value_db_column_type(&value)?;
-    match &db_column_type {
+    let column_type = value.get_type();
+    match &column_type {
         DbColumnType::Enum(_) => {
             let v = if let DbValue::Enum(v) = value {
                 Some(v)
@@ -199,7 +199,7 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
             }
         }
         DbColumnType::Range(t) => set_value_helper(setter, &t.base_type, value, DbValueType::Range),
-        _ => set_value_helper(setter, &db_column_type, value, DbValueType::Primitive),
+        _ => set_value_helper(setter, &column_type, value, DbValueType::Primitive),
     }
 }
 
@@ -473,96 +473,6 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             "{} do not support '{}' value",
             value_type, column_type
         )),
-    }
-}
-
-fn get_value_db_column_type(value: &DbValue) -> Result<DbColumnType, String> {
-    match value {
-        DbValue::Character(_) => Ok(DbColumnType::Character),
-        DbValue::Int2(_) => Ok(DbColumnType::Int2),
-        DbValue::Int4(_) => Ok(DbColumnType::Int4),
-        DbValue::Int8(_) => Ok(DbColumnType::Int8),
-        DbValue::Float4(_) => Ok(DbColumnType::Float4),
-        DbValue::Float8(_) => Ok(DbColumnType::Float8),
-        DbValue::Numeric(_) => Ok(DbColumnType::Numeric),
-        DbValue::Boolean(_) => Ok(DbColumnType::Boolean),
-        DbValue::Text(_) => Ok(DbColumnType::Text),
-        DbValue::Varchar(_) => Ok(DbColumnType::Varchar),
-        DbValue::Bpchar(_) => Ok(DbColumnType::Bpchar),
-        DbValue::Bytea(_) => Ok(DbColumnType::Bytea),
-        DbValue::Uuid(_) => Ok(DbColumnType::Uuid),
-        DbValue::Json(_) => Ok(DbColumnType::Json),
-        DbValue::Jsonb(_) => Ok(DbColumnType::Jsonb),
-        DbValue::Jsonpath(_) => Ok(DbColumnType::Jsonpath),
-        DbValue::Xml(_) => Ok(DbColumnType::Xml),
-        DbValue::Timestamp(_) => Ok(DbColumnType::Timestamp),
-        DbValue::Timestamptz(_) => Ok(DbColumnType::Timestamptz),
-        DbValue::Time(_) => Ok(DbColumnType::Time),
-        DbValue::Timetz(_) => Ok(DbColumnType::Timetz),
-        DbValue::Date(_) => Ok(DbColumnType::Date),
-        DbValue::Interval(_) => Ok(DbColumnType::Interval),
-        DbValue::Inet(_) => Ok(DbColumnType::Inet),
-        DbValue::Cidr(_) => Ok(DbColumnType::Cidr),
-        DbValue::Macaddr(_) => Ok(DbColumnType::Macaddr),
-        DbValue::Bit(_) => Ok(DbColumnType::Bit),
-        DbValue::Varbit(_) => Ok(DbColumnType::Varbit),
-        DbValue::Int4range(_) => Ok(DbColumnType::Int4range),
-        DbValue::Int8range(_) => Ok(DbColumnType::Int8range),
-        DbValue::Numrange(_) => Ok(DbColumnType::Numrange),
-        DbValue::Tsrange(_) => Ok(DbColumnType::Tsrange),
-        DbValue::Tstzrange(_) => Ok(DbColumnType::Tstzrange),
-        DbValue::Daterange(_) => Ok(DbColumnType::Daterange),
-        DbValue::Money(_) => Ok(DbColumnType::Money),
-        DbValue::Oid(_) => Ok(DbColumnType::Oid),
-        DbValue::Enum(v) => Ok(DbColumnType::Enum(EnumType::new(v.name.clone()))),
-        DbValue::Composite(v) => Ok(DbColumnType::Composite(CompositeType::new(
-            v.name.clone(),
-            vec![],
-        ))),
-        DbValue::Domain(v) => {
-            let t = get_value_db_column_type(&v.value)?;
-            Ok(DbColumnType::Domain(DomainType::new(v.name.clone(), t)))
-        }
-        DbValue::Range(r) => {
-            let v = (*r.value).start_value().or((*r.value).end_value());
-            let t = if let Some(v) = v {
-                get_value_db_column_type(v)?
-            } else {
-                DbColumnType::Null
-            };
-            Ok(DbColumnType::Range(RangeType::new(r.name.clone(), t)))
-        }
-        DbValue::Array(vs) => {
-            let t = if !vs.is_empty() {
-                let t = get_value_db_column_type(&vs[0])?;
-                match t {
-                    DbColumnType::Range(r) if *r.base_type == DbColumnType::Null => {
-                        let v = vs
-                            .iter()
-                            .map(|v| {
-                                if let DbValue::Range(v) = v {
-                                    (*v.value).start_value().or((*v.value).end_value())
-                                } else {
-                                    None
-                                }
-                            })
-                            .find(|v| v.is_some())
-                            .flatten();
-                        let t = if let Some(v) = v {
-                            get_value_db_column_type(v)?
-                        } else {
-                            DbColumnType::Null
-                        };
-                        DbColumnType::Range(RangeType::new(r.name, t))
-                    }
-                    _ => t,
-                }
-            } else {
-                DbColumnType::Null
-            };
-            Ok(DbColumnType::Array(Box::new(t)))
-        }
-        DbValue::Null => Ok(DbColumnType::Null),
     }
 }
 
