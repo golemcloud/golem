@@ -21,16 +21,16 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    fork_worker_response, get_oplog_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
     list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
-    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest,
-    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest,
-    ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
+    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -243,7 +243,7 @@ pub trait TestDsl {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>>;
     async fn log_output(&self, worker_id: &WorkerId);
-    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()>;
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()>;
     async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()>;
     async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()>;
     async fn auto_update_worker(
@@ -291,6 +291,13 @@ pub trait TestDsl {
         priority: i32,
         parameters: HashMap<String, String>,
     ) -> crate::Result<PluginInstallationId>;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    ) -> crate::Result<()>;
 }
 
 #[async_trait]
@@ -972,11 +979,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         });
     }
 
-    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()> {
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
         let response = self
             .worker_service()
             .resume_worker(ResumeWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
+                force: Some(force),
             })
             .await?;
 
@@ -1288,6 +1296,32 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .collect::<Vec<_>>()
                 .join(", ")
         ))
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    ) -> crate::Result<()> {
+        let response = self
+            .worker_service()
+            .fork_worker(ForkWorkerRequest {
+                source_worker_id: Some(source_worker_id.clone().into()),
+                target_worker_id: Some(target_worker_id.clone().into()),
+                oplog_index_cutoff: oplog_index.into(),
+            })
+            .await?;
+
+        match response {
+            ForkWorkerResponse {
+                result: Some(fork_worker_response::Result::Success(_)),
+            } => Ok(()),
+            ForkWorkerResponse {
+                result: Some(fork_worker_response::Result::Error(error)),
+            } => Err(anyhow!("Failed to fork worker: {error:?}")),
+            _ => Err(anyhow!("Failed to fork worker: unknown error")),
+        }
     }
 }
 
@@ -1748,7 +1782,7 @@ pub trait TestDslUnsafe {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>>;
     async fn log_output(&self, worker_id: &WorkerId);
-    async fn resume(&self, worker_id: &WorkerId);
+    async fn resume(&self, worker_id: &WorkerId, force: bool);
     async fn interrupt(&self, worker_id: &WorkerId);
     async fn simulated_crash(&self, worker_id: &WorkerId);
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
@@ -1783,6 +1817,13 @@ pub trait TestDslUnsafe {
         priority: i32,
         parameters: HashMap<String, String>,
     ) -> PluginInstallationId;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    );
 }
 
 #[async_trait]
@@ -2042,8 +2083,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::log_output(self, worker_id).await
     }
 
-    async fn resume(&self, worker_id: &WorkerId) {
-        <T as TestDsl>::resume(self, worker_id)
+    async fn resume(&self, worker_id: &WorkerId, force: bool) {
+        <T as TestDsl>::resume(self, worker_id, force)
             .await
             .expect("Failed to resume worker")
     }
@@ -2156,5 +2197,16 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
             .await
             .expect("Failed to wait for status")
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index: OplogIndex,
+    ) {
+        <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
+            .await
+            .expect("Failed to fork worker")
     }
 }

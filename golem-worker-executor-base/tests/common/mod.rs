@@ -94,6 +94,7 @@ use golem_worker_executor_base::services::rpc::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
@@ -925,6 +926,36 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
+        let worker_fork = Arc::new(DefaultWorkerFork::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            shard_manager_service.clone(),
+            worker_service.clone(),
+            worker_proxy.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            plugins.clone(),
+            oplog_processor_plugin.clone(),
+            (),
+        ));
+
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -935,6 +966,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            worker_fork.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -961,6 +993,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             runtime,
             component_service,
             shard_manager_service,
+            worker_fork,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,

@@ -19,7 +19,7 @@ impl<T: Type> Payload for JsonOrYaml<T> {
                 && (content_type.subtype() == "yaml" || content_type.subtype() == "json"
                 || content_type
                     .suffix()
-                    .map_or(false, |v| v == "yaml" || v == "json")))
+                    .is_some_and(|v| v == "yaml" || v == "json")))
     }
 
     fn schema_ref() -> MetaSchemaRef {

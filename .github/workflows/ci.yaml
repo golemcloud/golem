@@ -20,7 +20,7 @@ env:
 
 jobs:
   docker-targets-build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
@@ -75,7 +75,7 @@ jobs:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
   docker-publish:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: [ docker-targets-build ]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
@@ -207,6 +207,8 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   build-and-test:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
@@ -216,6 +218,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -247,7 +253,7 @@ jobs:
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -260,7 +266,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.13.2
+        run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -285,6 +291,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -334,6 +344,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -362,6 +376,8 @@ jobs:
           detailed_summary: true
           include_passed: true
   integration-tests:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
@@ -371,11 +387,15 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.13.2
+        run: cargo binstall --no-confirm cargo-component@0.20.0
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -413,6 +433,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -443,6 +467,8 @@ jobs:
           detailed_summary: true
           include_passed: true
   sharding-tests:
+    env:
+      CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
     steps:
       - name: Checkout
@@ -452,6 +478,10 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+      - name: Install Fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install libfontconfig1-dev
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -492,7 +522,7 @@ jobs:
         sharding-tests,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -596,7 +626,7 @@ jobs:
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     needs: [ publish, docker-publish, publish_cli_binaries ]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2

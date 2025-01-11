@@ -45,12 +45,27 @@ service WorkerExecutor {
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+  rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
 
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
+}
+
+message ForkWorkerRequest {
+  golem.common.AccountId account_id = 1;
+  golem.worker.WorkerId source_worker_id = 2;
+  golem.worker.WorkerId target_worker_id = 3;
+  uint64 oplog_index_cutoff = 4;
+}
+
+message ForkWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }
 
 message InvokeWorkerResponse {
@@ -206,6 +221,7 @@ message GetWorkerMetadataResponse {
 message ResumeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
+  optional bool force = 3;
 }
 
 message ResumeWorkerResponse {

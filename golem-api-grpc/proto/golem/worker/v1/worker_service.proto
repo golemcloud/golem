@@ -49,7 +49,12 @@ service WorkerService {
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
+
+  rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
+
 }
+
+
 
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
@@ -65,10 +70,19 @@ message LaunchNewWorkerResponse {
   }
 }
 
+
+
 message LaunchNewWorkerSuccessResponse {
   golem.worker.WorkerId workerId = 1;
   uint64 component_version = 2;
 }
+
+message ForkWorkerRequest {
+  golem.worker.WorkerId source_worker_id = 2;
+  golem.worker.WorkerId target_worker_id = 3;
+  uint64 oplog_index_cutoff = 4;
+}
+
 
 message CompletePromiseRequest {
   golem.worker.WorkerId workerId = 1;
@@ -81,6 +95,14 @@ message CompletePromiseResponse {
     golem.worker.v1.WorkerError error = 2;
   }
 }
+
+message ForkWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerError error  = 2;
+  }
+}
+
 
 message DeleteWorkerRequest {
   golem.worker.WorkerId workerId = 1;
@@ -178,6 +200,7 @@ message InvokeJsonRequest {
 
 message ResumeWorkerRequest {
   golem.worker.WorkerId workerId = 1;
+  optional bool force = 2;
 }
 
 message ResumeWorkerResponse {

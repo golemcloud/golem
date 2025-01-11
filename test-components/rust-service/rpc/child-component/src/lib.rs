@@ -1,6 +1,6 @@
 mod bindings;
 
-use crate::bindings::exports::golem::it::api::*;
+use crate::bindings::exports::golem::it_exports::api::*;
 
 struct Component;
 

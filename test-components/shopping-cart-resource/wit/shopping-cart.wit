@@ -4,14 +4,14 @@ interface api {
   record product-item {
     product-id: string,
     name: string,
-    price: float32,
+    price: f32,
     quantity: u32,
   }
 
   record order {
     order-id: string,
     items: list<product-item>,
-    total: float32,
+    total: f32,
     timestamp: u64,
   }
 

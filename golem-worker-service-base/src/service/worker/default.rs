@@ -27,8 +27,8 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    DeactivatePluginRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
-    ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::oplog::OplogIndex;
@@ -200,6 +200,7 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
+        force: bool,
     ) -> WorkerResult<()>;
 
     async fn update(
@@ -253,6 +254,14 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()>;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 }
@@ -768,6 +777,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
+        force: bool,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -778,6 +788,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     account_id: metadata.account_id.clone().map(|id| id.into()),
+                    force: Some(force),
                 }))
             },
             |response| match response.into_inner() {
@@ -1186,6 +1197,43 @@ impl WorkerService for WorkerServiceDefault {
         )
             .await?;
 
+        Ok(())
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
+        let source_worker_id = source_worker_id.clone();
+        let target_worker_id = target_worker_id.clone();
+        self.call_worker_executor(
+            source_worker_id.clone(),
+            "fork_worker",
+            move |worker_executor_client| {
+                let source_worker_id = source_worker_id.clone();
+                let target_worker_id = target_worker_id.clone();
+                Box::pin(worker_executor_client.fork_worker(ForkWorkerRequest {
+                    source_worker_id: Some(source_worker_id.into()),
+                    target_worker_id: Some(target_worker_id.into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                    oplog_index_cutoff: oplog_index_cut_off.into(),
+                }))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ForkWorkerResponse {
+                    result: Some(workerexecutor::v1::fork_worker_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::v1::ForkWorkerResponse {
+                    result: Some(workerexecutor::v1::fork_worker_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::ForkWorkerResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
         Ok(())
     }
 }

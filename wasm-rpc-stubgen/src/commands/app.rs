@@ -2,8 +2,8 @@ use crate::cargo::regenerate_cargo_package_component;
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
-    set_log_output, LogColorize, LogIndent, Output,
+    log_action, log_skipping_up_to_date, log_warn_action, set_log_output, LogColorize, LogIndent,
+    Output,
 };
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ComponentName,
@@ -12,9 +12,9 @@ use crate::model::app::{
 };
 use crate::model::app_raw;
 use crate::stub::{StubConfig, StubDefinition};
-use crate::validation::ValidatedResult;
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wit_generate::{
-    add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
+    add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep, AddClientAsDepConfig,
     UpdateCargoToml,
 };
 use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
@@ -34,10 +34,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 use walkdir::WalkDir;
-use wit_parser::PackageName;
 
 pub struct Config<CPE: ComponentPropertiesExtensions> {
-    pub app_resolve_mode: ApplicationSourceMode,
+    pub app_source_mode: ApplicationSourceMode,
+    pub component_select_mode: ComponentSelectMode,
     pub skip_up_to_date_checks: bool,
     pub profile: Option<ProfileName>,
     pub offline: bool,
@@ -62,6 +62,12 @@ pub enum ApplicationSourceMode {
     Explicit(Vec<PathBuf>),
 }
 
+#[derive(Debug, Clone)]
+pub enum ComponentSelectMode {
+    CurrentDir,
+    Explicit(Vec<ComponentName>),
+}
+
 #[derive(Debug)]
 pub struct ComponentStubInterfaces {
     pub stub_interface_name: String,
@@ -75,6 +81,7 @@ pub struct ApplicationContext<CPE: ComponentPropertiesExtensions> {
     component_stub_defs: HashMap<ComponentName, StubDefinition>,
     common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
+    selected_component_names: BTreeSet<ComponentName>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
@@ -84,8 +91,13 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         let ctx = to_anyhow(
             config.log_output,
             "Failed to create application context, see problems above",
-            load_app_validated(&config).and_then(|application| {
+            load_app(&config).and_then(|(application, selected_component_names)| {
                 ResolvedWitApplication::new(&application, config.profile.as_ref()).map(|wit| {
+                    let selected_component_names = if selected_component_names.is_empty() {
+                        application.component_names().cloned().collect()
+                    } else {
+                        selected_component_names
+                    };
                     ApplicationContext {
                         config,
                         application,
@@ -93,177 +105,13 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                         component_stub_defs: HashMap::new(),
                         common_wit_deps: OnceCell::new(),
                         component_generated_base_wit_deps: HashMap::new(),
+                        selected_component_names,
                     }
                 })
             }),
         )?;
 
-        // Selecting and validating profiles
-        {
-            match &ctx.config.profile {
-                Some(profile) => {
-                    let all_profiles = ctx.application.all_profiles();
-                    if all_profiles.is_empty() {
-                        bail!(
-                            "Profile {} not found, no available profiles",
-                            profile.as_str().log_color_error_highlight(),
-                        );
-                    } else if !all_profiles.contains(profile) {
-                        bail!(
-                            "Profile {} not found, available profiles: {}",
-                            profile.as_str().log_color_error_highlight(),
-                            all_profiles
-                                .into_iter()
-                                .map(|s| s.as_str().log_color_highlight())
-                                .join(", ")
-                        );
-                    }
-                    log_action(
-                        "Selecting",
-                        format!(
-                            "profiles, requested profile: {}",
-                            profile.as_str().log_color_highlight()
-                        ),
-                    );
-                }
-                None => {
-                    log_action("Selecting", "profiles, no profile was requested");
-                }
-            }
-
-            let _indent = LogIndent::new();
-            for component_name in ctx.application.component_names() {
-                let selection = ctx
-                    .application
-                    .component_effective_property_source(component_name, ctx.profile());
-
-                let message = match (
-                    selection.profile,
-                    selection.template_name,
-                    ctx.profile().is_some(),
-                    selection.is_requested_profile,
-                ) {
-                    (None, None, false, _) => {
-                        format!(
-                            "default build for {}",
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (None, None, true, _) => {
-                        format!(
-                            "default build for {}, component has no profiles",
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (None, Some(template), false, _) => {
-                        format!(
-                            "default build for {} using template {}{}",
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (None, Some(template), true, _) => {
-                        format!(
-                            "default build for {} using template {}{}, component has no profiles",
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), None, false, false) => {
-                        format!(
-                            "default profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), None, true, false) => {
-                        format!(
-                            "default profile {} for {}, component has no matching requested profile",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), Some(template), false, false) => {
-                        format!(
-                            "default profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), Some(template), true, false) => {
-                        format!(
-                            "default profile {} for {} using template {}{}, component has no matching requested profile",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), None, false, true) => {
-                        format!(
-                            "profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), None, true, true) => {
-                        format!(
-                            "requested profile {} for {}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight()
-                        )
-                    }
-                    (Some(profile), Some(template), false, true) => {
-                        format!(
-                            "profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                    (Some(profile), Some(template), true, true) => {
-                        format!(
-                            "requested profile {} for {} using template {}{}",
-                            profile.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            template.as_str().log_color_highlight(),
-                            if selection.any_template_overrides {
-                                " with overrides"
-                            } else {
-                                ""
-                            }
-                        )
-                    }
-                };
-
-                log_action("Selected", message);
-            }
-        }
+        select_and_validate_profiles(&ctx)?;
 
         if ctx.config.offline {
             log_action("Selected", "offline mode");
@@ -297,7 +145,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                     source_wit_root: self
                         .application
                         .component_generated_base_wit(component_name),
-                    target_root: self.application.stub_temp_build_dir(component_name),
+                    client_root: self.application.client_temp_build_dir(component_name),
                     selected_world: None,
                     stub_crate_version: WASM_RPC_VERSION.to_string(),
                     // NOTE: these overrides are deliberately not part of cli flags or the app manifest, at least for now
@@ -305,7 +153,7 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
                         wasm_rpc_path_override: std::env::var("WASM_RPC_PATH_OVERRIDE").ok(),
                         wasm_rpc_version_override: std::env::var("WASM_RPC_VERSION_OVERRIDE").ok(),
                     },
-                    extract_source_interface_package: false,
+                    extract_source_exports_package: false,
                     seal_cargo_workspace: true,
                 })
                 .context("Failed to gather information for the stub generator")?,
@@ -319,16 +167,10 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
         component_name: &ComponentName,
     ) -> anyhow::Result<ComponentStubInterfaces> {
         let stub_def = self.component_stub_def(component_name)?;
-
-        // TODO: cleanup in app manifest PR
-        let stub_package_name = PackageName {
-            namespace: stub_def.source_package_name.namespace.clone(),
-            name: format!("{}-stub", stub_def.source_package_name.name),
-            version: stub_def.source_package_name.version.clone(),
-        };
-
+        let client_package_name = stub_def.client_parser_package_name();
         let result = ComponentStubInterfaces {
-            stub_interface_name: stub_package_name.interface_id(&stub_def.target_interface_name()),
+            stub_interface_name: client_package_name
+                .interface_id(&stub_def.client_interface_name()),
             exported_interfaces_per_stub_resource: BTreeMap::from_iter(
                 stub_def
                     .stub_imported_interfaces()
@@ -349,10 +191,17 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .common_wit_deps
             .get_or_init(|| {
                 let sources = self.application.wit_deps();
-                if sources.is_empty() {
+                if sources.value.is_empty() {
                     bail!("No common witDeps were defined in the application manifest")
                 }
-                WitDepsResolver::new(sources)
+                WitDepsResolver::new(
+                    sources
+                        .value
+                        .iter()
+                        .cloned()
+                        .map(|path| sources.source.join(path))
+                        .collect(),
+                )
             })
             .as_ref()
         {
@@ -383,8 +232,16 @@ impl<CPE: ComponentPropertiesExtensions> ApplicationContext<CPE> {
             .get(component_name)
             .unwrap())
     }
+
+    pub fn selected_component_names(&self) -> &BTreeSet<ComponentName> {
+        &self.selected_component_names
+    }
 }
 
+// TODO: this step is not selected_component_names aware yet, for that we have to build / filter
+//         - based on wit deps and / or
+//         - based on rpc deps
+//       depending on the sub-step
 async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
 ) -> anyhow::Result<()> {
@@ -397,7 +254,7 @@ async fn gen_rpc<CPE: ComponentPropertiesExtensions>(
         }
 
         for dep in &ctx.application.all_wasm_rpc_dependencies() {
-            build_stub(ctx, dep).await?;
+            build_client(ctx, dep).await?;
         }
     }
 
@@ -422,7 +279,7 @@ fn componentize<CPE: ComponentPropertiesExtensions>(
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application.component_names() {
+    for component_name in ctx.selected_component_names() {
         let component_properties = ctx
             .application
             .component_properties(component_name, ctx.profile());
@@ -445,7 +302,11 @@ fn componentize<CPE: ComponentPropertiesExtensions>(
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            execute_external_command(ctx, component_name, build_step)?;
+            execute_external_command(
+                ctx,
+                ctx.application.component_source_dir(component_name),
+                build_step,
+            )?;
         }
     }
 
@@ -458,14 +319,23 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
     log_action("Linking", "RPC");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application.component_names() {
-        let source = ctx.application.component_source(component_name);
-        let dependencies = ctx
+    for component_name in ctx.selected_component_names() {
+        let static_dependencies = ctx
             .application
             .component_wasm_rpc_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
             .collect::<BTreeSet<_>>();
+        let dynamic_dependencies = ctx
+            .application
+            .component_wasm_rpc_dependencies(component_name)
+            .iter()
+            .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
+            .collect::<BTreeSet<_>>();
+        let client_wasms = static_dependencies
+            .iter()
+            .map(|dep| ctx.application.client_wasm(&dep.name))
+            .collect::<Vec<_>>();
         let component_wasm = ctx
             .application
             .component_wasm(component_name, ctx.profile());
@@ -473,64 +343,97 @@ async fn link_rpc<CPE: ComponentPropertiesExtensions>(
             .application
             .component_linked_wasm(component_name, ctx.profile());
 
-        if is_up_to_date(
-            ctx.config.skip_up_to_date_checks,
-            // We also include the component specification source,
-            // so it triggers build in case deps are changed
-            || [source.to_path_buf(), component_wasm.clone()],
-            || [linked_wasm.clone()],
-        ) {
-            log_skipping_up_to_date(format!(
-                "linking wasm rpc dependencies ({}) into {}",
-                dependencies
-                    .iter()
-                    .map(|s| s.name.as_str().log_color_highlight())
-                    .join(", "),
-                component_name.as_str().log_color_highlight(),
-            ));
-            continue;
-        }
+        let task_result_marker = TaskResultMarker::new(
+            &ctx.application.task_result_marker_dir(),
+            LinkRpcMarkerHash {
+                component_name,
+                dependencies: &static_dependencies,
+            },
+        )?;
 
-        if dependencies.is_empty() {
+        if !dynamic_dependencies.is_empty() {
             log_action(
-                "Copying",
+                "Found",
                 format!(
-                    "(without linking) {} to {}, no wasm rpc dependencies defined",
-                    component_wasm.log_color_highlight(),
-                    linked_wasm.log_color_highlight(),
-                ),
-            );
-            fs::copy(&component_wasm, &linked_wasm)?;
-        } else {
-            log_action(
-                "Linking",
-                format!(
-                    "WASM RPC dependencies ({}) into {}",
-                    dependencies
+                    "dynamic WASM RPC dependencies ({}) for {}",
+                    dynamic_dependencies
                         .iter()
                         .map(|s| s.name.as_str().log_color_highlight())
                         .join(", "),
                     component_name.as_str().log_color_highlight(),
                 ),
             );
-            let _indent = LogIndent::new();
-
-            let stub_wasms = dependencies
-                .iter()
-                .map(|dep| ctx.application.stub_wasm(&dep.name))
-                .collect::<Vec<_>>();
-
-            commands::composition::compose(
-                ctx.application
-                    .component_wasm(component_name, ctx.profile())
-                    .as_path(),
-                &stub_wasms,
-                ctx.application
-                    .component_linked_wasm(component_name, ctx.profile())
-                    .as_path(),
-            )
-            .await?;
         }
+
+        if !static_dependencies.is_empty() {
+            log_action(
+                "Found",
+                format!(
+                    "static WASM RPC dependencies ({}) for {}",
+                    static_dependencies
+                        .iter()
+                        .map(|s| s.name.as_str().log_color_highlight())
+                        .join(", "),
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
+        }
+
+        if is_up_to_date(
+            ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
+            || {
+                let mut inputs = client_wasms.clone();
+                inputs.push(component_wasm.clone());
+                inputs
+            },
+            || [linked_wasm.clone()],
+        ) {
+            log_skipping_up_to_date(format!(
+                "linking RPC for {}",
+                component_name.as_str().log_color_highlight(),
+            ));
+            continue;
+        }
+
+        task_result_marker.result(
+            async {
+                if static_dependencies.is_empty() {
+                    log_action(
+                        "Copying",
+                        format!(
+                            "{} without linking, no static WASM RPC dependencies were found",
+                            component_name.as_str().log_color_highlight(),
+                        ),
+                    );
+                    fs::copy(&component_wasm, &linked_wasm).map(|_| ())
+                } else {
+                    log_action(
+                        "Linking",
+                        format!(
+                            "static WASM RPC dependencies ({}) into {}",
+                            static_dependencies
+                                .iter()
+                                .map(|s| s.name.as_str().log_color_highlight())
+                                .join(", "),
+                            component_name.as_str().log_color_highlight(),
+                        ),
+                    );
+                    let _indent = LogIndent::new();
+
+                    commands::composition::compose(
+                        ctx.application
+                            .component_wasm(component_name, ctx.profile())
+                            .as_path(),
+                        &client_wasms,
+                        ctx.application
+                            .component_linked_wasm(component_name, ctx.profile())
+                            .as_path(),
+                    )
+                    .await
+                }
+            }
+            .await,
+        )?;
     }
 
     Ok(())
@@ -552,11 +455,12 @@ pub async fn build<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> a
     Ok(())
 }
 
+// TODO: clean is not selected_component_names aware yet
 pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow::Result<()> {
-    let app = to_anyhow(
+    let (app, _selected_component_names) = to_anyhow(
         config.log_output,
         "Failed to load application manifest(s), see problems above",
-        load_app_validated(&config),
+        load_app(&config),
     )?;
 
     {
@@ -616,20 +520,33 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     }
 
     {
-        log_action("Cleaning", "component stubs");
+        log_action("Cleaning", "component clients");
         let _indent = LogIndent::new();
 
         for dep in app.all_wasm_rpc_dependencies() {
             log_action(
                 "Cleaning",
-                format!("component stub {}", dep.name.as_str().log_color_highlight()),
+                format!(
+                    "component client {}",
+                    dep.name.as_str().log_color_highlight()
+                ),
             );
             let _indent = LogIndent::new();
 
-            delete_path("stub wit", &app.stub_wit(&dep.name))?;
+            delete_path("client wit", &app.client_wit(&dep.name))?;
             if dep.dep_type == DependencyType::StaticWasmRpc {
-                delete_path("stub wasm", &app.stub_wasm(&dep.name))?;
+                delete_path("client wasm", &app.client_wasm(&dep.name))?;
             }
+        }
+    }
+
+    {
+        log_action("Cleaning", "common clean targets");
+        let _indent = LogIndent::new();
+
+        let common_clean = app.common_clean();
+        for path in &common_clean.value {
+            delete_path("common clean target", &common_clean.source.join(path))?;
         }
     }
 
@@ -637,21 +554,22 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
         log_action("Cleaning", "application build dir");
         let _indent = LogIndent::new();
 
-        delete_path("temp dir", app.temp_dir())?;
+        delete_path("temp dir", &app.temp_dir())?;
     }
 
     Ok(())
 }
 
+// TODO: collect_custom_commands is not selected_component_names aware yet
 pub fn collect_custom_commands<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
 ) -> anyhow::Result<BTreeMap<String, BTreeSet<ProfileName>>> {
     set_log_output(config.log_output);
 
-    let app = to_anyhow(
+    let (app, _selected_component_names) = to_anyhow(
         config.log_output,
         "Failed to load application manifest(s), see problems above",
-        load_app_validated(&config),
+        load_app(&config),
     )?;
 
     let all_profiles = app.all_option_profiles();
@@ -710,6 +628,19 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
     );
     let _indent = LogIndent::new();
 
+    let common_custom_commands = ctx.application.common_custom_commands();
+    if let Some(custom_command) = common_custom_commands.value.get(command) {
+        log_action(
+            "Executing",
+            format!("common custom command {}", command.log_color_highlight(),),
+        );
+        let _indent = LogIndent::new();
+
+        for step in custom_command {
+            execute_external_command(&ctx, &common_custom_commands.source, step)?;
+        }
+    }
+
     for component_name in ctx.application.component_names() {
         let properties = &ctx
             .application
@@ -726,7 +657,11 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
             let _indent = LogIndent::new();
 
             for step in custom_command {
-                execute_external_command(&ctx, component_name, step)?;
+                execute_external_command(
+                    &ctx,
+                    ctx.application.component_source_dir(component_name),
+                    step,
+                )?;
             }
         }
     }
@@ -751,48 +686,118 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_app_validated<CPE: ComponentPropertiesExtensions>(
+fn load_app<CPE: ComponentPropertiesExtensions>(
     config: &Config<CPE>,
-) -> ValidatedResult<Application<CPE>> {
-    let sources = collect_sources(&config.app_resolve_mode);
-    let oam_apps = sources.and_then(|sources| {
+) -> ValidatedResult<(Application<CPE>, BTreeSet<ComponentName>)> {
+    collect_sources(&config.app_source_mode).and_then(|(sources, calling_working_dir)| {
         sources
             .into_iter()
             .map(|source| {
                 ValidatedResult::from_result(app_raw::ApplicationWithSource::from_yaml_file(source))
             })
             .collect::<ValidatedResult<Vec<_>>>()
-    });
+            .map(|source_apps| (source_apps, calling_working_dir))
+    }).and_then(|(source_raw_apps, calling_working_dir)| {
+        let current_dir = std::env::current_dir().expect("Failed to get current working directory");
 
-    log_action("Collecting", "components");
-    let _indent = LogIndent::new();
+        log_action("Collecting", "components");
+        let _indent = LogIndent::new();
 
-    let app = oam_apps.and_then(Application::from_raw_apps);
+        Application::from_raw_apps(source_raw_apps)
+            .and_then(|application| {
+                let component_names: ValidatedResult<BTreeSet<ComponentName>> =
+                    match &config.component_select_mode {
+                        ComponentSelectMode::CurrentDir => match &config.app_source_mode {
+                            ApplicationSourceMode::Automatic => {
+                                let called_from_project_root = calling_working_dir == current_dir;
+                                if called_from_project_root {
+                                    ValidatedResult::Ok(BTreeSet::new())
+                                } else {
+                                    ValidatedResult::Ok(
+                                        application
+                                            .component_names()
+                                            .filter(|component_name| application.component_source_dir(component_name).starts_with(calling_working_dir.as_path()))
+                                            .cloned()
+                                            .collect()
+                                    )
+                                }
+                            }
+                            ApplicationSourceMode::Explicit(_) => ValidatedResult::Ok(BTreeSet::new()),
+                        },
+                        ComponentSelectMode::Explicit(component_names) => {
+                            let mut validation = ValidationBuilder::new();
+                            for component_name in component_names {
+                                if !application.contains_component(component_name) {
+                                    validation.add_error(format!(
+                                        "Requested component {} not found, available components: {}",
+                                        component_name.as_str().log_color_error_highlight(),
+                                        application
+                                            .component_names()
+                                            .map(|s| s.as_str().log_color_highlight())
+                                            .join(", ")
+                                    ));
+                                }
+                            }
+                            validation.build(BTreeSet::from_iter(component_names.iter().cloned()))
+                        }
+                    };
 
-    log_validated_action_result("Found", &app, |app| {
-        if app.component_names().next().is_none() {
-            "no components".to_string()
-        } else {
-            format!(
-                "components: {}",
-                app.component_names()
-                    .map(|s| s.as_str().log_color_highlight())
-                    .join(", ")
-            )
-        }
-    });
+                component_names.map(|component_names| (application, component_names))
+            })
+            .inspect(|(application, component_names)| {
+                if application.component_names().next().is_none() {
+                    log_action("Found", "no components")
+                } else {
+                    log_action(
+                        "Found",
+                        format!(
+                            "components: {}",
+                            application
+                                .component_names()
+                                .map(|s| s.as_str().log_color_highlight())
+                                .join(", ")
+                        ),
+                    )
+                }
 
-    app
+                if !component_names.is_empty() {
+                    match config.component_select_mode {
+                        ComponentSelectMode::CurrentDir => log_action(
+                            "Selected",
+                            format!(
+                                "components based on current dir: {} ",
+                                component_names
+                                    .iter()
+                                    .map(|s| s.as_str().log_color_highlight())
+                                    .join(", ")
+                            ),
+                        ),
+                        ComponentSelectMode::Explicit(_) => log_action(
+                            "Selected",
+                            format!(
+                                "components based on request: {} ",
+                                component_names
+                                    .iter()
+                                    .map(|s| s.as_str().log_color_highlight())
+                                    .join(", ")
+                            ),
+                        ),
+                    }
+                }
+            })
+    })
 }
 
-fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<PathBuf>> {
+fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<(BTreeSet<PathBuf>, PathBuf)> {
+    let calling_working_dir =
+        std::env::current_dir().expect("Failed to get current working directory");
+
     log_action("Collecting", "sources");
     let _indent = LogIndent::new();
 
-    let sources = match mode {
+    match mode {
         ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
-                // TODO: save original current dir and use it as a component filter
                 let source_ext = PathExtra::new(&source);
                 let source_dir = source_ext.parent().unwrap();
                 std::env::set_current_dir(source_dir)
@@ -831,23 +836,24 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<BTreeSet<Pat
                 non_unique_source_warns,
             )
         }
-    };
-
-    log_validated_action_result("Found", &sources, |sources| {
+    }
+    .inspect(|sources| {
         if sources.is_empty() {
-            "no sources".to_string()
+            log_action("Found", "no sources");
         } else {
-            format!(
-                "sources: {}",
-                sources
-                    .iter()
-                    .map(|source| source.log_color_highlight())
-                    .join(", ")
-            )
+            log_action(
+                "Found",
+                format!(
+                    "sources: {}",
+                    sources
+                        .iter()
+                        .map(|source| source.log_color_highlight())
+                        .join(", ")
+                ),
+            );
         }
-    });
-
-    sources
+    })
+    .map(|sources| (sources, calling_working_dir))
 }
 
 fn find_main_source() -> Option<PathBuf> {
@@ -868,6 +874,176 @@ fn find_main_source() -> Option<PathBuf> {
     }
 
     last_source
+}
+
+fn select_and_validate_profiles<CPE: ComponentPropertiesExtensions>(
+    ctx: &ApplicationContext<CPE>,
+) -> anyhow::Result<()> {
+    match &ctx.config.profile {
+        Some(profile) => {
+            let all_profiles = ctx.application.all_profiles();
+            if all_profiles.is_empty() {
+                bail!(
+                    "Profile {} not found, no available profiles",
+                    profile.as_str().log_color_error_highlight(),
+                );
+            } else if !all_profiles.contains(profile) {
+                bail!(
+                    "Profile {} not found, available profiles: {}",
+                    profile.as_str().log_color_error_highlight(),
+                    all_profiles
+                        .into_iter()
+                        .map(|s| s.as_str().log_color_highlight())
+                        .join(", ")
+                );
+            }
+            log_action(
+                "Selecting",
+                format!(
+                    "profiles, requested profile: {}",
+                    profile.as_str().log_color_highlight()
+                ),
+            );
+        }
+        None => {
+            log_action("Selecting", "profiles, no profile was requested");
+        }
+    }
+
+    let _indent = LogIndent::new();
+    for component_name in ctx.application.component_names() {
+        let selection = ctx
+            .application
+            .component_effective_property_source(component_name, ctx.profile());
+
+        let message = match (
+            selection.profile,
+            selection.template_name,
+            ctx.profile().is_some(),
+            selection.is_requested_profile,
+        ) {
+            (None, None, false, _) => {
+                format!(
+                    "default build for {}",
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (None, None, true, _) => {
+                format!(
+                    "default build for {}, component has no profiles",
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (None, Some(template), false, _) => {
+                format!(
+                    "default build for {} using template {}{}",
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (None, Some(template), true, _) => {
+                format!(
+                    "default build for {} using template {}{}, component has no profiles",
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), None, false, false) => {
+                format!(
+                    "default profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), None, true, false) => {
+                format!(
+                    "default profile {} for {}, component has no matching requested profile",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), Some(template), false, false) => {
+                format!(
+                    "default profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), Some(template), true, false) => {
+                format!(
+                    "default profile {} for {} using template {}{}, component has no matching requested profile",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), None, false, true) => {
+                format!(
+                    "profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), None, true, true) => {
+                format!(
+                    "requested profile {} for {}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                )
+            }
+            (Some(profile), Some(template), false, true) => {
+                format!(
+                    "profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            (Some(profile), Some(template), true, true) => {
+                format!(
+                    "requested profile {} for {} using template {}{}",
+                    profile.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
+                    template.as_str().log_color_highlight(),
+                    if selection.any_template_overrides {
+                        " with overrides"
+                    } else {
+                        ""
+                    }
+                )
+            }
+        };
+
+        log_action("Selected", message);
+    }
+
+    Ok(())
 }
 
 fn to_anyhow<T>(
@@ -1075,72 +1251,76 @@ fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
                 component_name.as_str().log_color_highlight(),
             ),
         );
-        let _indent = LogIndent::new();
 
-        delete_path(
-            "generated base wit directory",
-            &component_generated_base_wit,
-        )?;
-        copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
+        task_result_marker.result((|| {
+            let _indent = LogIndent::new();
 
-        {
-            let missing_package_deps = ctx
-                .wit
-                .missing_generic_source_package_deps(component_name)?;
+            delete_path(
+                "generated base wit directory",
+                &component_generated_base_wit,
+            )?;
+            copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
 
-            if !missing_package_deps.is_empty() {
-                log_action("Adding", "package deps");
-                let _indent = LogIndent::new();
+            {
+                let missing_package_deps = ctx
+                    .wit
+                    .missing_generic_source_package_deps(component_name)?;
 
-                ctx.common_wit_deps()?
-                    .add_packages_with_transitive_deps_to_wit_dir(
-                        &missing_package_deps,
-                        &component_generated_base_wit,
-                    )?;
-            }
-        }
+                if !missing_package_deps.is_empty() {
+                    log_action("Adding", "package deps");
+                    let _indent = LogIndent::new();
 
-        {
-            let component_interface_package_deps =
-                ctx.wit.component_interface_package_deps(component_name)?;
-            if !component_interface_package_deps.is_empty() {
-                log_action("Adding", "component interface package dependencies");
-                let _indent = LogIndent::new();
-
-                for (dep_interface_package_name, dep_component_name) in
-                    &component_interface_package_deps
-                {
-                    ctx.component_base_output_wit_deps(dep_component_name)?
+                    ctx.common_wit_deps()
+                        .with_context(|| {
+                            format!(
+                                "Failed to add package dependencies: {}",
+                                missing_package_deps
+                                    .iter()
+                                    .map(|s| s.to_string().log_color_highlight())
+                                    .join(", ")
+                            )
+                        })?
                         .add_packages_with_transitive_deps_to_wit_dir(
-                            &[dep_interface_package_name.clone()],
+                            &missing_package_deps,
                             &component_generated_base_wit,
                         )?;
                 }
             }
-        }
 
-        {
-            log_action(
-                "Extracting",
-                format!(
-                    "main interface package from {} to {}",
-                    component_source_wit.log_color_highlight(),
-                    component_generated_base_wit.log_color_highlight()
-                ),
-            );
-            let _indent = LogIndent::new();
+            {
+                let component_exports_package_deps =
+                    ctx.wit.component_exports_package_deps(component_name)?;
+                if !component_exports_package_deps.is_empty() {
+                    log_action("Adding", "component exports package dependencies");
+                    let _indent = LogIndent::new();
 
-            match extract_main_interface_as_wit_dep(&component_generated_base_wit) {
-                Ok(()) => {
-                    task_result_marker.success()?;
-                    Ok(true)
-                }
-                Err(err) => {
-                    task_result_marker.failure()?;
-                    Err(err)
+                    for (dep_exports_package_name, dep_component_name) in
+                        &component_exports_package_deps
+                    {
+                        ctx.component_base_output_wit_deps(dep_component_name)?
+                            .add_packages_with_transitive_deps_to_wit_dir(
+                                &[dep_exports_package_name.clone()],
+                                &component_generated_base_wit,
+                            )?;
+                    }
                 }
             }
-        }
+
+            {
+                log_action(
+                    "Extracting",
+                    format!(
+                        "exports package from {} to {}",
+                        component_source_wit.log_color_highlight(),
+                        component_generated_base_wit.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+                extract_exports_as_wit_dep(&component_generated_base_wit)?
+            }
+
+            Ok(true)
+        })())
     }
 }
 
@@ -1180,15 +1360,14 @@ fn create_generated_wit<CPE: ComponentPropertiesExtensions>(
                 component_name.as_str().log_color_highlight(),
             ),
         );
-        let _indent = LogIndent::new();
 
-        delete_path("generated wit directory", &component_generated_wit)?;
-        copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
-        add_stub_deps(ctx, component_name)?;
-
-        task_result_marker.success()?;
-
-        Ok(true)
+        task_result_marker.result((|| {
+            let _indent = LogIndent::new();
+            delete_path("generated wit directory", &component_generated_wit)?;
+            copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
+            add_client_deps(ctx, component_name)?;
+            Ok(true)
+        })())
     }
 }
 
@@ -1230,152 +1409,136 @@ fn update_cargo_toml<CPE: ComponentPropertiesExtensions>(
         return Ok(());
     }
 
-    let result = regenerate_cargo_package_component(
+    task_result_marker.result(regenerate_cargo_package_component(
         &cargo_toml,
         &ctx.application
             .component_generated_wit(component_name, ctx.profile()),
         None,
-    );
-    match result {
-        Ok(()) => {
-            task_result_marker.success()?;
-            Ok(())
-        }
-        Err(err) => {
-            task_result_marker.failure()?;
-            Err(err)
-        }
-    }
+    ))
 }
 
-async fn build_stub<CPE: ComponentPropertiesExtensions>(
+async fn build_client<CPE: ComponentPropertiesExtensions>(
     ctx: &mut ApplicationContext<CPE>,
     component: &DependentComponent,
 ) -> anyhow::Result<bool> {
     let stub_def = ctx.component_stub_def(&component.name)?;
-    let target_root = stub_def.target_wit_root();
+    let client_wit_root = stub_def.client_wit_root();
 
-    let stub_dep_package_ids = stub_def.stub_dep_package_ids();
-    let stub_sources: Vec<PathBuf> = stub_def
+    let client_dep_package_ids = stub_def.stub_dep_package_ids();
+    let client_sources: Vec<PathBuf> = stub_def
         .packages_with_wit_sources()
         .flat_map(|(package_id, _, sources)| {
-            (stub_dep_package_ids.contains(&package_id) || package_id == stub_def.source_package_id)
+            (client_dep_package_ids.contains(&package_id)
+                || package_id == stub_def.source_package_id)
                 .then(|| sources.files.iter().cloned())
                 .unwrap_or_default()
         })
         .collect();
 
-    let stub_wasm = ctx.application.stub_wasm(&component.name);
-    let stub_wit = ctx.application.stub_wit(&component.name);
+    let client_wasm = ctx.application.client_wasm(&component.name);
+    let client_wit = ctx.application.client_wit(&component.name);
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
             component_name: &component.name,
-            generator_kind: "stub",
+            generator_kind: "client",
         },
     )?;
 
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
-        || stub_sources,
+        || client_sources,
         || {
             if component.dep_type == DependencyType::StaticWasmRpc {
-                vec![stub_wit.clone(), stub_wasm.clone()]
+                vec![client_wit.clone(), client_wasm.clone()]
             } else {
-                vec![stub_wit.clone()]
+                vec![client_wit.clone()]
             }
         },
     ) {
+        // TODO: message based on type
         log_skipping_up_to_date(format!(
-            "generating wasm rpc stub for {}",
+            "generating WASM RPC client for {}",
             component.name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
-        match component.dep_type {
-            DependencyType::StaticWasmRpc => {
-                log_action(
-                    "Building",
-                    format!(
-                        "wasm rpc stub for {}",
-                        component.name.as_str().log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
+        task_result_marker.result(
+            async {
+                match component.dep_type {
+                    DependencyType::StaticWasmRpc => {
+                        log_action(
+                            "Building",
+                            format!(
+                                "WASM RPC client for {}",
+                                component.name.as_str().log_color_highlight()
+                            ),
+                        );
 
-                delete_path("stub temp build dir", &target_root)?;
-                delete_path("stub wit", &stub_wit)?;
-                delete_path("stub wasm", &stub_wasm)?;
+                        let _indent = LogIndent::new();
 
-                log_action(
-                    "Creating",
-                    format!("stub temp build dir {}", target_root.log_color_highlight()),
-                );
-                fs::create_dir_all(&target_root)?;
+                        delete_path("client temp build dir", &client_wit_root)?;
+                        delete_path("client wit", &client_wit)?;
+                        delete_path("client wasm", &client_wasm)?;
 
-                let offline = ctx.config.offline;
-                let stub_def = ctx.component_stub_def(&component.name)?;
-                let result =
-                    commands::generate::build(stub_def, &stub_wasm, &stub_wit, offline).await;
-                match result {
-                    Ok(()) => {
-                        task_result_marker.success()?;
+                        log_action(
+                            "Creating",
+                            format!(
+                                "client temp build dir {}",
+                                client_wit_root.log_color_highlight()
+                            ),
+                        );
+                        fs::create_dir_all(&client_wit_root)?;
 
-                        let skip_delete = std::env::var("WASM_RPC_KEEP_STUB_DIR")
-                            .ok()
-                            .map(|flag| {
-                                let flag = flag.to_lowercase();
-                                flag.starts_with("t") || flag == "1"
-                            })
-                            .unwrap_or_default();
+                        let offline = ctx.config.offline;
+                        commands::generate::build(
+                            ctx.component_stub_def(&component.name)?,
+                            &client_wasm,
+                            &client_wit,
+                            offline,
+                        )
+                        .await?;
 
-                        if !skip_delete {
-                            delete_path("stub temp build dir", &target_root)?;
+                        if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
+                            delete_path("client temp build dir", &client_wit_root)?;
                         }
-                        Ok(true)
+
+                        Ok(())
                     }
-                    Err(err) => {
-                        task_result_marker.failure()?;
-                        Err(err)
+                    DependencyType::DynamicWasmRpc => {
+                        log_action(
+                            "Generating",
+                            format!(
+                                "WASM RPC client for {}",
+                                component.name.as_str().log_color_highlight()
+                            ),
+                        );
+                        let _indent = LogIndent::new();
+
+                        delete_path("client wit", &client_wit)?;
+
+                        log_action(
+                            "Creating",
+                            format!(
+                                "client temp build dir {}",
+                                client_wit_root.log_color_highlight()
+                            ),
+                        );
+                        fs::create_dir_all(&client_wit_root)?;
+
+                        let stub_def = ctx.component_stub_def(&component.name)?;
+                        commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
                 }
             }
-            DependencyType::DynamicWasmRpc => {
-                log_action(
-                    "Generating",
-                    format!(
-                        "wasm rpc stub for {}",
-                        component.name.as_str().log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
+            .await,
+        )?;
 
-                delete_path("stub wit", &stub_wit)?;
-
-                log_action(
-                    "Creating",
-                    format!("stub temp build dir {}", target_root.log_color_highlight()),
-                );
-                fs::create_dir_all(&target_root)?;
-
-                let stub_def = ctx.component_stub_def(&component.name)?;
-                let result = commands::generate::generate_and_copy_stub_wit(stub_def, &stub_wit);
-                match result {
-                    Ok(_) => {
-                        task_result_marker.success()?;
-                        Ok(true)
-                    }
-                    Err(err) => {
-                        task_result_marker.failure()?;
-                        Err(err)
-                    }
-                }
-            }
-        }
+        Ok(true)
     }
 }
 
-fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
+fn add_client_deps<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
@@ -1388,7 +1551,7 @@ fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
         log_action(
             "Adding",
             format!(
-                "stub wit dependencies to {}",
+                "client wit dependencies to {}",
                 component_name.as_str().log_color_highlight()
             ),
         );
@@ -1399,15 +1562,15 @@ fn add_stub_deps<CPE: ComponentPropertiesExtensions>(
             log_action(
                 "Adding",
                 format!(
-                    "{} stub wit dependency to {}",
+                    "{} client wit dependency to {}",
                     dep_component.name.as_str().log_color_highlight(),
                     component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-                stub_wit_root: ctx.application.stub_wit(&dep_component.name),
+            add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+                client_wit_root: ctx.application.client_wit(&dep_component.name),
                 dest_wit_root: ctx
                     .application
                     .component_generated_wit(component_name, ctx.profile()),
@@ -1462,22 +1625,14 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
 
 fn execute_external_command<CPE: ComponentPropertiesExtensions>(
     ctx: &ApplicationContext<CPE>,
-    component_name: &ComponentName,
+    base_build_dir: &Path,
     command: &app_raw::ExternalCommand,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
-        .map(|dir| {
-            ctx.application
-                .component_source_dir(component_name)
-                .join(dir)
-        })
-        .unwrap_or_else(|| {
-            ctx.application
-                .component_source_dir(component_name)
-                .to_path_buf()
-        });
+        .map(|dir| base_build_dir.join(dir))
+        .unwrap_or_else(|| base_build_dir.to_path_buf());
 
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
@@ -1513,45 +1668,54 @@ fn execute_external_command<CPE: ComponentPropertiesExtensions>(
         ),
     );
 
-    if !command.mkdirs.is_empty() {
-        let _ident = LogIndent::new();
-        for dir in &command.mkdirs {
-            let dir = build_dir.join(dir);
-            if !std::fs::exists(&dir)? {
-                log_action(
-                    "Creating",
-                    format!("directory {}", dir.log_color_highlight()),
-                );
-                std::fs::create_dir_all(dir)?
+    task_result_marker.result((|| {
+        if !command.rmdirs.is_empty() {
+            let _ident = LogIndent::new();
+            for dir in &command.rmdirs {
+                let dir = build_dir.join(dir);
+                delete_path("directory", &dir)?;
             }
         }
-    }
 
-    let command_tokens = shlex::split(&command.command)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse external command: {}", command.command))?;
-    if command_tokens.is_empty() {
-        return Err(anyhow!("Empty command!"));
-    }
+        if !command.mkdirs.is_empty() {
+            let _ident = LogIndent::new();
+            for dir in &command.mkdirs {
+                let dir = build_dir.join(dir);
+                if !std::fs::exists(&dir)? {
+                    log_action(
+                        "Creating",
+                        format!("directory {}", dir.log_color_highlight()),
+                    );
+                    std::fs::create_dir_all(dir)?
+                }
+            }
+        }
 
-    let result = Command::new(command_tokens[0].clone())
-        .args(command_tokens.iter().skip(1))
-        .current_dir(build_dir)
-        .status()
-        .with_context(|| "Failed to execute command".to_string())?;
+        let command_tokens = shlex::split(&command.command).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse external command: {}", command.command)
+        })?;
+        if command_tokens.is_empty() {
+            return Err(anyhow!("Empty command!"));
+        }
 
-    if result.success() {
-        task_result_marker.success()?;
-        Ok(())
-    } else {
-        task_result_marker.failure()?;
-        Err(anyhow!(format!(
-            "Command failed with exit code: {}",
-            result
-                .code()
-                .map(|code| code.to_string().log_color_error_highlight().to_string())
-                .unwrap_or_else(|| "?".to_string())
-        )))
-    }
+        let result = Command::new(command_tokens[0].clone())
+            .args(command_tokens.iter().skip(1))
+            .current_dir(build_dir)
+            .status()
+            .with_context(|| "Failed to execute command".to_string())?;
+
+        if result.success() {
+            Ok(())
+        } else {
+            Err(anyhow!(format!(
+                "Command failed with exit code: {}",
+                result
+                    .code()
+                    .map(|code| code.to_string().log_color_error_highlight().to_string())
+                    .unwrap_or_else(|| "?".to_string())
+            )))
+        }
+    })())
 }
 
 trait TaskResultMarkerHashInput {
@@ -1588,6 +1752,29 @@ impl TaskResultMarkerHashInput for ComponentGeneratorMarkerHash<'_> {
 
     fn hash_input(&self) -> anyhow::Result<Vec<u8>> {
         Ok(format!("{}-{}", self.component_name, self.generator_kind).into_bytes())
+    }
+}
+
+struct LinkRpcMarkerHash<'a> {
+    component_name: &'a ComponentName,
+    dependencies: &'a BTreeSet<&'a DependentComponent>,
+}
+
+impl TaskResultMarkerHashInput for LinkRpcMarkerHash<'_> {
+    fn task_kind() -> &'static str {
+        "RpcLinkMarkerHash"
+    }
+
+    fn hash_input(&self) -> anyhow::Result<Vec<u8>> {
+        Ok(format!(
+            "{}#{}",
+            self.component_name,
+            self.dependencies
+                .iter()
+                .map(|s| format!("{}#{}", s.name.as_str(), s.dep_type.as_str()))
+                .join(",")
+        )
+        .into_bytes())
     }
 }
 
@@ -1655,4 +1842,32 @@ impl TaskResultMarker {
     fn failure(&self) -> anyhow::Result<()> {
         fs::write_str(&self.failure_marker_file_path, "")
     }
+
+    fn result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        match result {
+            Ok(result) => {
+                self.success()?;
+                Ok(result)
+            }
+            Err(source_err) => {
+                self.failure().with_context(|| {
+                    anyhow!(
+                        "Failed to save failure marker for source error: {:?}",
+                        source_err,
+                    )
+                })?;
+                Err(source_err)
+            }
+        }
+    }
+}
+
+fn env_var_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|flag| {
+            let flag = flag.to_lowercase();
+            flag.starts_with("t") || flag == "1"
+        })
+        .unwrap_or_default()
 }

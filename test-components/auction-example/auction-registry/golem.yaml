@@ -1,0 +1,28 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+
+components:
+  auction-registry:
+    template: rust
+    profiles:
+      debug:
+        componentWasm: ../target/wasm32-wasip1/debug/auction_registry.wasm
+        linkedWasm: ../target/golem-components/debug/auction_registry_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/debug/auction_registry.wasm ../..
+          - command: cp ../target/golem-components/debug/auction_registry_composed.wasm ../..
+      release:
+        componentWasm: ../target/wasm32-wasip1/release/auction_registry.wasm
+        linkedWasm: ../target/golem-components/release/auction_registry_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/release/auction_registry.wasm ../..
+          - command: cp ../target/golem-components/release/auction_registry_composed.wasm ../..
+    defaultProfile: debug
+dependencies:
+  auction-registry:
+  - target: auction
+    type: static-wasm-rpc

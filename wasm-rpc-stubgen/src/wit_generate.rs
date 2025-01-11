@@ -23,41 +23,37 @@ use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, fs, naming};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
-    Ident, Interface, Package, PackageItem, PackageName, Params, ResourceFunc, Results,
-    StandaloneFunc, Type, TypeDef, World, WorldItem,
+    Ident, Interface, InterfaceItem, Package, PackageItem, Params, ResourceFunc, ResourceFuncKind,
+    Results, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
 };
 use wit_parser::PackageId;
 
-pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
+pub fn generate_client_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
         "Generating",
         format!(
-            "stub WIT to {}",
-            def.target_wit_path().log_color_highlight()
+            "client WIT to {}",
+            def.client_wit_path().log_color_highlight()
         ),
     );
 
-    let out = generate_stub_wit_from_stub_def(def)?;
-    fs::create_dir_all(def.target_wit_root())?;
-    fs::write(def.target_wit_path(), out)?;
+    let out = generate_client_wit_from_stub_def(def)?;
+    fs::create_dir_all(def.client_wit_root())?;
+    fs::write(def.client_wit_path(), out)?;
     Ok(())
 }
 
-pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
-    Ok(generate_stub_package_from_stub_def(def)?.to_string())
+pub fn generate_client_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
+    Ok(generate_client_package_from_stub_def(def)?.to_string())
 }
 
-pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> anyhow::Result<Package> {
-    let mut package = Package::new(PackageName::new(
-        def.source_package_name.namespace.clone(),
-        format!("{}-stub", def.source_package_name.name),
-        def.source_package_name.version.clone(),
-    ));
+pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Result<Package> {
+    let mut package = Package::new(def.client_encoder_package_name());
 
-    let interface_identifier = def.target_interface_name();
+    let interface_identifier = def.client_interface_name();
 
     // Stub interface
     {
@@ -120,7 +116,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> anyhow::Resu
                 // Blocking
                 {
                     let mut blocking_function = {
-                        let function_name = format!("blocking-{}", function.name.clone());
+                        let function_name = naming::wit::blocking_function_name(function);
                         if is_static {
                             ResourceFunc::static_(function_name)
                         } else {
@@ -161,7 +157,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> anyhow::Resu
 
     // Stub world
     {
-        let mut stub_world = World::new(def.target_world_name());
+        let mut stub_world = World::new(def.client_world_name());
         stub_world.named_interface_export(interface_identifier);
         package.world(stub_world);
     }
@@ -221,7 +217,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         format!(
             "WIT dependencies from {} to {}",
             def.config.source_wit_root.log_color_highlight(),
-            def.config.target_root.log_color_highlight(),
+            def.config.client_root.log_color_highlight(),
         ),
     );
 
@@ -229,7 +225,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
 
     let stub_dep_packages = def.stub_dep_package_ids();
 
-    let target_wit_root = def.target_wit_root();
+    let target_wit_root = def.client_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
     for (package_id, package, package_sources) in def.packages_with_wit_sources() {
@@ -307,26 +303,26 @@ pub enum UpdateCargoToml {
     NoUpdate,
 }
 
-pub struct AddStubAsDepConfig {
-    pub stub_wit_root: PathBuf,
+pub struct AddClientAsDepConfig {
+    pub client_wit_root: PathBuf,
     pub dest_wit_root: PathBuf,
     pub update_cargo_toml: UpdateCargoToml,
 }
 
-pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::Result<()> {
+pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyhow::Result<()> {
     log_action(
         "Adding",
         format!(
-            "stub dependencies to {} from {}",
+            "client dependencies to {} from {}",
             config.dest_wit_root.log_color_highlight(),
-            config.stub_wit_root.log_color_highlight()
+            config.client_wit_root.log_color_highlight()
         ),
     );
 
     let _indent = LogIndent::new();
 
-    let stub_resolved_wit_root = ResolvedWitDir::new(&config.stub_wit_root)?;
-    let stub_package = stub_resolved_wit_root.main_package()?;
+    let client_resolved_wit_root = ResolvedWitDir::new(&config.client_wit_root)?;
+    let client_package = client_resolved_wit_root.main_package()?;
 
     let dest_resolved_wit_root = ResolvedWitDir::new(&config.dest_wit_root)?;
 
@@ -335,13 +331,13 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     let mut actions = OverwriteSafeActions::new();
     let mut package_names_to_package_path = BTreeMap::<wit_parser::PackageName, PathBuf>::new();
 
-    for (package_name, package_id) in &stub_resolved_wit_root.resolve.package_names {
-        let package_sources = stub_resolved_wit_root
+    for (package_name, package_id) in &client_resolved_wit_root.resolve.package_names {
+        let package_sources = client_resolved_wit_root
             .package_sources
             .get(package_id)
             .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?;
 
-        if *package_id == stub_resolved_wit_root.package_id {
+        if *package_id == client_resolved_wit_root.package_id {
             let package_path = naming::wit::package_wit_dep_dir_from_parser(package_name);
 
             package_names_to_package_path.insert(package_name.clone(), package_path.clone());
@@ -369,13 +365,13 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
                     source: source.clone(),
                     target: config
                         .dest_wit_root
-                        .join(PathExtra::new(&source).strip_prefix(&config.stub_wit_root)?),
+                        .join(PathExtra::new(&source).strip_prefix(&config.client_wit_root)?),
                 });
             }
         }
     }
 
-    // Import stub and remove source interfaces
+    // Import client and remove source interfaces
     let dest_main_package_id = dest_resolved_wit_root.package_id;
 
     let dest_main_package_sources = dest_resolved_wit_root
@@ -396,13 +392,13 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
 
     let package = dest_encoded_wit_root.package(dest_main_package_id)?;
     // NOTE: wit_encoder "inlines" all transitive imports, so we have to clean up transitive
-    //       imports from the source-interface package, given they might have been removed or renamed
+    //       imports from the source-exports package, given they might have been removed or renamed
     //       in the source, and could create invalid imports.
     remove_world_named_interface_imports(
         package,
-        &naming::wit::stub_import_interface_prefix_from_stub_package_name(&stub_package.name)?,
+        &naming::wit::client_import_exports_prefix_from_client_package_name(&client_package.name)?,
     );
-    add_world_named_interface_import(package, &naming::wit::stub_import_name(stub_package)?);
+    add_world_named_interface_import(package, &naming::wit::client_import_name(client_package)?);
     let content = package.to_string();
 
     actions.add(OverwriteSafeAction::WriteFile {
@@ -411,7 +407,6 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     });
 
     // Check overwrites
-    // TODO: allow_skip_by_content, decide
     let forbidden_overwrites = actions.run(true, false, log_action_plan)?;
     if !forbidden_overwrites.is_empty() {
         eprintln!("The following files would have been overwritten with new content:");
@@ -635,11 +630,11 @@ fn remove_world_named_interface_imports(package: &mut Package, import_prefix: &s
     }
 }
 
-pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
+pub fn extract_exports_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
     log_action(
         "Extracting",
         format!(
-            "interface package from main package in wit directory {}",
+            "exports package from main package in wit directory {}",
             wit_dir.log_color_highlight()
         ),
     );
@@ -648,10 +643,8 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
     let main_package_id = resolved_wit_dir.package_id;
     let mut encoded_wit_dir = EncodedWitDir::new(&resolved_wit_dir.resolve)?;
 
-    let resolved_wit_dir = ResolvedWitDir::new(wit_dir)?;
-
-    let (main_package, interface_package) =
-        extract_main_interface_package(main_package_id, &mut encoded_wit_dir)?;
+    let (main_package, exports_package) =
+        extract_exports_package(main_package_id, &mut encoded_wit_dir)?;
     let sources = resolved_wit_dir
         .package_sources
         .get(&resolved_wit_dir.package_id)
@@ -671,18 +664,18 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
 
     let _indent = LogIndent::new();
 
-    let interface_package_path = wit_dir
+    let exports_package_path = wit_dir
         .join(naming::wit::DEPS_DIR)
-        .join(package_dep_dir_name_from_encoder(interface_package.name()))
-        .join(naming::wit::INTERFACE_WIT_FILE_NAME);
+        .join(package_dep_dir_name_from_encoder(exports_package.name()))
+        .join(naming::wit::EXPORTS_WIT_FILE_NAME);
     log_action(
         "Writing",
         format!(
-            "interface package to {}",
-            interface_package_path.log_color_highlight()
+            "exports package to {}",
+            exports_package_path.log_color_highlight()
         ),
     );
-    fs::write_str(&interface_package_path, interface_package.to_string())?;
+    fs::write_str(&exports_package_path, exports_package.to_string())?;
 
     let main_package_path = &sources.files[0];
     log_action(
@@ -700,54 +693,54 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
 // TODO: handle world include
 // TODO: handle world use
 // TODO: maybe transform inline interfaces and functions into included world?
-fn extract_main_interface_package(
+fn extract_exports_package(
     main_package_id: PackageId,
     encoded_wit_dir: &mut EncodedWitDir,
 ) -> anyhow::Result<(Package, Package)> {
     let package = encoded_wit_dir.package(main_package_id)?;
 
-    let mut interface_package = package.clone();
-    interface_package.set_name(naming::wit::interface_encoder_package_name(package.name()));
+    let mut exports_package = package.clone();
+    exports_package.set_name(naming::wit::exports_encoder_package_name(package.name()));
 
-    let interface_prefix = format!(
+    let exports_prefix = format!(
         "{}:{}/",
         package.name().namespace(),
-        interface_package.name().name()
+        exports_package.name().name()
     );
-    let interface_suffix = package
+    let exports_suffix = package
         .name()
         .version()
         .map(|version| format!("@{}", version))
         .unwrap_or_default();
 
     let mut exported_interface_identifiers = HashSet::<Ident>::new();
-    let mut inline_interface_exports = BTreeMap::<Ident, Vec<Interface>>::new();
+    let mut inline_interface_exports = BTreeMap::<Ident, BTreeMap<Ident, Interface>>::new();
     let mut inline_function_exports = BTreeMap::<Ident, Vec<StandaloneFunc>>::new();
     for package_item in package.items_mut() {
         if let PackageItem::World(world) = package_item {
             let world_name = world.name().clone();
+            let inline_interface_exports = inline_interface_exports
+                .entry(world_name.clone())
+                .or_default();
+            let inline_function_exports = inline_function_exports
+                .entry(world_name.clone())
+                .or_default();
 
             world.items_mut().retain(|world_item| match world_item {
                 // Remove and collect inline interface exports
                 WorldItem::InlineInterfaceExport(interface) => {
                     let mut interface = interface.clone();
-                    interface.set_name(naming::wit::interface_package_world_inline_interface_name(
+                    let interface_name = interface.name().clone();
+                    interface.set_name(naming::wit::exports_package_world_inline_interface_name(
                         &world_name,
                         interface.name(),
                     ));
-
-                    inline_interface_exports
-                        .entry(world_name.clone())
-                        .or_default()
-                        .push(interface.clone());
+                    inline_interface_exports.insert(interface_name, interface);
                     false
                 }
                 // Remove and collect inline function exports
                 WorldItem::FunctionExport(function) => {
-                    inline_function_exports
-                        .entry(world_name.clone())
-                        .or_default()
-                        .push(function.clone());
+                    inline_function_exports.push(function.clone());
                     false
                 }
                 // Collect named interface export identifiers
@@ -759,21 +752,19 @@ fn extract_main_interface_package(
             });
 
             // Insert named imports for extracted inline interfaces
-            if let Some(interfaces) = inline_interface_exports.get(&world_name) {
-                for interface in interfaces {
-                    world.named_interface_export(interface.name().clone());
-                }
+            for interface in inline_interface_exports.values_mut() {
+                world.named_interface_export(interface.name().clone());
             }
 
             // Insert named import for extracted inline functions
-            if inline_function_exports.contains_key(&world_name) {
+            if !inline_function_exports.is_empty() {
                 world.named_interface_export(format!(
                     "{}{}{}",
-                    interface_prefix,
+                    exports_prefix,
                     naming::wit::interface_package_world_inline_functions_interface_name(
                         &world_name
                     ),
-                    interface_suffix
+                    exports_suffix
                 ));
             }
         }
@@ -787,15 +778,6 @@ fn extract_main_interface_package(
         PackageItem::World(_) => true,
     });
 
-    interface_package.items_mut().retain(|item| match item {
-        // Drop non-exported interfaces from interface package
-        PackageItem::Interface(interface) => {
-            exported_interface_identifiers.contains(interface.name())
-        }
-        // Drop all worlds from interface package
-        PackageItem::World(_) => false,
-    });
-
     // Rename named self export and imports to use the extracted interface names
     for package_item in package.items_mut() {
         if let PackageItem::World(world) = package_item {
@@ -804,18 +786,18 @@ fn extract_main_interface_package(
                     if !import.name().raw_name().contains("/") {
                         import.set_name(format!(
                             "{}{}{}",
-                            interface_prefix,
+                            exports_prefix,
                             import.name(),
-                            interface_suffix
+                            exports_suffix
                         ));
                     }
                 } else if let WorldItem::NamedInterfaceExport(export) = world_item {
                     if !export.name().raw_name().contains("/") {
                         export.set_name(format!(
                             "{}{}{}",
-                            interface_prefix,
+                            exports_prefix,
                             export.name(),
-                            interface_suffix
+                            exports_suffix
                         ));
                     }
                 }
@@ -823,25 +805,275 @@ fn extract_main_interface_package(
         }
     }
 
-    // Add inlined exported interfaces to the interface package
+    // Collect type identifiers used by inlined items
+    let mut inline_interfaces_used_type_identifiers =
+        HashMap::<Ident, HashMap<Ident, HashSet<Ident>>>::new();
+    let mut inline_functions_used_type_identifiers = HashMap::<Ident, HashSet<Ident>>::new();
+    for (world_name, inline_interface_exports) in &inline_interface_exports {
+        let identifiers_by_interfaces = inline_interfaces_used_type_identifiers
+            .entry(world_name.clone())
+            .or_default();
+        for (interface_name, interface) in inline_interface_exports {
+            identifiers_by_interfaces.insert(interface_name.clone(), interface.used_type_idents());
+        }
+    }
+    for (world_name, inline_function_exports) in &inline_function_exports {
+        inline_functions_used_type_identifiers
+            .entry(world_name.clone())
+            .or_default()
+            .extend(
+                inline_function_exports
+                    .iter()
+                    .flat_map(|function| function.used_type_idents()),
+            );
+    }
+
+    let mut inline_function_uses = HashMap::<Ident, Vec<Use>>::new();
+    exports_package.items_mut().retain(|item| match item {
+        // Drop non-exported interfaces from exports package
+        PackageItem::Interface(interface) => {
+            exported_interface_identifiers.contains(interface.name())
+        }
+        // Drop all worlds from exports package, while moving export used "uses" into the new interfaces
+        PackageItem::World(world) => {
+            let use_to_idents = world
+                .uses()
+                .iter()
+                .map(|use_| {
+                    (
+                        use_,
+                        use_.use_names_list()
+                            .iter()
+                            .map(|(name, alias)| alias.as_ref().unwrap_or(name))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+
+            // Copy used uses into interfaces
+            {
+                let inline_interface_exports = inline_interface_exports
+                    .get_mut(world.name())
+                    .expect("Missing world in inline_interface_exports");
+
+                let inline_interfaces_used_type_identifiers =
+                    inline_interfaces_used_type_identifiers
+                        .get(world.name())
+                        .expect("Missing world in inline_interfaces_used_type_identifiers");
+
+                for (interface_name, used_type_identifiers) in
+                    inline_interfaces_used_type_identifiers
+                {
+                    let interface = inline_interface_exports
+                        .get_mut(interface_name)
+                        .expect("Missing interface in inline_interface_exports");
+                    use_to_idents
+                        .iter()
+                        .filter(|(_, idents)| {
+                            idents
+                                .iter()
+                                .any(|ident| used_type_identifiers.contains(ident))
+                        })
+                        .for_each(|(&use_, _)| interface.use_(use_.clone()))
+                }
+            }
+
+            // Copy used uses into function interface
+            {
+                let uses = inline_function_uses
+                    .entry(world.name().clone())
+                    .or_default();
+
+                let inline_functions_used_type_identifiers = inline_functions_used_type_identifiers
+                    .get(world.name())
+                    .expect("Missing world in inline_functions_used_type_identifiers");
+
+                use_to_idents
+                    .iter()
+                    .filter(|(_, idents)| {
+                        idents
+                            .iter()
+                            .any(|ident| inline_functions_used_type_identifiers.contains(ident))
+                    })
+                    .for_each(|(&use_, _)| uses.push(use_.clone()))
+            }
+
+            false
+        }
+    });
+
+    // Add inlined exported interfaces to the exports package
     for (_, interfaces) in inline_interface_exports {
-        for interface in interfaces {
-            interface_package.interface(interface);
+        for (_, interface) in interfaces {
+            exports_package.interface(interface);
         }
     }
 
-    // Add interface for inlined functions to the interface package
+    // Add interface for inlined functions to the exports package
     for (world_name, functions) in inline_function_exports {
         let mut interface = Interface::new(
             naming::wit::interface_package_world_inline_functions_interface_name(&world_name),
         );
 
+        for use_ in inline_function_uses.remove(&world_name).unwrap_or_default() {
+            interface.use_(use_);
+        }
+
         for function in functions {
             interface.function(function);
         }
 
-        interface_package.interface(interface);
+        exports_package.interface(interface);
     }
 
-    Ok((package.clone(), interface_package))
+    Ok((package.clone(), exports_package))
+}
+
+trait UsedTypeIdents {
+    fn used_type_idents(&self) -> HashSet<Ident>;
+}
+
+impl UsedTypeIdents for Type {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        match self {
+            Type::Bool => HashSet::new(),
+            Type::U8 => HashSet::new(),
+            Type::U16 => HashSet::new(),
+            Type::U32 => HashSet::new(),
+            Type::U64 => HashSet::new(),
+            Type::S8 => HashSet::new(),
+            Type::S16 => HashSet::new(),
+            Type::S32 => HashSet::new(),
+            Type::S64 => HashSet::new(),
+            Type::F32 => HashSet::new(),
+            Type::F64 => HashSet::new(),
+            Type::Char => HashSet::new(),
+            Type::String => HashSet::new(),
+            Type::Borrow(ident) => HashSet::from([ident.clone()]),
+            Type::Option(type_) => type_.used_type_idents(),
+            Type::Result(result_) => {
+                let mut idents = HashSet::<Ident>::new();
+                idents.extend(
+                    result_
+                        .get_ok()
+                        .as_ref()
+                        .map(|type_| type_.used_type_idents())
+                        .unwrap_or_default(),
+                );
+                idents.extend(
+                    result_
+                        .get_err()
+                        .as_ref()
+                        .map(|type_| type_.used_type_idents())
+                        .unwrap_or_default(),
+                );
+                idents
+            }
+            Type::List(type_) => type_.used_type_idents(),
+            Type::Tuple(tuple) => tuple
+                .types()
+                .iter()
+                .flat_map(|type_| type_.used_type_idents())
+                .collect(),
+            Type::Named(ident) => HashSet::from([ident.clone()]),
+        }
+    }
+}
+
+impl UsedTypeIdents for TypeDef {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        match self.kind() {
+            TypeDefKind::Record(record) => record
+                .fields()
+                .iter()
+                .flat_map(|field| field.type_().used_type_idents())
+                .collect(),
+            TypeDefKind::Resource(resource) => resource
+                .funcs()
+                .iter()
+                .flat_map(|func| func.used_type_idents())
+                .collect(),
+            TypeDefKind::Flags(_) => HashSet::new(),
+            TypeDefKind::Variant(variant) => variant
+                .cases()
+                .iter()
+                .flat_map(|case| {
+                    case.type_()
+                        .iter()
+                        .flat_map(|type_| type_.used_type_idents())
+                        .collect::<HashSet<_>>()
+                })
+                .collect(),
+            TypeDefKind::Enum(_) => HashSet::new(),
+            TypeDefKind::Type(type_) => type_.used_type_idents(),
+        }
+    }
+}
+
+impl UsedTypeIdents for Params {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        self.items()
+            .iter()
+            .flat_map(|(_, type_)| type_.used_type_idents())
+            .collect()
+    }
+}
+
+impl UsedTypeIdents for ResourceFunc {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        let mut idents = HashSet::<Ident>::new();
+        idents.extend(self.params().used_type_idents());
+
+        let results = match self.kind() {
+            ResourceFuncKind::Method(_, results) => Some(results),
+            ResourceFuncKind::Static(_, results) => Some(results),
+            ResourceFuncKind::Constructor => None,
+        };
+        if let Some(results) = results {
+            idents.extend(results.used_type_idents());
+        }
+
+        idents
+    }
+}
+
+impl UsedTypeIdents for Results {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        match self {
+            Results::Named(params) => params.used_type_idents(),
+            Results::Anon(type_) => type_.used_type_idents(),
+        }
+    }
+}
+
+impl UsedTypeIdents for InterfaceItem {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        match self {
+            InterfaceItem::TypeDef(type_def) => type_def.used_type_idents(),
+            InterfaceItem::Function(function) => {
+                let mut idents = HashSet::<Ident>::new();
+                idents.extend(function.params().used_type_idents());
+                idents.extend(function.results().used_type_idents());
+                idents
+            }
+        }
+    }
+}
+
+impl UsedTypeIdents for Interface {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        self.items()
+            .iter()
+            .flat_map(|item| item.used_type_idents())
+            .collect()
+    }
+}
+
+impl UsedTypeIdents for StandaloneFunc {
+    fn used_type_idents(&self) -> HashSet<Ident> {
+        let mut idents = HashSet::<Ident>::new();
+        idents.extend(self.params().used_type_idents());
+        idents.extend(self.results().used_type_idents());
+        idents
+    }
 }

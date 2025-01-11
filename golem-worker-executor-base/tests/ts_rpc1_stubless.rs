@@ -43,11 +43,14 @@ async fn counter_resource_test_1(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        (
+                            "counter".to_string(),
+                            "rpc:counters-exports/api".to_string(),
+                        ),
                     ]),
                 }),
             )],
@@ -64,10 +67,18 @@ async fn counter_resource_test_1(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
@@ -91,11 +102,14 @@ async fn counter_resource_test_1_with_restart(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        (
+                            "counter".to_string(),
+                            "rpc:counters-exports/api".to_string(),
+                        ),
                     ]),
                 }),
             )],
@@ -112,14 +126,22 @@ async fn counter_resource_test_1_with_restart(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
     let executor = common::start(deps, &context).await.unwrap();
 
     let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test1}",
+            vec![],
+        )
         .await;
 
     drop(executor);
@@ -143,11 +165,14 @@ async fn context_inheritance(
         .store_component_with_dynamic_linking(
             CALLER_COMPONENT_NAME,
             &[(
-                "rpc:counters-stub/stub-counters",
+                "rpc:counters-client/counters-client",
                 DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                     target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters/api".to_string()),
-                        ("counter".to_string(), "rpc:counters/api".to_string()),
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        (
+                            "counter".to_string(),
+                            "rpc:counters-exports/api".to_string(),
+                        ),
                     ]),
                 }),
             )],
@@ -170,7 +195,11 @@ async fn context_inheritance(
         .await;
 
     let result = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{test3}",
+            vec![],
+        )
         .await;
 
     drop(executor);

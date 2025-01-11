@@ -104,7 +104,7 @@ pub struct RedisLabelledApi<'a> {
     connected: &'a AtomicBool,
 }
 
-impl<'a> RedisLabelledApi<'a> {
+impl RedisLabelledApi<'_> {
     pub async fn ensure_connected(&self) -> Result<(), RedisError> {
         if !self.connected.swap(true, atomic::Ordering::Relaxed) {
             let _connection = self.pool.connect();
