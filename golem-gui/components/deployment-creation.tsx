@@ -42,16 +42,21 @@ export default function DeploymentCreationPage({
     data?: ApiDeployment | null;
     error?: string | null;
   }>;
-  version?:string;
+  version?: string;
 }) {
   const [error, setError] = useState<string | null>(null);
   const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId, version);
-  const apiDefinitions = data.filter((api) => api.draft);
+  const apiDefinitions = data;
 
-  const uniqueApiDefintions = Object.values(apiDefinitions?.reduce<Record<string,ApiDefinition>>((obj, apiDefinition:ApiDefinition)=>{
-    obj[apiDefinition.id] = apiDefinition;
-    return obj;
-  }, {}) || {})
+  const uniqueApiDefintions = Object.values(
+    apiDefinitions?.reduce<Record<string, ApiDefinition>>(
+      (obj, apiDefinition: ApiDefinition) => {
+        obj[apiDefinition.id] = apiDefinition;
+        return obj;
+      },
+      {}
+    ) || {}
+  );
 
   const {
     control,
@@ -61,8 +66,8 @@ export default function DeploymentCreationPage({
     formState: { errors },
   } = useForm<FormValues>({
     defaultValues: {
-      domain: "",
-      subdomain: "",
+      domain: process.env.NEXT_PUBLIC_DEFAULT_DOMIAN || "",
+      subdomain: process.env.NEXT_PUBLIC_DEFAULT_SUB_DOMIAN || "",
       definitions: [{ id: "", version: "" }] as KeyValue[],
     },
   });
@@ -101,11 +106,12 @@ export default function DeploymentCreationPage({
             <Controller
               name="domain"
               control={control}
-              rules={{ required: "Domain is required.",
+              rules={{
+                required: "Domain is required.",
                 pattern: {
-                  value:  /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
+                  value: /^(?!:\/\/)([a-zA-Z0-9-_]+\.)+[a-zA-Z]{2,}$/,
                   message: "Please enter a valid domain.",
-                }
+                },
               }}
               render={({ field }) => <TextField size="small" {...field} />}
             />
@@ -120,12 +126,13 @@ export default function DeploymentCreationPage({
               name="subdomain"
               control={control}
               //
-              rules={{ required: "Subdomain is required.",
+              rules={{
+                required: "Subdomain is required.",
                 pattern: {
-                  value:  /^(?!-)[a-zA-Z0-9-]{1,63}(?<!-)$/,
+                  value: /^(?!-)[a-zA-Z0-9-]{1,63}(?<!-)$/,
                   message: "Invalid Subdomain",
-                }
-               }}
+                },
+              }}
               render={({ field }) => <TextField size="small" {...field} />}
             />
             <Typography variant="caption" color="error">
@@ -187,7 +194,9 @@ export default function DeploymentCreationPage({
                             size="small"
                             name={`definition[${index}].id`}
                             variant="outlined"
-                            disabled={isLoading || uniqueApiDefintions?.length === 0}
+                            disabled={
+                              isLoading || uniqueApiDefintions?.length === 0
+                            }
                             value={definitions[index].id}
                             onChange={(e) => {
                               const newDef = {

@@ -33,7 +33,6 @@ import DeleteApiVersion from "../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import CreateComponentForm from '@/components/new-component';
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-
 const actionsMap = {
   new_version: "Create New Version",
   new_route: "Create New Route",
@@ -193,8 +192,6 @@ export default function SecondaryHeader({
 
   const handleClose = () => setOpen(null);
 
-  const ApiName = decodeURIComponent(apiId);
-
   useEffect(()=>{
     if(drawerOpen){
       setDrawerOpen(false)
@@ -218,12 +215,7 @@ export default function SecondaryHeader({
         </Box>
 
         {variant === "apis" && (
-          <Box className="flex gap-3">
-            <div className="w-12">{apiTab != "playground" && <VersionFilter />}</div>
-            <Typography variant="body2" className="text-bold">
-              {ApiName.length > 15 ? `${ApiName.slice(0, 15)}...` : ApiName}
-            </Typography>
-          </Box>
+          <VersionFilter showFilter={apiTab != "playground" }/>
         )}
         {variant === "apis" && apiTab != "playground" && (
           <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
