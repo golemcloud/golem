@@ -116,17 +116,25 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
       return;
     }
 
-    const reposne = await fetch(`https://${deployment.site.subdomain}.${deployment.site.host}`, {
-      method: route.method,
+    const { method } = route;
+
+    const options = {
+      method: method,
       headers: { 
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7', 
         'accept-language': 'en-US,en;q=0.9', 
         'cache-control': 'max-age=0', 
         'Content-Type': 'application/json'
-      },
-      body: JSON.stringify((data?.request?.body || {})) 
-    })
-
+      }
+    };
+    
+    // Only add body for methods that support it (e.g., POST, PUT, DELETE)
+    if (method !== 'Get' && method !== 'Head') {
+      options.body = JSON.stringify(data?.request?.body || {});
+    }
+    
+    const response = await fetch(`https://${deployment.site.subdomain}.${deployment.site.host}`, options);
+    
   };
   return (
     <div>
