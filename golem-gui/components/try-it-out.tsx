@@ -1,15 +1,22 @@
+'use client'
 import DynamicForm from "@/app/components/[compId]/workers/[id]/form-generator";
-import { ApiRoute, Parameter } from "@/types/api";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { fetcher } from "@/lib/utils";
+import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
 import {
-  AnalysedType_TypeOption,
   AnalysedType_TypeRecord,
 } from "@/types/golem-data-types";
-import { Typography } from "@mui/material";
-import React, { useMemo } from "react";
+import { MenuItem, Select, Typography } from "@mui/material";
+import React, { useMemo, useState } from "react";
+import { ApiDefinition } from '../types/api';
+import useApiDeployments from "@/lib/hooks/use-api-deployments";
 type FormData = {
   [key: string]: unknown;
 };
 export default function TryItOut({ route }: { route: ApiRoute }) {
+  const {apiId} = useCustomParam();
+  const [deployment, setDeployment] = useState<ApiDeployment|null>();
+  const {apiDeployments, isLoading, error} = useApiDeployments(apiId)
   const routeMeta = useMemo(() => {
     if (!route) {
       return null;
@@ -36,8 +43,9 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
         meta.typ.fields.push({
           name: "body",
           typ: {
-            type: "Option",
-          } as AnalysedType_TypeOption,
+            type: "Record",
+            fields: [],
+          } as AnalysedType_TypeRecord,
         });
       }
 
@@ -52,8 +60,9 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
         meta.typ.fields.push({
           name: "path",
           typ: {
-            type: "Option",
-          } as AnalysedType_TypeOption,
+            type: "Record",
+            fields: []
+          } as AnalysedType_TypeRecord,
         });
       }
     }
@@ -70,8 +79,9 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
         meta.typ.fields.push({
           name: "body",
           typ: {
-            type: "Option",
-          } as AnalysedType_TypeOption,
+            type: "Record",
+            fields: []
+          } as AnalysedType_TypeRecord,
         });
       }
 
@@ -86,8 +96,9 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
         meta.typ.fields.push({
           name: "path",
           typ: {
-            type: "Option",
-          } as AnalysedType_TypeOption,
+            type: "Record",
+            fields: []
+          } as AnalysedType_TypeRecord,
         });
       }
     }
@@ -97,13 +108,55 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
 
   console.log("routeMeta====>", routeMeta);
 
-  const handleSubmit = (data: FormData) => {
-    console.log("data==========>", data);
+  const handleSubmit = async (data: FormData) => {
+
+    console.log("data=========>", data);
+
+    if(!deployment){
+      return;
+    }
+
+    const reposne = await fetch(`https://${deployment.site.subdomain}.${deployment.site.host}`, {
+      method: route.method,
+      headers: { 
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7', 
+        'accept-language': 'en-US,en;q=0.9', 
+        'cache-control': 'max-age=0', 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify((data?.request?.body || {})) 
+    })
+
   };
   return (
     <div>
       {route && routeMeta ? (
-        <DynamicForm config={[routeMeta]} onSubmit={handleSubmit} />
+        <>
+                <DynamicForm config={[routeMeta]} onSubmit={handleSubmit} />
+                <Select
+                    variant="outlined"
+                    className="max-w-max"
+                    value={deployment}
+                    onChange={(e) => {
+                      const selectedIndex = Number(e.target.value);
+                      if (selectedIndex < 0 || isNaN(selectedIndex)) {
+                        return;
+                      }
+                      setDeployment(apiDeployments[selectedIndex]);
+                      
+                    }}
+                  >
+                    {apiDeployments.map((deployment: ApiDeployment, in_idx: number) => (
+                      <MenuItem
+                        key={`${deployment.site.host}_${deployment.site.subdomain}`}
+                        value={in_idx}
+                      >
+                        {`${deployment.site.subdomain}.${deployment.site.host}`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+        </>
+        
       ) : (
         <Typography>No Route Found!</Typography>
       )}

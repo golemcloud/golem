@@ -23,7 +23,7 @@ const RouteDetails = () => {
   });
 
   return (
-    <ApiDetails route={route}/>
+    route ? <ApiDetails route={route}/>: <>No route found!</>
   );
 };
 

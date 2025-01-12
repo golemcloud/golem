@@ -84,7 +84,7 @@ function useComponents(componentId?: string, version?: string | number | null) {
   ): { success: boolean; error?: string | null; data?: Component } => {
     if (!version && version !== 0 && !id) {
       return {
-        success: false,
+        success: components.length == 0,
         data: components[components.length - 1] || components[0],
         error: components.length == 0 ? "No component components found!" : null,
       };

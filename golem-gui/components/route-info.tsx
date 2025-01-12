@@ -1,6 +1,6 @@
 "use client"
 
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Box,
   Typography,
@@ -10,9 +10,25 @@ import {
   Stack,
 } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
-import { Pencil,Trash } from "lucide-react";
+import { Loader, Pencil,Trash } from "lucide-react";
+import { ApiRoute, Component } from "@/types/api";
+import useComponents from "@/lib/hooks/use-component";
+import TryItOut from "./try-it-out";
 
-const ApiDetails = ({route}:{route: any}) => {
+const ApiDetails = ({route}:{route: ApiRoute}) => {
+
+  // console.log("route================>", route?.binding?.componentId?.componentId);
+  // const {error:requestError, getComponent, isLoading} = useComponents(route?.binding?.componentId?.componentId, route?.binding?.componentId?.version);
+
+  // const {component, error} = useMemo(()=>{
+  //   return (!isLoading && !requestError && getComponent())
+  // },[getComponent, isLoading, requestError])
+
+  // console.log("component======>", component);
+
+  // if(isLoading){
+  //   return <Loader/>
+  // }
 
   return (
     <Box>
@@ -45,48 +61,14 @@ const ApiDetails = ({route}:{route: any}) => {
         </Grid>
         <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
           <Typography variant="body2" fontFamily="monospace">
-            try/v0
+            {route?.binding?.componentId?.componentId}{"/"}{route?.binding?.componentId?.version}
           </Typography>
         </Grid>
 
         <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Path Parameters */}
-        <Grid size={{ xs: 12, sm: 3 }} >
-          <Typography variant="body2" className="text-muted-foreground">Path Parameters</Typography>
+        <Grid size={12}>
+        <TryItOut route={route}/>
         </Grid>
-        
-        <Grid size={{ xs: 12, sm: 9 }}>
-            <Stack direction="row" gap={5} alignItems="center">
-                <Typography className="text-muted-foreground">user_id </Typography>
-                <Paper
-                    elevation={0}
-                    className="w-full"
-                    sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-                >
-                    u64
-                </Paper>
-          </Stack>
-        </Grid>
-
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Request Body */}
-        <Grid size={{ xs: 12, sm: 3 }} >
-          <Typography variant="body2" className="text-muted-foreground">Request Body</Typography>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 9 }}>
-          <Paper
-            elevation={0}
-            sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-          >
-            Value will come from the request body
-          </Paper>
-        </Grid>
-
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Response */}
         <Grid size={{ xs: 12, sm: 3 }} >
           <Typography variant="body2">
             <Box display="flex" flexDirection="column" gap={1}>
@@ -101,7 +83,7 @@ const ApiDetails = ({route}:{route: any}) => {
             elevation={0}
             sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
           >
-            rib will come here
+            {route?.binding?.response}
           </Paper>
         </Grid>
 
@@ -121,9 +103,8 @@ const ApiDetails = ({route}:{route: any}) => {
             elevation={0}
             sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
           >
-            let user: u64 = request.path.user-id;
+            {route?.binding?.workerName}
             <br />
-            &#34;my-worker-$&#123;user&#125;&#34;
           </Paper>
         </Grid>
       </Grid>
