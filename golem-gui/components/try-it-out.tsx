@@ -1,21 +1,21 @@
 'use client'
 import DynamicForm from "@/app/components/[compId]/workers/[id]/form-generator";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { fetcher } from "@/lib/utils";
 import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
 import {
   AnalysedType_TypeRecord,
 } from "@/types/golem-data-types";
 import { MenuItem, Select, Typography } from "@mui/material";
 import React, { useMemo, useState } from "react";
-import { ApiDefinition } from '../types/api';
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
+import JsonEditor from "./json-editor";
 type FormData = {
   [key: string]: unknown;
 };
 export default function TryItOut({ route }: { route: ApiRoute }) {
   const {apiId} = useCustomParam();
   const [deployment, setDeployment] = useState<ApiDeployment|null>();
+  const [curl, setCurl] = useState<string|null>(null)
   const {apiDeployments, isLoading, error} = useApiDeployments(apiId)
   const routeMeta = useMemo(() => {
     if (!route) {
@@ -106,34 +106,42 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
     return meta;
   }, [route]);
 
-  console.log("routeMeta====>", routeMeta);
+
+  async function copyCurlToClipboard(method: string, url: string, body: any = null) {
+    let curlCommand = `curl -X ${method.toUpperCase()} "${url}"`;
+  
+    // Add common headers
+    curlCommand += ` -H "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"`;
+    curlCommand += ` -H "accept-language: en-US,en;q=0.9"`;
+    curlCommand += ` -H "cache-control: max-age=0"`;
+  
+    // If the request is POST, PUT, or PATCH, include the Content-Type header
+    if (method.toUpperCase() === 'POST' || method.toUpperCase() === 'PUT' || method.toUpperCase() === 'PATCH') {
+      curlCommand += ` -H "Content-Type: application/json"`;
+    }
+  
+    // If there is a body, add the data using the -d flag
+    if (body) {
+      curlCommand += ` -d '${JSON.stringify(body)}'`;
+    }
+  
+    // Copy the generated curl command to the clipboard
+    await navigator.clipboard.writeText(curlCommand);
+  
+    return curlCommand;
+  }
+  
+  
 
   const handleSubmit = async (data: FormData) => {
-
-    console.log("data=========>", data);
-
     if(!deployment){
       return;
     }
 
-    const { method } = route;
+    const curl = await copyCurlToClipboard(route.method, 
+      `https://${deployment.site.subdomain}.${deployment.site.host}${route.path}`, data?.request?.body);
+    setCurl(curl)
 
-    const options = {
-      method: method,
-      headers: { 
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7', 
-        'accept-language': 'en-US,en;q=0.9', 
-        'cache-control': 'max-age=0', 
-        'Content-Type': 'application/json'
-      }
-    };
-    
-    // Only add body for methods that support it (e.g., POST, PUT, DELETE)
-    if (method !== 'Get' && method !== 'Head') {
-      options.body = JSON.stringify(data?.request?.body || {});
-    }
-    
-    const response = await fetch(`https://${deployment.site.subdomain}.${deployment.site.host}`, options);
     
   };
   return (
@@ -163,6 +171,7 @@ export default function TryItOut({ route }: { route: ApiRoute }) {
                       </MenuItem>
                     ))}
                   </Select>
+                  {curl && <JsonEditor json={curl}/>}
         </>
         
       ) : (

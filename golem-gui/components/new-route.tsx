@@ -414,7 +414,6 @@ const NewRouteForm = ({
           {defaultRoute ? "Update" : "Create"} Route
         </Button2>
       </Box>
-      {apiDefintion && apiDefintion?.draft!==true && defaultRoute&& <TryItOut route={defaultRoute}/>}
     </Box>
   );
 };
