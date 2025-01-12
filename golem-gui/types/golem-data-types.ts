@@ -107,7 +107,7 @@ export interface AnalysedType_TypeOption extends AnalysedType_Base {
   inner: AnalysedType; // Comes from TypeOption
 }
 
-interface AnalysedType_TypeRecord extends AnalysedType_Base {
+export interface AnalysedType_TypeRecord extends AnalysedType_Base {
   type: "Record";
   fields: NameTypePair[];
 }
