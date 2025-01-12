@@ -25,6 +25,8 @@ use wasmtime_wasi_http::WasiHttpView;
 use wasmtime_wasi_http::bindings::{Proxy, ProxyPre};
 use http_body_util::combinators::BoxBody;
 use wasmtime_wasi_http::bindings::http::types::ErrorCode as WasiHttpErrorCode;
+use std::sync::Arc;
+use futures::lock::Mutex;
 
 use crate::durable_host::DurableWorkerCtxView;
 use crate::error::GolemError;
@@ -34,19 +36,22 @@ use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 pub async fn invoke_worker_incoming_http_handler<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
     request: hyper::Request<hyper::body::Incoming>,
-    store: &mut impl AsContextMut<Data = Ctx>,
-    instance: & wasmtime::component::Instance,
+    store: Arc<Mutex<dyn AsContextMut<Data = Ctx> + Sync + Send>>,
+    instance: Arc<wasmtime::component::Instance>,
 ) -> Result<http::Response<BoxBody<Bytes, WasiHttpErrorCode>>, GolemError> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
 
-    let mut store = store.as_context_mut();
-    let scheme = wasi_http_scheme_from_request(&request)?;
-    let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(scheme, request).unwrap();
-    let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
-
-    let proxy = Proxy::new(&mut store, instance).unwrap();
+    let store = store.clone();
+    let instance = instance.clone();
 
     let task = tokio::task::spawn(async move {
+        let mut store_mutex = store.lock().await;
+        let mut store = store_mutex.as_context_mut();
+        let proxy = Proxy::new(&mut store, &instance).unwrap();
+        let scheme = wasi_http_scheme_from_request(&request)?;
+        let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(scheme, request).unwrap();
+        let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
+
         if let Err(_e) = proxy
             .wasi_http_incoming_handler()
             .call_handle(store, incoming, outgoing)
