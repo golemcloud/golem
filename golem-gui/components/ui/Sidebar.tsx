@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { use } from "react";
 import {
   Box,
   Button,
@@ -12,7 +12,11 @@ import {
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
 import Link from "next/link";
-import { usePathname,useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { ApiRoute } from "@/types/api";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { Button2 } from "./button";
 
 type SidebarProps = {
   id: string;
@@ -30,9 +34,18 @@ type NavigationLinks = {
 
 const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
   const pathname = usePathname();
-  const router=useRouter();
+  const router = useRouter();
   const params = useSearchParams();
-  const version = params?.get("version");
+  const { apiId } = useCustomParam();
+  const version = params.get("version");
+  const {
+    isLoading,
+    getApiDefintion,
+    error: requestError,
+  } = useApiDefinitions(apiId, version);
+  const { data: apiDefintion, error } = (!isLoading && getApiDefintion()) || {};
+
+
   return (
     <Box
       sx={{
@@ -90,25 +103,68 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
           );
         })}
       </List>
-      {variant == "apis" && (
-        <Typography
-          variant="subtitle2"
-          sx={{
-            fontWeight: "bold",
-            color: "#AAAAAA",
-            marginTop: 3,
-            marginBottom: 1,
-            fontSize: "14px",
-          }}
-        >
-          Routes
-        </Typography>
+      {variant === "apis" && (
+        <>
+          <Typography
+            variant="subtitle2"
+            sx={{
+              fontWeight: "bold",
+              color: "#AAAAAA",
+              marginBottom: 1,
+              fontSize: "14px",
+            }}
+          >
+            Routes
+          </Typography>
+          {apiDefintion?.routes.map((route: ApiRoute, index: number) => {
+          const routeId = encodeURIComponent(`${route.path}|${route.method}`);
+            return (
+              <Link
+                key={index}
+                href={`/apis/${id}/${routeId}${
+                  version ? `?version=${version}` : ""
+                }`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                <ListItem
+                  sx={{
+                    marginBottom: "0.8rem",
+                    cursor: "pointer",
+                    backgroundColor:
+                      pathname === `/apis/${id}/${routeId}`
+                        ? "#373737"
+                        : "transparent",
+                    "&:hover": {
+                      backgroundColor: "#373737",
+                    },
+                  }}
+                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0] ${
+                    pathname === `/apis/${id}/${routeId}`
+                      ? "dark:bg-[#373737] bg-[#C0C0C0]"
+                      : "transparent"
+                  }`}
+                >
+                  <ListItemText primary={route.path} />
+                  <ListItemIcon sx={{ minWidth: 32, color: "inherit" }}>
+                    <Button2 variant="success" size="xs">{route.method}</Button2>
+                  </ListItemIcon>
+                 
+                </ListItem>
+              </Link>
+            );
+          })}
+        </>
       )}
 
       {variant === "apis" && (
         //TODO:for now handling for button. but needs to Link.(don't want to break the ui)
         <Button
-          onClick={(e) =>{e.preventDefault(); router.push(`/apis/${id}/new-route${version? `?version=${version}`: ''}`)}}
+          onClick={(e) => {
+            e.preventDefault();
+            router.push(
+              `/apis/${id}/new-route${version ? `?version=${version}` : ""}`
+            );
+          }}
           variant="outlined"
           sx={{
             textTransform: "none",
