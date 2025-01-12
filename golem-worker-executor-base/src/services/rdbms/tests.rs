@@ -339,30 +339,28 @@ async fn postgres_create_insert_select_test(
     let db_address = postgres.rdbs[1].host_connection_string();
     let rdbms = rdbms_service.postgres();
 
-    let create_enum_statement = r#"
-            CREATE TYPE test_enum AS ENUM ('regular', 'special');
-        "#;
-    let create_composite_type_statement = r#"
+    let statements = vec![
+        r#"
+             CREATE TYPE test_enum AS ENUM ('regular', 'special');
+        "#,
+        r#"
             CREATE TYPE inventory_item AS (
                 product_id      uuid,
                 name            text,
                 supplier_id     INT4,
                 price           numeric
             );
-        "#;
-
-    let create_domain_type_statement = r#"
+        "#,
+        r#"
             CREATE DOMAIN posint4 AS INT4 CHECK (VALUE > 0);
-        "#;
-
-    let create_float8range_type_statement = r#"
+        "#,
+        r#"
             CREATE TYPE float8range AS RANGE (
                 subtype = float8,
                 subtype_diff = float8mi
             );
-        "#;
-
-    let create_table_statement = r#"
+        "#,
+        r#"
             CREATE TABLE data_types (
                 id VARCHAR(25) PRIMARY KEY,
                 enum_col test_enum,
@@ -407,19 +405,17 @@ async fn postgres_create_insert_select_test(
                 posint4_col posint4,
                 float8range_col float8range
             );
-        "#;
+        "#,
+    ];
 
     rdbms_test(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![
-                StatementTest::execute_test(create_enum_statement, vec![], None),
-                StatementTest::execute_test(create_composite_type_statement, vec![], None),
-                StatementTest::execute_test(create_domain_type_statement, vec![], None),
-                StatementTest::execute_test(create_float8range_type_statement, vec![], None),
-                StatementTest::execute_test(create_table_statement, vec![], None),
-            ],
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
             None,
         ),
     )
@@ -993,30 +989,99 @@ async fn postgres_create_insert_select_array_test(
     let db_address = postgres.rdbs[1].host_connection_string();
     let rdbms = rdbms_service.postgres();
 
-    let create_enum_statement = r#"
+    let statements = vec![
+        r#"
             CREATE TYPE a_test_enum AS ENUM ('first', 'second', 'third');
-        "#;
-
-    let create_composite_type_statement = r#"
+        "#,
+        r#"
             CREATE TYPE a_inventory_item AS (
                 product_id      uuid,
                 name            text,
                 supplier_id     INT4,
                 price           numeric
             );
-        "#;
-
-    let create_float4range_type_statement = r#"
+        "#,
+        r#"
             CREATE TYPE float4range AS RANGE (
                 subtype = float4
             );
-        "#;
-
-    let create_domain_type_statement = r#"
+        "#,
+        "CREATE TYPE a_custom_type AS (val int4);",
+        r#"
+            CREATE FUNCTION a_custom_type_lt(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val < b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE FUNCTION a_custom_type_le(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val <= b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE FUNCTION a_custom_type_gt(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val > b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE FUNCTION a_custom_type_ge(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val >= b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE FUNCTION a_custom_type_eq(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val = b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE FUNCTION a_custom_type_ne(a a_custom_type, b a_custom_type)
+            RETURNS boolean AS $$
+                SELECT a.val <> b.val;
+            $$ LANGUAGE SQL IMMUTABLE STRICT;
+        "#,
+        r#"
+            CREATE OPERATOR < (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_lt
+            );
+        "#,
+        r#"
+            CREATE OPERATOR <= (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_le
+            );
+        "#,
+        r#"
+             CREATE OPERATOR > (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_gt
+            );
+        "#,
+        r#"
+            CREATE OPERATOR >= (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_ge
+            );
+        "#,
+        r#"
+            CREATE OPERATOR = (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_eq, COMMUTATOR = =
+            );
+        "#,
+        r#"
+            CREATE OPERATOR <> (
+                LEFTARG = a_custom_type, RIGHTARG = a_custom_type, PROCEDURE = a_custom_type_ne, COMMUTATOR = <>
+            );
+        "#,
+        r#"
+            CREATE TYPE a_custom_type_range AS RANGE (
+                subtype = a_custom_type
+            );
+        "#,
+        r#"
             CREATE DOMAIN posint8 AS INT8 CHECK (VALUE > 0);
-        "#;
-
-    let create_table_statement = r#"
+        "#,
+        r#"
             CREATE TABLE array_data_types (
                 id VARCHAR(25) PRIMARY KEY,
                 enum_col a_test_enum[],
@@ -1059,21 +1124,20 @@ async fn postgres_create_insert_select_array_test(
                 tsquery_col TSQUERY[],
                 inventory_item_col a_inventory_item[],
                 posint8_col posint8[],
-                float4range_col float4range[]
+                float4range_col float4range[],
+                a_custom_type_range_col a_custom_type_range[]
             );
-        "#;
+        "#,
+    ];
 
     rdbms_test(
         rdbms.clone(),
         &db_address,
         RdbmsTest::new(
-            vec![
-                StatementTest::execute_test(create_enum_statement, vec![], None),
-                StatementTest::execute_test(create_composite_type_statement, vec![], None),
-                StatementTest::execute_test(create_domain_type_statement, vec![], None),
-                StatementTest::execute_test(create_float4range_type_statement, vec![], None),
-                StatementTest::execute_test(create_table_statement, vec![], None),
-            ],
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
             None,
         ),
     )
@@ -1123,7 +1187,8 @@ async fn postgres_create_insert_select_array_test(
             tsquery_col,
             inventory_item_col,
             posint8_col,
-            float4range_col
+            float4range_col,
+            a_custom_type_range_col
             )
             VALUES
             (
@@ -1131,7 +1196,7 @@ async fn postgres_create_insert_select_array_test(
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[],
-                $40, $41, $42
+                $40, $41, $42, $43
             );
         "#;
 
@@ -1355,9 +1420,56 @@ async fn postgres_create_insert_select_array_test(
                         ),
                     )),
                 ]),
+                postgres_types::DbValue::Array(vec![
+                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        "a_custom_type_range".to_string(),
+                        postgres_types::ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
+                    )),
+                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        "a_custom_type_range".to_string(),
+                        postgres_types::ValuesRange::new(
+                            Bound::Unbounded,
+                            Bound::Excluded(postgres_types::DbValue::Composite(
+                                postgres_types::Composite::new(
+                                    "a_custom_type".to_string(),
+                                    vec![postgres_types::DbValue::Int4(i as i32 + 1)],
+                                ),
+                            )),
+                        ),
+                    )),
+                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        "a_custom_type_range".to_string(),
+                        postgres_types::ValuesRange::new(
+                            Bound::Included(postgres_types::DbValue::Composite(
+                                postgres_types::Composite::new(
+                                    "a_custom_type".to_string(),
+                                    vec![postgres_types::DbValue::Int4(i as i32 + 2)],
+                                ),
+                            )),
+                            Bound::Excluded(postgres_types::DbValue::Composite(
+                                postgres_types::Composite::new(
+                                    "a_custom_type".to_string(),
+                                    vec![postgres_types::DbValue::Int4(i as i32 + 5)],
+                                ),
+                            )),
+                        ),
+                    )),
+                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        "a_custom_type_range".to_string(),
+                        postgres_types::ValuesRange::new(
+                            Bound::Included(postgres_types::DbValue::Composite(
+                                postgres_types::Composite::new(
+                                    "a_custom_type".to_string(),
+                                    vec![postgres_types::DbValue::Int4(i as i32 + 1)],
+                                ),
+                            )),
+                            Bound::Unbounded,
+                        ),
+                    )),
+                ]),
             ]);
         } else {
-            for _ in 0..41 {
+            for _ in 0..42 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1654,6 +1766,19 @@ async fn postgres_create_insert_select_array_test(
             .into_array(),
             db_type_name: "float4range[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "a_custom_type_range_col".to_string(),
+            ordinal: 42,
+            db_type: postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
+                "a_custom_type_range".to_string(),
+                postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
+                    "a_custom_type".to_string(),
+                    vec![("val".to_string(), postgres_types::DbColumnType::Int4)],
+                )),
+            ))
+            .into_array(),
+            db_type_name: "a_custom_type_range[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1699,7 +1824,8 @@ async fn postgres_create_insert_select_array_test(
             tsquery_col::text[],
             inventory_item_col,
             posint8_col,
-            float4range_col
+            float4range_col,
+            a_custom_type_range_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
@@ -2430,7 +2556,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("execute result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
+                        println!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2448,7 +2574,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("query result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
+                        println!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
@@ -2466,7 +2592,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         }
                     }
                     v => {
-                        println!("query stream result for worker {worker_id} and test statement with index {i}, statement:  {}, error: {:?}",st.statement, v);
+                        println!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
                         check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
