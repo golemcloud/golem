@@ -1,34 +1,19 @@
 "use client"
 
-import React, { useMemo } from "react";
+import React from "react";
 import {
   Box,
   Typography,
   Grid2 as Grid,
   Paper,
   Divider,
-  Stack,
 } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
-import { Loader, Pencil,Trash } from "lucide-react";
-import { ApiRoute, Component } from "@/types/api";
-import useComponents from "@/lib/hooks/use-component";
+import { Pencil,Trash } from "lucide-react";
+import { ApiRoute } from "@/types/api";
 import TryItOut from "./try-it-out";
 
-const ApiDetails = ({route}:{route: ApiRoute}) => {
-
-  // console.log("route================>", route?.binding?.componentId?.componentId);
-  // const {error:requestError, getComponent, isLoading} = useComponents(route?.binding?.componentId?.componentId, route?.binding?.componentId?.version);
-
-  // const {component, error} = useMemo(()=>{
-  //   return (!isLoading && !requestError && getComponent())
-  // },[getComponent, isLoading, requestError])
-
-  // console.log("component======>", component);
-
-  // if(isLoading){
-  //   return <Loader/>
-  // }
+const ApiDetails = ({route, version}:{route: ApiRoute, version: string}) => {
 
   return (
     <Box>
@@ -67,7 +52,7 @@ const ApiDetails = ({route}:{route: ApiRoute}) => {
 
         <Grid size={12}><Divider className="bg-border my-2" /></Grid>
         <Grid size={12}>
-        <TryItOut route={route}/>
+        <TryItOut route={route} version={version}/>
         </Grid>
         <Grid size={{ xs: 12, sm: 3 }} >
           <Typography variant="body2">

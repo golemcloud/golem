@@ -1,8 +1,10 @@
 "use client";
 
+import ErrorBoundary from "@/components/erro-boundary";
 import ApiDetails from "@/components/route-info";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { Loader } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 const RouteDetails = () => {
@@ -22,8 +24,16 @@ const RouteDetails = () => {
      return route.method==method && route.path==path;
   });
 
+  if(isLoading){
+    return <Loader/>
+  }
+
+  if(requestError || error) {
+    return <ErrorBoundary message={requestError || error}/>
+  }
+
   return (
-    route ? <ApiDetails route={route}/>: <>No route found!</>
+    apiDefinition && route ? <ApiDetails route={route} version={apiDefinition?.version}/>: <>No route found!</>
   );
 };
 
