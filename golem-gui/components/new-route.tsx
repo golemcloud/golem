@@ -23,7 +23,6 @@ import {
   InterpolationExpressions,
   AvailableFunctions,
 } from "./interpolate-tooltip";
-import TryItOut from "./try-it-out";
 
 type FormData = {
   path: string;

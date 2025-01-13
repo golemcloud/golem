@@ -5,9 +5,9 @@ import { Card } from "@/components/ui/card";
 import { ApiDefinition, ApiRoute } from "../types/api";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useState } from "react";
-import CustomModal from "@/components/CustomModal";
-import NewRouteForm from "./new-route";
 import ErrorBoundary from "./erro-boundary";
+import { useRouter } from "next/navigation";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export function RouteList({
   apiDefintion,
@@ -22,8 +22,9 @@ export function RouteList({
 }) {
   let routes = (apiDefintion?.routes || []) as ApiRoute[];
   routes = limit ? routes.slice(0, limit) : routes;
-  const [route, setRoute] = useState<ApiRoute | null>(null);
-
+  // const [route, setRoute] = useState<ApiRoute | null>(null);
+  const router=useRouter();
+  const {apiId}=useCustomParam();
   return (
     <>
       <Box>
@@ -54,7 +55,7 @@ export function RouteList({
                       className="px-4 py-6 flex border"
                       onClick={(e) => {
                         e.preventDefault();
-                        setRoute(route);
+                        router.push(`/apis/${apiId}/${routeId}`)
                       }}
                     >
                       <Typography gutterBottom className="font-bold">
@@ -75,18 +76,6 @@ export function RouteList({
           </>
         )}
       </Box>
-      <>
-        <CustomModal open={!!route} onClose={() => setRoute(null)}>
-          {apiDefintion && (
-            <NewRouteForm
-              apiId={apiDefintion?.id}
-              version={apiDefintion?.version}
-              defaultRoute={route}
-              onSuccess={() => setRoute(null)}
-            />
-          )}
-        </CustomModal>
-      </>
     </>
   );
 }

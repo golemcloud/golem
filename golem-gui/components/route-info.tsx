@@ -1,11 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { Box, Typography, Grid2 as Grid, Paper, Divider } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
 import { Pencil, Trash } from "lucide-react";
 import { ApiRoute } from "@/types/api";
 import TryItOut from "./try-it-out";
+import CustomModal from "./CustomModal";
+import NewRouteForm from "./new-route";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
@@ -33,8 +35,9 @@ const ApiDetails = ({
       throw error;
     }
   };
-
+  const [open,setOpen]=useState(false)
   return (
+    <>
     <Box>
       <Box className="flex justify-between">
         <Box>
@@ -43,8 +46,8 @@ const ApiDetails = ({
             {route?.method}
           </Button>
         </Box>
-        <Box>
-          <Button variant="primary" size="sm" endIcon={<Pencil size={64} />}>
+        <Box >
+          <Button variant="primary" size="sm" endIcon={<Pencil size={64}/>} onClick={() => setOpen((prev) => !prev)}>
             Edit
           </Button>
           <AlertDialogDemo
@@ -146,6 +149,17 @@ const ApiDetails = ({
         </Grid>
       </Grid>
     </Box>
+       <CustomModal open={open} onClose={() => {}}>
+       {route && (
+         <NewRouteForm
+           apiId={route.binding.componentId.componentId}
+           version={route.binding.componentId.version}
+           defaultRoute={route}
+           onSuccess={() => {}}
+         />
+       )}
+     </CustomModal>
+     </>
   );
 };
 
