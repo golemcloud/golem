@@ -7,6 +7,8 @@ import { Box, Typography } from "@mui/material";
 import DraftsIcon from "@mui/icons-material/Drafts";
 import DoneIcon from "@mui/icons-material/Done";
 
+
+
 export function VersionFilter({ showFilter }: { showFilter?: boolean }) {
   const router = useRouter();
   const { apiId } = useCustomParam();
@@ -15,8 +17,10 @@ export function VersionFilter({ showFilter }: { showFilter?: boolean }) {
   const { apiDefinitions, getApiDefintion, isLoading } =
     useApiDefinitions(apiId);
 
-  const { data: apiDefinition } =
-    (!isLoading && getApiDefintion(apiId, params.get("version"))) || {};
+  // Extract version explicitly
+  const version = params.get("version");
+
+  const { data: apiDefinition } =  (!isLoading && getApiDefintion(apiId, version)) || { data: null };
 
   const versions = useMemo(() => {
     return apiDefinitions.map((api) => {
@@ -29,12 +33,24 @@ export function VersionFilter({ showFilter }: { showFilter?: boolean }) {
     return parts[parts.length - 1] || "overview";
   }, [pathname]);
 
-  const handleChange = (value: string[]) => {
-    if (!value) {
-      return;
+  const handleChange = 
+    (value: string[]) => {
+      if (!value) {
+        return;
+      }
+     
+      if (["overview", "settings", "playground", "deployments"].includes(tab)) {
+        return router.push(`/apis/${apiId}/${tab}?version=${value[0]}`);
+      } else {
+        const {data: apiDefinition} = getApiDefintion(apiId, value[0])
+        const route = apiDefinition ? apiDefinition?.routes[0] : null;
+        const newtab =
+          (route && encodeURIComponent(`${route?.path}|${route?.method}`)) ||
+          "overview";
+
+        return router.push(`/apis/${apiId}/${newtab}/?version=${value[0]}`);
+      }
     }
-    router.push(`/apis/${apiId}/${tab}?version=${value[0]}`);
-  };
 
   const apiName = (apiDefinition && apiDefinition?.id) || "";
 
