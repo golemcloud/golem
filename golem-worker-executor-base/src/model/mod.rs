@@ -296,7 +296,7 @@ impl Display for LastError {
     }
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,

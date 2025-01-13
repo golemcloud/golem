@@ -15,8 +15,7 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::bindings::sockets::udp_create_socket::{Host, IpAddressFamily, UdpSocket};
 use wasmtime_wasi::SocketError;
@@ -27,7 +26,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         address_family: IpAddressFamily,
     ) -> Result<Resource<UdpSocket>, SocketError> {
-        record_host_function_call("sockets::udp_create_socket", "create_udp_socket");
+        self.observe_function_call("sockets::udp_create_socket", "create_udp_socket");
         Host::create_udp_socket(&mut self.as_wasi_view(), address_family)
     }
 }

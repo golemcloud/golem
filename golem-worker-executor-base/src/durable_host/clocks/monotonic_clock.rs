@@ -16,21 +16,20 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "now",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
 
@@ -43,11 +42,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "resolution",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
 
@@ -60,16 +59,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
-        record_host_function_call("clocks::monotonic_clock", "subscribe_instant");
+        self.observe_function_call("clocks::monotonic_clock", "subscribe_instant");
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 
     async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
-        let durability = Durability::<Ctx, Instant, SerializableError>::new(
+        let durability = Durability::<Instant, SerializableError>::new(
             self,
             "monotonic_clock",
             "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
 

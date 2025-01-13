@@ -18,7 +18,7 @@ use test_r::test;
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
 use golem_common::model::oplog::{
-    IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId, WrappedFunctionType,
+    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::{
@@ -52,7 +52,7 @@ pub fn oplog_entry() {
         function_name: "test:pkg/iface.{fn}".to_string(),
         request: OplogPayload::Inline(vec![5, 6, 7, 8, 9]),
         response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: WrappedFunctionType::ReadLocal,
+        wrapped_function_type: DurableFunctionType::ReadLocal,
     };
     let oe27a = OplogEntry::Create {
         timestamp: Timestamp::from(1724701938466),

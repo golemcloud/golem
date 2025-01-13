@@ -17,7 +17,7 @@ pub mod types;
 
 use async_trait::async_trait;
 use futures_util::TryFutureExt;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -36,11 +36,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, u64, SerializableError>::new(
+        let durability = Durability::<u64, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "create_container",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -72,11 +72,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, Option<u64>, SerializableError>::new(
+        let durability = Durability::<Option<u64>, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "get_container",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -105,11 +105,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "delete_container",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -134,11 +134,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<bool, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "container_exists",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -164,11 +164,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "copy_object",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -206,11 +206,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.account_id();
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
             "move_object",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result = if durability.is_live() {

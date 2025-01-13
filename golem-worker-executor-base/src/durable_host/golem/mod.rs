@@ -25,9 +25,8 @@ use wasmtime_wasi::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
-use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::{
@@ -36,7 +35,7 @@ use crate::preview2::golem::api0_2_0::host::{
 use crate::services::oplog::CommitLevel;
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
-use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScanCursor, WorkerId,
@@ -50,7 +49,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         filter: Option<golem::api0_2_0::host::WorkerAnyFilter>,
         precise: bool,
     ) -> anyhow::Result<Resource<GetWorkersEntry>> {
-        record_host_function_call("golem::api::get-workers", "new");
+        self.observe_function_call("golem::api::get-workers", "new");
         let entry = GetWorkersEntry::new(component_id.into(), filter.map(|f| f.into()), precise);
         let resource = self.as_wasi_view().table().push(entry)?;
         Ok(resource)
@@ -60,7 +59,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<GetWorkersEntry>,
     ) -> anyhow::Result<Option<Vec<WorkerMetadata>>> {
-        record_host_function_call("golem::api::get-workers", "get-next");
+        self.observe_function_call("golem::api::get-workers", "get-next");
         let (component_id, filter, count, precise, cursor) = self
             .as_wasi_view()
             .table()
@@ -94,7 +93,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
-        record_host_function_call("golem::api::get-workers", "drop");
+        self.observe_function_call("golem::api::get-workers", "drop");
         self.as_wasi_view().table().delete::<GetWorkersEntry>(rep)?;
         Ok(())
     }
@@ -131,7 +130,7 @@ impl GetWorkersEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> Result<golem::api0_2_0::host::PromiseId, anyhow::Error> {
-        record_host_function_call("golem::api", "create_promise");
+        self.observe_function_call("golem::api", "create_promise");
         let oplog_idx = self.get_oplog_index().await?;
 
         Ok(self
@@ -149,7 +148,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem::api0_2_0::host::PromiseId,
     ) -> Result<Vec<u8>, anyhow::Error> {
-        record_host_function_call("golem::api", "await_promise");
+        self.observe_function_call("golem::api", "await_promise");
         let promise_id: PromiseId = promise_id.into();
         match self
             .public_state
@@ -170,11 +169,11 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         promise_id: golem::api0_2_0::host::PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
-        let durability = Durability::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<bool, SerializableError>::new(
             self,
             "", // TODO: fix in 2.0
             "golem_complete_promise",
-            WrappedFunctionType::WriteLocal,
+            DurableFunctionType::WriteLocal,
         )
         .await?;
 
@@ -197,11 +196,11 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem::api0_2_0::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "", // TODO: fix in 2.0
             "golem_delete_promise",
-            WrappedFunctionType::WriteLocal,
+            DurableFunctionType::WriteLocal,
         )
         .await?;
 
@@ -224,7 +223,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         function_name: String,
     ) -> Result<golem::rpc::types::Uri, anyhow::Error> {
-        record_host_function_call("golem::api", "get_self_uri");
+        self.observe_function_call("golem::api", "get_self_uri");
         let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_urn(
             &self.owned_worker_id.worker_id,
             Some(&function_name),
@@ -233,7 +232,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem::api0_2_0::host::OplogIndex> {
-        record_host_function_call("golem::api", "get_oplog_index");
+        self.observe_function_call("golem::api", "get_oplog_index");
         if self.state.is_live() {
             self.state.oplog.add(OplogEntry::nop()).await;
             Ok(self.state.current_oplog_index().await.into())
@@ -247,7 +246,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         oplog_idx: golem::api0_2_0::host::OplogIndex,
     ) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "set_oplog_index");
+        self.observe_function_call("golem::api", "set_oplog_index");
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
         if jump_target > jump_source {
@@ -289,7 +288,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "oplog_commit");
+        self.observe_function_call("golem::api", "oplog_commit");
         if self.state.is_live() {
             let timeout = Duration::from_secs(1);
             debug!("Worker committing oplog to {replicas} replicas");
@@ -312,7 +311,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<golem::api0_2_0::host::OplogIndex> {
-        record_host_function_call("golem::api", "mark_begin_operation");
+        self.observe_function_call("golem::api", "mark_begin_operation");
 
         if self.state.is_live() {
             self.state
@@ -369,7 +368,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         begin: golem::api0_2_0::host::OplogIndex,
     ) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "mark_end_operation");
+        self.observe_function_call("golem::api", "mark_end_operation");
         if self.state.is_live() {
             self.state
                 .oplog
@@ -383,7 +382,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        record_host_function_call("golem::api", "get_retry_policy");
+        self.observe_function_call("golem::api", "get_retry_policy");
         match &self.state.overridden_retry_policy {
             Some(policy) => Ok(policy.into()),
             None => Ok((&self.state.config.retry).into()),
@@ -391,7 +390,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "set_retry_policy");
+        self.observe_function_call("golem::api", "set_retry_policy");
         let new_retry_policy: RetryConfig = new_retry_policy.into();
         self.state.overridden_retry_policy = Some(new_retry_policy.clone());
 
@@ -407,15 +406,15 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
-        record_host_function_call("golem::api", "get_oplog_persistence_level");
-        Ok(self.state.persistence_level.clone().into())
+        self.observe_function_call("golem::api", "get_oplog_persistence_level");
+        Ok(self.state.persistence_level.into())
     }
 
     async fn set_oplog_persistence_level(
         &mut self,
         new_persistence_level: PersistenceLevel,
     ) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "set_oplog_persistence_level");
+        self.observe_function_call("golem::api", "set_oplog_persistence_level");
         // commit all pending entries and change persistence level
         if self.state.is_live() {
             self.state.oplog.commit(CommitLevel::DurableOnly).await;
@@ -429,22 +428,22 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        record_host_function_call("golem::api", "get_idempotence_mode");
+        self.observe_function_call("golem::api", "get_idempotence_mode");
         Ok(self.state.assume_idempotence)
     }
 
     async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        record_host_function_call("golem::api", "set_idempotence_mode");
+        self.observe_function_call("golem::api", "set_idempotence_mode");
         self.state.assume_idempotence = idempotent;
         Ok(())
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api0_2_0::host::Uuid> {
-        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<(u64, u64), SerializableError>::new(
             self,
             "golem api",
             "generate_idempotency_key",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -473,11 +472,11 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         target_version: ComponentVersion,
         mode: UpdateMode,
     ) -> anyhow::Result<()> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::api",
             "update-worker",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -506,7 +505,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
-        record_host_function_call("golem::api", "get_self_metadata");
+        self.observe_function_call("golem::api", "get_self_metadata");
         let metadata = self.public_state.worker().get_metadata().await?;
         Ok(metadata.into())
     }
@@ -515,7 +514,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: golem::api0_2_0::host::WorkerId,
     ) -> anyhow::Result<Option<WorkerMetadata>> {
-        record_host_function_call("golem::api", "get_worker_metadata");
+        self.observe_function_call("golem::api", "get_worker_metadata");
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
         let metadata = self.state.worker_service.get(&owned_worker_id).await;

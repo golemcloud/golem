@@ -18,10 +18,9 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
-use crate::durable_host::{Durability, DurableWorkerCtx, OplogEntryVersion};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
-use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
@@ -30,7 +29,7 @@ use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::exports::function_by_name;
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
 };
@@ -57,7 +56,7 @@ use wasmtime_wasi::subscribe;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "new");
+        self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
         match location.parse_as_golem_urn() {
             Some((remote_worker_id, None)) => {
@@ -105,11 +104,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<(u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
         let uuid = if durability.is_live() {
@@ -126,11 +125,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let durability = Durability::<Ctx, TypeAnnotatedValue, SerializableError>::new(
+        let durability = Durability::<TypeAnnotatedValue, SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await result",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result: Result<WitValue, RpcError> = if durability.is_live() {
@@ -237,11 +236,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<(u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
         let uuid = if durability.is_live() {
@@ -259,11 +258,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
         let result: Result<(), RpcError> = if durability.is_live() {
@@ -317,7 +316,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let begin_index = self
             .state
-            .begin_function(&WrappedFunctionType::WriteRemote)
+            .begin_function(&DurableFunctionType::WriteRemote)
             .await?;
 
         let entry = self.table().get(&this)?;
@@ -333,11 +332,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let durability = Durability::<Ctx, (u64, u64), SerializableError>::new(
+        let durability = Durability::<(u64, u64), SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
         let uuid = if durability.is_live() {
@@ -412,7 +411,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             Err(_) => {
                 self.state
-                    .end_function(&WrappedFunctionType::WriteRemote, begin_index)
+                    .end_function(&DurableFunctionType::WriteRemote, begin_index)
                     .await?;
             }
         }
@@ -421,7 +420,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
-        record_host_function_call("golem::rpc::wasm-rpc", "drop");
+        self.observe_function_call("golem::rpc::wasm-rpc", "drop");
 
         let _ = self.table().delete(rep)?;
         Ok(())
@@ -514,7 +513,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
-        record_host_function_call("golem::rpc::future-invoke-result", "subscribe");
+        self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
         subscribe(self.table(), this, None)
     }
 
@@ -522,7 +521,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Option<Result<WitValue, golem_wasm_rpc::RpcError>>> {
-        record_host_function_call("golem::rpc::future-invoke-result", "get");
+        self.observe_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
         let component_service = self.state.component_service.clone();
 
@@ -649,7 +648,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         "golem::rpc::future-invoke-result::get".to_string(),
                         &serializable_invoke_request,
                         &serializable_invoke_result,
-                        WrappedFunctionType::WriteRemote,
+                        DurableFunctionType::WriteRemote,
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));
@@ -661,7 +660,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     match self.state.open_function_table.get(&handle) {
                         Some(begin_index) => {
                             self.state
-                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
                                 .await?;
                             self.state.open_function_table.remove(&handle);
                         }
@@ -703,7 +702,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     match self.state.open_function_table.get(&handle) {
                         Some(begin_index) => {
                             self.state
-                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
                                 .await?;
                             self.state.open_function_table.remove(&handle);
                         }
@@ -745,7 +744,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     match self.state.open_function_table.get(&handle) {
                         Some(begin_index) => {
                             self.state
-                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
                                 .await?;
                             self.state.open_function_table.remove(&handle);
                         }
@@ -768,7 +767,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        record_host_function_call("golem::rpc::future-invoke-result", "drop");
+        self.observe_function_call("golem::rpc::future-invoke-result", "drop");
         let _ = self.table().delete(this)?;
         Ok(())
     }

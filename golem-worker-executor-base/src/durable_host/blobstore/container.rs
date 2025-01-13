@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -21,8 +21,7 @@ use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::blobstore::container::{
     Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue,
     ObjectMetadata, ObjectName, OutgoingValue, StreamObjectNames,
@@ -35,7 +34,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<String, Error>> {
-        record_host_function_call("blobstore::container::container", "name");
+        self.observe_function_call("blobstore::container::container", "name");
         let name = self
             .as_wasi_view()
             .table()
@@ -48,7 +47,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<ContainerMetadata, Error>> {
-        record_host_function_call("blobstore::container::container", "info");
+        self.observe_function_call("blobstore::container::container", "info");
         let info = self
             .as_wasi_view()
             .table()
@@ -67,11 +66,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        let durability = Durability::<Ctx, Vec<u8>, SerializableError>::new(
+        let durability = Durability::<Vec<u8>, SerializableError>::new(
             self,
             "golem blobstore::container",
             "get_data",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 
@@ -112,11 +111,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::container",
             "write_data",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -156,11 +155,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Vec<String>, SerializableError>::new(
             self,
             "golem blobstore::container",
             "list_object",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 
@@ -199,11 +198,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::container",
             "delete_object",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -238,11 +237,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::container",
             "delete_objects",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -277,11 +276,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let durability = Durability::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<bool, SerializableError>::new(
             self,
             "golem blobstore::container",
             "has_object",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 
@@ -317,11 +316,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
         let durability =
-            Durability::<Ctx, crate::services::blob_store::ObjectMetadata, SerializableError>::new(
+            Durability::<crate::services::blob_store::ObjectMetadata, SerializableError>::new(
                 self,
                 "golem blobstore::container",
                 "object_info",
-                WrappedFunctionType::ReadRemote,
+                DurableFunctionType::ReadRemote,
             )
             .await?;
 
@@ -360,11 +359,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::container",
             "clear",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -390,7 +389,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
-        record_host_function_call("blobstore::container::container", "drop");
+        self.observe_function_call("blobstore::container::container", "drop");
         self.as_wasi_view()
             .table()
             .delete::<ContainerEntry>(container)?;
@@ -405,7 +404,7 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
         self_: Resource<StreamObjectNames>,
         len: u64,
     ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
-        record_host_function_call(
+        self.observe_function_call(
             "blobstore::container::stream_object_names",
             "read_stream_object_names",
         );
@@ -431,7 +430,7 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
         self_: Resource<StreamObjectNames>,
         num: u64,
     ) -> anyhow::Result<Result<(u64, bool), Error>> {
-        record_host_function_call(
+        self.observe_function_call(
             "blobstore::container::stream_object_names",
             "skip_stream_object_names",
         );
@@ -453,7 +452,7 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
-        record_host_function_call("blobstore::container::stream_object_names", "drop");
+        self.observe_function_call("blobstore::container::stream_object_names", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
     }

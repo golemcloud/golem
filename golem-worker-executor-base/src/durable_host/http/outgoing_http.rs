@@ -21,11 +21,12 @@ use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
 
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 
 use crate::durable_host::http::serialized::SerializableHttpRequest;
-use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{
+    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
+};
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
@@ -35,12 +36,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         request: Resource<HostOutgoingRequest>,
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
-        record_host_function_call("http::outgoing_handler", "handle");
+        self.observe_function_call("http::outgoing_handler", "handle");
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
-            .state
-            .begin_function(&WrappedFunctionType::WriteRemoteBatched(None))
+            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
 
@@ -89,10 +89,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 );
             }
             Err(_) => {
-                self.state
-                    .end_function(&WrappedFunctionType::WriteRemoteBatched(None), begin_index)
-                    .await
-                    .map_err(|err| HttpError::trap(anyhow!(err)))?;
+                self.end_durable_function(
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    begin_index,
+                )
+                .await
+                .map_err(|err| HttpError::trap(anyhow!(err)))?;
             }
         }
 
