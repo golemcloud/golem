@@ -11,7 +11,7 @@ import NewRouteForm from "./new-route";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 const ApiDetails = ({
   route,

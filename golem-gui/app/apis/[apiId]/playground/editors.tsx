@@ -5,21 +5,23 @@ import NewRouteForm from "@/components/new-route";
 import CustomModal from "@/components/CustomModal";
 import CreateNewApiVersion from "@/components/create-api-new-version";
 import DeleteApiVersion from "@/components/api-version-deletion";
-import { downloadApi } from "@/lib/hooks/use-api-definitons";
+import useApiDefinitions, { downloadApi } from "@/lib/hooks/use-api-definitons";
+import { AlertDialogDemo } from "@/components/confirmation-dialog";
 import { Typography } from "@mui/material";
 import JsonEditor from "@/components/json-editor";
 import DeploymentCreationPage from "@/components/deployment-creation";
-
+import { Button2 as Button } from "@/components/ui/button";
 const operationMap = {
   "new_route": "New Route",
   "new_api": "New Version",
   "update_api": "Update Api",
   "delete_api": "Delete Api",
   "download_api": "Download Api",
-  "update_route": "Update Route",
+  "update_route": "Update",
   "delete_route": "Delete Route",
 } as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { Trash } from "lucide-react";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -30,6 +32,18 @@ export default function Editors() {
     setTrigger(null);
     setSelectedNode(null);
     setSelectedEdge(null);
+  };
+  const { deleteRoute } = useApiDefinitions(apiId);
+  const handleDelete = async (
+    e: React.MouseEvent<HTMLButtonElement>
+  ): Promise<void> => {
+    console.log("delete route ",trigger);
+    e.preventDefault();
+    try {
+      await deleteRoute(trigger?.meta?.route ,trigger?.meta?.version);
+    } catch (error) {
+      throw error;
+    }
   };
 
   useEffect(() => {
@@ -123,17 +137,26 @@ export default function Editors() {
               )}
               {trigger?.operation === "delete_route" && (
                 // Chnage it to delete modal. work in progress
-                <NewRouteForm
-                  apiId={apiId}
-                  onSuccess={handleClose}
-                  defaultRoute={trigger?.meta?.route}
-                  // isExperimental={true}
-                  version={trigger?.meta?.version}
-                  isModal={true}
-                />
+                <AlertDialogDemo
+                onSubmit={(e: any) => handleDelete(e)}
+                paragraph={
+                  "This action cannot be undone. This will permanently delete this route."
+                }
+                child={
+                  <Button
+                    variant="error"
+                    size="sm"
+                    endIcon={<Trash />}
+                    className="ml-2"
+                  >
+                    {" "}
+                    Delete{" "}
+                  </Button>
+                }
+              />
+
               )}
               {trigger?.operation === "update_route" && (
-                // Chnage it to update modal. work in progress
                 <NewRouteForm
                   apiId={apiId}
                   onSuccess={handleClose}
