@@ -1,13 +1,12 @@
 "use client";
 import { Box, Typography, Stack, List } from "@mui/material";
 import { Loader } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { ApiDefinition, ApiRoute } from "../types/api";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import { useState } from "react";
-import CustomModal from "@/components/CustomModal";
-import NewRouteForm from "./new-route";
 import ErrorBoundary from "./erro-boundary";
+import { useRouter } from "next/navigation";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { Button2 } from "./ui/button";
 
 export function RouteList({
   apiDefintion,
@@ -22,8 +21,9 @@ export function RouteList({
 }) {
   let routes = (apiDefintion?.routes || []) as ApiRoute[];
   routes = limit ? routes.slice(0, limit) : routes;
-  const [route, setRoute] = useState<ApiRoute | null>(null);
-
+  // const [route, setRoute] = useState<ApiRoute | null>(null);
+  const router=useRouter();
+  const {apiId}=useCustomParam();
   return (
     <>
       <Box>
@@ -48,45 +48,32 @@ export function RouteList({
             <List className="space-y-4 p-2">
               {apiDefintion &&
                 routes?.map((route: ApiRoute) => {
+                  const routeId = encodeURIComponent(`${route.path}|${route.method}`);
                   return (
-                    <Card
+                    <Box
                       key={`${apiDefintion.id}_${apiDefintion.version}_${route.method}_${route.path}`}
-                      className="px-4 py-6 flex border"
+                      className="px-4 py-6 flex justify-between border rounded-lg dark:hover:bg-[#373737] hover:bg-[#C0C0C0] cursor-pointer"
                       onClick={(e) => {
                         e.preventDefault();
-                        setRoute(route);
+                        router.push(`/apis/${apiId}/${routeId}`)
                       }}
                     >
                       <Typography gutterBottom className="font-bold">
                         {route.path}
                       </Typography>
-
-                      <Typography
-                        border={1}
-                        borderRadius={2}
-                        className={"px-4 py-1 text-sm ml-auto self-center"}
+                      <Button2
+                        variant="success"
+                        size="xs"
                       >
                         {route.method}
-                      </Typography>
-                    </Card>
+                      </Button2>
+                    </Box>
                   );
                 })}
             </List>
           </>
         )}
       </Box>
-      <>
-        <CustomModal open={!!route} onClose={() => setRoute(null)}>
-          {apiDefintion && (
-            <NewRouteForm
-              apiId={apiDefintion?.id}
-              version={apiDefintion?.version}
-              defaultRoute={route}
-              onSuccess={() => setRoute(null)}
-            />
-          )}
-        </CustomModal>
-      </>
     </>
   );
 }

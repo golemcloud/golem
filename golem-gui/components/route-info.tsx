@@ -1,97 +1,112 @@
-"use client"
+"use client";
 
-import React from "react";
-import {
-  Box,
-  Typography,
-  Grid2 as Grid,
-  Paper,
-  Divider,
-  Stack,
-} from "@mui/material";
+import React, { useState } from "react";
+import { Box, Typography, Grid2 as Grid, Paper, Divider } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
-import { Pencil,Trash } from "lucide-react";
+import { Pencil, Trash } from "lucide-react";
+import { ApiRoute } from "@/types/api";
+import TryItOut from "./try-it-out";
+import CustomModal from "./CustomModal";
+import NewRouteForm from "./new-route";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { AlertDialogDemo } from "./confirmation-dialog";
+import { useRouter } from "next/navigation";
 
-const ApiDetails = ({route}:{route: any}) => {
-
+const ApiDetails = ({
+  route,
+  version,
+}: {
+  route: ApiRoute;
+  version: string;
+}) => {
+  const { apiId } = useCustomParam();
+  
+  const router = useRouter();
+  const { deleteRoute } = useApiDefinitions(apiId);
+  const handleDelete = async (
+    e: React.MouseEvent<HTMLButtonElement>
+  ): Promise<void> => {
+    console.log("delete route");
+    e.preventDefault();
+    try {
+      await deleteRoute(route!, version);
+      router.push(`/apis/${apiId}/overview?version=${version}`);
+    } catch (error) {
+      throw error;
+    }
+  };
+  const [open,setOpen]=useState(false)
   return (
+    <>
     <Box>
       <Box className="flex justify-between">
         <Box>
-          <Typography variant="h5" >
-           {route?.path}
-          </Typography>
+          <Typography variant="h5">{route?.path}</Typography>
           <Button variant="primary" size="icon_sm">
             {route?.method}
           </Button>
         </Box>
         <Box >
-          <Button variant="primary" size="sm" endIcon={<Pencil size={64}/>}>
+          <Button variant="primary" size="sm" endIcon={<Pencil size={64}/>} onClick={() => setOpen((prev) => !prev)}>
             Edit
           </Button>
-          <Button variant="error" size="sm" endIcon={<Trash/>} className="ml-2">
-            Delete
-          </Button>
+          <AlertDialogDemo
+            onSubmit={(e: any) => handleDelete(e)}
+            paragraph={
+              "This action cannot be undone. This will permanently delete this route."
+            }
+            child={
+              <Button
+                variant="error"
+                size="sm"
+                endIcon={<Trash />}
+                className="ml-2"
+              >
+                {" "}
+                Delete{" "}
+              </Button>
+            }
+          />
         </Box>
       </Box>
-
 
       {/* Sections */}
       <Grid container spacing={2}>
         {/* Component */}
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
+        <Grid size={12}>
+          <Divider className="bg-border my-2" />
+        </Grid>
         <Grid size={{ xs: 12, sm: 3 }} alignItems="center">
-          <Typography variant="body2" className="text-muted-foreground">Component</Typography>
+          <Typography variant="body2" className="text-muted-foreground">
+            Component
+          </Typography>
         </Grid>
         <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
           <Typography variant="body2" fontFamily="monospace">
-            try/v0
+            {route?.binding?.componentId?.componentId}
+            {"/"}
+            {route?.binding?.componentId?.version}
           </Typography>
         </Grid>
 
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Path Parameters */}
-        <Grid size={{ xs: 12, sm: 3 }} >
-          <Typography variant="body2" className="text-muted-foreground">Path Parameters</Typography>
+        <Grid size={12}>
+          <Divider className="bg-border my-2" />
         </Grid>
-        
-        <Grid size={{ xs: 12, sm: 9 }}>
-            <Stack direction="row" gap={5} alignItems="center">
-                <Typography className="text-muted-foreground">user_id </Typography>
-                <Paper
-                    elevation={0}
-                    className="w-full"
-                    sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-                >
-                    u64
-                </Paper>
-          </Stack>
+        <Grid size={12}>
+          <TryItOut route={route} version={version} />
         </Grid>
-
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Request Body */}
-        <Grid size={{ xs: 12, sm: 3 }} >
-          <Typography variant="body2" className="text-muted-foreground">Request Body</Typography>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 9 }}>
-          <Paper
-            elevation={0}
-            sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-          >
-            Value will come from the request body
-          </Paper>
-        </Grid>
-
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
-
-        {/* Response */}
-        <Grid size={{ xs: 12, sm: 3 }} >
+        <Grid size={{ xs: 12, sm: 3 }}>
           <Typography variant="body2">
             <Box display="flex" flexDirection="column" gap={1}>
               <span className="text-muted-foreground">Response</span>
-              <Button variant="primary" size="icon_sm" className="font-mono w-fit">Rib</Button>
+              <Button
+                variant="primary"
+                size="icon_sm"
+                className="font-mono w-fit"
+              >
+                Rib
+              </Button>
             </Box>
           </Typography>
         </Grid>
@@ -101,18 +116,26 @@ const ApiDetails = ({route}:{route: any}) => {
             elevation={0}
             sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
           >
-            rib will come here
+            {route?.binding?.response}
           </Paper>
         </Grid>
 
-        <Grid size={12}><Divider className="bg-border my-2" /></Grid>
+        <Grid size={12}>
+          <Divider className="bg-border my-2" />
+        </Grid>
 
         {/* Worker Name */}
-        <Grid size={{ xs: 12, sm: 3 }} >
-        <Typography variant="body2">
+        <Grid size={{ xs: 12, sm: 3 }}>
+          <Typography variant="body2">
             <Box display="flex" flexDirection="column" gap={1}>
               <span className="text-muted-foreground">Worker Name</span>
-              <Button variant="primary" size="icon_sm" className="font-mono w-fit">Rib</Button>
+              <Button
+                variant="primary"
+                size="icon_sm"
+                className="font-mono w-fit"
+              >
+                Rib
+              </Button>
             </Box>
           </Typography>
         </Grid>
@@ -121,13 +144,23 @@ const ApiDetails = ({route}:{route: any}) => {
             elevation={0}
             sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
           >
-            let user: u64 = request.path.user-id;
+            {route?.binding?.workerName}
             <br />
-            &#34;my-worker-$&#123;user&#125;&#34;
           </Paper>
         </Grid>
       </Grid>
     </Box>
+       <CustomModal open={open} onClose={() => setOpen(false)} heading="Editing Current Route">
+       {route && (
+         <NewRouteForm
+           apiId={apiId}
+           version={version}
+           defaultRoute={route}
+           onSuccess={()=>setOpen(false)}
+         />
+       )}
+     </CustomModal>
+     </>
   );
 };
 

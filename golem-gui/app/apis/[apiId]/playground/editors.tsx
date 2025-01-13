@@ -9,14 +9,13 @@ import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { Typography } from "@mui/material";
 import JsonEditor from "@/components/json-editor";
 import DeploymentCreationPage from "@/components/deployment-creation";
-
 const operationMap = {
   "new_route": "New Route",
   "new_api": "New Version",
   "update_api": "Update Api",
   "delete_api": "Delete Api",
   "download_api": "Download Api",
-  "update_route": "Update Route",
+  "update_route": "Update",
   "delete_route": "Delete Route",
 } as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
@@ -31,6 +30,7 @@ export default function Editors() {
     setSelectedNode(null);
     setSelectedEdge(null);
   };
+
 
   useEffect(() => {
     (async () => {
@@ -121,19 +121,7 @@ export default function Editors() {
                  isModal={true}
                />
               )}
-              {trigger?.operation === "delete_route" && (
-                // Chnage it to delete modal. work in progress
-                <NewRouteForm
-                  apiId={apiId}
-                  onSuccess={handleClose}
-                  defaultRoute={trigger?.meta?.route}
-                  // isExperimental={true}
-                  version={trigger?.meta?.version}
-                  isModal={true}
-                />
-              )}
               {trigger?.operation === "update_route" && (
-                // Chnage it to update modal. work in progress
                 <NewRouteForm
                   apiId={apiId}
                   onSuccess={handleClose}

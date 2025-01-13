@@ -8,13 +8,12 @@ import {
 } from "@mui/material";
 import { Loader } from "lucide-react";
 import { ApiDeployment } from "@/types/api";
-import { Card } from "@/components/ui/card";
 import AddIcon from "@mui/icons-material/Add";
 import { useState } from "react";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import CustomModal from "./CustomModal";
-import { Button2 as Button } from "./ui/button";
+import { Button2 as Button, Button2 } from "./ui/button";
 import ErrorBoundary from "./erro-boundary";
 import useApiDefinitions from '@/lib/hooks/use-api-definitons';
 
@@ -101,9 +100,10 @@ const {error} = (!apiLoading && getApiDefintion() || {});
                 (deployments: ApiDeployment[], dIndex: number) => {
                   const deployment = deployments[0];
                   return (
-                    <Card
+                    <Box
                       key={`${deployment.createdAt}_${dIndex}`}
-                      className="px-4 py-6 flex hover:"
+                      className="px-4 py-6 flex justify-between border rounded-lg dark:hover:bg-[#373737] hover:bg-[#C0C0C0] cursor-pointer"
+
                     >
                       <Stack>
                         <Typography gutterBottom className="font-bold">
@@ -115,16 +115,12 @@ const {error} = (!apiLoading && getApiDefintion() || {});
                           {deployment.site.subdomain}
                         </Typography>
                       </Stack>
-                      <Typography
-                        border={1}
-                        borderRadius={2}
-                        className={
-                          "px-4 py-1 text-sm ml-auto self-center hover:"
-                        }
+                      <Button2
+                       variant="success"
                       >
                         Active
-                      </Typography>
-                    </Card>
+                      </Button2>
+                    </Box>
                   );
                 }
               )}

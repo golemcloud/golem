@@ -601,7 +601,8 @@ const generateField = (
 const DynamicForm: React.FC<{
   config: Parameter[];
   onSubmit: (data: FormData) => void;
-}> = ({ config, onSubmit }) => {
+  invokeLabel?: string 
+}> = ({ config, onSubmit, invokeLabel }) => {
   const id = useId();
   const [tab, setTab] = useState<number>(0);
   const defaultValues = useMemo(() => {
@@ -684,7 +685,7 @@ const DynamicForm: React.FC<{
                 type="submit"
                 className="mx-2"
               >
-                Invoke <Triangle className="rotate-90" />
+                {invokeLabel || "Invoke"} <Triangle className="rotate-90" />
               </Button>
             </Box>
           </Grid>

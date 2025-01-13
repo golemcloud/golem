@@ -23,7 +23,7 @@ import {
   InterpolationExpressions,
   AvailableFunctions,
 } from "./interpolate-tooltip";
-import TryItOut from "./try-it-out";
+import { useRouter } from "next/navigation";
 
 type FormData = {
   path: string;
@@ -67,6 +67,7 @@ const NewRouteForm = ({
   });
 
   const component = watch("component");
+  const router=useRouter();
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("v1/components", fetcher);
   const {
@@ -120,18 +121,20 @@ const NewRouteForm = ({
       if (!success) {
         return setError(error!);
       }
+      const routeId = encodeURIComponent(`${newRoute.path}|${newRoute.method}`);
+      router.replace(`/apis/${apiId}/${routeId}`);
       onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    const response = await deleteRoute(defaultRoute!, version);
-    console.log("response======>", response, defaultRoute);
-    onSuccess?.();
-  };
+  // const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>) => {
+  //   e.preventDefault();
+  //   const response = await deleteRoute(defaultRoute!, version);
+  //   console.log("response======>", response, defaultRoute);
+  //   onSuccess?.();
+  // };
 
   return (
     <Box
@@ -168,14 +171,14 @@ const NewRouteForm = ({
             {defaultRoute ? "Update" : "New"} Route
           </Typography>
         )}
-        {defaultRoute && (
+        {/* {defaultRoute && (
           <Button onClick={handleDelete} className="ml-auto">
             <DeleteForever />
           </Button>
-        )}
+        )} */}
       </Box>
 
-      {!isModal && <Divider sx={{ borderColor: "#555" }} />}
+      {!isModal && <Divider className="bg-border" />}
 
       {/* HTTP Endpoint */}
       <Box sx={{ marginTop: isModal ? 1 : 4 }}>
@@ -386,7 +389,7 @@ const NewRouteForm = ({
               )}
             </Box>
           </PopoverDemo>
-          <p className="text-muted-foreground text-xs">Avilable functions</p>
+          <p className="text-muted-foreground text-xs">Available functions</p>
         </div>
         {errors && errors.response && (
           <Typography variant="inherit" color="error">
@@ -414,7 +417,6 @@ const NewRouteForm = ({
           {defaultRoute ? "Update" : "Create"} Route
         </Button2>
       </Box>
-      {apiDefintion && apiDefintion?.draft!==true && defaultRoute&& <TryItOut route={defaultRoute}/>}
     </Box>
   );
 };
