@@ -11,7 +11,7 @@ import NewRouteForm from "./new-route";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 const ApiDetails = ({
   route,
@@ -21,6 +21,7 @@ const ApiDetails = ({
   version: string;
 }) => {
   const { apiId } = useCustomParam();
+  
   const router = useRouter();
   const { deleteRoute } = useApiDefinitions(apiId);
   const handleDelete = async (
@@ -149,13 +150,13 @@ const ApiDetails = ({
         </Grid>
       </Grid>
     </Box>
-       <CustomModal open={open} onClose={() => {}}>
+       <CustomModal open={open} onClose={() => setOpen(false)} heading="Editing Current Route">
        {route && (
          <NewRouteForm
-           apiId={route.binding.componentId.componentId}
-           version={route.binding.componentId.version}
+           apiId={apiId}
+           version={version}
            defaultRoute={route}
-           onSuccess={() => {}}
+           onSuccess={()=>setOpen(false)}
          />
        )}
      </CustomModal>

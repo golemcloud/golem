@@ -125,12 +125,12 @@ const NewRouteForm = ({
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    const response = await deleteRoute(defaultRoute!, version);
-    console.log("response======>", response, defaultRoute);
-    onSuccess?.();
-  };
+  // const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>) => {
+  //   e.preventDefault();
+  //   const response = await deleteRoute(defaultRoute!, version);
+  //   console.log("response======>", response, defaultRoute);
+  //   onSuccess?.();
+  // };
 
   return (
     <Box
@@ -167,14 +167,14 @@ const NewRouteForm = ({
             {defaultRoute ? "Update" : "New"} Route
           </Typography>
         )}
-        {defaultRoute && (
+        {/* {defaultRoute && (
           <Button onClick={handleDelete} className="ml-auto">
             <DeleteForever />
           </Button>
-        )}
+        )} */}
       </Box>
 
-      {!isModal && <Divider sx={{ borderColor: "#555" }} />}
+      {!isModal && <Divider className="bg-border" />}
 
       {/* HTTP Endpoint */}
       <Box sx={{ marginTop: isModal ? 1 : 4 }}>

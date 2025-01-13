@@ -49,6 +49,7 @@ export function RouteList({
             <List className="space-y-4 p-2">
               {apiDefintion &&
                 routes?.map((route: ApiRoute) => {
+                  const routeId = encodeURIComponent(`${route.path}|${route.method}`);
                   return (
                     <Card
                       key={`${apiDefintion.id}_${apiDefintion.version}_${route.method}_${route.path}`}
