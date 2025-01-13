@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{ResourceTableError, WasiView};
 
@@ -41,11 +41,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::new(
+        let durability = Durability::<Vec<Option<Vec<u8>>>, SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "get_many",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
         let result = if durability.is_live() {
@@ -101,11 +101,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, Vec<String>, SerializableError>::new(
+        let durability = Durability::<Vec<String>, SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "get_keys",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
         let keys = if durability.is_live() {
@@ -149,11 +149,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "set_many",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -200,11 +200,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem keyvalue::eventual_batch",
             "delete_many",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 

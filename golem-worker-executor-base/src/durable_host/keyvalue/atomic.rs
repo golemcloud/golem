@@ -15,8 +15,7 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::atomic::{Bucket, Error, Host, Key};
 use crate::workerctx::WorkerCtx;
 
@@ -28,7 +27,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         _key: Key,
         _delta: u64,
     ) -> anyhow::Result<Result<u64, Resource<Error>>> {
-        record_host_function_call("keyvalue::atomic", "increment");
+        self.observe_function_call("keyvalue::atomic", "increment");
         unimplemented!("increment")
     }
 
@@ -39,7 +38,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         _old: u64,
         _new: u64,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        record_host_function_call("keyvalue::atomic", "compare_and_swap");
+        self.observe_function_call("keyvalue::atomic", "compare_and_swap");
         unimplemented!("compare_and_swap")
     }
 }

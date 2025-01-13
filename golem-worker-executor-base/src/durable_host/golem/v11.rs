@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -190,7 +189,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         worker_id: crate::preview2::golem::api1_1_0::oplog::WorkerId,
         start: crate::preview2::golem::api1_1_0::oplog::OplogIndex,
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
-        record_host_function_call("golem::api::get-oplog", "new");
+        self.observe_function_call("golem::api::get-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
         let worker_id: golem_common::model::WorkerId = worker_id.into();
@@ -209,7 +208,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<GetOplogEntry>,
     ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
-        record_host_function_call("golem::api::get-oplog", "get-next");
+        self.observe_function_call("golem::api::get-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
@@ -247,7 +246,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
-        record_host_function_call("golem::api::get-oplog", "drop");
+        self.observe_function_call("golem::api::get-oplog", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
     }
@@ -293,7 +292,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         worker_id: golem::api1_1_0::oplog::WorkerId,
         text: String,
     ) -> anyhow::Result<Resource<SearchOplog>> {
-        record_host_function_call("golem::api::search-oplog", "new");
+        self.observe_function_call("golem::api::search-oplog", "new");
 
         let account_id = self.owned_worker_id.account_id();
         let worker_id: golem_common::model::WorkerId = worker_id.into();
@@ -313,7 +312,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<SearchOplog>,
     ) -> anyhow::Result<Option<Vec<(golem::api1_1_0::oplog::OplogIndex, OplogEntry)>>> {
-        record_host_function_call("golem::api::search-oplog", "get-next");
+        self.observe_function_call("golem::api::search-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
@@ -356,7 +355,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
-        record_host_function_call("golem::api::search-oplog", "drop");
+        self.observe_function_call("golem::api::search-oplog", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
     }

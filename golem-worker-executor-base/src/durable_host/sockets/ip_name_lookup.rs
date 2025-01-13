@@ -16,11 +16,10 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::error::GolemError;
-use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, Pollable, ResolveAddressStream,
 };
@@ -33,7 +32,7 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<ResolveAddressStream>,
     ) -> Result<Option<IpAddress>, SocketError> {
-        record_host_function_call(
+        self.observe_function_call(
             "sockets::ip_name_lookup::resolve_address_stream",
             "resolve_next_address",
         );
@@ -44,7 +43,7 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<ResolveAddressStream>,
     ) -> anyhow::Result<Resource<Pollable>> {
-        record_host_function_call(
+        self.observe_function_call(
             "sockets::ip_name_lookup::resolve_address_stream",
             "subscribe",
         );
@@ -52,7 +51,7 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> anyhow::Result<()> {
-        record_host_function_call("sockets::ip_name_lookup::resolve_address_stream", "drop");
+        self.observe_function_call("sockets::ip_name_lookup::resolve_address_stream", "drop");
         HostResolveAddressStream::drop(&mut self.as_wasi_view(), rep)
     }
 }
@@ -64,11 +63,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let durability = Durability::<Ctx, SerializableIpAddresses, SerializableError>::new(
+        let durability = Durability::<SerializableIpAddresses, SerializableError>::new(
             self,
             "sockets::ip_name_lookup",
             "resolve_addresses",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 
