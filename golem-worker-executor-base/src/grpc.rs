@@ -718,6 +718,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(&header).await?;
 
+        let idempotency_key = header
+            .idempotency_key
+            .map(|ik| IdempotencyKey { value: ik.value })
+            .unwrap_or(IdempotencyKey::fresh());
+
         let http_method = grpc_method_to_hyper_method(header.method)?;
 
         let mut builder = hyper::Request::builder()
@@ -729,6 +734,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 builder = builder.header(name.as_str(), value);
             }
         }
+
+        // TODO
+        let request = builder.body(()).unwrap();
+
+        worker
+            .invoke_http_handler(idempotency_key, request)
+            .await?;
 
         todo!("implement");
     }

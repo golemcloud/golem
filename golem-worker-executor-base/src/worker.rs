@@ -512,6 +512,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub async fn invoke_http_handler(
+        &self,
+        idempotency_key: IdempotencyKey,
+        request: hyper::Request<()>
+    ) -> Result<TypeAnnotatedValue, GolemError> {
+        let output = self.lookup_invocation_result(&idempotency_key).await;
+        match output {
+            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+            LookupResult::Pending => Ok(None),
+            LookupResult::New => {
+                // Invoke the function in the background
+                self.enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
+                Ok(None)
+            }
+        }
+
+        todo!("todo")
+    }
+
     /// Enqueue attempting an update.
     ///
     /// The update itself is not performed by the invocation queue's processing loop,

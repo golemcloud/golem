@@ -169,12 +169,13 @@ message InvokeWorkerHttpHandlerRequest {
 
 message InvokeWorkerHttpHandlerRequestHeader {
   golem.worker.TargetWorkerId worker_id = 1;
-  golem.common.AccountId account_id = 2;
-  golem.common.ResourceLimits account_limits = 3;
-  optional golem.worker.InvocationContext context = 4;
-  golem.worker.HttpMethod method = 5;
-  string uri = 6;
-  golem.worker.HttpFields headers = 7;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.AccountId account_id = 3;
+  golem.common.ResourceLimits account_limits = 4;
+  optional golem.worker.InvocationContext context = 5;
+  golem.worker.HttpMethod method = 6;
+  string uri = 7;
+  golem.worker.HttpFields headers = 8;
 }
 
 message InvokeWorkerHttpHandlerRequestChunk {
