@@ -22,12 +22,12 @@ use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode}
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, ConnectWorkerRequest, DeactivatePluginRequest,
-    DeactivatePluginResponse, DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse,
-    GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
-    ListDirectoryRequest, ListDirectoryResponse, SearchOplogRequest, SearchOplogResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
+    DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
+    GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
+    InvokeAndAwaitWorkerSuccess, ListDirectoryRequest, ListDirectoryResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -170,7 +170,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             services: services.clone(),
             ctx: PhantomData,
         };
-        let worker_activator = Arc::new(DefaultWorkerActivator::new(services));
+        let worker_activator = Arc::new(DefaultWorkerActivator::new(services.clone()));
+
         lazy_worker_activator.set(worker_activator);
 
         let host = gethostname().to_string_lossy().to_string();
@@ -418,6 +419,57 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    async fn fork_worker_internal(
+        &self,
+        request: ForkWorkerRequest,
+    ) -> Result<ForkWorkerResponse, GolemError> {
+        let account_id_proto = request
+            .account_id
+            .clone()
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+
+        let account_id = account_id_proto.into();
+
+        let target_worker_id_proto = request
+            .target_worker_id
+            .clone()
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+
+        let target_worker_id: WorkerId = target_worker_id_proto
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+
+        let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+
+        let source_worker_id_proto = request
+            .source_worker_id
+            .clone()
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+
+        let source_worker_id: WorkerId = source_worker_id_proto
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+
+        let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
+
+        self.services
+            .worker_fork_service()
+            .fork(
+                &owned_source_worker_id,
+                &owned_target_worker_id.worker_id,
+                OplogIndex::from_u64(request.oplog_index_cutoff),
+            )
+            .await?;
+
+        Ok(ForkWorkerResponse {
+            result: Some(
+                golem::workerexecutor::v1::fork_worker_response::Result::Success(
+                    golem::common::Empty {},
+                ),
+            ),
+        })
+    }
+
     async fn interrupt_worker_internal(
         &self,
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
@@ -526,7 +578,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
+        let force_resume = request.force.unwrap_or(false);
+
         let metadata = self.worker_service().get(&owned_worker_id).await;
+
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
 
@@ -537,6 +592,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             WorkerStatus::Suspended | WorkerStatus::Interrupted | WorkerStatus::Idle => {
                 info!(
                     "Activating {:?} worker {worker_id} due to explicit resume request",
+                    worker_status.status
+                );
+                let _ = Worker::get_or_create_running(
+                    &self.services,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+            _ if force_resume => {
+                info!(
+                    "Force activating {:?} worker {worker_id} due to explicit resume request",
                     worker_status.status
                 );
                 let _ = Worker::get_or_create_running(
@@ -2220,6 +2291,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(SearchOplogResponse {
                     result: Some(
                         golem::workerexecutor::v1::search_oplog_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
+    async fn fork_worker(
+        &self,
+        request: Request<ForkWorkerRequest>,
+    ) -> Result<Response<ForkWorkerResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "fork_worker",
+            source_worker_id = proto_worker_id_string(&request.source_worker_id),
+            target_worker_id = proto_worker_id_string(&request.target_worker_id),
+        );
+
+        let result = self
+            .fork_worker_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(ForkWorkerResponse {
+                result: Some(
+                    golem::workerexecutor::v1::fork_worker_response::Result::Success(
+                        golem::common::Empty {},
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(ForkWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::fork_worker_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),

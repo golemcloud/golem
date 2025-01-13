@@ -549,7 +549,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
         let response = self
             .worker_service
-            .resume(&worker_id, empty_worker_metadata())
+            .resume(&worker_id, empty_worker_metadata(), false)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

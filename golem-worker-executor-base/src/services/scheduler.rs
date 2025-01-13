@@ -339,8 +339,6 @@ mod tests {
 
     use chrono::DateTime;
 
-    use uuid::Uuid;
-
     use crate::error::GolemError;
     use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
@@ -356,6 +354,7 @@ mod tests {
         AccountId, ComponentId, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
 

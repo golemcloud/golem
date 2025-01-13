@@ -4585,6 +4585,7 @@ dependencies = [
  "humantime-serde",
  "hyper 1.5.2",
  "lazy_static 1.5.0",
+ "log 0.4.22",
  "mime_guess",
  "nom",
  "openapiv3",
@@ -5450,6 +5451,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wac-graph",
 ]
 
