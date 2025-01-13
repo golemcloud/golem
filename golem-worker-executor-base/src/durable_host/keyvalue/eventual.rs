@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -41,11 +41,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, Option<Vec<u8>>, SerializableError>::new(
+        let durability = Durability::<Option<Vec<u8>>, SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "get",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 
@@ -101,11 +101,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .unwrap()
             .clone();
 
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "set",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -146,11 +146,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, (), SerializableError>::new(
+        let durability = Durability::<(), SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "delete",
-            WrappedFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemote,
         )
         .await?;
 
@@ -191,11 +191,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Ctx, bool, SerializableError>::new(
+        let durability = Durability::<bool, SerializableError>::new(
             self,
             "golem keyvalue::eventual",
             "exists",
-            WrappedFunctionType::ReadRemote,
+            DurableFunctionType::ReadRemote,
         )
         .await?;
 

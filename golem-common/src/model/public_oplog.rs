@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::lucene::{LeafQuery, Query};
-use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
+use crate::model::oplog::{DurableFunctionType, LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
@@ -78,7 +78,7 @@ pub struct WriteRemoteBatchedParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-pub enum PublicWrappedFunctionType {
+pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
     ReadLocal(Empty),
@@ -98,15 +98,15 @@ pub enum PublicWrappedFunctionType {
     WriteRemoteBatched(WriteRemoteBatchedParameters),
 }
 
-impl From<WrappedFunctionType> for PublicWrappedFunctionType {
-    fn from(wrapped_function_type: WrappedFunctionType) -> Self {
-        match wrapped_function_type {
-            WrappedFunctionType::ReadLocal => PublicWrappedFunctionType::ReadLocal(Empty {}),
-            WrappedFunctionType::WriteLocal => PublicWrappedFunctionType::WriteLocal(Empty {}),
-            WrappedFunctionType::ReadRemote => PublicWrappedFunctionType::ReadRemote(Empty {}),
-            WrappedFunctionType::WriteRemote => PublicWrappedFunctionType::WriteRemote(Empty {}),
-            WrappedFunctionType::WriteRemoteBatched(index) => {
-                PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
+impl From<DurableFunctionType> for PublicDurableFunctionType {
+    fn from(function_type: DurableFunctionType) -> Self {
+        match function_type {
+            DurableFunctionType::ReadLocal => PublicDurableFunctionType::ReadLocal(Empty {}),
+            DurableFunctionType::WriteLocal => PublicDurableFunctionType::WriteLocal(Empty {}),
+            DurableFunctionType::ReadRemote => PublicDurableFunctionType::ReadRemote(Empty {}),
+            DurableFunctionType::WriteRemote => PublicDurableFunctionType::WriteRemote(Empty {}),
+            DurableFunctionType::WriteRemoteBatched(index) => {
+                PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                     index,
                 })
             }
@@ -114,26 +114,26 @@ impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     }
 }
 
-impl IntoValue for PublicWrappedFunctionType {
+impl IntoValue for PublicDurableFunctionType {
     fn into_value(self) -> Value {
         match self {
-            PublicWrappedFunctionType::ReadLocal(_) => Value::Variant {
+            PublicDurableFunctionType::ReadLocal(_) => Value::Variant {
                 case_idx: 0,
                 case_value: None,
             },
-            PublicWrappedFunctionType::WriteLocal(_) => Value::Variant {
+            PublicDurableFunctionType::WriteLocal(_) => Value::Variant {
                 case_idx: 1,
                 case_value: None,
             },
-            PublicWrappedFunctionType::ReadRemote(_) => Value::Variant {
+            PublicDurableFunctionType::ReadRemote(_) => Value::Variant {
                 case_idx: 2,
                 case_value: None,
             },
-            PublicWrappedFunctionType::WriteRemote(_) => Value::Variant {
+            PublicDurableFunctionType::WriteRemote(_) => Value::Variant {
                 case_idx: 3,
                 case_value: None,
             },
-            PublicWrappedFunctionType::WriteRemoteBatched(params) => Value::Variant {
+            PublicDurableFunctionType::WriteRemoteBatched(params) => Value::Variant {
                 case_idx: 4,
                 case_value: Some(Box::new(params.index.into_value())),
             },
@@ -381,7 +381,7 @@ pub struct ImportedFunctionInvokedParameters {
     pub function_name: String,
     pub request: ValueAndType,
     pub response: ValueAndType,
-    pub wrapped_function_type: PublicWrappedFunctionType,
+    pub wrapped_function_type: PublicDurableFunctionType, // TODO: rename in Golem 2.0
 }
 
 impl IntoValue for ImportedFunctionInvokedParameters {
@@ -405,7 +405,7 @@ impl IntoValue for ImportedFunctionInvokedParameters {
             field("response", WitValue::get_type()),
             field(
                 "wrapped_function_type",
-                PublicWrappedFunctionType::get_type(),
+                PublicDurableFunctionType::get_type(),
             ),
         ])
     }
@@ -1504,10 +1504,10 @@ mod protobuf {
         ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
         ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
         OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
-        PluginInstallationDescription, PublicOplogEntry, PublicRetryConfig,
-        PublicUpdateDescription, PublicWorkerInvocation, PublicWrappedFunctionType,
-        ResourceParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters,
-        TimestampParameter, WriteRemoteBatchedParameters,
+        PluginInstallationDescription, PublicDurableFunctionType, PublicOplogEntry,
+        PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+        SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
+        WriteRemoteBatchedParameters,
     };
     use crate::model::regions::OplogRegion;
     use crate::model::Empty;
@@ -2186,7 +2186,7 @@ mod protobuf {
     }
 
     impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
-        for PublicWrappedFunctionType
+        for PublicDurableFunctionType
     {
         type Error = String;
 
@@ -2195,19 +2195,19 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             match value.r#type() {
                 wrapped_function_type::Type::ReadLocal => {
-                    Ok(PublicWrappedFunctionType::ReadLocal(Empty {}))
+                    Ok(PublicDurableFunctionType::ReadLocal(Empty {}))
                 }
                 wrapped_function_type::Type::WriteLocal => {
-                    Ok(PublicWrappedFunctionType::WriteLocal(Empty {}))
+                    Ok(PublicDurableFunctionType::WriteLocal(Empty {}))
                 }
                 wrapped_function_type::Type::ReadRemote => {
-                    Ok(PublicWrappedFunctionType::ReadRemote(Empty {}))
+                    Ok(PublicDurableFunctionType::ReadRemote(Empty {}))
                 }
                 wrapped_function_type::Type::WriteRemote => {
-                    Ok(PublicWrappedFunctionType::WriteRemote(Empty {}))
+                    Ok(PublicDurableFunctionType::WriteRemote(Empty {}))
                 }
                 wrapped_function_type::Type::WriteRemoteBatched => Ok(
-                    PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
+                    PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                         index: value.oplog_index.map(OplogIndex::from_u64),
                     }),
                 ),
@@ -2215,34 +2215,34 @@ mod protobuf {
         }
     }
 
-    impl From<PublicWrappedFunctionType> for golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-        fn from(value: PublicWrappedFunctionType) -> Self {
+    impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+        fn from(value: PublicDurableFunctionType) -> Self {
             match value {
-                PublicWrappedFunctionType::ReadLocal(_) => {
+                PublicDurableFunctionType::ReadLocal(_) => {
                     golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                         r#type: wrapped_function_type::Type::ReadLocal as i32,
                         oplog_index: None,
                     }
                 }
-                PublicWrappedFunctionType::WriteLocal(_) => {
+                PublicDurableFunctionType::WriteLocal(_) => {
                     golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                         r#type: wrapped_function_type::Type::WriteLocal as i32,
                         oplog_index: None,
                     }
                 }
-                PublicWrappedFunctionType::ReadRemote(_) => {
+                PublicDurableFunctionType::ReadRemote(_) => {
                     golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                         r#type: wrapped_function_type::Type::ReadRemote as i32,
                         oplog_index: None,
                     }
                 }
-                PublicWrappedFunctionType::WriteRemote(_) => {
+                PublicDurableFunctionType::WriteRemote(_) => {
                     golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                         r#type: wrapped_function_type::Type::WriteRemote as i32,
                         oplog_index: None,
                     }
                 }
-                PublicWrappedFunctionType::WriteRemoteBatched(parameters) => {
+                PublicDurableFunctionType::WriteRemoteBatched(parameters) => {
                     golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                         r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
                         oplog_index: parameters.index.map(|index| index.into()),
@@ -2449,8 +2449,8 @@ mod tests {
         ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
         GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
         PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-        PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation,
-        PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters,
+        PublicDurableFunctionType, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription,
+        PublicWorkerInvocation, ResourceParameters, SnapshotBasedUpdateParameters,
         SuccessfulUpdateParameters, TimestampParameter,
     };
     use crate::model::{
@@ -2525,7 +2525,7 @@ mod tests {
                 value: Value::List(vec![Value::U64(1)]),
                 typ: list(u64()),
             },
-            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty {}),
+            wrapped_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

@@ -443,7 +443,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 "f1".to_string(),
                 &"request".to_string(),
                 &"response".to_string(),
-                WrappedFunctionType::ReadRemote,
+                DurableFunctionType::ReadRemote,
             )
             .await
             .unwrap(),
@@ -562,7 +562,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 "f1".to_string(),
                 &"request".to_string(),
                 &large_payload1,
-                WrappedFunctionType::ReadRemote,
+                DurableFunctionType::ReadRemote,
             )
             .await
             .unwrap(),
@@ -753,7 +753,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                     "test-function".to_string(),
                     &"request".to_string(),
                     &i,
-                    WrappedFunctionType::ReadLocal,
+                    DurableFunctionType::ReadLocal,
                 )
                 .await
                 .unwrap(),

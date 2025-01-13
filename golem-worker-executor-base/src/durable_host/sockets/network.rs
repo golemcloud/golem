@@ -15,15 +15,14 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::bindings::sockets::network::{Error, ErrorCode, Host, HostNetwork, Network};
 use wasmtime_wasi::SocketError;
 
 impl<Ctx: WorkerCtx> HostNetwork for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<Network>) -> anyhow::Result<()> {
-        record_host_function_call("sockets::network", "drop_network");
+        self.observe_function_call("sockets::network", "drop_network");
         HostNetwork::drop(&mut self.as_wasi_view(), rep)
     }
 }
@@ -31,12 +30,12 @@ impl<Ctx: WorkerCtx> HostNetwork for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn network_error_code(&mut self, err: Resource<Error>) -> anyhow::Result<Option<ErrorCode>> {
-        record_host_function_call("sockets::network", "network_error_code");
+        self.observe_function_call("sockets::network", "network_error_code");
         Host::network_error_code(&mut self.as_wasi_view(), err)
     }
 
     fn convert_error_code(&mut self, err: SocketError) -> anyhow::Result<ErrorCode> {
-        record_host_function_call("sockets::network", "convert_error_code");
+        self.observe_function_call("sockets::network", "convert_error_code");
         Host::convert_error_code(&mut self.as_wasi_view(), err)
     }
 }

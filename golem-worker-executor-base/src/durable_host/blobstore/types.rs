@@ -22,8 +22,7 @@ use wasmtime_wasi::{
     HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe, WasiView,
 };
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
 use crate::preview2::wasi::blobstore::types::{
     Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue, IncomingValueAsyncBody,
@@ -34,7 +33,7 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
-        record_host_function_call("blobstore::types::outgoing_value", "new_outgoing_value");
+        self.observe_function_call("blobstore::types::outgoing_value", "new_outgoing_value");
         let outgoing_value = self
             .as_wasi_view()
             .table()
@@ -46,7 +45,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<OutgoingValueEntry>,
     ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
-        record_host_function_call(
+        self.observe_function_call(
             "blobstore::types::outgoing_value",
             "outgoing_value_write_body",
         );
@@ -62,7 +61,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
-        record_host_function_call("blobstore::types::outgoing_value", "drop");
+        self.observe_function_call("blobstore::types::outgoing_value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<OutgoingValueEntry>(rep)?;
@@ -76,7 +75,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
-        record_host_function_call(
+        self.observe_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_sync",
         );
@@ -94,7 +93,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
-        record_host_function_call(
+        self.observe_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_async",
         );
@@ -110,7 +109,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
-        record_host_function_call("blobstore::types::incoming_value", "size");
+        self.observe_function_call("blobstore::types::incoming_value", "size");
         let body = self
             .as_wasi_view()
             .table()
@@ -122,7 +121,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
-        record_host_function_call("blobstore::types::incoming_value", "drop");
+        self.observe_function_call("blobstore::types::incoming_value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<IncomingValueEntry>(rep)?;
