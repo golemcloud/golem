@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use tracing::warn;
 
 pub mod outgoing_http;
@@ -32,9 +32,11 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
     if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
         match ctx.state.open_function_table.get(&state.root_handle) {
             Some(begin_index) => {
-                ctx.state
-                    .end_function(&WrappedFunctionType::WriteRemoteBatched(None), *begin_index)
-                    .await?;
+                ctx.end_durable_function(
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    *begin_index,
+                )
+                .await?;
                 ctx.state.open_function_table.remove(&state.root_handle);
             }
             None => {

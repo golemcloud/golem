@@ -288,7 +288,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         response: OplogPayload,
-        wrapped_function_type: WrappedFunctionType,
+        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
     },
     /// The worker has been invoked
     ExportedFunctionInvoked {
@@ -405,7 +405,7 @@ pub enum OplogEntry {
         function_name: String,
         request: OplogPayload,
         response: OplogPayload,
-        wrapped_function_type: WrappedFunctionType,
+        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
     },
     /// The current version of the Create entry (previous is CreateV1)
     Create {
@@ -648,14 +648,14 @@ impl OplogEntry {
                 wrapped_function_type,
                 ..
             } => match wrapped_function_type {
-                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                DurableFunctionType::WriteRemoteBatched(Some(begin_index))
                     if *begin_index == idx =>
                 {
                     true
                 }
-                WrappedFunctionType::ReadLocal => true,
-                WrappedFunctionType::WriteLocal => true,
-                WrappedFunctionType::ReadRemote => true,
+                DurableFunctionType::ReadLocal => true,
+                DurableFunctionType::WriteLocal => true,
+                DurableFunctionType::ReadRemote => true,
                 _ => false,
             },
             OplogEntry::ExportedFunctionCompleted { .. } => false,
@@ -779,7 +779,7 @@ pub enum OplogPayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum WrappedFunctionType {
+pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
     ReadLocal,

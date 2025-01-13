@@ -18,62 +18,262 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
-use golem_common::serialization::try_deserialize;
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex};
+use golem_common::model::Timestamp;
+use golem_common::serialization::{serialize, try_deserialize};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use tracing::error;
 
+#[derive(Debug)]
+pub struct DurableExecutionState {
+    pub is_live: bool,
+    pub persistence_level: PersistenceLevel,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct PersistedDurableFunctionInvocation {
+    timestamp: Timestamp,
+    function_name: String,
+    response: Vec<u8>,
+    function_type: DurableFunctionType,
+    oplog_entry_version: OplogEntryVersion,
+}
+
+#[async_trait]
+pub trait DurabilityHost {
+    /// Observes a function call (produces logs and metrics)
+    fn observe_function_call(&self, interface: &'static str, function: &'static str);
+
+    /// Marks the beginning of a durable function.
+    ///
+    /// There must be a corresponding call to `end_durable_function` after the function has
+    /// performed its work (it can be ended in a different context, for example after an async
+    /// pollable operation has been completed)
+    async fn begin_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, GolemError>;
+
+    /// Marks the end of a durable function
+    ///
+    /// This is a pair of `begin_durable_function` and should be called after the durable function
+    /// has performed and persisted or replayed its work. The `begin_index` should be the index
+    /// returned by `begin_durable_function`.
+    async fn end_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError>;
+
+    /// Gets the current durable execution state
+    fn durable_execution_state(&self) -> DurableExecutionState;
+
+    /// Writes a record to the worker's oplog representing a durable function invocation
+    async fn persist_durable_function_invocation(
+        &self,
+        function_name: String,
+        request: &[u8],
+        response: &[u8],
+        function_type: DurableFunctionType,
+    );
+
+    /// Writes a record to the worker's oplog representing a durable function invocation
+    ///
+    /// The request and response are defined as pairs of value and type, which makes it
+    /// self-describing for observers of oplogs. This is the recommended way to persist
+    /// third-party function invocations.
+    async fn persist_typed_durable_function_invocation(
+        &self,
+        function_name: String,
+        request: ValueAndType,
+        response: ValueAndType,
+        function_type: DurableFunctionType,
+    );
+
+    /// Reads the next persisted durable function invocation from the oplog during replay
+    async fn read_persisted_durable_function_invocation(
+        &mut self,
+    ) -> Result<PersistedDurableFunctionInvocation, GolemError>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
+    fn observe_function_call(&self, interface: &'static str, function: &'static str) {
+        record_host_function_call(interface, function);
+    }
+
+    async fn begin_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, GolemError> {
+        self.state.begin_function(function_type).await
+    }
+
+    async fn end_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        self.state.end_function(function_type, begin_index).await?;
+        if function_type == &DurableFunctionType::WriteRemote
+            || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+        {
+            self.state.oplog.commit(CommitLevel::DurableOnly).await;
+        }
+        Ok(())
+    }
+
+    fn durable_execution_state(&self) -> DurableExecutionState {
+        DurableExecutionState {
+            is_live: self.state.is_live(),
+            persistence_level: self.state.persistence_level,
+        }
+    }
+
+    async fn persist_durable_function_invocation(
+        &self,
+        function_name: String,
+        request: &[u8],
+        response: &[u8],
+        function_type: DurableFunctionType,
+    ) {
+        self.state
+            .oplog
+            .add_raw_imported_function_invoked(function_name, request, response, function_type)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to serialize and store durable function invocation: {err}")
+            });
+    }
+
+    async fn persist_typed_durable_function_invocation(
+        &self,
+        function_name: String,
+        request: ValueAndType,
+        response: ValueAndType,
+        function_type: DurableFunctionType,
+    ) {
+        let request = serialize(&request).unwrap_or_else(|err| {
+            panic!("failed to serialize request ({request:?}) for persisting durable function invocation: {err}")
+        }).to_vec();
+        let response = serialize(&response).unwrap_or_else(|err| {
+            panic!("failed to serialize response ({response:?}) for persisting durable function invocation: {err}")
+        }).to_vec();
+
+        self.state
+            .oplog
+            .add_imported_function_invoked(function_name, &request, &response, function_type)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to serialize and store durable function invocation: {err}")
+            });
+    }
+
+    async fn read_persisted_durable_function_invocation(
+        &mut self,
+    ) -> Result<PersistedDurableFunctionInvocation, GolemError> {
+        let (_, oplog_entry) = crate::get_oplog_entry!(
+            self.state.replay_state,
+            OplogEntry::ImportedFunctionInvoked,
+            OplogEntry::ImportedFunctionInvokedV1
+        )?;
+
+        let bytes = self
+            .state
+            .oplog
+            .get_raw_payload_of_entry(&oplog_entry)
+            .await
+            .map_err(|err| {
+                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+            })?
+            .unwrap();
+
+        match oplog_entry {
+            OplogEntry::ImportedFunctionInvoked {
+                timestamp,
+                function_name,
+                wrapped_function_type,
+                ..
+            } => Ok(PersistedDurableFunctionInvocation {
+                timestamp,
+                function_name,
+                response: bytes.to_vec(),
+                function_type: wrapped_function_type,
+                oplog_entry_version: OplogEntryVersion::V2,
+            }),
+            OplogEntry::ImportedFunctionInvokedV1 {
+                timestamp,
+                function_name,
+                wrapped_function_type,
+                ..
+            } => Ok(PersistedDurableFunctionInvocation {
+                timestamp,
+                function_name,
+                response: bytes.to_vec(),
+                function_type: wrapped_function_type,
+                oplog_entry_version: OplogEntryVersion::V1,
+            }),
+            _ => Err(GolemError::unexpected_oplog_entry(
+                "ImportedFunctionInvoked",
+                format!("{:?}", oplog_entry),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum OplogEntryVersion {
     V1,
     V2,
 }
 
-pub struct Durability<Ctx, SOk, SErr> {
-    package: &'static str,
+pub struct Durability<SOk, SErr> {
+    interface: &'static str,
     function: &'static str,
-    function_type: WrappedFunctionType,
+    function_type: DurableFunctionType,
     begin_index: OplogIndex,
-    is_live: bool,
-    persistence_level: PersistenceLevel,
-    _ctx: PhantomData<Ctx>,
+    durable_execution_state: DurableExecutionState,
     _sok: PhantomData<SOk>,
     _serr: PhantomData<SErr>,
 }
 
-impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
+impl<SOk, SErr> Durability<SOk, SErr> {
     pub async fn new(
-        ctx: &mut DurableWorkerCtx<Ctx>,
-        package: &'static str,
+        ctx: &mut impl DurabilityHost,
+        interface: &'static str,
         function: &'static str,
-        function_type: WrappedFunctionType,
+        function_type: DurableFunctionType,
     ) -> Result<Self, GolemError> {
-        record_host_function_call(package, function);
+        ctx.observe_function_call(interface, function);
 
-        let begin_index = ctx.state.begin_function(&function_type).await?;
+        let begin_index = ctx.begin_durable_function(&function_type).await?;
+        let durable_execution_state = ctx.durable_execution_state();
 
         Ok(Self {
-            package,
+            interface,
             function,
             function_type,
             begin_index,
-            is_live: ctx.state.is_live(),
-            persistence_level: ctx.state.persistence_level.clone(),
-            _ctx: PhantomData,
+            durable_execution_state,
             _sok: PhantomData,
             _serr: PhantomData,
         })
     }
 
     pub fn is_live(&self) -> bool {
-        self.is_live || self.persistence_level == PersistenceLevel::PersistNothing
+        self.durable_execution_state.is_live
+            || self.durable_execution_state.persistence_level == PersistenceLevel::PersistNothing
     }
 
     pub async fn persist<SIn, Ok, Err>(
         &self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        ctx: &mut impl DurabilityHost,
         input: SIn,
         result: Result<Ok, Err>,
     ) -> Result<Ok, Err>
@@ -101,9 +301,9 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
 
     pub async fn persist_serializable<SIn>(
         &self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        ctx: &mut impl DurabilityHost,
         input: SIn,
-        serializable_result: Result<SOk, SErr>,
+        result: Result<SOk, SErr>,
     ) -> Result<(), GolemError>
     where
         SIn: Debug + Encode + Send + Sync,
@@ -111,77 +311,74 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
         SErr: Debug + Encode + Send + Sync,
     {
         let function_name = self.function_name();
-        if ctx.state.persistence_level != PersistenceLevel::PersistNothing {
-            ctx.state
-                .oplog
-                .add_imported_function_invoked(
-                    function_name.to_string(),
-                    &input,
-                    &serializable_result,
-                    self.function_type.clone(),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to serialize and store function request ({:?}) and response ({:?}): {err}",
-                        input,
-                        serializable_result
-                    )
-                });
-            ctx.state
-                .end_function(&self.function_type, self.begin_index)
+        if self.durable_execution_state.persistence_level != PersistenceLevel::PersistNothing {
+            let serialized_input = serialize(&input).unwrap_or_else(|err| {
+                panic!("failed to serialize input ({input:?}) for persisting durable function invocation: {err}")
+            }).to_vec();
+            let serialized_result = serialize(&result).unwrap_or_else(|err| {
+                panic!("failed to serialize result ({result:?}) for persisting durable function invocation: {err}")
+            }).to_vec();
+
+            ctx.persist_durable_function_invocation(
+                function_name.to_string(),
+                &serialized_input,
+                &serialized_result,
+                self.function_type.clone(),
+            )
+            .await;
+            ctx.end_durable_function(&self.function_type, self.begin_index)
                 .await?;
-            if self.function_type == WrappedFunctionType::WriteRemote
-                || matches!(
-                    self.function_type,
-                    WrappedFunctionType::WriteRemoteBatched(_)
-                )
-            {
-                ctx.state.oplog.commit(CommitLevel::DurableOnly).await;
-            }
+        }
+        Ok(())
+    }
+
+    pub async fn persist_typed_value<SIn>(
+        &self,
+        ctx: &mut impl DurabilityHost,
+        input: SIn,
+        result: Result<SOk, SErr>,
+    ) -> Result<(), GolemError>
+    where
+        SIn: Debug + IntoValue + Send + Sync,
+        SOk: Debug + IntoValue + Send + Sync,
+        SErr: Debug + IntoValue + Send + Sync,
+    {
+        let function_name = self.function_name();
+        if self.durable_execution_state.persistence_level != PersistenceLevel::PersistNothing {
+            let input_value = input.into_value_and_type();
+            let result_value = result.into_value_and_type();
+
+            ctx.persist_typed_durable_function_invocation(
+                function_name.to_string(),
+                input_value,
+                result_value,
+                self.function_type.clone(),
+            )
+            .await;
+            ctx.end_durable_function(&self.function_type, self.begin_index)
+                .await?;
         }
         Ok(())
     }
 
     pub async fn replay_raw(
         &self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        ctx: &mut impl DurabilityHost,
     ) -> Result<(Bytes, OplogEntryVersion), GolemError> {
-        let (_, oplog_entry) = crate::get_oplog_entry!(
-            ctx.state.replay_state,
-            OplogEntry::ImportedFunctionInvoked,
-            OplogEntry::ImportedFunctionInvokedV1
-        )?;
-
-        let version = if matches!(oplog_entry, OplogEntry::ImportedFunctionInvokedV1 { .. }) {
-            OplogEntryVersion::V1
-        } else {
-            OplogEntryVersion::V2
-        };
+        let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
         let function_name = self.function_name();
         Self::validate_oplog_entry(&oplog_entry, &function_name)?;
 
-        let bytes = ctx
-            .state
-            .oplog
-            .get_raw_payload_of_entry(&oplog_entry)
-            .await
-            .map_err(|err| {
-                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-            })?
-            .unwrap();
-
-        ctx.state
-            .end_function(&self.function_type, self.begin_index)
+        ctx.end_durable_function(&self.function_type, self.begin_index)
             .await?;
 
-        Ok((bytes, version))
+        Ok((oplog_entry.response.into(), oplog_entry.oplog_entry_version))
     }
 
     pub async fn replay_serializable(
         &self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        ctx: &mut impl DurabilityHost,
     ) -> Result<Result<SOk, SErr>, GolemError>
     where
         SOk: Decode,
@@ -196,7 +393,7 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
         Ok(result)
     }
 
-    pub async fn replay<Ok, Err>(&self, ctx: &mut DurableWorkerCtx<Ctx>) -> Result<Ok, Err>
+    pub async fn replay<Ok, Err>(&self, ctx: &mut impl DurabilityHost) -> Result<Ok, Err>
     where
         Ok: From<SOk>,
         Err: From<SErr> + From<GolemError>,
@@ -210,44 +407,27 @@ impl<Ctx: WorkerCtx, SOk, SErr> Durability<Ctx, SOk, SErr> {
     }
 
     fn function_name(&self) -> String {
-        if self.package.is_empty() {
+        if self.interface.is_empty() {
             // For backward compatibility - some of the recorded function names were not following the pattern
             self.function.to_string()
         } else {
-            format!("{}::{}", self.package, self.function)
+            format!("{}::{}", self.interface, self.function)
         }
     }
 
     fn validate_oplog_entry(
-        oplog_entry: &OplogEntry,
+        oplog_entry: &PersistedDurableFunctionInvocation,
         expected_function_name: &str,
     ) -> Result<(), GolemError> {
-        if let OplogEntry::ImportedFunctionInvoked { function_name, .. } = oplog_entry {
-            if function_name != expected_function_name {
-                error!(
-                    "Unexpected imported function call entry in oplog: expected {}, got {}",
-                    expected_function_name, function_name
-                );
-                Err(GolemError::unexpected_oplog_entry(
-                    expected_function_name,
-                    function_name,
-                ))
-            } else {
-                Ok(())
-            }
-        } else if let OplogEntry::ImportedFunctionInvokedV1 { function_name, .. } = oplog_entry {
-            if function_name != expected_function_name {
-                error!(
-                    "Unexpected imported function call entry in oplog: expected {}, got {}",
-                    expected_function_name, function_name
-                );
-                Err(GolemError::unexpected_oplog_entry(
-                    expected_function_name,
-                    function_name,
-                ))
-            } else {
-                Ok(())
-            }
+        if oplog_entry.function_name != expected_function_name {
+            error!(
+                "Unexpected imported function call entry in oplog: expected {}, got {}",
+                expected_function_name, oplog_entry.function_name
+            );
+            Err(GolemError::unexpected_oplog_entry(
+                expected_function_name,
+                oplog_entry.function_name.clone(),
+            ))
         } else {
             Ok(())
         }
