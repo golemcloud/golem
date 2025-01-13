@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
@@ -12,7 +14,9 @@ dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
 c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
-ts_test_components=("ts-rpc")
+
+rust_test_apps=("auction-example" "rpc" "rust-service/rpc")
+ts_test_apps=("ts-rpc")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
@@ -102,6 +106,28 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     target_wat="../$subdir.wat"
     cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
     wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
+
+if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+  echo "Building the Rust test apps"
+  for subdir in "${rust_test_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
+    if [ "$rebuild" = true ]; then
+      golem-cli app clean
+      cargo clean
+    fi
+
+    golem-cli app -b release build
+    golem-cli app -b release copy
 
     popd || exit
   done
@@ -279,7 +305,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "swift" ]; then
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
-    /Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swiftc -target wasm32-unknown-wasi main.swift -o main.wasm -sdk /Library/Developer/Toolchains/swift-wasm-5.7.3-RELEASE.xctoolchain/usr/share/wasi-sysroot/
+    /Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swiftc -target wasm32-unknown-wasi main.swift -o main.wasm -sdk /Library/Developer/Toolchains/swift-latest.xctoolchain/usr/share/wasi-sysroot/
     wasm-opt -Os main.wasm -o main.opt.wasm
 
     echo "Turning the module into a WebAssembly Component..."
@@ -306,7 +332,8 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
       rm *.wasm
     fi
     wit-bindgen c --autodrop-borrows yes ./wit
-    ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
+    # last built with wasi-sdk-0.25.0
+    $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
 
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
@@ -334,6 +361,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
     fi
 
     echo "Compiling the python code into a WebAssembly Component..."
+    rm -rf bindings
     componentize-py bindings bindings
     componentize-py componentize test -o "${subdir}_full.wasm"
     wasm-tools strip "${subdir}_full.wasm" -o "${subdir}.wasm"
@@ -349,8 +377,8 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
 fi
 
 if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
-  echo "Building the TS test components"
-  for subdir in ${ts_test_components[@]}; do
+  echo "Building the TS test apps"
+  for subdir in ${ts_test_apps[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
@@ -359,9 +387,11 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      golem-cli app build
-      golem-cli app copy
+      golem-cli app clean
     fi
+
+    golem-cli app build
+    golem-cli app copy
 
     popd || exit
   done
