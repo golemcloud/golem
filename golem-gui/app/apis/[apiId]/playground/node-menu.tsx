@@ -12,6 +12,9 @@ import { canDelete as checkForDeletion } from "@/lib/react-flow/utils";
 import { FlowNode } from "@/types/react-flow";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import { ApiRoute } from "@/types/api";
+import useApiDefinitions from "@/lib/hooks/use-api-definitons";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { AlertDialogDemo } from "@/components/confirmation-dialog";
 
 export default function NodeMenu({
   data,
@@ -25,6 +28,7 @@ export default function NodeMenu({
   // const stopPropagation = (e: React.MouseEvent<HTMLButtonElement>) => {
   //   e.stopPropagation();
   // };
+  const { apiId } = useCustomParam();
   const { setSelectedNode, setTrigger } = useStore();
   const canDelete = checkForDeletion(data);
   const [open, setOpen] = React.useState(false);
@@ -53,6 +57,16 @@ export default function NodeMenu({
       setOpen(false);
     }
   }
+
+  // Delete route
+  const { deleteRoute } = useApiDefinitions(apiId);
+  const handleDelete = async(route:ApiRoute,version:string) => {
+    try {
+      await deleteRoute(route, version);
+    } catch (error) {
+      throw error;
+    }
+  };
 
   // return focus to the button when we transitioned from !open -> open
   const prevOpen = React.useRef(open);
@@ -146,27 +160,17 @@ export default function NodeMenu({
                     >
                       Deploy Api
                     </MenuItem>}
-                    <MenuItem
-                      disabled={!canDelete}
-                      onClick={(e) => {
-                        if (!canDelete) {
-                          return handleClose(e);
-                        }
-                        setTrigger({
-                          type: triggerType,
-                          operation: `delete_${triggerType}`,
-                          id,
-                          meta: {
-                            version: triggerType=="api" ? data.version: apiInfo?.version,
-                            ...(triggerType=="route" ? {route: route as ApiRoute}: {})
 
-                          }
-                        });
-                        handleClose(e);
-                      }}
-                    >
-                      Delete
+                    <MenuItem disabled={!canDelete}>
+                      <AlertDialogDemo
+                        onSubmit={(e: any) => handleDelete(route as ApiRoute, apiInfo?.version)}
+                        paragraph={
+                          "This action cannot be undone. This will permanently delete this route."
+                        }
+                        child={<div className="w-full">Delete</div>}
+                      />
                     </MenuItem>
+
                     <MenuItem
                       onClick={(e) => {
                         setTrigger({
