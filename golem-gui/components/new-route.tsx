@@ -23,6 +23,7 @@ import {
   InterpolationExpressions,
   AvailableFunctions,
 } from "./interpolate-tooltip";
+import { useRouter } from "next/navigation";
 
 type FormData = {
   path: string;
@@ -66,6 +67,7 @@ const NewRouteForm = ({
   });
 
   const component = watch("component");
+  const router=useRouter();
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("v1/components", fetcher);
   const {
@@ -119,6 +121,8 @@ const NewRouteForm = ({
       if (!success) {
         return setError(error!);
       }
+      const routeId = encodeURIComponent(`${newRoute.path}|${newRoute.method}`);
+      router.replace(`/apis/${apiId}/${routeId}`);
       onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);
@@ -385,7 +389,7 @@ const NewRouteForm = ({
               )}
             </Box>
           </PopoverDemo>
-          <p className="text-muted-foreground text-xs">Avilable functions</p>
+          <p className="text-muted-foreground text-xs">Available functions</p>
         </div>
         {errors && errors.response && (
           <Typography variant="inherit" color="error">
