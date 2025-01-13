@@ -170,6 +170,17 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<(), String> {
+        self.put_stream_oneshot(_target_label, _op_label, namespace, path, stream.make_stream().await?).await
+    }
+
+    async fn put_stream_oneshot(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+    ) -> Result<(), String> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -181,11 +192,11 @@ impl BlobStorage for InMemoryBlobStorage {
             .to_string_lossy()
             .to_string();
 
-        let stream = stream.make_stream().await?;
         let data = stream
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| e.to_string())?;
+
         let entry = Entry {
             data: Bytes::from(data.concat()),
             metadata: BlobMetadata {
@@ -203,6 +214,7 @@ impl BlobStorage for InMemoryBlobStorage {
 
         Ok(())
     }
+
 
     async fn delete(
         &self,

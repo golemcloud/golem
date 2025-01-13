@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 
 use crate::storage::sqlite::DBValue;
 use crate::storage::{
@@ -23,7 +23,7 @@ use crate::storage::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 
 use super::ReplayableStream;
 
@@ -198,7 +198,19 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<(), String> {
-        let data = stream.make_stream().await?.try_collect::<Vec<_>>().await?;
+        self.put_stream_oneshot(target_label, op_label, namespace, path, stream.make_stream().await?).await
+    }
+
+    async fn put_stream_oneshot(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+    ) -> Result<(), String> {
+        let pinned = pin!(stream);
+        let data = pinned.try_collect::<Vec<Bytes>>().await?;
         let data = Bytes::from(data.concat());
         self.put_raw(target_label, op_label, namespace, path, &data)
             .await

@@ -47,6 +47,8 @@ use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::storage::blob::BlobStorageNamespace;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
+use http_body::Frame;
+use http_body_util::StreamBody;
 use tonic::Streaming;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -742,12 +744,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id: AccountId = header.account_id.expect("Missing account id").into();
         let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
 
+
+        let (trailers_sender, trailers_receiver) = tokio::sync::oneshot::channel();
+        let framed_stream = body_and_trailers.map(|e| {
+            use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+            use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+
+            match e {
+                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Frame::data(chunk.body_chunk)),
+                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
+                    trailers_sender.send(trailer);
+                    None
+                },
+                Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
+                Err(e) => todo!("failed"),
+                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
+            }
+        });
+
+        // let raw_body = StreamBody::new(body_and_trailers);
+        // StreamBody::new()
+
         self.services.blob_storage().put_stream(
             "http_input_bodies",
             "put",
             BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id },
             todo!(),
-            body_and_trailers
+            framed_stream
         ).await;
 
         worker

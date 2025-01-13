@@ -15,10 +15,10 @@
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
@@ -109,6 +109,17 @@ impl FileSystemBlobStorage {
             Ok(())
         }
     }
+
+    async fn ensure_parent_exists(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            if async_fs::metadata(parent).await.is_err() {
+                async_fs::create_dir_all(parent).await.map_err(|err| {
+                    format!("Failed to create parent directory {parent:?}: {err}")
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -192,13 +203,7 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await.map_err(|err| {
-                    format!("Failed to create parent directory {parent:?}: {err}")
-                })?;
-            }
-        }
+        self.ensure_parent_exists(&full_path).await?;
 
         async_fs::write(&full_path, data)
             .await
@@ -207,22 +212,27 @@ impl BlobStorage for FileSystemBlobStorage {
 
     async fn put_stream(
         &self,
-        _target_label: &'static str,
-        _op_label: &'static str,
+        target_label: &'static str,
+        op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
         stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<(), String> {
-        let full_path = self.path_of(&namespace, path);
-        self.ensure_path_is_inside_root(&full_path)?;
+        self.put_stream_oneshot(target_label, op_label, namespace, path, stream.make_stream().await?).await
+    }
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await.map_err(|err| {
-                    format!("Failed to create parent directory {parent:?}: {err}")
-                })?;
-            }
-        }
+    async fn put_stream_oneshot(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>
+    ) -> Result<(), String> {
+        let full_path = self.path_of(&namespace, path);
+
+        self.ensure_path_is_inside_root(&full_path)?;
+        self.ensure_parent_exists(&full_path).await?;
 
         let file = tokio::fs::File::create(&full_path)
             .await
@@ -230,7 +240,6 @@ impl BlobStorage for FileSystemBlobStorage {
 
         let mut writer = tokio::io::BufWriter::new(file);
 
-        let mut stream = stream.make_stream().await?;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|err| err.to_string())?;
             writer

@@ -25,7 +25,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use aws_sdk_s3::Client;
 use bytes::Bytes;
-use futures::TryFutureExt;
+use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use std::error::Error;
@@ -647,6 +647,46 @@ impl BlobStorage for S3BlobStorage {
         )
         .await
         .map_err(SdkErrorOrCustomError::into_string)
+    }
+
+    async fn put_stream_oneshot(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+    ) -> Result<(), String> {
+        let bucket = self.bucket_of(&namespace);
+        let key = self.prefix_of(&namespace).join(path);
+
+        let data = {
+            let mut buffer = Vec::new();
+            while let Some(res) = stream.next().await {
+                let inner = res?;
+                buffer.append(&mut inner.to_vec());
+            };
+
+            Bytes::from(buffer)
+        };
+
+        // TODO: Do not buffer in memory to determine size of the stream. Probably write it as fixed size chunks together with an index file.
+        let data_size = data.len();
+
+        let body = reqwest::Body::from(data);
+        let byte_stream = ByteStream::from_body_1_x(body);
+
+        self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key.to_string_lossy())
+            .content_length(data_size as i64)
+            .body(byte_stream)
+            .send()
+            .map_err(SdkErrorOrCustomError::sdk_error)
+            .map_ok(|_| ())
+            .await
+            .map_err(SdkErrorOrCustomError::into_string)
     }
 
     async fn delete(

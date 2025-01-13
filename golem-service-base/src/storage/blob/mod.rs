@@ -86,6 +86,16 @@ pub trait BlobStorage: Debug {
         stream: &dyn ReplayableStream<Item = Result<Bytes, String>>,
     ) -> Result<(), String>;
 
+    // Attempt to put a stream into the blob store, if there are any connection issues the upload will not be retried.
+    async fn put_stream_oneshot(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+    ) -> Result<(), String>;
+
     async fn delete(
         &self,
         target_label: &'static str,
