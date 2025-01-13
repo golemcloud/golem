@@ -16,9 +16,11 @@ import { useRouter } from "next/navigation";
 const ApiDetails = ({
   route,
   version,
+  noRedirect
 }: {
   route: ApiRoute;
   version: string;
+  noRedirect?: boolean;
 }) => {
   const { apiId } = useCustomParam();
   
@@ -31,7 +33,9 @@ const ApiDetails = ({
     e.preventDefault();
     try {
       await deleteRoute(route!, version);
-      router.push(`/apis/${apiId}/overview?version=${version}`);
+      if(!noRedirect){
+        router.push(`/apis/${apiId}/overview?version=${version}`);
+      }
     } catch (error) {
       throw error;
     }
@@ -52,7 +56,7 @@ const ApiDetails = ({
             Edit
           </Button>
           <AlertDialogDemo
-            onSubmit={(e: any) => handleDelete(e)}
+            onSubmit={(e: React.MouseEvent<HTMLButtonElement>) => handleDelete(e)}
             paragraph={
               "This action cannot be undone. This will permanently delete this route."
             }
@@ -157,6 +161,7 @@ const ApiDetails = ({
            version={version}
            defaultRoute={route}
            onSuccess={()=>setOpen(false)}
+           noRedirect={noRedirect}
          />
        )}
      </CustomModal>

@@ -15,7 +15,6 @@ import { fetcher } from "@/lib/utils";
 import { ApiRoute, Component } from "@/types/api";
 import { Info, Loader } from "lucide-react";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import { DeleteForever } from "@mui/icons-material";
 import { ComponentSelect } from "./new-route-select";
 import { Button2 } from "@/components/ui/button";
 import { PopoverDemo } from "./interpolate-tooltip";
@@ -41,6 +40,7 @@ const NewRouteForm = ({
   isExperimental,
   defaultRoute,
   onSuccess,
+  noRedirect,
 }: {
   apiId: string;
   version?: string | null;
@@ -48,6 +48,7 @@ const NewRouteForm = ({
   isModal?: boolean;
   isExperimental?: boolean;
   defaultRoute?: ApiRoute | null;
+  noRedirect?: boolean;
 }) => {
   const {
     control,
@@ -74,9 +75,8 @@ const NewRouteForm = ({
     getApiDefintion,
     isLoading: apiDefinitonLoading,
     upsertRoute,
-    deleteRoute,
   } = useApiDefinitions(apiId);
-  const { error: apiDefintionError, data: apiDefintion } =
+  const { error: apiDefintionError } =
     (!apiDefinitonLoading && getApiDefintion(apiId, version)) || {};
   const components = (data?.data || null) as Component[];
   const selectedVersion = watch("version");
@@ -122,7 +122,9 @@ const NewRouteForm = ({
         return setError(error!);
       }
       const routeId = encodeURIComponent(`${newRoute.path}|${newRoute.method}`);
-      router.replace(`/apis/${apiId}/${routeId}`);
+      if(!noRedirect){
+        router.replace(`/apis/${apiId}/${routeId}`);
+      }
       onSuccess?.();
     } catch (error) {
       console.error("Error creating route:", error);

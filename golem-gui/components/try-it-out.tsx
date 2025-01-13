@@ -9,6 +9,7 @@ import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import JsonEditor from "./json-editor";
 import { Loader } from "lucide-react";
 import ErrorBoundary from "./erro-boundary";
+import { toast } from "react-toastify";
 type FormData = {
   [key: string]: unknown;
 };
@@ -114,7 +115,7 @@ export default function TryItOut({
       }
     }
 
-    return meta;
+    return [meta];
   }, [route]);
 
   async function copyCurlToClipboard(
@@ -155,12 +156,19 @@ export default function TryItOut({
       return;
     }
 
-    const curl = await copyCurlToClipboard(
-      route.method,
-      `https://${deployment.site.subdomain}.${deployment.site.host}${route.path}`,
-      data?.request?.body
-    );
-    setCurl(curl);
+    try{
+      const curl = await copyCurlToClipboard(
+        route.method,
+        `https://${deployment.site.subdomain}.${deployment.site.host}${route.path}`,
+        data?.request?.body
+      );
+      setCurl(curl);
+      toast.success("Curl request has been copied to the clipboard.")
+    }catch(err){
+      console.error("somthing went wrong!", err);
+      toast.error("Something went wrong while creating curl");
+    } 
+    
   };
 
   if (isLoading) {
@@ -179,17 +187,19 @@ export default function TryItOut({
             <Typography color="red">Experimental</Typography>
           </Stack>
 
-          <DynamicForm config={[routeMeta]} onSubmit={handleSubmit}  invokeLabel={"Copy Curl"}/>
+          <DynamicForm config={routeMeta} onSubmit={handleSubmit}  invokeLabel={"Copy Curl"}/>
+          <Typography>Select Host</Typography>
           <Select
             variant="outlined"
-            className="max-w-max"
-            value={deployment}
+            className="w-[250px] mb-3"
+            required
+            defaultValue={finalDeployments[0]}
             onChange={(e) => {
               const selectedIndex = Number(e.target.value);
               if (selectedIndex < 0 || isNaN(selectedIndex)) {
                 return;
               }
-              setDeployment(apiDeployments[selectedIndex]);
+              setDeployment(finalDeployments[selectedIndex]);
             }}
           >
             {finalDeployments.map(

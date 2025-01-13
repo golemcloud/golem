@@ -19,6 +19,7 @@ const operationMap = {
   "delete_route": "Delete Route",
 } as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import RouteDetails from "../[routeId]/page";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -119,6 +120,7 @@ export default function Editors() {
                  onSuccess={handleClose}
                  version={trigger?.meta?.version}
                  isModal={true}
+                 noRedirect={true}
                />
               )}
               {trigger?.operation === "update_route" && (
@@ -128,15 +130,14 @@ export default function Editors() {
                   defaultRoute={trigger?.meta?.route}
                   version={trigger?.meta?.version}
                   isModal={true}
+                  noRedirect={true}
                 />
               )}
               {trigger?.operation === "view_route" && (
-                // Chnage it to view modal. work in progress
-                <NewRouteForm
-                  apiId={apiId}
-                  onSuccess={handleClose}
-                  isExperimental={true}
-                  isModal={true}
+                <RouteDetails
+                  defaultRouteId={`${trigger.meta && `${trigger.meta.route?.path}|${trigger.meta.route?.method}`}`}
+                  defaultVersion={trigger?.meta?.version}
+                  noRedirect={true}
                 />
               )}
             </>
