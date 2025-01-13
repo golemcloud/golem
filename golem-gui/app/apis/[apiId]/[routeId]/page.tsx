@@ -7,18 +7,18 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Loader } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
-const RouteDetails = () => {
+const RouteDetails = ({defaultRouteId, defaultVersion, noRedirect}:{defaultRouteId?:string, defaultVersion?:string, noRedirect?:boolean}) => {
   const { routeId } = useCustomParam();
   const params = useSearchParams();
   const { apiId } = useCustomParam();
-  const version = params.get("version");
+  const version = defaultVersion  || params.get("version");
   const {
     isLoading,
     getApiDefintion,
     error: requestError,
   } = useApiDefinitions(apiId, version);
   const { data: apiDefinition, error } = (!isLoading && getApiDefintion()) || {};
-  const [path, method] = decodeURIComponent(routeId).split('|');
+  const [path, method] = decodeURIComponent(defaultRouteId || routeId).split('|');
 
   const route=apiDefinition?.routes.find((route)=>{ 
      return route.method==method && route.path==path;
@@ -33,7 +33,7 @@ const RouteDetails = () => {
   }
 
   return (
-    apiDefinition && route ? <ApiDetails route={route} version={apiDefinition?.version}/>: <>No route found!</>
+    apiDefinition && route ? <ApiDetails route={route} version={apiDefinition?.version} noRedirect={noRedirect}/>: <>No route found!</>
   );
 };
 
