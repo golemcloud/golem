@@ -25,9 +25,7 @@ use golem_common::model::{
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
