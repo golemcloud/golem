@@ -27,7 +27,7 @@ use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
+    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
@@ -224,19 +224,35 @@ pub trait OplogOps: Oplog {
         function_name: String,
         request: &I,
         response: &O,
-        wrapped_function_type: WrappedFunctionType,
+        function_type: DurableFunctionType,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
         let serialized_response = serialize(response)?.to_vec();
 
-        let request_payload: OplogPayload = self.upload_payload(&serialized_request).await?;
-        let response_payload = self.upload_payload(&serialized_response).await?;
+        self.add_raw_imported_function_invoked(
+            function_name,
+            &serialized_request,
+            &serialized_response,
+            function_type,
+        )
+        .await
+    }
+
+    async fn add_raw_imported_function_invoked(
+        &self,
+        function_name: String,
+        serialized_request: &[u8],
+        serialized_response: &[u8],
+        function_type: DurableFunctionType,
+    ) -> Result<OplogEntry, String> {
+        let request_payload: OplogPayload = self.upload_payload(serialized_request).await?;
+        let response_payload = self.upload_payload(serialized_response).await?;
         let entry = OplogEntry::ImportedFunctionInvoked {
             timestamp: Timestamp::now_utc(),
             function_name,
             request: request_payload,
             response: response_payload,
-            wrapped_function_type,
+            wrapped_function_type: function_type,
         };
         self.add(entry.clone()).await;
         Ok(entry)

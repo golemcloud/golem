@@ -15,8 +15,7 @@
 use std::any::Any;
 use std::sync::{Arc, RwLock};
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::types::{
     Error, Host, HostBucket, HostIncomingValue, HostOutgoingValue, IncomingValue,
     IncomingValueAsyncBody, IncomingValueSyncBody, OutgoingValueBodyAsync, OutgoingValueBodySync,
@@ -35,13 +34,13 @@ impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
         &mut self,
         name: String,
     ) -> anyhow::Result<Result<Resource<BucketEntry>, Resource<Error>>> {
-        record_host_function_call("keyvalue::types::bucket", "open");
+        self.observe_function_call("keyvalue::types::bucket", "open");
         let bucket = self.as_wasi_view().table().push(BucketEntry::new(name))?;
         Ok(Ok(bucket))
     }
 
     async fn drop(&mut self, rep: Resource<BucketEntry>) -> anyhow::Result<()> {
-        record_host_function_call("keyvalue::types::bucket", "drop");
+        self.observe_function_call("keyvalue::types::bucket", "drop");
         self.as_wasi_view().table().delete::<BucketEntry>(rep)?;
         Ok(())
     }
@@ -50,7 +49,7 @@ impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
-        record_host_function_call("keyvalue::types::outgoing_value", "new_outgoing_value");
+        self.observe_function_call("keyvalue::types::outgoing_value", "new_outgoing_value");
         let outgoing_value = self
             .as_wasi_view()
             .table()
@@ -62,7 +61,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<OutgoingValueEntry>,
     ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, Resource<Error>>> {
-        record_host_function_call(
+        self.observe_function_call(
             "keyvalue::types::outgoing_value",
             "outgoing_value_write_body_async",
         );
@@ -82,7 +81,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingValueEntry>,
         value: OutgoingValueBodySync,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        record_host_function_call(
+        self.observe_function_call(
             "keyvalue::types::outgoing_value",
             "outgoing_value_write_body_sync",
         );
@@ -97,7 +96,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
-        record_host_function_call("keyvalue::types::outgoing_value", "drop");
+        self.observe_function_call("keyvalue::types::outgoing_value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<OutgoingValueEntry>(rep)?;
@@ -111,7 +110,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<IncomingValueSyncBody, Resource<Error>>> {
-        record_host_function_call(
+        self.observe_function_call(
             "keyvalue::types::incoming_value",
             "incoming_value_consume_sync",
         );
@@ -129,7 +128,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Resource<Error>>> {
-        record_host_function_call(
+        self.observe_function_call(
             "keyvalue::types::incoming_value",
             "incoming_value_consume_async",
         );
@@ -148,7 +147,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<u64, Resource<Error>>> {
-        record_host_function_call("keyvalue::types::incoming_value", "size");
+        self.observe_function_call("keyvalue::types::incoming_value", "size");
         let body = self
             .as_wasi_view()
             .table()
@@ -160,7 +159,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
-        record_host_function_call("keyvalue::types::incoming_value", "drop");
+        self.observe_function_call("keyvalue::types::incoming_value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<IncomingValueEntry>(rep)?;

@@ -4729,7 +4729,7 @@ components:
         response:
           $ref: '#/components/schemas/ValueAndType'
         wrapped_function_type:
-          $ref: '#/components/schemas/PublicWrappedFunctionType'
+          $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
       - function_name
@@ -4955,6 +4955,46 @@ components:
       - Facebook
       - Microsoft
       - Gitlab
+    PublicDurableFunctionType:
+      discriminator:
+        propertyName: type
+        mapping:
+          ReadLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+    PublicDurableFunctionType_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemote
+            type: string
+            enum:
+            - WriteRemote
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicDurableFunctionType_WriteRemoteBatchedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemoteBatched
+            type: string
+            enum:
+            - WriteRemoteBatched
+        required:
+        - type
+      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5354,46 +5394,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
-    PublicWrappedFunctionType:
-      discriminator:
-        propertyName: type
-        mapping:
-          ReadLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          ReadRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
-    PublicWrappedFunctionType_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemote
-            type: string
-            enum:
-            - WriteRemote
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
-    PublicWrappedFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteBatched
-            type: string
-            enum:
-            - WriteRemoteBatched
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     ResourceMetadata:
       type: object
       properties:

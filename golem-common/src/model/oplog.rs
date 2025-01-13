@@ -77,6 +77,34 @@ impl OplogIndex {
     }
 }
 
+pub struct OplogIndexRange {
+    current: u64,
+    end: u64,
+}
+
+impl Iterator for OplogIndexRange {
+    type Item = OplogIndex;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current <= self.end {
+            let current = self.current;
+            self.current += 1; // Move forward
+            Some(OplogIndex(current))
+        } else {
+            None
+        }
+    }
+}
+
+impl OplogIndexRange {
+    pub fn new(start: OplogIndex, end: OplogIndex) -> OplogIndexRange {
+        OplogIndexRange {
+            current: start.0,
+            end: end.0,
+        }
+    }
+}
+
 impl Display for OplogIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -288,7 +316,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         response: OplogPayload,
-        wrapped_function_type: WrappedFunctionType,
+        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
     },
     /// The worker has been invoked
     ExportedFunctionInvoked {
@@ -405,7 +433,7 @@ pub enum OplogEntry {
         function_name: String,
         request: OplogPayload,
         response: OplogPayload,
-        wrapped_function_type: WrappedFunctionType,
+        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
     },
     /// The current version of the Create entry (previous is CreateV1)
     Create {
@@ -648,14 +676,14 @@ impl OplogEntry {
                 wrapped_function_type,
                 ..
             } => match wrapped_function_type {
-                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                DurableFunctionType::WriteRemoteBatched(Some(begin_index))
                     if *begin_index == idx =>
                 {
                     true
                 }
-                WrappedFunctionType::ReadLocal => true,
-                WrappedFunctionType::WriteLocal => true,
-                WrappedFunctionType::ReadRemote => true,
+                DurableFunctionType::ReadLocal => true,
+                DurableFunctionType::WriteLocal => true,
+                DurableFunctionType::ReadRemote => true,
                 _ => false,
             },
             OplogEntry::ExportedFunctionCompleted { .. } => false,
@@ -735,6 +763,56 @@ impl OplogEntry {
             _ => None,
         }
     }
+
+    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
+        match self {
+            OplogEntry::CreateV1 {
+                timestamp,
+                component_version,
+                args,
+                env,
+                account_id,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                worker_id: _,
+            } => Some(OplogEntry::CreateV1 {
+                timestamp: *timestamp,
+                worker_id: worker_id.clone(),
+                component_version: *component_version,
+                args: args.clone(),
+                env: env.clone(),
+                account_id: account_id.clone(),
+                parent: parent.clone(),
+                component_size: *component_size,
+                initial_total_linear_memory_size: *initial_total_linear_memory_size,
+            }),
+            OplogEntry::Create {
+                timestamp,
+                component_version,
+                args,
+                env,
+                account_id,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+                worker_id: _,
+            } => Some(OplogEntry::Create {
+                timestamp: *timestamp,
+                worker_id: worker_id.clone(),
+                component_version: *component_version,
+                args: args.clone(),
+                env: env.clone(),
+                account_id: account_id.clone(),
+                parent: parent.clone(),
+                component_size: *component_size,
+                initial_total_linear_memory_size: *initial_total_linear_memory_size,
+                initial_active_plugins: initial_active_plugins.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Describes a pending update
@@ -779,7 +857,7 @@ pub enum OplogPayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum WrappedFunctionType {
+pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
     ReadLocal,

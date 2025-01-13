@@ -18,9 +18,10 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    invoke_and_await_typed_response, invoke_response, update_worker_response, worker_error,
-    InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    invoke_and_await_typed_response, invoke_response, resume_worker_response,
+    update_worker_response, worker_error, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse,
+    InvokeRequest, InvokeResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
 use golem_common::client::GrpcClient;
@@ -66,6 +67,9 @@ pub trait WorkerProxy {
         target_version: ComponentVersion,
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError>;
+
+    async fn resume(&self, owned_worker_id: &WorkerId, force: bool)
+        -> Result<(), WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -76,6 +80,19 @@ pub enum WorkerProxyError {
     NotFound(String),
     AlreadyExists(String),
     InternalError(GolemError),
+}
+
+impl From<WorkerProxyError> for GolemError {
+    fn from(value: WorkerProxyError) -> Self {
+        match value {
+            WorkerProxyError::BadRequest(errors) => GolemError::invalid_request(errors.join(", ")),
+            WorkerProxyError::Unauthorized(error) => GolemError::unknown(error),
+            WorkerProxyError::LimitExceeded(error) => GolemError::unknown(error),
+            WorkerProxyError::NotFound(error) => GolemError::unknown(error),
+            WorkerProxyError::AlreadyExists(error) => GolemError::unknown(error),
+            WorkerProxyError::InternalError(error) => error,
+        }
+    }
 }
 
 impl Error for WorkerProxyError {}
@@ -314,6 +331,32 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(update_worker_response::Result::Success(_)) => Ok(()),
             Some(update_worker_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
+                "Empty response through the worker API".to_string(),
+            ))),
+        }
+    }
+
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+        debug!("Resuming remote worker");
+
+        let response: ResumeWorkerResponse = self
+            .client
+            .call("resume_worker", move |client| {
+                Box::pin(client.resume_worker(authorised_grpc_request(
+                    ResumeWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        force: Some(force),
+                    },
+                    &self.access_token,
+                )))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(resume_worker_response::Result::Success(_)) => Ok(()),
+            Some(resume_worker_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(GolemError::unknown(
                 "Empty response through the worker API".to_string(),
             ))),

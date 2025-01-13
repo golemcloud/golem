@@ -17,17 +17,17 @@ use async_trait::async_trait;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::random::random::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
-        let durability = Durability::<Ctx, Vec<u8>, SerializableError>::new(
+        let durability = Durability::<Vec<u8>, SerializableError>::new(
             self,
             "golem random",
             "get_random_bytes",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
         if durability.is_live() {
@@ -39,11 +39,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
-        let durability = Durability::<Ctx, u64, SerializableError>::new(
+        let durability = Durability::<u64, SerializableError>::new(
             self,
             "golem random",
             "get_random_u64",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
         if durability.is_live() {

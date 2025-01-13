@@ -15,24 +15,23 @@
 use crate::model::InterruptKind;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx, SuspendForSleep};
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
-        record_host_function_call("io::poll:pollable", "ready");
+        self.observe_function_call("io::poll:pollable", "ready");
         HostPollable::ready(&mut self.as_wasi_view(), self_).await
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
-        record_host_function_call("io::poll:pollable", "block");
+        self.observe_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
 
@@ -40,7 +39,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
-        record_host_function_call("io::poll:pollable", "drop");
+        self.observe_function_call("io::poll:pollable", "drop");
         HostPollable::drop(&mut self.as_wasi_view(), rep)
     }
 }
@@ -48,11 +47,11 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
-        let durability = Durability::<Ctx, Vec<u32>, SerializableError>::new(
+        let durability = Durability::<Vec<u32>, SerializableError>::new(
             self,
             "golem io::poll",
             "poll",
-            WrappedFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
 

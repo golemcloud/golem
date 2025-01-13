@@ -14,20 +14,19 @@
 
 use async_trait::async_trait;
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::bindings::cli::exit::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn exit(&mut self, status: Result<(), ()>) -> anyhow::Result<()> {
-        record_host_function_call("cli::exit", "exit");
+        self.observe_function_call("cli::exit", "exit");
         Host::exit(&mut self.as_wasi_view(), status)
     }
 
     fn exit_with_code(&mut self, status_code: u8) -> anyhow::Result<()> {
-        record_host_function_call("cli::exit", "exit_with_code");
+        self.observe_function_call("cli::exit", "exit_with_code");
         Host::exit_with_code(&mut self.as_wasi_view(), status_code)
     }
 }

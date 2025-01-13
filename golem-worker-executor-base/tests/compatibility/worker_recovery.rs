@@ -49,7 +49,7 @@ async fn recover_shopping_cart_example(
     .await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -74,7 +74,7 @@ async fn recover_shopping_cart_resource_example(
     .await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -99,7 +99,7 @@ async fn recover_environment_example(
     .await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -120,7 +120,7 @@ async fn recover_read_stdin(
             .await;
 
     executor.interrupt(&worker_id).await;
-    let _ = golem_test_framework::dsl::TestDsl::resume(&executor, &worker_id).await; // this fails but we don't mind
+    let _ = golem_test_framework::dsl::TestDsl::resume(&executor, &worker_id, false).await; // this fails but we don't mind
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Failed);
@@ -140,7 +140,7 @@ async fn recover_jump(
         restore_from_recovery_golden_file(&executor, &context, "jump", &["runtime-service"]).await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -160,7 +160,7 @@ async fn recover_js_example_1(
         restore_from_recovery_golden_file(&executor, &context, "js_example_1", &["js-1"]).await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -185,7 +185,7 @@ async fn recover_auto_update_on_running(
     .await;
 
     executor.interrupt(&worker_id).await;
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);
@@ -218,7 +218,7 @@ async fn recover_counter_resource_test_2(
 
     executor.interrupt(&caller_worker_id).await;
     executor.interrupt(&counter_worker_id).await;
-    executor.resume(&caller_worker_id).await;
+    executor.resume(&caller_worker_id, false).await;
 
     let status = wait_for_worker_recovery(&executor, &caller_worker_id).await;
     assert_eq!(status, WorkerStatus::Idle);

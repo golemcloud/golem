@@ -22,7 +22,7 @@ use golem_common::model::public_oplog::{
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicRetryConfig, PublicWorkerInvocation, PublicWrappedFunctionType, ResourceParameters,
+    PublicDurableFunctionType, PublicRetryConfig, PublicWorkerInvocation, ResourceParameters,
     SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
     WriteRemoteBatchedParameters,
 };
@@ -253,14 +253,14 @@ impl From<Timestamp> for Datetime {
     }
 }
 
-impl From<PublicWrappedFunctionType> for oplog::WrappedFunctionType {
-    fn from(value: PublicWrappedFunctionType) -> Self {
+impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
+    fn from(value: PublicDurableFunctionType) -> Self {
         match value {
-            PublicWrappedFunctionType::WriteLocal(_) => Self::WriteLocal,
-            PublicWrappedFunctionType::ReadLocal(_) => Self::ReadLocal,
-            PublicWrappedFunctionType::WriteRemote(_) => Self::WriteRemote,
-            PublicWrappedFunctionType::ReadRemote(_) => Self::ReadRemote,
-            PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
+            PublicDurableFunctionType::WriteLocal(_) => Self::WriteLocal,
+            PublicDurableFunctionType::ReadLocal(_) => Self::ReadLocal,
+            PublicDurableFunctionType::WriteRemote(_) => Self::WriteRemote,
+            PublicDurableFunctionType::ReadRemote(_) => Self::ReadRemote,
+            PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                 index: idx,
             }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
         }

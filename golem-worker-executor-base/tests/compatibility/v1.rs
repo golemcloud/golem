@@ -24,9 +24,8 @@ use test_r::test;
 use bincode::{Decode, Encode};
 use goldenfile::Mint;
 use golem_common::model::oplog::{
-    IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload, PayloadId,
-    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
-    WrappedFunctionType,
+    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
+    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -603,32 +602,32 @@ pub fn wrapped_function_type() {
     backward_compatible(
         "wrapped_function_type_read_local",
         &mut mint,
-        WrappedFunctionType::ReadLocal,
+        DurableFunctionType::ReadLocal,
     );
     backward_compatible(
         "wrapped_function_type_read_remote",
         &mut mint,
-        WrappedFunctionType::ReadRemote,
+        DurableFunctionType::ReadRemote,
     );
     backward_compatible(
         "wrapped_function_type_write_local",
         &mut mint,
-        WrappedFunctionType::WriteLocal,
+        DurableFunctionType::WriteLocal,
     );
     backward_compatible(
         "wrapped_function_type_write_remote",
         &mut mint,
-        WrappedFunctionType::WriteRemote,
+        DurableFunctionType::WriteRemote,
     );
     backward_compatible(
         "wrapped_function_type_write_remote_batched_none",
         &mut mint,
-        WrappedFunctionType::WriteRemoteBatched(None),
+        DurableFunctionType::WriteRemoteBatched(None),
     );
     backward_compatible(
         "wrapped_function_type_write_remote_batched_some",
         &mut mint,
-        WrappedFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(100))),
+        DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(100))),
     );
 }
 
@@ -713,7 +712,7 @@ pub fn oplog_entry() {
         timestamp: Timestamp::from(1724701938466),
         function_name: "test:pkg/iface.{fn}".to_string(),
         response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: WrappedFunctionType::ReadLocal,
+        wrapped_function_type: DurableFunctionType::ReadLocal,
     };
 
     let oe3 = OplogEntry::ExportedFunctionInvoked {
