@@ -21,6 +21,7 @@ use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
+use golem_service_base::storage::blob::BlobStorage;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
@@ -147,6 +148,10 @@ pub trait HasOplogProcessorPlugin {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>;
 }
 
+pub trait HasBlobStorage {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -170,6 +175,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasFileLoader
     + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
     + HasOplogProcessorPlugin
+    + HasBlobStorage
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -198,6 +204,7 @@ impl<
             + HasFileLoader
             + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + HasOplogProcessorPlugin
+            + HasBlobStorage
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -235,6 +242,7 @@ pub struct All<Ctx: WorkerCtx> {
             + Sync,
     >,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -264,6 +272,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            blob_storage: self.blob_storage.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -303,6 +312,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
                 + Sync,
         >,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -329,6 +339,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            blob_storage,
             extra_deps,
         }
     }
@@ -358,6 +369,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.file_loader(),
             this.plugins(),
             this.oplog_processor_plugin(),
+            this.blob_storage(),
             this.extra_deps(),
         )
     }
@@ -520,6 +532,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync> {
         self.all().oplog_processor_plugin.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasBlobStorage for T {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+        self.all().blob_storage.clone()
     }
 }
 

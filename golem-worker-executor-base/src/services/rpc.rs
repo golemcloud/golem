@@ -18,12 +18,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
 
 use super::file_loader::FileLoader;
+use super::HasBlobStorage;
 use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -479,6 +481,12 @@ impl<Ctx: WorkerCtx>
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DirectWorkerInvocationRpc<Ctx> {
     fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin + Send + Sync> {
         self.oplog_processor_plugin.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasBlobStorage for DirectWorkerInvocationRpc<Ctx> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+        self.blob_storage().clone()
     }
 }
 

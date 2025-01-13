@@ -91,6 +91,11 @@ impl FileSystemBlobStorage {
                 result.push("initial_component_files");
                 result.push(account_id.to_string());
             }
+            BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id } => {
+                result.push("persisted_http_input_bodies");
+                result.push(account_id.to_string());
+                result.push(component_id.to_string())
+            }
         }
 
         result.push(path);

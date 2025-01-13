@@ -358,6 +358,10 @@ pub enum BlobStorageNamespace {
         component_id: ComponentId,
         level: usize,
     },
+    PersistedHttpInputBodies {
+        account_id: AccountId,
+        component_id: ComponentId
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

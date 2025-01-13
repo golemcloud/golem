@@ -79,6 +79,9 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::InitialComponentFiles { account_id } => {
                 format!("initial_component_files-{}", account_id.value)
             }
+            BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id } => {
+                format!("persisted_http_input_bodies-{}-{}", account_id, component_id)
+            }
         }
     }
 

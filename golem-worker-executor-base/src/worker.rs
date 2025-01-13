@@ -805,6 +805,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+
+
     pub async fn list_directory(
         &self,
         path: ComponentFilePath,

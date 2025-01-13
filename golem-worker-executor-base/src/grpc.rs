@@ -44,6 +44,7 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
+use golem_service_base::storage::blob::BlobStorageNamespace;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
 use tonic::Streaming;
@@ -697,7 +698,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_worker_http_handler_internal(
         &self,
         header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
-        _remaining: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
+        body_and_trailers: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
     ) -> Result<(), GolemError> {
         // let hyper_method = match header.method {
         //     golem::worker::METHOD_GET => Method::Get,
@@ -737,6 +738,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         // TODO
         let request = builder.body(()).unwrap();
+
+        let account_id: AccountId = header.account_id.expect("Missing account id").into();
+        let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
+
+        self.services.blob_storage().put_stream(
+            "http_input_bodies",
+            "put",
+            BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id },
+            todo!(),
+            body_and_trailers
+        ).await;
 
         worker
             .invoke_http_handler(idempotency_key, request)

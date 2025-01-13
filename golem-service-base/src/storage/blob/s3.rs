@@ -81,6 +81,8 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialComponentFiles { .. } => {
                 &self.config.initial_component_files_bucket
             }
+            BlobStorageNamespace::PersistedHttpInputBodies { .. } =>
+                &self.config.persisted_http_input_bodies_bucket
         }
     }
 
@@ -141,6 +143,20 @@ impl S3BlobStorage {
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(account_id_string)
+                        .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id } => {
+                let account_id_string = account_id.to_string();
+                let component_id_string = component_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    Path::new(&account_id_string)
+                        .join(component_id_string)
+                        .to_path_buf()
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
+                        .join(component_id_string)
                         .to_path_buf()
                 }
             }
