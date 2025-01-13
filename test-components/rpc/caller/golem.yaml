@@ -1,0 +1,30 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+
+components:
+  caller:
+    template: rust
+    profiles:
+      debug:
+        componentWasm: ../target/wasm32-wasip1/debug/caller.wasm
+        linkedWasm: ../target/golem-components/debug/caller_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/debug/caller.wasm ../..
+          - command: cp ../target/golem-components/debug/caller_composed.wasm ../..
+      release:
+        componentWasm: ../target/wasm32-wasip1/release/caller.wasm
+        linkedWasm: ../target/golem-components/release/caller_composed.wasm
+        customCommands:
+          copy:
+          - command: cp ../target/wasm32-wasip1/release/caller.wasm ../..
+          - command: cp ../target/golem-components/release/caller_composed.wasm ../..
+    defaultProfile: debug
+dependencies:
+  caller:
+  - target: counters
+    type: static-wasm-rpc
+  - target: ephemeral
+    type: static-wasm-rpc

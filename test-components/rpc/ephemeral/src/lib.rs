@@ -1,4 +1,4 @@
-use bindings::exports::rpc::ephemeral::api::Guest;
+use crate::bindings::exports::rpc::ephemeral_exports::api::Guest;
 
 mod bindings;
 

@@ -1,0 +1,18 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.0/golem.schema.json
+
+components:
+  caller:
+    template: ts
+    componentWasm: dist/caller-ts.wasm
+    linkedWasm: ../dist/caller-composed-ts.wasm
+    customCommands:
+      copy:
+      - command: cp dist/caller-ts.wasm ../..
+      - command: cp ../dist/caller-composed-ts.wasm ../..
+dependencies:
+  caller:
+  - target: counter
+    type: static-wasm-rpc

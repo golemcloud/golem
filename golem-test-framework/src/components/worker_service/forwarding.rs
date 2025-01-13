@@ -23,15 +23,16 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetFileContentsRequest,
-    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
+    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
@@ -457,6 +458,7 @@ impl WorkerService for ForwardingWorkerService {
                         }
                         .into(),
                     ),
+                    force: request.force,
                 })
                 .await;
 
@@ -807,6 +809,59 @@ impl WorkerService for ForwardingWorkerService {
             }
         }
         Ok(Bytes::from(bytes))
+    }
+
+    async fn fork_worker(
+        &self,
+        fork_worker_request: ForkWorkerRequest,
+    ) -> crate::Result<ForkWorkerResponse> {
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .fork_worker(workerexecutor::v1::ForkWorkerRequest {
+                    source_worker_id: fork_worker_request.source_worker_id.clone(),
+                    target_worker_id: fork_worker_request.target_worker_id.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    oplog_index_cutoff: fork_worker_request.oplog_index_cutoff,
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor fork-worker call"
+            )),
+            Some(workerexecutor::v1::fork_worker_response::Result::Success(_)) => {
+                Ok(ForkWorkerResponse {
+                    result: Some(worker::v1::fork_worker_response::Result::Success(Empty {})),
+                })
+            }
+            Some(workerexecutor::v1::fork_worker_response::Result::Failure(error)) => {
+                Ok(ForkWorkerResponse {
+                    result: Some(worker::v1::fork_worker_response::Result::Error(
+                        WorkerError {
+                            error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
+                })
+            }
+        }
     }
 
     fn private_host(&self) -> String {

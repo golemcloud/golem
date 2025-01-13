@@ -19,10 +19,10 @@ use test_r::test;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
-use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
+use golem_wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_generate::{
-    add_stub_as_dependency_to_wit_dir, AddStubAsDepConfig, UpdateCargoToml,
+    add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
 };
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
@@ -42,8 +42,8 @@ fn all_wit_types_no_collision() {
     let stub_wit_root = stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.clone(),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -76,8 +76,8 @@ fn all_wit_types_re_add_with_changes() {
     let alternative_stub_wit_root = alternative_stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.clone(),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -101,8 +101,8 @@ fn all_wit_types_re_add_with_changes() {
         &dest_wit_root,
     );
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: alternative_stub_wit_root.clone(),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: alternative_stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -135,8 +135,8 @@ fn many_ways_to_export_no_collision() {
     let stub_wit_root = stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.clone(),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -147,13 +147,13 @@ fn many_ways_to_export_no_collision() {
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "exports-stub", None),
+        &PackageName::new("test", "exports-client", None),
         &dest_wit_root,
         &stub_wit_root,
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "exports-interface", None),
+        &PackageName::new("test", "exports-exports", None),
         source_dir.path(),
         &dest_wit_root,
     );
@@ -173,14 +173,14 @@ fn direct_circular() {
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -226,14 +226,14 @@ fn direct_circular_readd() {
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -249,14 +249,14 @@ fn direct_circular_readd() {
     regenerate_stub(stub_b_dir.path(), dest_b.path());
 
     println!("Second round of add_stub_dependency calls");
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -306,14 +306,14 @@ fn direct_circular_same_world_name() {
     let dest_a = init_caller("direct-circular-a-same-world-name");
     let dest_b = init_caller("direct-circular-b-same-world-name");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -361,20 +361,20 @@ fn indirect_circular() {
     let dest_b = init_caller("indirect-circular-b");
     let dest_c = init_caller("indirect-circular-c");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_c_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -435,20 +435,20 @@ fn indirect_circular_readd() {
     println!("dest_b: {:?}", dest_b.path());
     println!("dest_c: {:?}", dest_c.path());
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_c_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -466,20 +466,20 @@ fn indirect_circular_readd() {
     regenerate_stub(stub_c_dir.path(), dest_c.path());
 
     println!("Second round of add_stub_dependency calls");
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_b_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_c_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -543,8 +543,8 @@ fn self_circular() {
 
     let dest_a = init_caller("self-circular");
 
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_a_dir.path().join("wit"),
+    add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
+        client_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
@@ -577,30 +577,30 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: canonical_source,
-        target_root: canonical_target,
+        client_root: canonical_target,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let _ = generate_stub_wit_dir(&def).unwrap();
+    let _ = generate_client_wit_dir(&def).unwrap();
     (source, target)
 }
 
 fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        target_root: stub_dir.to_path_buf(),
+        client_root: stub_dir.to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
-    let _ = generate_stub_wit_dir(&def).unwrap();
+    let _ = generate_client_wit_dir(&def).unwrap();
 }
 
 fn init_caller(name: &str) -> TempDir {

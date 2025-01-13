@@ -171,7 +171,12 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                                 vec![],
                                 None,
                             )
-                            .await?;
+                            .await?
+                            .into_component();
+
+                        let Some(component) = component else {
+                            return Ok(GolemResult::Empty);
+                        };
 
                         debug!(
                             "Uploaded oplog processor component {} as {}/{}",

@@ -6,7 +6,7 @@ mod model;
 mod bindings;
 
 use bindings::*;
-use exports::auction::registry::api::{
+use exports::auction::registry_exports::api::{
     Auction as WitAuction, AuctionId as WitAuctionId, BidderId as WitBidderId,
     Deadline as WitDeadline, Guest,
 };

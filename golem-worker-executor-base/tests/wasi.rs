@@ -958,7 +958,7 @@ async fn http_client_interrupting_response_stream(
 
     let _ = drain_connection(rx).await;
 
-    executor.resume(&worker_id).await;
+    executor.resume(&worker_id, false).await;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))

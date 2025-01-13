@@ -1,7 +1,6 @@
 mod bindings;
 
-use crate::bindings::exports::rpc::counters::api::{Guest, GuestCounter};
-use bindings::*;
+use crate::bindings::exports::rpc::counters_exports::api::{Guest, GuestCounter, TimelineNode};
 use std::cell::RefCell;
 use std::env::{args, vars};
 
@@ -40,9 +39,7 @@ impl Guest for Component {
         with_state(|state| state.global)
     }
 
-    fn bug_wasm_rpc_i32(
-        in_: exports::rpc::counters::api::TimelineNode,
-    ) -> exports::rpc::counters::api::TimelineNode {
+    fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode {
         in_
     }
 }

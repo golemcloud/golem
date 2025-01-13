@@ -23,7 +23,7 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::DefaultAst;
 use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
-use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
+use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -48,7 +48,7 @@ async fn compose_with_single_stub() {
     let component_wasm = caller_dir
         .path()
         .join("target")
-        .join("wasm32-wasi")
+        .join("wasm32-wasip1")
         .join("debug")
         .join("caller_no_dep.wasm");
 
@@ -77,15 +77,15 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root,
-        target_root: canonical_target_root,
+        client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: true,
     })
     .unwrap();
-    let wasm_path = generate_and_build_stub(&def, false).await.unwrap();
+    let wasm_path = generate_and_build_client(&def, false).await.unwrap();
     (source_dir, stub_dir, wasm_path)
 }
 

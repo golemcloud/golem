@@ -1,6 +1,6 @@
 package golem:it;
 
 world clocks {
-  export run: func() -> tuple<float64, float64, string>;
-  export sleep-for: func(seconds: float64) -> float64;
+  export run: func() -> tuple<f64, f64, string>;
+  export sleep-for: func(seconds: f64) -> f64;
 }

@@ -26,7 +26,7 @@ use golem_wasm_ast::analysis::{
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
-use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
+use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use tempfile::tempdir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
@@ -50,16 +50,16 @@ async fn all_wit_types() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.path().to_path_buf(),
-        target_root: canonical_target_root,
+        client_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),
-        extract_source_interface_package: true,
+        extract_source_exports_package: true,
         seal_cargo_workspace: false,
     })
     .unwrap();
 
-    let wasm_path = generate_and_build_stub(&def, false).await.unwrap();
+    let wasm_path = generate_and_build_client(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
     let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
@@ -72,7 +72,7 @@ async fn all_wit_types() {
         panic!("unexpected export type")
     };
 
-    assert_eq!(exported_interface.name, "test:main-stub/stub-api");
+    assert_eq!(exported_interface.name, "test:main-client/api-client");
 
     for fun in &exported_interface.functions {
         println!("Function: {}", fun.name);
@@ -340,6 +340,55 @@ async fn all_wit_types() {
         vec![permissions.clone()],
         Some(permissions.clone()),
     );
+}
+
+#[test]
+async fn resource() {
+    let source = test_data_path().join("wit/resources");
+    let source_wit_root = tempdir().unwrap();
+
+    fs_extra::dir::copy(
+        source,
+        source_wit_root.path(),
+        &CopyOptions::new().content_only(true),
+    )
+    .unwrap();
+
+    let target_root = tempdir().unwrap();
+    let canonical_target_root = target_root.path().canonicalize().unwrap();
+
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.path().to_path_buf(),
+        client_root: canonical_target_root,
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: wasm_rpc_override(),
+        extract_source_exports_package: true,
+        seal_cargo_workspace: false,
+    })
+    .unwrap();
+
+    let wasm_path = generate_and_build_client(&def, false).await.unwrap();
+
+    let stub_bytes = std::fs::read(wasm_path).unwrap();
+    let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
+
+    let state = AnalysisContext::new(stub_component);
+    let stub_exports = state.get_top_level_exports().unwrap();
+
+    assert_eq!(stub_exports.len(), 1);
+    let AnalysedExport::Instance(exported_interface) = &stub_exports[0] else {
+        panic!("unexpected export type")
+    };
+
+    assert_eq!(exported_interface.name, "test:main-client/api-client");
+
+    for fun in &exported_interface.functions {
+        println!("Function: {}", fun.name);
+    }
+
+    assert_has_rpc_resource_constructor(exported_interface, "iface1");
+    // TODO: asserts for "normal" resource
 }
 
 fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, name: &str) {

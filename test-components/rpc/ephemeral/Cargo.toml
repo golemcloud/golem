@@ -3,19 +3,26 @@ name = "ephemeral"
 version = "0.0.1"
 edition = "2021"
 
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.target.dependencies."rpc:ephemeral-exports"]
+path = "wit-generated/deps/rpc_ephemeral-exports"
+
+[dependencies]
+golem-rust = "1.2.1"
+once_cell = "1.17.1"
+rand = "0.8.5"
+
+[dependencies.uuid]
+version = "1.4.1"
+features = ["v4"]
+
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
+
 [lib]
 path = "src/lib.rs"
 crate-type = ["cdylib"]
-
-[dependencies]
-once_cell = "1.17.1"
-rand = "0.8.5"
-uuid = { version = "1.4.1", features = ["v4"] }
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
-
-golem-rust = "1.2.1"
-
-[package.metadata.component.target]
-path = "wit"
-
-[package.metadata.component.dependencies]
+required-features = []

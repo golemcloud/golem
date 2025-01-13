@@ -32,12 +32,12 @@ use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService,
-    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
+    HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -276,6 +276,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
+    worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
@@ -309,6 +310,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
+            worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
@@ -419,6 +421,12 @@ impl<Ctx: WorkerCtx> HasOplogService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerForkService for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_fork_service(&self) -> Arc<dyn worker_fork::WorkerForkService + Send + Sync> {
+        self.worker_fork.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasRpc for DirectWorkerInvocationRpc<Ctx> {
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         Arc::new(self.clone())
@@ -491,6 +499,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -525,6 +534,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
+            worker_fork,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,

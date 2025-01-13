@@ -65,7 +65,7 @@ impl ComponentPropertiesExtensions for GolemComponentExtensions {
         source: &Path,
         validation: &mut ValidationBuilder,
         overrides: Self::Raw,
-    ) -> serde_json::Result<(Option<Self>, bool)> {
+    ) -> serde_json::Result<Option<(Self, bool)>> {
         let mut any_errors = false;
         let mut any_overrides = false;
 
@@ -87,9 +87,9 @@ impl ComponentPropertiesExtensions for GolemComponentExtensions {
         }
 
         if any_errors {
-            Ok((None, false))
+            Ok(None)
         } else {
-            Ok((Some(self), any_overrides))
+            Ok(Some((self, any_overrides)))
         }
     }
 }
