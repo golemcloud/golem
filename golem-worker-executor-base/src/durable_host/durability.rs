@@ -16,6 +16,8 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
+use crate::preview2::golem;
+use crate::preview2::golem::api1_2_0;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -27,6 +29,7 @@ use golem_common::serialization::{serialize, try_deserialize};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem::transmute;
 use tracing::error;
 
 #[derive(Debug)]
@@ -48,7 +51,7 @@ pub struct PersistedDurableFunctionInvocation {
 #[async_trait]
 pub trait DurabilityHost {
     /// Observes a function call (produces logs and metrics)
-    fn observe_function_call(&self, interface: &'static str, function: &'static str);
+    fn observe_function_call(&self, interface: &str, function: &str);
 
     /// Marks the beginning of a durable function.
     ///
@@ -102,9 +105,175 @@ pub trait DurabilityHost {
     ) -> Result<PersistedDurableFunctionInvocation, GolemError>;
 }
 
+impl From<api1_2_0::durability::DurableFunctionType> for DurableFunctionType {
+    fn from(value: api1_2_0::durability::DurableFunctionType) -> Self {
+        match value {
+            api1_2_0::durability::DurableFunctionType::WriteRemote => {
+                DurableFunctionType::WriteRemote
+            }
+            api1_2_0::durability::DurableFunctionType::WriteLocal => {
+                DurableFunctionType::WriteLocal
+            }
+            api1_2_0::durability::DurableFunctionType::WriteRemoteBatched(oplog_index) => {
+                DurableFunctionType::WriteRemoteBatched(oplog_index.map(OplogIndex::from_u64))
+            }
+            api1_2_0::durability::DurableFunctionType::ReadRemote => {
+                DurableFunctionType::ReadRemote
+            }
+            api1_2_0::durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
+        }
+    }
+}
+
+impl From<DurableFunctionType> for api1_2_0::durability::DurableFunctionType {
+    fn from(value: DurableFunctionType) -> Self {
+        match value {
+            DurableFunctionType::WriteRemote => {
+                api1_2_0::durability::DurableFunctionType::WriteRemote
+            }
+            DurableFunctionType::WriteLocal => {
+                api1_2_0::durability::DurableFunctionType::WriteLocal
+            }
+            DurableFunctionType::WriteRemoteBatched(oplog_index) => {
+                api1_2_0::durability::DurableFunctionType::WriteRemoteBatched(
+                    oplog_index.map(|idx| idx.into()),
+                )
+            }
+            DurableFunctionType::ReadRemote => {
+                api1_2_0::durability::DurableFunctionType::ReadRemote
+            }
+            DurableFunctionType::ReadLocal => api1_2_0::durability::DurableFunctionType::ReadLocal,
+        }
+    }
+}
+
+impl From<OplogEntryVersion> for api1_2_0::durability::OplogEntryVersion {
+    fn from(value: OplogEntryVersion) -> Self {
+        match value {
+            OplogEntryVersion::V1 => api1_2_0::durability::OplogEntryVersion::V1,
+            OplogEntryVersion::V2 => api1_2_0::durability::OplogEntryVersion::V2,
+        }
+    }
+}
+
+impl From<PersistedDurableFunctionInvocation>
+    for api1_2_0::durability::PersistedDurableFunctionInvocation
+{
+    fn from(value: PersistedDurableFunctionInvocation) -> Self {
+        api1_2_0::durability::PersistedDurableFunctionInvocation {
+            timestamp: value.timestamp.into(),
+            function_name: value.function_name,
+            response: value.response,
+            function_type: value.function_type.into(),
+            entry_version: value.oplog_entry_version.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
+    async fn observe_function_call(
+        &mut self,
+        iface: String,
+        function: String,
+    ) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(self, &iface, &function);
+        Ok(())
+    }
+
+    async fn begin_durable_function(
+        &mut self,
+        function_type: api1_2_0::durability::DurableFunctionType,
+    ) -> anyhow::Result<api1_2_0::durability::OplogIndex> {
+        let oplog_idx = DurabilityHost::begin_durable_function(self, &function_type.into()).await?;
+        Ok(oplog_idx.into())
+    }
+
+    async fn end_durable_function(
+        &mut self,
+        function_type: api1_2_0::durability::DurableFunctionType,
+        begin_index: api1_2_0::durability::OplogIndex,
+    ) -> anyhow::Result<()> {
+        DurabilityHost::end_durable_function(
+            self,
+            &function_type.into(),
+            OplogIndex::from_u64(begin_index),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn current_durable_execution_state(
+        &mut self,
+    ) -> anyhow::Result<api1_2_0::durability::DurableExecutionState> {
+        let state = DurabilityHost::durable_execution_state(self);
+        let persistence_level: golem::api0_2_0::host::PersistenceLevel =
+            state.persistence_level.into();
+        Ok(api1_2_0::durability::DurableExecutionState {
+            is_live: state.is_live,
+            persistence_level: persistence_level.into(),
+        })
+    }
+
+    async fn persist_durable_function_invocation(
+        &mut self,
+        function_name: String,
+        request: Vec<u8>,
+        response: Vec<u8>,
+        function_type: api1_2_0::durability::DurableFunctionType,
+    ) -> anyhow::Result<()> {
+        DurabilityHost::persist_durable_function_invocation(
+            self,
+            function_name,
+            &request,
+            &response,
+            function_type.into(),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn persist_typed_durable_function_invocation(
+        &mut self,
+        function_name: String,
+        request: api1_2_0::durability::ValueAndType,
+        response: api1_2_0::durability::ValueAndType,
+        function_type: api1_2_0::durability::DurableFunctionType,
+    ) -> anyhow::Result<()> {
+        let request = unsafe {
+            transmute::<
+                api1_2_0::durability::ValueAndType,
+                golem_wasm_rpc::golem::rpc::types::ValueAndType,
+            >(request)
+        };
+        let response = unsafe {
+            transmute::<
+                api1_2_0::durability::ValueAndType,
+                golem_wasm_rpc::golem::rpc::types::ValueAndType,
+            >(response)
+        };
+        DurabilityHost::persist_typed_durable_function_invocation(
+            self,
+            function_name,
+            request.into(),
+            response.into(),
+            function_type.into(),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn read_persisted_durable_function_invocation(
+        &mut self,
+    ) -> anyhow::Result<api1_2_0::durability::PersistedDurableFunctionInvocation> {
+        let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
+        Ok(invocation.into())
+    }
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
-    fn observe_function_call(&self, interface: &'static str, function: &'static str) {
+    fn observe_function_call(&self, interface: &str, function: &str) {
         record_host_function_call(interface, function);
     }
 
@@ -160,11 +329,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: DurableFunctionType,
     ) {
         let request = serialize(&request).unwrap_or_else(|err| {
-            panic!("failed to serialize request ({request:?}) for persisting durable function invocation: {err}")
-        }).to_vec();
+                panic!("failed to serialize request ({request:?}) for persisting durable function invocation: {err}")
+            }).to_vec();
         let response = serialize(&response).unwrap_or_else(|err| {
-            panic!("failed to serialize response ({response:?}) for persisting durable function invocation: {err}")
-        }).to_vec();
+                panic!("failed to serialize response ({response:?}) for persisting durable function invocation: {err}")
+            }).to_vec();
 
         self.state
             .oplog

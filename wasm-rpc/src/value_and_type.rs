@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{RpcError, Value};
+use crate::{RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
     list, option, result, result_err, result_ok, tuple, variant,
 };
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_ast::analysis::{
+    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeEnum, TypeFlags,
+};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -70,7 +72,7 @@ impl From<ValueAndType> for AnalysedType {
 }
 
 #[cfg(feature = "host-bindings")]
-impl From<ValueAndType> for crate::WitValue {
+impl From<ValueAndType> for WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
     }
@@ -360,7 +362,7 @@ impl IntoValue for crate::WitValue {
 }
 
 #[cfg(feature = "host-bindings")]
-impl IntoValue for crate::WitNode {
+impl IntoValue for WitNode {
     fn into_value(self) -> Value {
         use crate::WitNode;
 
@@ -567,5 +569,234 @@ impl IntoValue for crate::RpcError {
             case("not-found", analysed_type::str()),
             case("remote-internal-error", analysed_type::str()),
         ])
+    }
+}
+
+impl From<WitType> for AnalysedType {
+    fn from(value: WitType) -> Self {
+        assert!(!value.nodes.is_empty());
+        build_tree(&value.nodes[0], &value.nodes)
+    }
+}
+
+fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
+    match node {
+        WitTypeNode::RecordType(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, idx)| {
+                    let field_type = build_tree(&nodes[*idx as usize], nodes);
+                    analysed_type::field(name, field_type)
+                })
+                .collect();
+            analysed_type::record(fields)
+        }
+        WitTypeNode::VariantType(cases) => {
+            let cases = cases
+                .iter()
+                .map(|(name, idx)| match idx {
+                    Some(idx) => {
+                        let case_type = build_tree(&nodes[*idx as usize], nodes);
+                        analysed_type::case(name, case_type)
+                    }
+                    None => analysed_type::unit_case(name),
+                })
+                .collect();
+            variant(cases)
+        }
+        WitTypeNode::EnumType(names) => AnalysedType::Enum(TypeEnum {
+            cases: names.clone(),
+        }),
+        WitTypeNode::FlagsType(names) => AnalysedType::Flags(TypeFlags {
+            names: names.clone(),
+        }),
+        WitTypeNode::TupleType(types) => {
+            let types = types
+                .iter()
+                .map(|idx| build_tree(&nodes[*idx as usize], nodes))
+                .collect();
+            tuple(types)
+        }
+        WitTypeNode::ListType(elem_type) => {
+            let elem_type = build_tree(&nodes[*elem_type as usize], nodes);
+            list(elem_type)
+        }
+        WitTypeNode::OptionType(inner_type) => {
+            let inner_type = build_tree(&nodes[*inner_type as usize], nodes);
+            option(inner_type)
+        }
+        WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
+            (Some(ok_type), Some(err_type)) => {
+                let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
+                let err_type = build_tree(&nodes[*err_type as usize], nodes);
+                result(ok_type, err_type)
+            }
+            (None, Some(err_type)) => {
+                let err_type = build_tree(&nodes[*err_type as usize], nodes);
+                result_err(err_type)
+            }
+            (Some(ok_type), None) => {
+                let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
+                result_ok(ok_type)
+            }
+            (None, None) => panic!("ResultType with no ok_type or err_type"),
+        },
+        WitTypeNode::PrimU8Type => analysed_type::u8(),
+        WitTypeNode::PrimU16Type => analysed_type::u16(),
+        WitTypeNode::PrimU32Type => analysed_type::u32(),
+        WitTypeNode::PrimU64Type => analysed_type::u64(),
+        WitTypeNode::PrimS8Type => analysed_type::s8(),
+        WitTypeNode::PrimS16Type => analysed_type::s16(),
+        WitTypeNode::PrimS32Type => analysed_type::s32(),
+        WitTypeNode::PrimS64Type => analysed_type::s64(),
+        WitTypeNode::PrimF32Type => analysed_type::f32(),
+        WitTypeNode::PrimF64Type => analysed_type::f64(),
+        WitTypeNode::PrimCharType => analysed_type::chr(),
+        WitTypeNode::PrimBoolType => analysed_type::bool(),
+        WitTypeNode::PrimStringType => analysed_type::str(),
+        WitTypeNode::HandleType((id, mode)) => analysed_type::handle(
+            AnalysedResourceId(*id),
+            match mode {
+                crate::ResourceMode::Owned => AnalysedResourceMode::Owned,
+                crate::ResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
+            },
+        ),
+    }
+}
+
+impl From<AnalysedType> for WitType {
+    fn from(value: AnalysedType) -> Self {
+        let mut builder = WitTypeBuilder::new();
+        builder.add(value);
+        builder.build()
+    }
+}
+
+struct WitTypeBuilder {
+    nodes: Vec<WitTypeNode>,
+    mapping: HashMap<AnalysedType, usize>,
+}
+
+impl WitTypeBuilder {
+    pub fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            mapping: HashMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, typ: AnalysedType) -> usize {
+        if let Some(idx) = self.mapping.get(&typ) {
+            *idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(WitTypeNode::PrimBoolType); // placeholder, to be replaced
+            let node: WitTypeNode = match typ {
+                AnalysedType::Variant(variant) => {
+                    let mut cases = Vec::new();
+                    for pair in variant.cases {
+                        let case_idx = pair.typ.map(|case| self.add(case) as i32);
+                        cases.push((pair.name, case_idx));
+                    }
+                    WitTypeNode::VariantType(cases)
+                }
+                AnalysedType::Result(result) => {
+                    let ok_idx = result.ok.map(|ok| self.add(*ok) as i32);
+                    let err_idx = result.err.map(|err| self.add(*err) as i32);
+                    WitTypeNode::ResultType((ok_idx, err_idx))
+                }
+                AnalysedType::Option(option) => {
+                    let inner_idx = self.add(*option.inner) as i32;
+                    WitTypeNode::OptionType(inner_idx)
+                }
+                AnalysedType::Enum(enm) => WitTypeNode::EnumType(enm.cases),
+                AnalysedType::Flags(flags) => WitTypeNode::FlagsType(flags.names),
+                AnalysedType::Record(record) => {
+                    let mut fields = Vec::new();
+                    for field in record.fields {
+                        fields.push((field.name, self.add(field.typ) as i32));
+                    }
+                    WitTypeNode::RecordType(fields)
+                }
+                AnalysedType::Tuple(tuple) => {
+                    let mut indices = Vec::new();
+                    for item in tuple.items {
+                        indices.push(self.add(item) as i32);
+                    }
+                    WitTypeNode::TupleType(indices)
+                }
+                AnalysedType::List(lst) => {
+                    let elem_idx = self.add(*lst.inner);
+                    WitTypeNode::ListType(elem_idx as i32)
+                }
+                AnalysedType::Str(_) => WitTypeNode::PrimStringType,
+                AnalysedType::Chr(_) => WitTypeNode::PrimCharType,
+                AnalysedType::F64(_) => WitTypeNode::PrimF64Type,
+                AnalysedType::F32(_) => WitTypeNode::PrimF32Type,
+                AnalysedType::U64(_) => WitTypeNode::PrimU64Type,
+                AnalysedType::S64(_) => WitTypeNode::PrimS64Type,
+                AnalysedType::U32(_) => WitTypeNode::PrimU32Type,
+                AnalysedType::S32(_) => WitTypeNode::PrimS32Type,
+                AnalysedType::U16(_) => WitTypeNode::PrimU16Type,
+                AnalysedType::S16(_) => WitTypeNode::PrimS16Type,
+                AnalysedType::U8(_) => WitTypeNode::PrimU8Type,
+                AnalysedType::S8(_) => WitTypeNode::PrimS8Type,
+                AnalysedType::Bool(_) => WitTypeNode::PrimBoolType,
+                AnalysedType::Handle(handle) => WitTypeNode::HandleType((
+                    handle.resource_id.0,
+                    match handle.mode {
+                        AnalysedResourceMode::Owned => crate::ResourceMode::Owned,
+                        AnalysedResourceMode::Borrowed => crate::ResourceMode::Borrowed,
+                    },
+                )),
+            };
+            self.nodes[idx] = node;
+            idx
+        }
+    }
+
+    pub fn build(self) -> WitType {
+        WitType { nodes: self.nodes }
+    }
+}
+
+impl From<crate::golem::rpc::types::ValueAndType> for ValueAndType {
+    fn from(value: crate::golem::rpc::types::ValueAndType) -> Self {
+        Self {
+            value: value.value.into(),
+            typ: value.typ.into(),
+        }
+    }
+}
+
+impl From<ValueAndType> for crate::golem::rpc::types::ValueAndType {
+    fn from(value: ValueAndType) -> Self {
+        Self {
+            value: value.value.into(),
+            typ: value.typ.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{IntoValue, RpcError, WitType, WitValue};
+    use golem_wasm_ast::analysis::AnalysedType;
+    use test_r::test;
+
+    #[test]
+    fn encoding_rpc_error_type() {
+        let typ1 = RpcError::get_type();
+        let encoded: WitType = typ1.clone().into();
+        let typ2: AnalysedType = encoded.into();
+        assert_eq!(typ1, typ2);
+    }
+
+    #[test]
+    fn encoding_wit_value_type() {
+        let typ1 = WitValue::get_type();
+        let encoded: WitType = typ1.clone().into();
+        let typ2: AnalysedType = encoded.into();
+        assert_eq!(typ1, typ2);
     }
 }
