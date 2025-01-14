@@ -32,7 +32,7 @@ import {
     setOplogPersistenceLevel as setOplogPersistenceLevelImpl,
     setRetryPolicy as setRetryPolicyImpl,
     updateWorker as updateWorkerImpl,
-} from "golem:api/host@0.2.0";
+} from "golem:api/host@1.1.0";
 
 export { GetWorkers };
 
