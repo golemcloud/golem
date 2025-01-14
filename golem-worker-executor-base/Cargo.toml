@@ -107,10 +107,6 @@ testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-[build-dependencies]
-cargo_metadata = "0.19.1"
-golem-wit = { workspace = true }
-
 [[test]]
 name = "integration"
 path = "tests/lib.rs"

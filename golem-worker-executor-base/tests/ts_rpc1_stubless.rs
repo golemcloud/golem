@@ -38,23 +38,22 @@ async fn counter_resource_test_1(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
-        .store_component_with_dynamic_linking(
-            CALLER_COMPONENT_NAME,
-            &[(
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                        (
-                            "counter".to_string(),
-                            "rpc:counters-exports/api".to_string(),
-                        ),
-                    ]),
-                }),
-            )],
-        )
+        .component(CALLER_COMPONENT_NAME)
+        .with_dynamic_linking(&[(
+            "rpc:counters-client/counters-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                target_interface_name: HashMap::from_iter(vec![
+                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                    (
+                        "counter".to_string(),
+                        "rpc:counters-exports/api".to_string(),
+                    ),
+                ]),
+            }),
+        )])
+        .store()
         .await;
 
     let mut env = HashMap::new();
@@ -97,23 +96,22 @@ async fn counter_resource_test_1_with_restart(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
-        .store_component_with_dynamic_linking(
-            CALLER_COMPONENT_NAME,
-            &[(
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                        (
-                            "counter".to_string(),
-                            "rpc:counters-exports/api".to_string(),
-                        ),
-                    ]),
-                }),
-            )],
-        )
+        .component(CALLER_COMPONENT_NAME)
+        .with_dynamic_linking(&[(
+            "rpc:counters-client/counters-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                target_interface_name: HashMap::from_iter(vec![
+                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                    (
+                        "counter".to_string(),
+                        "rpc:counters-exports/api".to_string(),
+                    ),
+                ]),
+            }),
+        )])
+        .store()
         .await;
 
     let mut env = HashMap::new();
@@ -160,23 +158,22 @@ async fn context_inheritance(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
-        .store_component_with_dynamic_linking(
-            CALLER_COMPONENT_NAME,
-            &[(
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![
-                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                        (
-                            "counter".to_string(),
-                            "rpc:counters-exports/api".to_string(),
-                        ),
-                    ]),
-                }),
-            )],
-        )
+        .component(CALLER_COMPONENT_NAME)
+        .with_dynamic_linking(&[(
+            "rpc:counters-client/counters-client",
+            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                target_interface_name: HashMap::from_iter(vec![
+                    ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                    (
+                        "counter".to_string(),
+                        "rpc:counters-exports/api".to_string(),
+                    ),
+                ]),
+            }),
+        )])
+        .store()
         .await;
 
     let mut env = HashMap::new();

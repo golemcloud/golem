@@ -13,21 +13,15 @@
 // limitations under the License.
 
 use crate::model::oplog::{
-    IndexedResourceKey, OplogEntry, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
+    IndexedResourceKey, OplogEntry, TimestampedUpdateDescription, WorkerResourceId,
 };
 use crate::model::regions::DeletedRegions;
-use crate::newtype_uuid;
-use crate::uri::oss::urn::WorkerUrn;
-use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
-use golem_wasm_ast::analysis::analysed_type::{
-    field, list, r#enum, record, s64, str, tuple, u32, u64,
-};
+use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::IntoValue;
 use http::Uri;
@@ -42,6 +36,8 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
+
+pub use crate::base_model::*;
 
 pub mod component;
 pub mod component_constraint;
@@ -80,18 +76,6 @@ impl<
 
 #[cfg(not(feature = "poem"))]
 impl<T> PoemTypeRequirements for T {}
-
-newtype_uuid!(
-    ComponentId,
-    golem_api_grpc::proto::golem::component::ComponentId
-);
-
-newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
-
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -203,82 +187,6 @@ impl IntoValue for Timestamp {
     }
 }
 
-pub type ComponentVersion = u64;
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerId {
-    pub component_id: ComponentId,
-    pub worker_name: String,
-}
-
-impl WorkerId {
-    pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.component_id.0, self.worker_name)
-    }
-
-    pub fn uri(&self) -> String {
-        WorkerUrn {
-            id: self.clone().into_target_worker_id(),
-        }
-        .to_string()
-    }
-
-    /// The dual of `TargetWorkerId::into_worker_id`
-    pub fn into_target_worker_id(self) -> TargetWorkerId {
-        TargetWorkerId {
-            component_id: self.component_id,
-            worker_name: Some(self.worker_name),
-        }
-    }
-}
-
-impl FromStr for WorkerId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() == 2 {
-            let component_id_uuid = Uuid::from_str(parts[0])
-                .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
-            let component_id = ComponentId(component_id_uuid);
-            let worker_name = parts[1].to_string();
-            Ok(Self {
-                component_id,
-                worker_name,
-            })
-        } else {
-            Err(format!(
-                "invalid worker id: {s} - expected format: <component_id>:<worker_name>"
-            ))
-        }
-    }
-}
-
-impl Display for WorkerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{}/{}", self.component_id, self.worker_name))
-    }
-}
-
-impl IntoValue for WorkerId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![
-            self.component_id.into_value(),
-            self.worker_name.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("component_id", ComponentId::get_type()),
-            field("worker_name", std::string::String::get_type()),
-        ])
-    }
-}
-
 /// Associates a worker-id with its owner account
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct OwnedWorkerId {
@@ -314,130 +222,6 @@ impl OwnedWorkerId {
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.account_id, self.worker_id)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
-pub struct TargetWorkerId {
-    pub component_id: ComponentId,
-    pub worker_name: Option<String>,
-}
-
-impl TargetWorkerId {
-    pub fn uri(&self) -> String {
-        WorkerUrn { id: self.clone() }.to_string()
-    }
-
-    /// Converts a `TargetWorkerId` to a `WorkerId` if the worker name is specified
-    pub fn try_into_worker_id(self) -> Option<WorkerId> {
-        self.worker_name.map(|worker_name| WorkerId {
-            component_id: self.component_id,
-            worker_name,
-        })
-    }
-
-    /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
-    /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
-    /// that the generated worker ID will belong to one of the provided shards.
-    ///
-    /// If the worker name was specified, `force_in_shard` is ignored.
-    pub fn into_worker_id(
-        self,
-        force_in_shard: &HashSet<ShardId>,
-        number_of_shards: usize,
-    ) -> WorkerId {
-        let TargetWorkerId {
-            component_id,
-            worker_name,
-        } = self;
-        match worker_name {
-            Some(worker_name) => WorkerId {
-                component_id,
-                worker_name,
-            },
-            None => {
-                if force_in_shard.is_empty() || number_of_shards == 0 {
-                    let worker_name = Uuid::new_v4().to_string();
-                    WorkerId {
-                        component_id,
-                        worker_name,
-                    }
-                } else {
-                    let mut current = Uuid::new_v4().to_u128_le();
-                    loop {
-                        let uuid = Uuid::from_u128_le(current);
-                        let worker_name = uuid.to_string();
-                        let worker_id = WorkerId {
-                            component_id: component_id.clone(),
-                            worker_name,
-                        };
-                        let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
-                        if force_in_shard.contains(&shard_id) {
-                            return worker_id;
-                        }
-                        current += 1;
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl Display for TargetWorkerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.worker_name {
-            Some(worker_name) => write!(f, "{}/{}", self.component_id, worker_name),
-            None => write!(f, "{}/*", self.component_id),
-        }
-    }
-}
-
-impl From<WorkerId> for TargetWorkerId {
-    fn from(value: WorkerId) -> Self {
-        value.into_target_worker_id()
-    }
-}
-
-impl From<&WorkerId> for TargetWorkerId {
-    fn from(value: &WorkerId) -> Self {
-        value.clone().into_target_worker_id()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PromiseId {
-    pub worker_id: WorkerId,
-    pub oplog_idx: OplogIndex,
-}
-
-impl PromiseId {
-    pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.worker_id.to_redis_key(), self.oplog_idx)
-    }
-}
-
-impl Display for PromiseId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
-    }
-}
-
-impl IntoValue for PromiseId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![
-            self.worker_id.into_value(),
-            self.oplog_idx.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("worker_id", WorkerId::get_type()),
-            field("oplog_idx", OplogIndex::get_type()),
-        ])
     }
 }
 
@@ -497,70 +281,6 @@ pub struct ScheduleId {
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}@{}", self.action, self.timestamp)
-    }
-}
-
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize, Encode, Decode,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ShardId {
-    value: i64,
-}
-
-impl ShardId {
-    pub fn new(value: i64) -> Self {
-        Self { value }
-    }
-
-    pub fn from_worker_id(worker_id: &WorkerId, number_of_shards: usize) -> Self {
-        let hash = Self::hash_worker_id(worker_id);
-        let value = hash.abs() % number_of_shards as i64;
-        Self { value }
-    }
-
-    pub fn hash_worker_id(worker_id: &WorkerId) -> i64 {
-        let (high_bits, low_bits) = (
-            (worker_id.component_id.0.as_u128() >> 64) as i64,
-            worker_id.component_id.0.as_u128() as i64,
-        );
-        let high = Self::hash_string(&high_bits.to_string());
-        let worker_name = &worker_id.worker_name;
-        let component_worker_name = format!("{}{}", low_bits, worker_name);
-        let low = Self::hash_string(&component_worker_name);
-        ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
-    }
-
-    fn hash_string(string: &str) -> i32 {
-        let mut hash = 0;
-        if hash == 0 && !string.is_empty() {
-            for val in &mut string.bytes() {
-                hash = 31_i32.wrapping_mul(hash).wrapping_add(val as i32);
-            }
-        }
-        hash
-    }
-
-    pub fn is_left_neighbor(&self, other: &ShardId) -> bool {
-        other.value == self.value + 1
-    }
-}
-
-impl Display for ShardId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}>", self.value)
-    }
-}
-
-impl IntoValue for ShardId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::S64(self.value)
-    }
-
-    fn get_type() -> AnalysedType {
-        s64()
     }
 }
 

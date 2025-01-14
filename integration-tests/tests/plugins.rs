@@ -37,7 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("logging").await;
+    let component_id = deps.component("logging").unique().store().await;
     let port = 8999;
 
     deps.create_plugin(PluginDefinition {
@@ -154,8 +154,8 @@ fn transform_component(component: Bytes) -> anyhow::Result<Vec<u8>> {
 
 #[test]
 async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let plugin_component_id = deps.store_unique_component("oplog-processor").await;
-    let component_id = deps.store_unique_component("shopping-cart").await;
+    let plugin_component_id = deps.component("oplog-processor").unique().store().await;
+    let component_id = deps.component("shopping-cart").unique().store().await;
 
     deps.create_plugin(PluginDefinition {
         name: "oplog-processor-1".to_string(),

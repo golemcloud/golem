@@ -45,7 +45,7 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = deps.store_component("http-client-2").await;
+    let component_id = deps.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -105,7 +105,7 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -189,7 +189,7 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = deps.store_component("http-client-2").await;
+    let component_id = deps.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -261,7 +261,7 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -373,7 +373,7 @@ async fn fork_worker_when_target_already_exists(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -419,7 +419,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -460,7 +460,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -497,7 +497,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_component("environment-service").await;
+    let component_id = deps.component("environment-service").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
