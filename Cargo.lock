@@ -4094,7 +4094,7 @@ dependencies = [
  "derive_more 0.99.18",
  "dir-diff",
  "fancy-regex",
- "golem-wit 1.1.1",
+ "golem-wit",
  "include_dir",
  "once_cell",
  "regex",
@@ -4376,14 +4376,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit.git?branch=vigoo%2Fdurability-host-functions#445d9a7fcc15947d374a3f6ba2b8735bb2714941"
-
-[[package]]
-name = "golem-wit"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c54c03d2a2c3b54e1bc733115000c69cc027b0a0dd269917b9a7acab37beff"
+checksum = "cf53fc25db491f96c480d7f195175f6da5f18dcc6ef548d04b2ae648b7796bbf"
 
 [[package]]
 name = "golem-worker-executor"
@@ -4459,7 +4454,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit 0.0.0",
+ "golem-wit",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
@@ -6165,9 +6160,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ffbe83022cedc1d264172192511ae958937694cd57ce297164951b8b3568394"
+checksum = "b8402cab7aefae129c6977bb0ff1b8fd9a04eb5b51efc50a70bea51cda0c7924"
 dependencies = [
  "adler2",
  "simd-adler32",
