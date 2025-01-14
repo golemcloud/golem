@@ -34,7 +34,56 @@ use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::{InterruptKind, TrapType};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
-pub async fn invoke_worker_incoming_http_handler<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
+async fn invoke_worker_incoming_http_handler<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
+    request: hyper::Request<hyper::body::Incoming>,
+    store: Arc<Mutex<dyn AsContextMut<Data = Ctx> + Sync + Send>>,
+    instance: Arc<wasmtime::component::Instance>,
+) -> Result<http::Response<BoxBody<Bytes, WasiHttpErrorCode>>, GolemError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
+    let store = store.clone();
+    let instance = instance.clone();
+
+    let task = tokio::task::spawn(async move {
+        let mut store_mutex = store.lock().await;
+        let mut store = store_mutex.as_context_mut();
+        let proxy = Proxy::new(&mut store, &instance).unwrap();
+        let scheme = wasi_http_scheme_from_request(&request)?;
+        let incoming = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_incoming_request(scheme, request).unwrap();
+        let outgoing = store.data_mut().durable_ctx_mut().as_wasi_http_view().new_response_outparam(sender).unwrap();
+
+        if let Err(_e) = proxy
+            .wasi_http_incoming_handler()
+            .call_handle(store, incoming, outgoing)
+            .await
+        {
+            todo!("task failed");
+        }
+
+        Ok(())
+    });
+
+    match receiver.await {
+        Ok(Ok(resp)) => Ok(resp),
+        Ok(Err(_e)) => Err(GolemError::unknown("boom")),
+        Err(_) => {
+            // An error in the receiver (`RecvError`) only indicates that the
+            // task exited before a response was sent (i.e., the sender was
+            // dropped); it does not describe the underlying cause of failure.
+            // Instead we retrieve and propagate the error from inside the task
+            // which should more clearly tell the user what went wrong. Note
+            // that we assume the task has already exited at this point so the
+            // `await` should resolve immediately.
+            let e = match task.await {
+                Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
+                Err(_e) => GolemError::unknown("boom"),
+            };
+            todo!("guest never invoked `response-outparam::set` method: {e:?}")
+        }
+    }
+}
+
+async fn invoke_worker_incoming_http_handler_2<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
     request: hyper::Request<hyper::body::Incoming>,
     store: Arc<Mutex<dyn AsContextMut<Data = Ctx> + Sync + Send>>,
     instance: Arc<wasmtime::component::Instance>,

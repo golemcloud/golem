@@ -718,61 +718,63 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id: AccountId = header.account_id.expect("Missing account id").into();
         let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
 
-        // let encoded_headers = header.headers.unwrap().fields.iter().map(|h|
-        //     Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
-        // ).collect::<Vec<_>>();
+        let encoded_headers = header.headers.unwrap().fields.iter().map(|h|
+            Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
+        ).collect::<Vec<_>>();
 
-        // let encoded_trailers = trailers.map(|t| {
-        //     let inner = t.trailers.unwrap().fields.iter().map(|h|
-        //         Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
-        //     ).collect::<Vec<_>>();
-        //     Box::new(Value::List(inner))
-        // });
+        let encoded_trailers = trailers.map(|t| {
+            let inner = t.trailers.unwrap().fields.iter().map(|h|
+                Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
+            ).collect::<Vec<_>>();
+            Box::new(Value::List(inner))
+        });
 
-        let domain = {
-            use golem_common::model::http_invocation::*;
+        let encoded_chunks = chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).map(|b| Value::U8(b)).collect::<Vec<_>>();
 
-            let method = grpc_method_to_domain_method(&header.method)?;
+        // let domain = {
+        //     use golem_common::model::http_invocation::*;
+        //
+        //     let method = grpc_method_to_domain_method(&header.method)?;
+        //
+        //     let mut domain_headers = HashMap::new();
+        //
+        //     for h in header.headers.unwrap().fields.iter() {
+        //         domain_headers.insert(h.name.clone(), h.value.clone());
+        //     }
+        //
+        //     let body_bytes = if !chunks.is_empty() {
+        //         Some(Bytes::from(chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).collect::<Vec<_>>()))
+        //     } else {
+        //         None
+        //     };
+        //
+        //     let trailers = if let Some(trailers) = trailers {
+        //         let mut res = HashMap::new();
+        //         for h in trailers.trailers.unwrap().fields.iter() {
+        //             res.insert(h.name.clone(), h.value.clone());
+        //         }
+        //         Some(res)
+        //     } else {
+        //         None
+        //     };
+        //
+        //     let body_and_trailers = body_bytes.map(|body| BodyAndTrailers { body, trailers } );
+        //
+        //     IncomingHttpHandlerInvocation {
+        //         uri: header.uri,
+        //         method,
+        //         headers: domain_headers,
+        //         body_and_trailers
+        //     }
+        // };
 
-            let mut domain_headers = HashMap::new();
-
-            for h in header.headers.unwrap().fields.iter() {
-                domain_headers.insert(h.name.clone(), h.value.clone());
-            }
-
-            let body_bytes = if !chunks.is_empty() {
-                Some(Bytes::from(chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).collect::<Vec<_>>()))
-            } else {
-                None
-            };
-
-            let trailers = if let Some(trailers) = trailers {
-                let mut res = HashMap::new();
-                for h in trailers.trailers.unwrap().fields.iter() {
-                    res.insert(h.name.clone(), h.value.clone());
-                }
-                Some(res)
-            } else {
-                None
-            };
-
-            let body_and_trailers = body_bytes.map(|body| BodyAndTrailers { body, trailers } );
-
-            IncomingHttpHandlerInvocation {
-                uri: header.uri,
-                method,
-                headers: domain_headers,
-                body_and_trailers
-            }
-        };
-
-        // let as_wit = Value::Record(vec![
-        //     Value::String(header.uri),
-        //     Value::Enum(method.into()),
-        //     Value::List(encoded_headers),
-        //     Value::List(encoded_chunks),
-        //     Value::Option(encoded_trailers)
-        // ]);
+        let as_wit = Value::Record(vec![
+            Value::String(header.uri),
+            Value::Enum(method.into()),
+            Value::List(encoded_headers),
+            Value::List(encoded_chunks),
+            Value::Option(encoded_trailers)
+        ]);
 
         let values = worker
             .invoke_and_await(idempotency_key, "wasi:http/incoming-handler@0.2.0.{handle}".to_string(), vec![as_wit])
@@ -781,128 +783,128 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(values)
     }
 
-    async fn invoke_worker_http_handler_internal_bak(
-        &self,
-        header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
-        body_and_trailers: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
-    ) -> Result<(), GolemError> {
-        // let hyper_method = match header.method {
-        //     golem::worker::METHOD_GET => Method::Get,
-        //     golem::workerexecutor::v1::Method::POST => Method::Post,
-        //     golem::workerexecutor::v1::Method::PUT => Method::Put,
-        //     golem::workerexecutor::v1::Method::DELETE => Method::Delete,
-        // };
-
-        // let hyper_method = match header.method {
-        //     golem::worker::METHOD_GET => hyper::Method::GET,
-        // }
-
-        // let hyper_method = match header.method {
-        //     golem::worker::HttpMethod()
-        // }
-
-        // let hyper_method =
-
-        let worker = self.get_or_create(&header).await?;
-
-        let idempotency_key = header
-            .idempotency_key
-            .map(|ik| IdempotencyKey { value: ik.value })
-            .unwrap_or(IdempotencyKey::fresh());
-
-        let http_method = grpc_method_to_hyper_method(header.method)?;
-
-        let mut builder = hyper::Request::builder()
-            .uri(header.uri)
-            .method(http_method);
-
-        if let Some(headers) = header.headers {
-            for golem::worker::HttpField { name, value } in headers.fields {
-                builder = builder.header(name.as_str(), value);
-            }
-        }
-
-        // TODO
-        // let request = builder.body(()).unwrap();
-        //
-        let account_id: AccountId = header.account_id.expect("Missing account id").into();
-        let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
-
-
-        // let (body_stream, trailer_stream) = split_stream(matches!())
-        // let (raw_trailer_stream, raw_body_stream) =
-        //     split_stream(
-        //         body_and_trailers,
-        //         |e| matches!(e, Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Trailer(_)) })),
-        //         32
-        //     );
-
-        // let body_stream = raw_body_stream.filter_map(|e| async {
-        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
-        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
-        //
-        //     match e {
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
-        //         Err(e) => Some(Err(format!("Failed to read body: {}", e))),
-        //         _ => None
-        //     }
-        // });
-        //
-        // let mut trailer_stream = raw_trailer_stream.filter_map(|e| async {
-        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
-        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
-        //
-        //     match e {
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailers)) }) => Some(Ok(trailers)),
-        //         Err(e) => Some(Err(format!("Failed to read trailers: {}", e))),
-        //         _ => None
-        //     }
-        // });
-
-        // let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
-        // let sender = trailers_sender.clone();
-        // let body_stream = body_and_trailers.filter_map(|e| async move {
-        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
-        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
-        //
-        //     match e {
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
-        //             sender.send(trailer).await.unwrap();
-        //             None
-        //         },
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
-        //         Err(_) => todo!("failed"),
-        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
-        //     }
-        // });
-
-        // let raw_body = StreamBody::new(body_and_trailers);
-        // StreamBody::new()
-
-        let path = uuid::Uuid::new_v4().to_string();
-
-        self.services.blob_storage().put_stream_oneshot(
-            "http_input_bodies",
-            "put",
-            BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id },
-            &PathBuf::from(path),
-            Box::pin(body_stream)
-        ).await.unwrap();
-
-        let _trailers = if let Some(inner) = pin!(trailer_stream).next().await {
-            let trailers = inner.unwrap();
-            trailers.trailers.unwrap().fields.into_iter().map(|e| (e.name, e.value)).collect()
-        } else {
-            Vec::new()
-        };
-
-        // worker
-        //     .invoke_http_handler(idempotency_key, request)
-        //     .await?;
-
-        todo!("implement");
-    }
+    // async fn invoke_worker_http_handler_internal_bak(
+    //     &self,
+    //     header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
+    //     body_and_trailers: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
+    // ) -> Result<(), GolemError> {
+    //     // let hyper_method = match header.method {
+    //     //     golem::worker::METHOD_GET => Method::Get,
+    //     //     golem::workerexecutor::v1::Method::POST => Method::Post,
+    //     //     golem::workerexecutor::v1::Method::PUT => Method::Put,
+    //     //     golem::workerexecutor::v1::Method::DELETE => Method::Delete,
+    //     // };
+    //
+    //     // let hyper_method = match header.method {
+    //     //     golem::worker::METHOD_GET => hyper::Method::GET,
+    //     // }
+    //
+    //     // let hyper_method = match header.method {
+    //     //     golem::worker::HttpMethod()
+    //     // }
+    //
+    //     // let hyper_method =
+    //
+    //     let worker = self.get_or_create(&header).await?;
+    //
+    //     let idempotency_key = header
+    //         .idempotency_key
+    //         .map(|ik| IdempotencyKey { value: ik.value })
+    //         .unwrap_or(IdempotencyKey::fresh());
+    //
+    //     let http_method = grpc_method_to_hyper_method(header.method)?;
+    //
+    //     let mut builder = hyper::Request::builder()
+    //         .uri(header.uri)
+    //         .method(http_method);
+    //
+    //     if let Some(headers) = header.headers {
+    //         for golem::worker::HttpField { name, value } in headers.fields {
+    //             builder = builder.header(name.as_str(), value);
+    //         }
+    //     }
+    //
+    //     // TODO
+    //     // let request = builder.body(()).unwrap();
+    //     //
+    //     let account_id: AccountId = header.account_id.expect("Missing account id").into();
+    //     let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
+    //
+    //
+    //     // let (body_stream, trailer_stream) = split_stream(matches!())
+    //     // let (raw_trailer_stream, raw_body_stream) =
+    //     //     split_stream(
+    //     //         body_and_trailers,
+    //     //         |e| matches!(e, Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Trailer(_)) })),
+    //     //         32
+    //     //     );
+    //
+    //     // let body_stream = raw_body_stream.filter_map(|e| async {
+    //     //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+    //     //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+    //     //
+    //     //     match e {
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
+    //     //         Err(e) => Some(Err(format!("Failed to read body: {}", e))),
+    //     //         _ => None
+    //     //     }
+    //     // });
+    //     //
+    //     // let mut trailer_stream = raw_trailer_stream.filter_map(|e| async {
+    //     //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+    //     //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+    //     //
+    //     //     match e {
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailers)) }) => Some(Ok(trailers)),
+    //     //         Err(e) => Some(Err(format!("Failed to read trailers: {}", e))),
+    //     //         _ => None
+    //     //     }
+    //     // });
+    //
+    //     // let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
+    //     // let sender = trailers_sender.clone();
+    //     // let body_stream = body_and_trailers.filter_map(|e| async move {
+    //     //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+    //     //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+    //     //
+    //     //     match e {
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
+    //     //             sender.send(trailer).await.unwrap();
+    //     //             None
+    //     //         },
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
+    //     //         Err(_) => todo!("failed"),
+    //     //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
+    //     //     }
+    //     // });
+    //
+    //     // let raw_body = StreamBody::new(body_and_trailers);
+    //     // StreamBody::new()
+    //
+    //     let path = uuid::Uuid::new_v4().to_string();
+    //
+    //     self.services.blob_storage().put_stream_oneshot(
+    //         "http_input_bodies",
+    //         "put",
+    //         BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id },
+    //         &PathBuf::from(path),
+    //         Box::pin(body_stream)
+    //     ).await.unwrap();
+    //
+    //     let _trailers = if let Some(inner) = pin!(trailer_stream).next().await {
+    //         let trailers = inner.unwrap();
+    //         trailers.trailers.unwrap().fields.into_iter().map(|e| (e.name, e.value)).collect()
+    //     } else {
+    //         Vec::new()
+    //     };
+    //
+    //     // worker
+    //     //     .invoke_http_handler(idempotency_key, request)
+    //     //     .await?;
+    //
+    //     todo!("implement");
+    // }
 
     async fn revoke_shards_internal(
         &self,
@@ -1978,19 +1980,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: Request<Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>>,
     ) -> ResponseResult<Self::InvokeWorkerHttpHandlerStream> {
-
-
         let mut request = request.into_inner();
-
-        let chunks = request.collect::<Result<Vec<_>, _>>().await?;
 
         let mut headers = None;
         let mut chunks = Vec::new();
         let mut trailers = None;
-
-        let mut seen_header = false;
-        let mut seen_chunk = false;
-        let mut seen_trailer = false;
 
         while let Some(inner) = request.next().await {
             use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
@@ -2013,7 +2007,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     if chunks.is_empty() || trailers.is_some() {
                         todo!("error");
                     }
-                    trailers = Some(trailers);
+                    trailers = Some(trailer);
                 },
                 _ => todo!("error")
             }
@@ -2949,64 +2943,64 @@ impl Stream for WorkerEventStream {
     }
 }
 
-fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Result<hyper::Method, GolemError> {
-    let known_http_method = method.and_then(|m| m.value).unwrap();
+// fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Result<hyper::Method, GolemError> {
+//     let known_http_method = method.and_then(|m| m.value).unwrap();
+//
+//     let hyper_method = match known_http_method {
+//         golem::worker::http_method::Value::StandardMethod(inner) => {
+//             if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
+//                 match converted {
+//                     golem::worker::StandardHttpMethod::MethodGet => hyper::Method::GET,
+//                     golem::worker::StandardHttpMethod::MethodPost => hyper::Method::POST,
+//                     golem::worker::StandardHttpMethod::MethodPut => hyper::Method::PUT,
+//                     golem::worker::StandardHttpMethod::MethodDelete => hyper::Method::DELETE,
+//                     golem::worker::StandardHttpMethod::MethodPatch => hyper::Method::PATCH,
+//                     golem::worker::StandardHttpMethod::MethodHead => hyper::Method::HEAD,
+//                     golem::worker::StandardHttpMethod::MethodOptions => hyper::Method::OPTIONS,
+//                     golem::worker::StandardHttpMethod::MethodConnect => hyper::Method::CONNECT,
+//                     golem::worker::StandardHttpMethod::MethodTrace => hyper::Method::TRACE,
+//                 }
+//             } else {
+//                 todo!("failing")
+//             }
+//         },
+//         golem::worker::http_method::Value::CustomMethod(inner)  =>
+//             hyper::Method::from_bytes(inner.as_bytes()).unwrap(),
+//     };
+//
+//     Ok(hyper_method)
+// }
 
-    let hyper_method = match known_http_method {
-        golem::worker::http_method::Value::StandardMethod(inner) => {
-            if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
-                match converted {
-                    golem::worker::StandardHttpMethod::MethodGet => hyper::Method::GET,
-                    golem::worker::StandardHttpMethod::MethodPost => hyper::Method::POST,
-                    golem::worker::StandardHttpMethod::MethodPut => hyper::Method::PUT,
-                    golem::worker::StandardHttpMethod::MethodDelete => hyper::Method::DELETE,
-                    golem::worker::StandardHttpMethod::MethodPatch => hyper::Method::PATCH,
-                    golem::worker::StandardHttpMethod::MethodHead => hyper::Method::HEAD,
-                    golem::worker::StandardHttpMethod::MethodOptions => hyper::Method::OPTIONS,
-                    golem::worker::StandardHttpMethod::MethodConnect => hyper::Method::CONNECT,
-                    golem::worker::StandardHttpMethod::MethodTrace => hyper::Method::TRACE,
-                }
-            } else {
-                todo!("failing")
-            }
-        },
-        golem::worker::http_method::Value::CustomMethod(inner)  =>
-            hyper::Method::from_bytes(inner.as_bytes()).unwrap(),
-    };
-
-    Ok(hyper_method)
-}
-
-fn grpc_method_to_domain_method(method: &Option<golem::worker::HttpMethod>) -> Result<golem_common::model::http_invocation::HttpMethod, GolemError> {
-    use golem_common::model::http_invocation::HttpMethod as DomainMethod;
-    use golem::worker::StandardHttpMethod as GrpcMethod;
-
-    let known_http_method = method.and_then(|m| m.value).unwrap();
-
-    let domain_method = match known_http_method {
-        golem::worker::http_method::Value::StandardMethod(inner) => {
-            if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
-                match converted {
-                    GrpcMethod::MethodGet => DomainMethod::GET,
-                    GrpcMethod::MethodPost => DomainMethod::POST,
-                    GrpcMethod::MethodPut => DomainMethod::PUT,
-                    GrpcMethod::MethodDelete => DomainMethod::DELETE,
-                    GrpcMethod::MethodPatch => DomainMethod::PATCH,
-                    GrpcMethod::MethodHead => DomainMethod::HEAD,
-                    GrpcMethod::MethodOptions => DomainMethod::OPTIONS,
-                    GrpcMethod::MethodConnect => DomainMethod::CONNECT,
-                    GrpcMethod::MethodTrace => DomainMethod::TRACE,
-                }
-            } else {
-                todo!("failing")
-            }
-        },
-        golem::worker::http_method::Value::CustomMethod(inner)  =>
-            DomainMethod::Custom(inner),
-    };
-
-    Ok(domain_method)
-}
+// fn grpc_method_to_domain_method(method: &Option<golem::worker::HttpMethod>) -> Result<golem_common::model::http_invocation::HttpMethod, GolemError> {
+//     use golem_common::model::http_invocation::HttpMethod as DomainMethod;
+//     use golem::worker::StandardHttpMethod as GrpcMethod;
+//
+//     let known_http_method = method.and_then(|m| m.value).unwrap();
+//
+//     let domain_method = match known_http_method {
+//         golem::worker::http_method::Value::StandardMethod(inner) => {
+//             if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
+//                 match converted {
+//                     GrpcMethod::MethodGet => DomainMethod::GET,
+//                     GrpcMethod::MethodPost => DomainMethod::POST,
+//                     GrpcMethod::MethodPut => DomainMethod::PUT,
+//                     GrpcMethod::MethodDelete => DomainMethod::DELETE,
+//                     GrpcMethod::MethodPatch => DomainMethod::PATCH,
+//                     GrpcMethod::MethodHead => DomainMethod::HEAD,
+//                     GrpcMethod::MethodOptions => DomainMethod::OPTIONS,
+//                     GrpcMethod::MethodConnect => DomainMethod::CONNECT,
+//                     GrpcMethod::MethodTrace => DomainMethod::TRACE,
+//                 }
+//             } else {
+//                 todo!("failing")
+//             }
+//         },
+//         golem::worker::http_method::Value::CustomMethod(inner)  =>
+//             DomainMethod::Custom(inner),
+//     };
+//
+//     Ok(domain_method)
+// }
 
 // fn split_stream<S, F>(stream: S, predicate: F, buffer_size: usize) -> (impl Stream<Item = S::Item>, impl Stream<Item = S::Item>)
 //     where

@@ -42,7 +42,6 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-use crate::model::http_invocation::IncomingHttpHandlerInvocation;
 
 pub mod component;
 pub mod component_constraint;
@@ -54,7 +53,6 @@ pub mod plugin;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
-pub mod http_invocation;
 
 #[cfg(feature = "poem")]
 mod poem;
@@ -1095,10 +1093,6 @@ pub enum WorkerInvocation {
     },
     ManualUpdate {
         target_version: ComponentVersion,
-    },
-    IncomingHttpHandler {
-        idempotency_key: IdempotencyKey,
-        input: IncomingHttpHandlerInvocation
     }
 }
 
