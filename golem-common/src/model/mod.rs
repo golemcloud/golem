@@ -1097,6 +1097,7 @@ pub enum WorkerInvocation {
         target_version: ComponentVersion,
     },
     IncomingHttpHandler {
+        idempotency_key: IdempotencyKey,
         input: IncomingHttpHandlerInvocation
     }
 }

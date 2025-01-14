@@ -1784,6 +1784,187 @@ impl RunningWorker {
                                                 break;
                                             }
                                         }
+                                        WorkerInvocation::IncomingHttpHandler {
+                                            idempotency_key: invocation_key,
+                                            input
+                                        } => {
+                                            let span = span!(
+                                                Level::INFO,
+                                                "incoming_http_handler",
+                                                worker_id = owned_worker_id.worker_id.to_string(),
+                                                idempotency_key = invocation_key.to_string()
+                                            );
+                                            let do_break = async {
+                                                store
+                                                    .data_mut()
+                                                    .set_current_idempotency_key(invocation_key)
+                                                    .await;
+
+                                                if let Some(idempotency_key) =
+                                                    &store.data().get_current_idempotency_key().await
+                                                {
+                                                    store
+                                                        .data_mut()
+                                                        .get_public_state()
+                                                        .worker()
+                                                        .store_invocation_resuming(idempotency_key)
+                                                        .await;
+                                                }
+
+                                                // Make sure to update the pending invocation queue in the status record before
+                                                // the invocation writes the invocation start oplog entry
+                                                store.data_mut().update_pending_invocations().await;
+
+                                                // TODO: Invoke dedicated handler
+
+                                                let result = invoke_worker(
+                                                    full_function_name.clone(),
+                                                    function_input.clone(),
+                                                    store,
+                                                    &instance,
+                                                )
+                                                    .await;
+
+                                                match result {
+                                                    Ok(InvokeResult::Succeeded {
+                                                           output,
+                                                           consumed_fuel,
+                                                       }) => {
+                                                        let component_metadata =
+                                                            store.as_context().data().component_metadata();
+
+
+
+                                                        let function_results = exports::function_by_name(
+                                                            &component_metadata.exports,
+                                                            &full_function_name,
+                                                        );
+
+                                                        match function_results {
+                                                            Ok(Some(export_function)) => {
+                                                                let function_results = export_function
+                                                                    .results
+                                                                    .into_iter()
+                                                                    .collect();
+
+                                                                let result = interpret_function_results(
+                                                                    output,
+                                                                    function_results,
+                                                                )
+                                                                    .map_err(|e| GolemError::ValueMismatch {
+                                                                        details: e.join(", "),
+                                                                    });
+
+                                                                match result {
+                                                                    Ok(result) => {
+                                                                        store
+                                                                            .data_mut()
+                                                                            .on_invocation_success(
+                                                                                &full_function_name,
+                                                                                &function_input,
+                                                                                consumed_fuel,
+                                                                                result,
+                                                                            )
+                                                                            .await
+                                                                            .unwrap(); // TODO: handle this error
+
+                                                                        if store
+                                                                            .data_mut()
+                                                                            .component_metadata()
+                                                                            .component_type
+                                                                            == ComponentType::Ephemeral
+                                                                        {
+                                                                            final_decision =
+                                                                                RetryDecision::None;
+                                                                            true // stop after the invocation
+                                                                        } else {
+                                                                            false // continue processing the queue
+                                                                        }
+                                                                    }
+                                                                    Err(error) => {
+                                                                        let trap_type =
+                                                                            TrapType::from_error::<Ctx>(
+                                                                                &anyhow!(error),
+                                                                            );
+
+                                                                        store
+                                                                            .data_mut()
+                                                                            .on_invocation_failure(
+                                                                                &trap_type,
+                                                                            )
+                                                                            .await;
+
+                                                                        final_decision =
+                                                                            RetryDecision::None;
+                                                                        true // break
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            Ok(None) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(
+                                                                        &TrapType::Error(
+                                                                            WorkerError::InvalidRequest(
+                                                                                "Function not found"
+                                                                                    .to_string(),
+                                                                            ),
+                                                                        ),
+                                                                    )
+                                                                    .await;
+
+                                                                final_decision = RetryDecision::None;
+                                                                true // break
+                                                            }
+
+                                                            Err(result) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(
+                                                                        &TrapType::Error(
+                                                                            WorkerError::Unknown(result),
+                                                                        ),
+                                                                    )
+                                                                    .await;
+
+                                                                final_decision = RetryDecision::None;
+                                                                true // break
+                                                            }
+                                                        }
+                                                    }
+                                                    _ => {
+                                                        let trap_type = match result {
+                                                            Ok(invoke_result) => {
+                                                                invoke_result.as_trap_type::<Ctx>()
+                                                            }
+                                                            Err(error) => {
+                                                                Some(TrapType::from_error::<Ctx>(&anyhow!(
+                                                                    error
+                                                                )))
+                                                            }
+                                                        };
+                                                        let decision = match trap_type {
+                                                            Some(trap_type) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(&trap_type)
+                                                                    .await
+                                                            }
+                                                            None => RetryDecision::None,
+                                                        };
+
+                                                        final_decision = decision;
+                                                        true // break
+                                                    }
+                                                }
+                                            }
+                                                .instrument(span)
+                                                .await;
+                                            if do_break {
+                                                break;
+                                            }
+                                        }
                                         WorkerInvocation::ManualUpdate { target_version } => {
                                             let span = span!(
                                                 Level::INFO,
