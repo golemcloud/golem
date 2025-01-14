@@ -66,6 +66,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
+use crate::model::http::IncomingHttpHandlerInvocation;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -830,8 +831,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn enqueue_http_handler(
         &self,
         idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
+        input: IncomingHttpHandlerInvocation
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {

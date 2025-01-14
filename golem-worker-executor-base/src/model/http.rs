@@ -25,5 +25,5 @@ pub struct IncomingHttpHandlerInvocation {
     pub uri: String,
     pub method: HttpMethod,
     pub headers: HashMap<String, String>,
-    pub body_and_trailers: BodyAndTrailers
+    pub body_and_trailers: Option<BodyAndTrailers>
 }

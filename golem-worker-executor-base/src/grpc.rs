@@ -722,22 +722,45 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         //     Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
         // ).collect::<Vec<_>>();
 
-        let encoded_chunks = Bytes::from(chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).collect::<Vec<_>>());
-
-        let encoded_trailers = trailers.map(|t| {
-            let inner = t.trailers.unwrap().fields.iter().map(|h|
-                Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
-            ).collect::<Vec<_>>();
-            Box::new(Value::List(inner))
-        });
+        // let encoded_trailers = trailers.map(|t| {
+        //     let inner = t.trailers.unwrap().fields.iter().map(|h|
+        //         Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
+        //     ).collect::<Vec<_>>();
+        //     Box::new(Value::List(inner))
+        // });
 
         let domain = {
             use crate::model::http::*;
 
+            let mut domain_headers = HashMap::new();
+
+            for h in header.headers.unwrap().fields.iter() {
+                domain_headers.insert(h.name.clone(), h.value.clone());
+            }
+
+            let body_bytes = if !chunks.is_empty() {
+                Some(Bytes::from(chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).collect::<Vec<_>>()))
+            } else {
+                None
+            };
+
+            let trailers = if let Some(trailers) = trailers {
+                let mut res = HashMap::new();
+                for h in trailers.trailers.unwrap().fields.iter() {
+                    res.insert(h.name.clone(), h.value.clone());
+                }
+                Some(res)
+            } else {
+                None
+            };
+
+            let body_and_trailers = body_bytes.map(|body| BodyAndTrailers { body, trailers } );
+
             IncomingHttpHandlerInvocation {
                 uri: header.uri,
                 method: todo!(),
-
+                headers: domain_headers,
+                body_and_trailers
             }
         };
 

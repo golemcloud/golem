@@ -1094,6 +1094,9 @@ pub enum WorkerInvocation {
     ManualUpdate {
         target_version: ComponentVersion,
     },
+    IncomingHttpHandler {
+        input: IncomingHttpHandler
+    }
 }
 
 impl WorkerInvocation {
