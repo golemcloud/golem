@@ -49,7 +49,6 @@ fs-set-times = "0.20.2"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.5.0"
-golem-wit = { version = "=1.1.1" }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = "1.0.1"                                 # keep in sync with wasmtime
@@ -110,6 +109,7 @@ tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.19.1"
+golem-wit = { workspace = true }
 
 [[test]]
 name = "integration"

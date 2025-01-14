@@ -13,6 +13,153 @@ pub mod golem {
             use super::super::super::_rt;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             pub type NodeIndex = i32;
+            pub type ResourceId = u64;
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum ResourceMode {
+                Owned,
+                Borrowed,
+            }
+            impl ::core::fmt::Debug for ResourceMode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        ResourceMode::Owned => {
+                            f.debug_tuple("ResourceMode::Owned").finish()
+                        }
+                        ResourceMode::Borrowed => {
+                            f.debug_tuple("ResourceMode::Borrowed").finish()
+                        }
+                    }
+                }
+            }
+            impl ResourceMode {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> ResourceMode {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => ResourceMode::Owned,
+                        1 => ResourceMode::Borrowed,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            #[derive(Clone)]
+            pub enum WitTypeNode {
+                RecordType(_rt::Vec<(_rt::String, NodeIndex)>),
+                VariantType(_rt::Vec<(_rt::String, Option<NodeIndex>)>),
+                EnumType(_rt::Vec<_rt::String>),
+                FlagsType(_rt::Vec<_rt::String>),
+                TupleType(_rt::Vec<NodeIndex>),
+                ListType(NodeIndex),
+                OptionType(NodeIndex),
+                ResultType((Option<NodeIndex>, Option<NodeIndex>)),
+                PrimU8Type,
+                PrimU16Type,
+                PrimU32Type,
+                PrimU64Type,
+                PrimS8Type,
+                PrimS16Type,
+                PrimS32Type,
+                PrimS64Type,
+                PrimF32Type,
+                PrimF64Type,
+                PrimCharType,
+                PrimBoolType,
+                PrimStringType,
+                HandleType((ResourceId, ResourceMode)),
+            }
+            impl ::core::fmt::Debug for WitTypeNode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        WitTypeNode::RecordType(e) => {
+                            f.debug_tuple("WitTypeNode::RecordType").field(e).finish()
+                        }
+                        WitTypeNode::VariantType(e) => {
+                            f.debug_tuple("WitTypeNode::VariantType").field(e).finish()
+                        }
+                        WitTypeNode::EnumType(e) => {
+                            f.debug_tuple("WitTypeNode::EnumType").field(e).finish()
+                        }
+                        WitTypeNode::FlagsType(e) => {
+                            f.debug_tuple("WitTypeNode::FlagsType").field(e).finish()
+                        }
+                        WitTypeNode::TupleType(e) => {
+                            f.debug_tuple("WitTypeNode::TupleType").field(e).finish()
+                        }
+                        WitTypeNode::ListType(e) => {
+                            f.debug_tuple("WitTypeNode::ListType").field(e).finish()
+                        }
+                        WitTypeNode::OptionType(e) => {
+                            f.debug_tuple("WitTypeNode::OptionType").field(e).finish()
+                        }
+                        WitTypeNode::ResultType(e) => {
+                            f.debug_tuple("WitTypeNode::ResultType").field(e).finish()
+                        }
+                        WitTypeNode::PrimU8Type => {
+                            f.debug_tuple("WitTypeNode::PrimU8Type").finish()
+                        }
+                        WitTypeNode::PrimU16Type => {
+                            f.debug_tuple("WitTypeNode::PrimU16Type").finish()
+                        }
+                        WitTypeNode::PrimU32Type => {
+                            f.debug_tuple("WitTypeNode::PrimU32Type").finish()
+                        }
+                        WitTypeNode::PrimU64Type => {
+                            f.debug_tuple("WitTypeNode::PrimU64Type").finish()
+                        }
+                        WitTypeNode::PrimS8Type => {
+                            f.debug_tuple("WitTypeNode::PrimS8Type").finish()
+                        }
+                        WitTypeNode::PrimS16Type => {
+                            f.debug_tuple("WitTypeNode::PrimS16Type").finish()
+                        }
+                        WitTypeNode::PrimS32Type => {
+                            f.debug_tuple("WitTypeNode::PrimS32Type").finish()
+                        }
+                        WitTypeNode::PrimS64Type => {
+                            f.debug_tuple("WitTypeNode::PrimS64Type").finish()
+                        }
+                        WitTypeNode::PrimF32Type => {
+                            f.debug_tuple("WitTypeNode::PrimF32Type").finish()
+                        }
+                        WitTypeNode::PrimF64Type => {
+                            f.debug_tuple("WitTypeNode::PrimF64Type").finish()
+                        }
+                        WitTypeNode::PrimCharType => {
+                            f.debug_tuple("WitTypeNode::PrimCharType").finish()
+                        }
+                        WitTypeNode::PrimBoolType => {
+                            f.debug_tuple("WitTypeNode::PrimBoolType").finish()
+                        }
+                        WitTypeNode::PrimStringType => {
+                            f.debug_tuple("WitTypeNode::PrimStringType").finish()
+                        }
+                        WitTypeNode::HandleType(e) => {
+                            f.debug_tuple("WitTypeNode::HandleType").field(e).finish()
+                        }
+                    }
+                }
+            }
+            #[derive(Clone)]
+            pub struct WitType {
+                pub nodes: _rt::Vec<WitTypeNode>,
+            }
+            impl ::core::fmt::Debug for WitType {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WitType").field("nodes", &self.nodes).finish()
+                }
+            }
             #[derive(Clone)]
             pub struct Uri {
                 pub value: _rt::String,
@@ -138,6 +285,22 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
+            pub struct ValueAndType {
+                pub value: WitValue,
+                pub typ: WitType,
+            }
+            impl ::core::fmt::Debug for ValueAndType {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ValueAndType")
+                        .field("value", &self.value)
+                        .field("typ", &self.typ)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
             pub enum RpcError {
                 ProtocolError(_rt::String),
                 Denied(_rt::String),
@@ -204,7 +367,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
                             fn drop(_: u32);
@@ -241,7 +404,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
@@ -259,7 +422,7 @@ pub mod golem {
                         let ptr1 = vec1.as_ptr().cast::<u8>();
                         let len1 = vec1.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[constructor]wasm-rpc"]
                             fn wit_import(_: *mut u8, _: usize) -> i32;
@@ -521,7 +684,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke-and-await"]
                             fn wit_import(
@@ -1157,7 +1320,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke"]
                             fn wit_import(
@@ -1515,7 +1678,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
                             fn wit_import(
@@ -1560,7 +1723,7 @@ pub mod golem {
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.subscribe"]
                             fn wit_import(_: i32) -> i32;
@@ -1587,7 +1750,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -1954,6 +2117,1479 @@ pub mod golem {
                             _ => _rt::invalid_enum_discriminant(),
                         }
                     }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn extract_value(vnt: &ValueAndType) -> WitValue {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ValueAndType { value: value0, typ: typ0 } = vnt;
+                    let WitValue { nodes: nodes1 } = value0;
+                    let vec11 = nodes1;
+                    let len11 = vec11.len();
+                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec11.len() * 24,
+                        8,
+                    );
+                    let result11 = if layout11.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout11);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec11.into_iter().enumerate() {
+                        let base = result11.add(i * 24);
+                        {
+                            match e {
+                                WitNode::RecordValue(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec2 = e;
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    *base.add(12).cast::<usize>() = len2;
+                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                                WitNode::VariantValue(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let (t3_0, t3_1) = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
+                                    match t3_1 {
+                                        Some(e) => {
+                                            *base.add(12).cast::<u8>() = (1i32) as u8;
+                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(12).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::EnumValue(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::FlagsValue(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec4 = e;
+                                    let len4 = vec4.len();
+                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec4.len() * 1,
+                                        1,
+                                    );
+                                    let result4 = if layout4.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout4);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec4.into_iter().enumerate() {
+                                        let base = result4.add(i * 1);
+                                        {
+                                            *base.add(0).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            }) as u8;
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len4;
+                                    *base.add(8).cast::<*mut u8>() = result4;
+                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
+                                }
+                                WitNode::TupleValue(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec5 = e;
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    *base.add(12).cast::<usize>() = len5;
+                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
+                                }
+                                WitNode::ListValue(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let vec6 = e;
+                                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                                    let len6 = vec6.len();
+                                    *base.add(12).cast::<usize>() = len6;
+                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                }
+                                WitNode::OptionValue(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::ResultValue(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        Err(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    };
+                                }
+                                WitNode::PrimU8(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimU16(e) => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimU32(e) => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimU64(e) => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimS8(e) => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimS16(e) => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimS32(e) => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimS64(e) => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimFloat32(e) => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                }
+                                WitNode::PrimFloat64(e) => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                }
+                                WitNode::PrimChar(e) => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimBool(e) => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                    *base.add(8).cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                WitNode::PrimString(e) => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                    let vec7 = e;
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    *base.add(12).cast::<usize>() = len7;
+                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                                WitNode::Handle(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t8_0, t8_1) = e;
+                                    let Uri { value: value9 } = t8_0;
+                                    let vec10 = value9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base.add(12).cast::<usize>() = len10;
+                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(t8_1);
+                                }
+                            }
+                        }
+                    }
+                    let WitType { nodes: nodes12 } = typ0;
+                    let vec26 = nodes12;
+                    let len26 = vec26.len();
+                    let layout26 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec26.len() * 24,
+                        8,
+                    );
+                    let result26 = if layout26.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout26).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout26);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec26.into_iter().enumerate() {
+                        let base = result26.add(i * 24);
+                        {
+                            match e {
+                                WitTypeNode::RecordType(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec15 = e;
+                                    let len15 = vec15.len();
+                                    let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec15.len() * 12,
+                                        4,
+                                    );
+                                    let result15 = if layout15.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout15);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec15.into_iter().enumerate() {
+                                        let base = result15.add(i * 12);
+                                        {
+                                            let (t13_0, t13_1) = e;
+                                            let vec14 = t13_0;
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            *base.add(4).cast::<usize>() = len14;
+                                            *base.add(0).cast::<*mut u8>() = ptr14.cast_mut();
+                                            *base.add(8).cast::<i32>() = _rt::as_i32(t13_1);
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len15;
+                                    *base.add(8).cast::<*mut u8>() = result15;
+                                    cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                }
+                                WitTypeNode::VariantType(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let vec18 = e;
+                                    let len18 = vec18.len();
+                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec18.len() * 16,
+                                        4,
+                                    );
+                                    let result18 = if layout18.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout18);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec18.into_iter().enumerate() {
+                                        let base = result18.add(i * 16);
+                                        {
+                                            let (t16_0, t16_1) = e;
+                                            let vec17 = t16_0;
+                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                            let len17 = vec17.len();
+                                            *base.add(4).cast::<usize>() = len17;
+                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
+                                            match t16_1 {
+                                                Some(e) => {
+                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len18;
+                                    *base.add(8).cast::<*mut u8>() = result18;
+                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
+                                }
+                                WitTypeNode::EnumType(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let vec20 = e;
+                                    let len20 = vec20.len();
+                                    let layout20 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec20.len() * 8,
+                                        4,
+                                    );
+                                    let result20 = if layout20.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout20).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout20);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec20.into_iter().enumerate() {
+                                        let base = result20.add(i * 8);
+                                        {
+                                            let vec19 = e;
+                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                            let len19 = vec19.len();
+                                            *base.add(4).cast::<usize>() = len19;
+                                            *base.add(0).cast::<*mut u8>() = ptr19.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len20;
+                                    *base.add(8).cast::<*mut u8>() = result20;
+                                    cleanup_list.extend_from_slice(&[(result20, layout20)]);
+                                }
+                                WitTypeNode::FlagsType(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec22 = e;
+                                    let len22 = vec22.len();
+                                    let layout22 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec22.len() * 8,
+                                        4,
+                                    );
+                                    let result22 = if layout22.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout22).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout22);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec22.into_iter().enumerate() {
+                                        let base = result22.add(i * 8);
+                                        {
+                                            let vec21 = e;
+                                            let ptr21 = vec21.as_ptr().cast::<u8>();
+                                            let len21 = vec21.len();
+                                            *base.add(4).cast::<usize>() = len21;
+                                            *base.add(0).cast::<*mut u8>() = ptr21.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len22;
+                                    *base.add(8).cast::<*mut u8>() = result22;
+                                    cleanup_list.extend_from_slice(&[(result22, layout22)]);
+                                }
+                                WitTypeNode::TupleType(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec23 = e;
+                                    let ptr23 = vec23.as_ptr().cast::<u8>();
+                                    let len23 = vec23.len();
+                                    *base.add(12).cast::<usize>() = len23;
+                                    *base.add(8).cast::<*mut u8>() = ptr23.cast_mut();
+                                }
+                                WitTypeNode::ListType(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::OptionType(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::ResultType(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    let (t24_0, t24_1) = e;
+                                    match t24_0 {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match t24_1 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitTypeNode::PrimU8Type => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                }
+                                WitTypeNode::PrimU16Type => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                }
+                                WitTypeNode::PrimU32Type => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                }
+                                WitTypeNode::PrimU64Type => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                }
+                                WitTypeNode::PrimS8Type => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                }
+                                WitTypeNode::PrimS16Type => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                }
+                                WitTypeNode::PrimS32Type => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                }
+                                WitTypeNode::PrimS64Type => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                }
+                                WitTypeNode::PrimF32Type => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                }
+                                WitTypeNode::PrimF64Type => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                }
+                                WitTypeNode::PrimCharType => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                }
+                                WitTypeNode::PrimBoolType => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                }
+                                WitTypeNode::PrimStringType => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                }
+                                WitTypeNode::HandleType(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t25_0, t25_1) = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(t25_0);
+                                    *base.add(16).cast::<u8>() = (t25_1.clone() as i32) as u8;
+                                }
+                            }
+                        }
+                    }
+                    let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                    extern "C" {
+                        #[link_name = "extract-value"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(result11, len11, result26, len26, ptr27);
+                    let l28 = *ptr27.add(0).cast::<*mut u8>();
+                    let l29 = *ptr27.add(4).cast::<usize>();
+                    let base75 = l28;
+                    let len75 = l29;
+                    let mut result75 = _rt::Vec::with_capacity(len75);
+                    for i in 0..len75 {
+                        let base = base75.add(i * 24);
+                        let e75 = {
+                            let l30 = i32::from(*base.add(0).cast::<u8>());
+                            let v74 = match l30 {
+                                0 => {
+                                    let e74 = {
+                                        let l31 = *base.add(8).cast::<*mut u8>();
+                                        let l32 = *base.add(12).cast::<usize>();
+                                        let len33 = l32;
+                                        _rt::Vec::from_raw_parts(l31.cast(), len33, len33)
+                                    };
+                                    WitNode::RecordValue(e74)
+                                }
+                                1 => {
+                                    let e74 = {
+                                        let l34 = *base.add(8).cast::<i32>();
+                                        let l35 = i32::from(*base.add(12).cast::<u8>());
+                                        (
+                                            l34 as u32,
+                                            match l35 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l36 = *base.add(16).cast::<i32>();
+                                                        l36
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    WitNode::VariantValue(e74)
+                                }
+                                2 => {
+                                    let e74 = {
+                                        let l37 = *base.add(8).cast::<i32>();
+                                        l37 as u32
+                                    };
+                                    WitNode::EnumValue(e74)
+                                }
+                                3 => {
+                                    let e74 = {
+                                        let l38 = *base.add(8).cast::<*mut u8>();
+                                        let l39 = *base.add(12).cast::<usize>();
+                                        let base41 = l38;
+                                        let len41 = l39;
+                                        let mut result41 = _rt::Vec::with_capacity(len41);
+                                        for i in 0..len41 {
+                                            let base = base41.add(i * 1);
+                                            let e41 = {
+                                                let l40 = i32::from(*base.add(0).cast::<u8>());
+                                                _rt::bool_lift(l40 as u8)
+                                            };
+                                            result41.push(e41);
+                                        }
+                                        _rt::cabi_dealloc(base41, len41 * 1, 1);
+                                        result41
+                                    };
+                                    WitNode::FlagsValue(e74)
+                                }
+                                4 => {
+                                    let e74 = {
+                                        let l42 = *base.add(8).cast::<*mut u8>();
+                                        let l43 = *base.add(12).cast::<usize>();
+                                        let len44 = l43;
+                                        _rt::Vec::from_raw_parts(l42.cast(), len44, len44)
+                                    };
+                                    WitNode::TupleValue(e74)
+                                }
+                                5 => {
+                                    let e74 = {
+                                        let l45 = *base.add(8).cast::<*mut u8>();
+                                        let l46 = *base.add(12).cast::<usize>();
+                                        let len47 = l46;
+                                        _rt::Vec::from_raw_parts(l45.cast(), len47, len47)
+                                    };
+                                    WitNode::ListValue(e74)
+                                }
+                                6 => {
+                                    let e74 = {
+                                        let l48 = i32::from(*base.add(8).cast::<u8>());
+                                        match l48 {
+                                            0 => None,
+                                            1 => {
+                                                let e = {
+                                                    let l49 = *base.add(12).cast::<i32>();
+                                                    l49
+                                                };
+                                                Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    WitNode::OptionValue(e74)
+                                }
+                                7 => {
+                                    let e74 = {
+                                        let l50 = i32::from(*base.add(8).cast::<u8>());
+                                        match l50 {
+                                            0 => {
+                                                let e = {
+                                                    let l51 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l51 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l52 = *base.add(16).cast::<i32>();
+                                                                l52
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Ok(e)
+                                            }
+                                            1 => {
+                                                let e = {
+                                                    let l53 = i32::from(*base.add(12).cast::<u8>());
+                                                    match l53 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l54 = *base.add(16).cast::<i32>();
+                                                                l54
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    }
+                                                };
+                                                Err(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    WitNode::ResultValue(e74)
+                                }
+                                8 => {
+                                    let e74 = {
+                                        let l55 = i32::from(*base.add(8).cast::<u8>());
+                                        l55 as u8
+                                    };
+                                    WitNode::PrimU8(e74)
+                                }
+                                9 => {
+                                    let e74 = {
+                                        let l56 = i32::from(*base.add(8).cast::<u16>());
+                                        l56 as u16
+                                    };
+                                    WitNode::PrimU16(e74)
+                                }
+                                10 => {
+                                    let e74 = {
+                                        let l57 = *base.add(8).cast::<i32>();
+                                        l57 as u32
+                                    };
+                                    WitNode::PrimU32(e74)
+                                }
+                                11 => {
+                                    let e74 = {
+                                        let l58 = *base.add(8).cast::<i64>();
+                                        l58 as u64
+                                    };
+                                    WitNode::PrimU64(e74)
+                                }
+                                12 => {
+                                    let e74 = {
+                                        let l59 = i32::from(*base.add(8).cast::<i8>());
+                                        l59 as i8
+                                    };
+                                    WitNode::PrimS8(e74)
+                                }
+                                13 => {
+                                    let e74 = {
+                                        let l60 = i32::from(*base.add(8).cast::<i16>());
+                                        l60 as i16
+                                    };
+                                    WitNode::PrimS16(e74)
+                                }
+                                14 => {
+                                    let e74 = {
+                                        let l61 = *base.add(8).cast::<i32>();
+                                        l61
+                                    };
+                                    WitNode::PrimS32(e74)
+                                }
+                                15 => {
+                                    let e74 = {
+                                        let l62 = *base.add(8).cast::<i64>();
+                                        l62
+                                    };
+                                    WitNode::PrimS64(e74)
+                                }
+                                16 => {
+                                    let e74 = {
+                                        let l63 = *base.add(8).cast::<f32>();
+                                        l63
+                                    };
+                                    WitNode::PrimFloat32(e74)
+                                }
+                                17 => {
+                                    let e74 = {
+                                        let l64 = *base.add(8).cast::<f64>();
+                                        l64
+                                    };
+                                    WitNode::PrimFloat64(e74)
+                                }
+                                18 => {
+                                    let e74 = {
+                                        let l65 = *base.add(8).cast::<i32>();
+                                        _rt::char_lift(l65 as u32)
+                                    };
+                                    WitNode::PrimChar(e74)
+                                }
+                                19 => {
+                                    let e74 = {
+                                        let l66 = i32::from(*base.add(8).cast::<u8>());
+                                        _rt::bool_lift(l66 as u8)
+                                    };
+                                    WitNode::PrimBool(e74)
+                                }
+                                20 => {
+                                    let e74 = {
+                                        let l67 = *base.add(8).cast::<*mut u8>();
+                                        let l68 = *base.add(12).cast::<usize>();
+                                        let len69 = l68;
+                                        let bytes69 = _rt::Vec::from_raw_parts(
+                                            l67.cast(),
+                                            len69,
+                                            len69,
+                                        );
+                                        _rt::string_lift(bytes69)
+                                    };
+                                    WitNode::PrimString(e74)
+                                }
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e74 = {
+                                        let l70 = *base.add(8).cast::<*mut u8>();
+                                        let l71 = *base.add(12).cast::<usize>();
+                                        let len72 = l71;
+                                        let bytes72 = _rt::Vec::from_raw_parts(
+                                            l70.cast(),
+                                            len72,
+                                            len72,
+                                        );
+                                        let l73 = *base.add(16).cast::<i64>();
+                                        (
+                                            Uri {
+                                                value: _rt::string_lift(bytes72),
+                                            },
+                                            l73 as u64,
+                                        )
+                                    };
+                                    WitNode::Handle(e74)
+                                }
+                            };
+                            v74
+                        };
+                        result75.push(e75);
+                    }
+                    _rt::cabi_dealloc(base75, len75 * 24, 8);
+                    if layout11.size() != 0 {
+                        _rt::alloc::dealloc(result11.cast(), layout11);
+                    }
+                    if layout26.size() != 0 {
+                        _rt::alloc::dealloc(result26.cast(), layout26);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    WitValue { nodes: result75 }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn extract_type(vnt: &ValueAndType) -> WitType {
+                unsafe {
+                    let mut cleanup_list = _rt::Vec::new();
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ValueAndType { value: value0, typ: typ0 } = vnt;
+                    let WitValue { nodes: nodes1 } = value0;
+                    let vec11 = nodes1;
+                    let len11 = vec11.len();
+                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec11.len() * 24,
+                        8,
+                    );
+                    let result11 = if layout11.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout11);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec11.into_iter().enumerate() {
+                        let base = result11.add(i * 24);
+                        {
+                            match e {
+                                WitNode::RecordValue(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec2 = e;
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    *base.add(12).cast::<usize>() = len2;
+                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                                WitNode::VariantValue(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let (t3_0, t3_1) = e;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
+                                    match t3_1 {
+                                        Some(e) => {
+                                            *base.add(12).cast::<u8>() = (1i32) as u8;
+                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(12).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::EnumValue(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::FlagsValue(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec4 = e;
+                                    let len4 = vec4.len();
+                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec4.len() * 1,
+                                        1,
+                                    );
+                                    let result4 = if layout4.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout4);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec4.into_iter().enumerate() {
+                                        let base = result4.add(i * 1);
+                                        {
+                                            *base.add(0).cast::<u8>() = (match e {
+                                                true => 1,
+                                                false => 0,
+                                            }) as u8;
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len4;
+                                    *base.add(8).cast::<*mut u8>() = result4;
+                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
+                                }
+                                WitNode::TupleValue(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec5 = e;
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    *base.add(12).cast::<usize>() = len5;
+                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
+                                }
+                                WitNode::ListValue(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    let vec6 = e;
+                                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                                    let len6 = vec6.len();
+                                    *base.add(12).cast::<usize>() = len6;
+                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                }
+                                WitNode::OptionValue(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitNode::ResultValue(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        Err(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    };
+                                }
+                                WitNode::PrimU8(e) => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimU16(e) => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimU32(e) => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimU64(e) => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimS8(e) => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                }
+                                WitNode::PrimS16(e) => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                }
+                                WitNode::PrimS32(e) => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimS64(e) => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                }
+                                WitNode::PrimFloat32(e) => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                }
+                                WitNode::PrimFloat64(e) => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                }
+                                WitNode::PrimChar(e) => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitNode::PrimBool(e) => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                    *base.add(8).cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                WitNode::PrimString(e) => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                    let vec7 = e;
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    *base.add(12).cast::<usize>() = len7;
+                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                                WitNode::Handle(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t8_0, t8_1) = e;
+                                    let Uri { value: value9 } = t8_0;
+                                    let vec10 = value9;
+                                    let ptr10 = vec10.as_ptr().cast::<u8>();
+                                    let len10 = vec10.len();
+                                    *base.add(12).cast::<usize>() = len10;
+                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                    *base.add(16).cast::<i64>() = _rt::as_i64(t8_1);
+                                }
+                            }
+                        }
+                    }
+                    let WitType { nodes: nodes12 } = typ0;
+                    let vec26 = nodes12;
+                    let len26 = vec26.len();
+                    let layout26 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec26.len() * 24,
+                        8,
+                    );
+                    let result26 = if layout26.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout26).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout26);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec26.into_iter().enumerate() {
+                        let base = result26.add(i * 24);
+                        {
+                            match e {
+                                WitTypeNode::RecordType(e) => {
+                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                    let vec15 = e;
+                                    let len15 = vec15.len();
+                                    let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec15.len() * 12,
+                                        4,
+                                    );
+                                    let result15 = if layout15.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout15);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec15.into_iter().enumerate() {
+                                        let base = result15.add(i * 12);
+                                        {
+                                            let (t13_0, t13_1) = e;
+                                            let vec14 = t13_0;
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            *base.add(4).cast::<usize>() = len14;
+                                            *base.add(0).cast::<*mut u8>() = ptr14.cast_mut();
+                                            *base.add(8).cast::<i32>() = _rt::as_i32(t13_1);
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len15;
+                                    *base.add(8).cast::<*mut u8>() = result15;
+                                    cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                }
+                                WitTypeNode::VariantType(e) => {
+                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                    let vec18 = e;
+                                    let len18 = vec18.len();
+                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec18.len() * 16,
+                                        4,
+                                    );
+                                    let result18 = if layout18.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout18);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec18.into_iter().enumerate() {
+                                        let base = result18.add(i * 16);
+                                        {
+                                            let (t16_0, t16_1) = e;
+                                            let vec17 = t16_0;
+                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                            let len17 = vec17.len();
+                                            *base.add(4).cast::<usize>() = len17;
+                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
+                                            match t16_1 {
+                                                Some(e) => {
+                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                    *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len18;
+                                    *base.add(8).cast::<*mut u8>() = result18;
+                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
+                                }
+                                WitTypeNode::EnumType(e) => {
+                                    *base.add(0).cast::<u8>() = (2i32) as u8;
+                                    let vec20 = e;
+                                    let len20 = vec20.len();
+                                    let layout20 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec20.len() * 8,
+                                        4,
+                                    );
+                                    let result20 = if layout20.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout20).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout20);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec20.into_iter().enumerate() {
+                                        let base = result20.add(i * 8);
+                                        {
+                                            let vec19 = e;
+                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                            let len19 = vec19.len();
+                                            *base.add(4).cast::<usize>() = len19;
+                                            *base.add(0).cast::<*mut u8>() = ptr19.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len20;
+                                    *base.add(8).cast::<*mut u8>() = result20;
+                                    cleanup_list.extend_from_slice(&[(result20, layout20)]);
+                                }
+                                WitTypeNode::FlagsType(e) => {
+                                    *base.add(0).cast::<u8>() = (3i32) as u8;
+                                    let vec22 = e;
+                                    let len22 = vec22.len();
+                                    let layout22 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec22.len() * 8,
+                                        4,
+                                    );
+                                    let result22 = if layout22.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout22).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout22);
+                                        }
+                                        ptr
+                                    } else {
+                                        ::core::ptr::null_mut()
+                                    };
+                                    for (i, e) in vec22.into_iter().enumerate() {
+                                        let base = result22.add(i * 8);
+                                        {
+                                            let vec21 = e;
+                                            let ptr21 = vec21.as_ptr().cast::<u8>();
+                                            let len21 = vec21.len();
+                                            *base.add(4).cast::<usize>() = len21;
+                                            *base.add(0).cast::<*mut u8>() = ptr21.cast_mut();
+                                        }
+                                    }
+                                    *base.add(12).cast::<usize>() = len22;
+                                    *base.add(8).cast::<*mut u8>() = result22;
+                                    cleanup_list.extend_from_slice(&[(result22, layout22)]);
+                                }
+                                WitTypeNode::TupleType(e) => {
+                                    *base.add(0).cast::<u8>() = (4i32) as u8;
+                                    let vec23 = e;
+                                    let ptr23 = vec23.as_ptr().cast::<u8>();
+                                    let len23 = vec23.len();
+                                    *base.add(12).cast::<usize>() = len23;
+                                    *base.add(8).cast::<*mut u8>() = ptr23.cast_mut();
+                                }
+                                WitTypeNode::ListType(e) => {
+                                    *base.add(0).cast::<u8>() = (5i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::OptionType(e) => {
+                                    *base.add(0).cast::<u8>() = (6i32) as u8;
+                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                }
+                                WitTypeNode::ResultType(e) => {
+                                    *base.add(0).cast::<u8>() = (7i32) as u8;
+                                    let (t24_0, t24_1) = e;
+                                    match t24_0 {
+                                        Some(e) => {
+                                            *base.add(8).cast::<u8>() = (1i32) as u8;
+                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match t24_1 {
+                                        Some(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            *base.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                WitTypeNode::PrimU8Type => {
+                                    *base.add(0).cast::<u8>() = (8i32) as u8;
+                                }
+                                WitTypeNode::PrimU16Type => {
+                                    *base.add(0).cast::<u8>() = (9i32) as u8;
+                                }
+                                WitTypeNode::PrimU32Type => {
+                                    *base.add(0).cast::<u8>() = (10i32) as u8;
+                                }
+                                WitTypeNode::PrimU64Type => {
+                                    *base.add(0).cast::<u8>() = (11i32) as u8;
+                                }
+                                WitTypeNode::PrimS8Type => {
+                                    *base.add(0).cast::<u8>() = (12i32) as u8;
+                                }
+                                WitTypeNode::PrimS16Type => {
+                                    *base.add(0).cast::<u8>() = (13i32) as u8;
+                                }
+                                WitTypeNode::PrimS32Type => {
+                                    *base.add(0).cast::<u8>() = (14i32) as u8;
+                                }
+                                WitTypeNode::PrimS64Type => {
+                                    *base.add(0).cast::<u8>() = (15i32) as u8;
+                                }
+                                WitTypeNode::PrimF32Type => {
+                                    *base.add(0).cast::<u8>() = (16i32) as u8;
+                                }
+                                WitTypeNode::PrimF64Type => {
+                                    *base.add(0).cast::<u8>() = (17i32) as u8;
+                                }
+                                WitTypeNode::PrimCharType => {
+                                    *base.add(0).cast::<u8>() = (18i32) as u8;
+                                }
+                                WitTypeNode::PrimBoolType => {
+                                    *base.add(0).cast::<u8>() = (19i32) as u8;
+                                }
+                                WitTypeNode::PrimStringType => {
+                                    *base.add(0).cast::<u8>() = (20i32) as u8;
+                                }
+                                WitTypeNode::HandleType(e) => {
+                                    *base.add(0).cast::<u8>() = (21i32) as u8;
+                                    let (t25_0, t25_1) = e;
+                                    *base.add(8).cast::<i64>() = _rt::as_i64(t25_0);
+                                    *base.add(16).cast::<u8>() = (t25_1.clone() as i32) as u8;
+                                }
+                            }
+                        }
+                    }
+                    let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                    extern "C" {
+                        #[link_name = "extract-type"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(result11, len11, result26, len26, ptr27);
+                    let l28 = *ptr27.add(0).cast::<*mut u8>();
+                    let l29 = *ptr27.add(4).cast::<usize>();
+                    let base70 = l28;
+                    let len70 = l29;
+                    let mut result70 = _rt::Vec::with_capacity(len70);
+                    for i in 0..len70 {
+                        let base = base70.add(i * 24);
+                        let e70 = {
+                            let l30 = i32::from(*base.add(0).cast::<u8>());
+                            let v69 = match l30 {
+                                0 => {
+                                    let e69 = {
+                                        let l31 = *base.add(8).cast::<*mut u8>();
+                                        let l32 = *base.add(12).cast::<usize>();
+                                        let base37 = l31;
+                                        let len37 = l32;
+                                        let mut result37 = _rt::Vec::with_capacity(len37);
+                                        for i in 0..len37 {
+                                            let base = base37.add(i * 12);
+                                            let e37 = {
+                                                let l33 = *base.add(0).cast::<*mut u8>();
+                                                let l34 = *base.add(4).cast::<usize>();
+                                                let len35 = l34;
+                                                let bytes35 = _rt::Vec::from_raw_parts(
+                                                    l33.cast(),
+                                                    len35,
+                                                    len35,
+                                                );
+                                                let l36 = *base.add(8).cast::<i32>();
+                                                (_rt::string_lift(bytes35), l36)
+                                            };
+                                            result37.push(e37);
+                                        }
+                                        _rt::cabi_dealloc(base37, len37 * 12, 4);
+                                        result37
+                                    };
+                                    WitTypeNode::RecordType(e69)
+                                }
+                                1 => {
+                                    let e69 = {
+                                        let l38 = *base.add(8).cast::<*mut u8>();
+                                        let l39 = *base.add(12).cast::<usize>();
+                                        let base45 = l38;
+                                        let len45 = l39;
+                                        let mut result45 = _rt::Vec::with_capacity(len45);
+                                        for i in 0..len45 {
+                                            let base = base45.add(i * 16);
+                                            let e45 = {
+                                                let l40 = *base.add(0).cast::<*mut u8>();
+                                                let l41 = *base.add(4).cast::<usize>();
+                                                let len42 = l41;
+                                                let bytes42 = _rt::Vec::from_raw_parts(
+                                                    l40.cast(),
+                                                    len42,
+                                                    len42,
+                                                );
+                                                let l43 = i32::from(*base.add(8).cast::<u8>());
+                                                (
+                                                    _rt::string_lift(bytes42),
+                                                    match l43 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l44 = *base.add(12).cast::<i32>();
+                                                                l44
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                )
+                                            };
+                                            result45.push(e45);
+                                        }
+                                        _rt::cabi_dealloc(base45, len45 * 16, 4);
+                                        result45
+                                    };
+                                    WitTypeNode::VariantType(e69)
+                                }
+                                2 => {
+                                    let e69 = {
+                                        let l46 = *base.add(8).cast::<*mut u8>();
+                                        let l47 = *base.add(12).cast::<usize>();
+                                        let base51 = l46;
+                                        let len51 = l47;
+                                        let mut result51 = _rt::Vec::with_capacity(len51);
+                                        for i in 0..len51 {
+                                            let base = base51.add(i * 8);
+                                            let e51 = {
+                                                let l48 = *base.add(0).cast::<*mut u8>();
+                                                let l49 = *base.add(4).cast::<usize>();
+                                                let len50 = l49;
+                                                let bytes50 = _rt::Vec::from_raw_parts(
+                                                    l48.cast(),
+                                                    len50,
+                                                    len50,
+                                                );
+                                                _rt::string_lift(bytes50)
+                                            };
+                                            result51.push(e51);
+                                        }
+                                        _rt::cabi_dealloc(base51, len51 * 8, 4);
+                                        result51
+                                    };
+                                    WitTypeNode::EnumType(e69)
+                                }
+                                3 => {
+                                    let e69 = {
+                                        let l52 = *base.add(8).cast::<*mut u8>();
+                                        let l53 = *base.add(12).cast::<usize>();
+                                        let base57 = l52;
+                                        let len57 = l53;
+                                        let mut result57 = _rt::Vec::with_capacity(len57);
+                                        for i in 0..len57 {
+                                            let base = base57.add(i * 8);
+                                            let e57 = {
+                                                let l54 = *base.add(0).cast::<*mut u8>();
+                                                let l55 = *base.add(4).cast::<usize>();
+                                                let len56 = l55;
+                                                let bytes56 = _rt::Vec::from_raw_parts(
+                                                    l54.cast(),
+                                                    len56,
+                                                    len56,
+                                                );
+                                                _rt::string_lift(bytes56)
+                                            };
+                                            result57.push(e57);
+                                        }
+                                        _rt::cabi_dealloc(base57, len57 * 8, 4);
+                                        result57
+                                    };
+                                    WitTypeNode::FlagsType(e69)
+                                }
+                                4 => {
+                                    let e69 = {
+                                        let l58 = *base.add(8).cast::<*mut u8>();
+                                        let l59 = *base.add(12).cast::<usize>();
+                                        let len60 = l59;
+                                        _rt::Vec::from_raw_parts(l58.cast(), len60, len60)
+                                    };
+                                    WitTypeNode::TupleType(e69)
+                                }
+                                5 => {
+                                    let e69 = {
+                                        let l61 = *base.add(8).cast::<i32>();
+                                        l61
+                                    };
+                                    WitTypeNode::ListType(e69)
+                                }
+                                6 => {
+                                    let e69 = {
+                                        let l62 = *base.add(8).cast::<i32>();
+                                        l62
+                                    };
+                                    WitTypeNode::OptionType(e69)
+                                }
+                                7 => {
+                                    let e69 = {
+                                        let l63 = i32::from(*base.add(8).cast::<u8>());
+                                        let l65 = i32::from(*base.add(16).cast::<u8>());
+                                        (
+                                            match l63 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l64 = *base.add(12).cast::<i32>();
+                                                        l64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                            match l65 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l66 = *base.add(20).cast::<i32>();
+                                                        l66
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            },
+                                        )
+                                    };
+                                    WitTypeNode::ResultType(e69)
+                                }
+                                8 => WitTypeNode::PrimU8Type,
+                                9 => WitTypeNode::PrimU16Type,
+                                10 => WitTypeNode::PrimU32Type,
+                                11 => WitTypeNode::PrimU64Type,
+                                12 => WitTypeNode::PrimS8Type,
+                                13 => WitTypeNode::PrimS16Type,
+                                14 => WitTypeNode::PrimS32Type,
+                                15 => WitTypeNode::PrimS64Type,
+                                16 => WitTypeNode::PrimF32Type,
+                                17 => WitTypeNode::PrimF64Type,
+                                18 => WitTypeNode::PrimCharType,
+                                19 => WitTypeNode::PrimBoolType,
+                                20 => WitTypeNode::PrimStringType,
+                                n => {
+                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                    let e69 = {
+                                        let l67 = *base.add(8).cast::<i64>();
+                                        let l68 = i32::from(*base.add(16).cast::<u8>());
+                                        (l67 as u64, ResourceMode::_lift(l68 as u8))
+                                    };
+                                    WitTypeNode::HandleType(e69)
+                                }
+                            };
+                            v69
+                        };
+                        result70.push(e70);
+                    }
+                    _rt::cabi_dealloc(base70, len70 * 24, 8);
+                    if layout11.size() != 0 {
+                        _rt::alloc::dealloc(result11.cast(), layout11);
+                    }
+                    if layout26.size() != 0 {
+                        _rt::alloc::dealloc(result26.cast(), layout26);
+                    }
+                    for (ptr, layout) in cleanup_list {
+                        if layout.size() != 0 {
+                            _rt::alloc::dealloc(ptr.cast(), layout);
+                        }
+                    }
+                    WitType { nodes: result70 }
                 }
             }
         }
@@ -2360,37 +3996,48 @@ mod _rt {
     extern crate alloc as alloc_crate;
 }
 #[cfg(target_arch = "wasm32")]
-#[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc@0.1.0:wit-value-world:encoded world"]
+#[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc@0.1.1:wit-value:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1322] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa4\x09\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1875] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd3\x0d\x01A\x02\x01\
 A\x05\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
-\x03\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\
-\x01\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01r\x01\x05va\
-lues\x04\0\x03uri\x03\0\x04\x01p\x03\x01k\x03\x01o\x02y\x07\x01p\x7f\x01j\x01\x07\
-\x01\x07\x01o\x02\x05w\x01q\x16\x0crecord-value\x01\x06\0\x0dvariant-value\x01\x08\
-\0\x0aenum-value\x01y\0\x0bflags-value\x01\x09\0\x0btuple-value\x01\x06\0\x0alis\
-t-value\x01\x06\0\x0coption-value\x01\x07\0\x0cresult-value\x01\x0a\0\x07prim-u8\
-\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\
-\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\
-\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-str\
-ing\x01s\0\x06handle\x01\x0b\0\x04\0\x08wit-node\x03\0\x0c\x01p\x0d\x01r\x01\x05\
-nodes\x0e\x04\0\x09wit-value\x03\0\x0f\x01q\x04\x0eprotocol-error\x01s\0\x06deni\
-ed\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\
-\x03\0\x11\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i\x13\
-\x01@\x01\x08location\x05\0\x15\x04\0\x15[constructor]wasm-rpc\x01\x16\x01h\x13\x01\
-p\x10\x01j\x01\x10\x01\x12\x01@\x03\x04self\x17\x0dfunction-names\x0ffunction-pa\
-rams\x18\0\x19\x04\0![method]wasm-rpc.invoke-and-await\x01\x1a\x01j\0\x01\x12\x01\
-@\x03\x04self\x17\x0dfunction-names\x0ffunction-params\x18\0\x1b\x04\0\x17[metho\
-d]wasm-rpc.invoke\x01\x1c\x01i\x14\x01@\x03\x04self\x17\x0dfunction-names\x0ffun\
-ction-params\x18\0\x1d\x04\0'[method]wasm-rpc.async-invoke-and-await\x01\x1e\x01\
-h\x14\x01i\x01\x01@\x01\x04self\x1f\0\x20\x04\0&[method]future-invoke-result.sub\
-scribe\x01!\x01k\x19\x01@\x01\x04self\x1f\0\"\x04\0\x20[method]future-invoke-res\
-ult.get\x01#\x03\0\x15golem:rpc/types@0.1.0\x05\x02\x04\0\x1fgolem:rpc/wit-value\
--world@0.1.0\x04\0\x0b\x15\x01\0\x0fwit-value-world\x03\0\0\0G\x09producers\x01\x0c\
-processed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
+\x03\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B@\x02\x03\x02\x01\
+\x01\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0b\
+resource-id\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
+\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\
+\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\
+\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09lis\
+t-type\x01\x03\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-ty\
+pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
+-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
+-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
+prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01\
+p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\
+\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\
+\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0b\
+flags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption\
+-value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
+prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
+s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
+rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\
+\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\
+\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0e\
+protocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-er\
+ror\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
+nvoke-result\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]was\
+m-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
+function-params*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01\
+@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rp\
+c.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\
+\0'[method]wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\
+\02\x04\0&[method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\
+\x04\0\x20[method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0d\
+extract-value\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15g\
+olem:rpc/types@0.1.1\x05\x02\x04\0\x19golem:rpc/wit-value@0.1.1\x04\0\x0b\x0f\x01\
+\0\x09wit-value\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\
+\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
