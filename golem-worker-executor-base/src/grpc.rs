@@ -55,7 +55,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -83,6 +83,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
+use tokio_stream::wrappers::ReceiverStream;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -746,23 +747,53 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id: AccountId = header.account_id.expect("Missing account id").into();
         let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
 
-        let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
-        let sender = trailers_sender.clone();
-        let body_stream = body_and_trailers.filter_map(|e| async move {
+        // let (body_stream, trailer_stream) = split_stream(matches!())
+        let (raw_trailer_stream, raw_body_stream) =
+            split_stream(
+                body_and_trailers,
+                |e| matches!(e, Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Trailer(_)) })),
+                32
+            );
+
+        let body_stream = raw_body_stream.filter_map(|e| async {
             use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
             use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
 
             match e {
                 Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
-                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
-                    sender.send(trailer).await.unwrap();
-                    None
-                },
-                Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
-                Err(_) => todo!("failed"),
-                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
+                Err(e) => Some(Err(format!("Failed to read body: {}", e))),
+                _ => None
             }
         });
+
+        let mut trailer_stream = raw_trailer_stream.filter_map(|e| async {
+            use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+            use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+
+            match e {
+                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailers)) }) => Some(Ok(trailers)),
+                Err(e) => Some(Err(format!("Failed to read trailers: {}", e))),
+                _ => None
+            }
+        });
+
+        // let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
+        // let sender = trailers_sender.clone();
+        // let body_stream = body_and_trailers.filter_map(|e| async move {
+        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+        //
+        //     match e {
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
+        //             sender.send(trailer).await.unwrap();
+        //             None
+        //         },
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
+        //         Err(_) => todo!("failed"),
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
+        //     }
+        // });
 
         // let raw_body = StreamBody::new(body_and_trailers);
         // StreamBody::new()
@@ -776,6 +807,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &PathBuf::from(path),
             Box::pin(body_stream)
         ).await.unwrap();
+
+        let _trailers = if let Some(inner) = pin!(trailer_stream).next().await {
+            let trailers = inner.unwrap();
+            trailers.trailers.unwrap().fields.into_iter().map(|e| (e.name, e.value)).collect()
+        } else {
+            Vec::new()
+        };
 
         // worker
         //     .invoke_http_handler(idempotency_key, request)
@@ -2835,3 +2873,26 @@ fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Res
 
     Ok(hyper_method)
 }
+
+fn split_stream<S, F>(stream: S, predicate: F, buffer_size: usize) -> (impl Stream<Item = S::Item>, impl Stream<Item = S::Item>)
+    where
+        S: Stream + Send + 'static,
+        S::Item: Send,
+        F: Fn(&S::Item) -> bool + Send + 'static,
+    {
+        let (tx1, rx1) = tokio::sync::mpsc::channel(buffer_size);
+        let (tx2, rx2) = tokio::sync::mpsc::channel(buffer_size);
+
+        tokio::spawn(async move {
+            let mut pinned = pin!(stream);
+            while let Some(item) = pinned.next().await {
+                if predicate(&item) {
+                    let _ = tx1.send(item).await;
+                } else {
+                    let _ = tx2.send(item).await;
+                }
+            }
+        });
+
+        (ReceiverStream::new(rx1), ReceiverStream::new(rx2))
+    }
