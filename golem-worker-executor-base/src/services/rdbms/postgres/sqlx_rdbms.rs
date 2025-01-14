@@ -475,18 +475,6 @@ fn get_db_value<G: PgValueGetter>(
         DbColumnType::Array(t) => {
             let base_type: DbColumnType = *t.clone();
             match base_type {
-                DbColumnType::Enum(_) => {
-                    let vs: Option<PgEnums> = getter.try_get_value()?;
-                    DbValue::array_from(vs.map(|v| v.0), DbValue::Enum)
-                }
-                DbColumnType::Composite(_) => {
-                    let vs: Option<PgComposites> = getter.try_get_value()?;
-                    DbValue::array_from(vs.map(|v| v.0), DbValue::Composite)
-                }
-                DbColumnType::Domain(_) => {
-                    let vs: Option<PgDomains> = getter.try_get_value()?;
-                    DbValue::array_from(vs.map(|v| v.0), DbValue::Domain)
-                }
                 DbColumnType::Range(v) => {
                     get_db_value_helper(&v.base_type, DbValueCategory::RangeArray, getter)?
                 }
@@ -1067,15 +1055,6 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgEnums {
     }
 }
 
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgEnums {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let value = <Vec<Enum> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-        Ok(Self(value))
-    }
-}
-
 #[derive(Clone)]
 struct PgJsonPath(String);
 
@@ -1270,15 +1249,6 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgComposites {
     }
 }
 
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgComposites {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let value = <Vec<Composite> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-        Ok(Self(value))
-    }
-}
-
 impl sqlx::Type<sqlx::Postgres> for Domain {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         sqlx::postgres::PgTypeInfo::with_oid(Oid(2267)) // pseudo any type
@@ -1356,15 +1326,6 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgDomains {
 
     fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
         get_array_pg_type_info(&self.0)
-    }
-}
-
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgDomains {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let value = <Vec<Domain> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-        Ok(Self(value))
     }
 }
 
