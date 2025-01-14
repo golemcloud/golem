@@ -109,7 +109,6 @@ futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 git-version = "0.3.9"
-golem-wit = { version = "=1.1.2" }
 hex = "0.4.3"
 http = "1.2.0" # keep in sync with wasmtime
 humansize = "2.1.3"

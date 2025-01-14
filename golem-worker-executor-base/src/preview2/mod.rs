@@ -15,7 +15,29 @@
 use golem_wasm_rpc::ValueAndType;
 use std::mem;
 
-include!(concat!(env!("OUT_DIR"), "/preview2_mod.rs"));
+wasmtime::component::bindgen!({
+    path: r"../wit",
+    world: "golem:api/golem",
+    tracing: false,
+    async: true,
+    trappable_imports: true,
+    with: {
+        "wasi:io/streams/input-stream": InputStream,
+        "wasi:io/streams/output-stream": OutputStream,
+        "wasi:io/poll/pollable": Pollable,
+        "wasi:blobstore/container/container": super::durable_host::blobstore::types::ContainerEntry,
+        "wasi:blobstore/container/stream-object-names": super::durable_host::blobstore::types::StreamObjectNamesEntry,
+        "wasi:blobstore/types/incoming-value": super::durable_host::blobstore::types::IncomingValueEntry,
+        "wasi:blobstore/types/outgoing-value": super::durable_host::blobstore::types::OutgoingValueEntry,
+        "wasi:keyvalue/wasi-keyvalue-error/error": super::durable_host::keyvalue::error::ErrorEntry,
+        "wasi:keyvalue/types/bucket": super::durable_host::keyvalue::types::BucketEntry,
+        "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
+        "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
+        "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
+        "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
+        "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+    },
+});
 
 pub type InputStream = wasmtime_wasi::InputStream;
 pub type OutputStream = wasmtime_wasi::OutputStream;

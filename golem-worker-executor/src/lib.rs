@@ -206,7 +206,10 @@ impl Bootstrap<Context> for ServerBootstrap {
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_2_0::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem::rpc0_1_1::types::add_to_linker_get_host(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         Ok(linker)
     }
 }

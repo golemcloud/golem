@@ -4346,6 +4346,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-wit",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4376,9 +4377,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf53fc25db491f96c480d7f195175f6da5f18dcc6ef548d04b2ae648b7796bbf"
+checksum = "6c4e508508927dfefdcedd22a35b6d76d528596599ca8647ac8673c2dd5d7be3"
 
 [[package]]
 name = "golem-worker-executor"
@@ -4433,7 +4434,6 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
- "cargo_metadata 0.19.1",
  "chrono",
  "console-subscriber",
  "dashmap",
@@ -4454,7 +4454,6 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
