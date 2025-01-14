@@ -17,7 +17,7 @@ bytes = "1.6.0"
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun-2024", features = [
     "json",
 ] }
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
 path = "wit"

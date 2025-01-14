@@ -18,7 +18,7 @@ reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-jun
 ] }
 serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.117"
-wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
 
 [package.metadata.component]
 package = "golem:it"
