@@ -57,7 +57,27 @@ dependencies = [
 # WIT DEPENDENCIES
 [tasks.wit]
 description = "Fetches the WIT dependencies based on wit/deps.toml"
-dependencies = ["wit-host", "wit-wasm-rpc"]
+dependencies = ["wit-host", "wit-durable-wasi", "wit-wasm-rpc"]
+
+[tasks.wit-durable-wasi]
+dependencies = ["wit-host"]
+script_runner = "@duckscript"
+script = """
+rm -r durable-wasi/wit/deps
+mkdir durable-wasi/wit/deps
+cp wit/deps/cli durable-wasi/wit/deps
+cp wit/deps/clocks durable-wasi/wit/deps
+cp wit/deps/filesystem durable-wasi/wit/deps
+cp wit/deps/http durable-wasi/wit/deps
+cp wit/deps/io durable-wasi/wit/deps
+cp wit/deps/random durable-wasi/wit/deps
+cp wit/deps/sockets durable-wasi/wit/deps
+
+cp wit/deps/golem-1.1 durable-wasi/wit/deps
+cp wit/deps/golem-1.2 durable-wasi/wit/deps
+cp wit/deps/wasm-rpc durable-wasi/wit/deps
+"""
+
 
 [tasks.wit-wasm-rpc]
 dependencies = ["wit-host"]

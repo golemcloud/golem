@@ -25,3 +25,4 @@ data
 .DS_Store
 wit/deps
 wasm-rpc/wit/deps
+durable-wasi/wit/deps

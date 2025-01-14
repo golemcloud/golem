@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "durable-wasi",
     "golem-api-grpc",
     "golem-cli",
     "golem-client",

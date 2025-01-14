@@ -1,0 +1,50 @@
+[package]
+name = "durable-wasi"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem's durable WASI wrapper"
+
+include = []
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+harness = false
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0", default-features = false, features = ["base-model", "serialization"] }
+
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+wit-bindgen-rt = { version = "=0.36.0", features = ["bitflags"] }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[build-dependencies]
+
+[features]
+
+
+[package.metadata.component]
+package = "golem:wasi"
+
+[package.metadata.component.target]
+path = "wit"
+world = "durable-wasi"
+
+[package.metadata.component.target.dependencies]
+"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"golem:api" = { path = "wit/deps/golem-1.2" }
+
+"wasi:cli" = { path = "wit/deps/cli" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:filesystem" = { path = "wit/deps/filesystem" }
+"wasi:http" = { path = "wit/deps/http" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:random" = { path = "wit/deps/random" }
+"wasi:sockets" = { path = "wit/deps/sockets" }

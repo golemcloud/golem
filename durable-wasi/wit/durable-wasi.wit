@@ -1,0 +1,8 @@
+package golem:wasi;
+
+world durable-wasi {
+    import wasi:clocks/monotonic-clock@0.2.0;
+    export wasi:clocks/monotonic-clock@0.2.0;
+
+    import golem:api/durability@1.2.0;
+}

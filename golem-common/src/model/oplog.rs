@@ -34,48 +34,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    Default,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct OplogIndex(u64);
-
-impl OplogIndex {
-    pub const NONE: OplogIndex = OplogIndex(0);
-    pub const INITIAL: OplogIndex = OplogIndex(1);
-
-    pub const fn from_u64(value: u64) -> OplogIndex {
-        OplogIndex(value)
-    }
-
-    /// Gets the previous oplog index
-    pub fn previous(&self) -> OplogIndex {
-        OplogIndex(self.0 - 1)
-    }
-
-    /// Gets the next oplog index
-    pub fn next(&self) -> OplogIndex {
-        OplogIndex(self.0 + 1)
-    }
-
-    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
-    /// having `count` elements.
-    pub fn range_end(&self, count: u64) -> OplogIndex {
-        OplogIndex(self.0 + count - 1)
-    }
-}
+pub use crate::base_model::OplogIndex;
 
 pub struct OplogIndexRange {
     current: u64,
@@ -102,28 +61,6 @@ impl OplogIndexRange {
             current: start.0,
             end: end.0,
         }
-    }
-}
-
-impl Display for OplogIndex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<OplogIndex> for u64 {
-    fn from(value: OplogIndex) -> Self {
-        value.0
-    }
-}
-
-impl IntoValue for OplogIndex {
-    fn into_value(self) -> Value {
-        Value::U64(self.0)
-    }
-
-    fn get_type() -> AnalysedType {
-        u64()
     }
 }
 
