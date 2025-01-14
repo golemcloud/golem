@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::*;
 use futures::stream::BoxStream;
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -67,7 +66,11 @@ use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 use bytes::Bytes;
+use tokio;
+use tokio_stream::wrappers::ReceiverStream;
+use golem_wasm_rpc::Value;
 
+use crate::error::*;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -82,9 +85,6 @@ use crate::services::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use tokio;
-use tokio_stream::wrappers::ReceiverStream;
-use golem_wasm_rpc::Value;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -730,7 +730,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // });
 
         let domain = {
-            use crate::model::http::*;
+            use golem_common::model::http_invocation::*;
+
+            let method = grpc_method_to_domain_method(&header.method)?;
 
             let mut domain_headers = HashMap::new();
 
@@ -758,7 +760,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             IncomingHttpHandlerInvocation {
                 uri: header.uri,
-                method: todo!(),
+                method,
                 headers: domain_headers,
                 body_and_trailers
             }
@@ -2973,6 +2975,37 @@ fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Res
     };
 
     Ok(hyper_method)
+}
+
+fn grpc_method_to_domain_method(method: &Option<golem::worker::HttpMethod>) -> Result<golem_common::model::http_invocation::HttpMethod, GolemError> {
+    use golem_common::model::http_invocation::HttpMethod as DomainMethod;
+    use golem::worker::StandardHttpMethod as GrpcMethod;
+
+    let known_http_method = method.and_then(|m| m.value).unwrap();
+
+    let domain_method = match known_http_method {
+        golem::worker::http_method::Value::StandardMethod(inner) => {
+            if let Ok(converted) = golem::worker::StandardHttpMethod::try_from(inner) {
+                match converted {
+                    GrpcMethod::MethodGet => DomainMethod::GET,
+                    GrpcMethod::MethodPost => DomainMethod::POST,
+                    GrpcMethod::MethodPut => DomainMethod::PUT,
+                    GrpcMethod::MethodDelete => DomainMethod::DELETE,
+                    GrpcMethod::MethodPatch => DomainMethod::PATCH,
+                    GrpcMethod::MethodHead => DomainMethod::HEAD,
+                    GrpcMethod::MethodOptions => DomainMethod::OPTIONS,
+                    GrpcMethod::MethodConnect => DomainMethod::CONNECT,
+                    GrpcMethod::MethodTrace => DomainMethod::TRACE,
+                }
+            } else {
+                todo!("failing")
+            }
+        },
+        golem::worker::http_method::Value::CustomMethod(inner)  =>
+            DomainMethod::Custom(inner),
+    };
+
+    Ok(domain_method)
 }
 
 // fn split_stream<S, F>(stream: S, predicate: F, buffer_size: usize) -> (impl Stream<Item = S::Item>, impl Stream<Item = S::Item>)

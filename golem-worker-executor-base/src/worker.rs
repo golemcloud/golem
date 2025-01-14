@@ -66,7 +66,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
-use crate::model::http::IncomingHttpHandlerInvocation;
+use golem_common::model::http_invocation::IncomingHttpHandlerInvocation;
+use crate::model::http_invocation::IncomingHttpHandlerInvocation;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -841,11 +842,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
                 debug!("Worker is initializing, persisting pending invocation");
-                let invocation = WorkerInvocation::ExportedFunction {
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                };
+                let invocation = WorkerInvocation::IncomingHttpHandler { input };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
                     timestamp: entry.timestamp(),
@@ -1333,6 +1330,14 @@ impl RunningWorker {
             full_function_name,
             function_input,
         };
+        self.enqueue_worker_invocation(invocation).await;
+    }
+
+    pub async fn enqueue_http_handler(
+        &self,
+        input: IncomingHttpHandlerInvocation
+    ) {
+        let invocation = WorkerInvocation::IncomingHttpHandler { input };
         self.enqueue_worker_invocation(invocation).await;
     }
 
