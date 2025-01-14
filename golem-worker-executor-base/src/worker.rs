@@ -473,6 +473,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub async fn invoke_http_handler(
+        &self,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
+        let output = self.lookup_invocation_result(&idempotency_key).await;
+
+        match output {
+            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+            LookupResult::Pending => Ok(None),
+            LookupResult::New => {
+                // Invoke the function in the background
+                self.enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
+                Ok(None)
+            }
+        }
+    }
+
+
     /// Invokes the worker and awaits for a result.
     ///
     /// Successful result is a `TypeAnnotatedValue` encoding either a tuple or a record.
@@ -512,7 +534,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn invoke_http_handler(
+    pub async fn invoke_http_handler_and_await(
         &self,
         idempotency_key: IdempotencyKey,
         request: hyper::Request<()>
@@ -805,7 +827,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-
+    async fn enqueue_http_handler(
+        &self,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                running
+                    .enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
+            }
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
+                debug!("Worker is initializing, persisting pending invocation");
+                let invocation = WorkerInvocation::ExportedFunction {
+                    idempotency_key,
+                    full_function_name,
+                    function_input,
+                };
+                let entry = OplogEntry::pending_worker_invocation(invocation.clone());
+                let timestamped_invocation = TimestampedWorkerInvocation {
+                    timestamp: entry.timestamp(),
+                    invocation,
+                };
+                self.queue
+                    .write()
+                    .unwrap()
+                    .push_back(QueuedWorkerInvocation::External(timestamped_invocation));
+                self.oplog.add_and_commit(entry).await;
+                self.update_metadata()
+                    .await
+                    .expect("update_metadata failed"); // TODO
+            }
+        }
+    }
 
     pub async fn list_directory(
         &self,

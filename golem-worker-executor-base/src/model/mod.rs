@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod public_oplog;
+pub mod http;
 
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;

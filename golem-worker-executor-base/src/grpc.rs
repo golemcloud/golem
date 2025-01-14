@@ -84,6 +84,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
 use tokio_stream::wrappers::ReceiverStream;
+use golem_wasm_rpc::Value;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -703,6 +704,61 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_worker_http_handler_internal(
         &self,
         header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
+        chunks: Vec<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestChunk>,
+        trailers: Option<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestTrailer>
+    ) -> Result<TypeAnnotatedValue, GolemError> {
+        let method = header.method.unwrap().value.unwrap();
+        let worker = self.get_or_create(&header).await?;
+
+        let idempotency_key = header
+            .idempotency_key
+            .map(|ik| IdempotencyKey { value: ik.value })
+            .unwrap_or(IdempotencyKey::fresh());
+
+        let account_id: AccountId = header.account_id.expect("Missing account id").into();
+        let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
+
+        // let encoded_headers = header.headers.unwrap().fields.iter().map(|h|
+        //     Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
+        // ).collect::<Vec<_>>();
+
+        let encoded_chunks = Bytes::from(chunks.into_iter().flat_map(|c| c.body_chunk.into_iter()).collect::<Vec<_>>());
+
+        let encoded_trailers = trailers.map(|t| {
+            let inner = t.trailers.unwrap().fields.iter().map(|h|
+                Value::Tuple(vec![Value::String(h.name.clone()), Value::String(h.value.clone())])
+            ).collect::<Vec<_>>();
+            Box::new(Value::List(inner))
+        });
+
+        let domain = {
+            use crate::model::http::*;
+
+            IncomingHttpHandlerInvocation {
+                uri: header.uri,
+                method: todo!(),
+
+            }
+        };
+
+        // let as_wit = Value::Record(vec![
+        //     Value::String(header.uri),
+        //     Value::Enum(method.into()),
+        //     Value::List(encoded_headers),
+        //     Value::List(encoded_chunks),
+        //     Value::Option(encoded_trailers)
+        // ]);
+
+        let values = worker
+            .invoke_and_await(idempotency_key, "wasi:http/incoming-handler@0.2.0.{handle}".to_string(), vec![as_wit])
+            .await?;
+
+        Ok(values)
+    }
+
+    async fn invoke_worker_http_handler_internal_bak(
+        &self,
+        header: golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequestHeader,
         body_and_trailers: Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>,
     ) -> Result<(), GolemError> {
         // let hyper_method = match header.method {
@@ -747,35 +803,36 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id: AccountId = header.account_id.expect("Missing account id").into();
         let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
 
+
         // let (body_stream, trailer_stream) = split_stream(matches!())
-        let (raw_trailer_stream, raw_body_stream) =
-            split_stream(
-                body_and_trailers,
-                |e| matches!(e, Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Trailer(_)) })),
-                32
-            );
+        // let (raw_trailer_stream, raw_body_stream) =
+        //     split_stream(
+        //         body_and_trailers,
+        //         |e| matches!(e, Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Trailer(_)) })),
+        //         32
+        //     );
 
-        let body_stream = raw_body_stream.filter_map(|e| async {
-            use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
-            use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
-
-            match e {
-                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
-                Err(e) => Some(Err(format!("Failed to read body: {}", e))),
-                _ => None
-            }
-        });
-
-        let mut trailer_stream = raw_trailer_stream.filter_map(|e| async {
-            use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
-            use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
-
-            match e {
-                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailers)) }) => Some(Ok(trailers)),
-                Err(e) => Some(Err(format!("Failed to read trailers: {}", e))),
-                _ => None
-            }
-        });
+        // let body_stream = raw_body_stream.filter_map(|e| async {
+        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+        //
+        //     match e {
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
+        //         Err(e) => Some(Err(format!("Failed to read body: {}", e))),
+        //         _ => None
+        //     }
+        // });
+        //
+        // let mut trailer_stream = raw_trailer_stream.filter_map(|e| async {
+        //     use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+        //     use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+        //
+        //     match e {
+        //         Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailers)) }) => Some(Ok(trailers)),
+        //         Err(e) => Some(Err(format!("Failed to read trailers: {}", e))),
+        //         _ => None
+        //     }
+        // });
 
         // let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
         // let sender = trailers_sender.clone();
@@ -1896,41 +1953,62 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: Request<Streaming<golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest>>,
     ) -> ResponseResult<Self::InvokeWorkerHttpHandlerStream> {
+
+
         let mut request = request.into_inner();
 
-        let header = request.next().await;
+        let chunks = request.collect::<Result<Vec<_>, _>>().await?;
 
-        if let Some(Ok(golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest { data: Some(golem::workerexecutor::v1::invoke_worker_http_handler_request::Data::Header(header)) })) = header {
-            let record = recorded_grpc_api_request!(
-                "invoke_worker_http_handler",
-                worker_id = proto_target_worker_id_string(&header.worker_id),
-                url = header.uri,
-            );
-            self.invoke_worker_http_handler_internal(
-                header,
-                request,
-            )
+        let mut headers = None;
+        let mut chunks = Vec::new();
+        let mut trailers = None;
+
+        let mut seen_header = false;
+        let mut seen_chunk = false;
+        let mut seen_trailer = false;
+
+        while let Some(inner) = request.next().await {
+            use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
+            use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
+
+            match inner.unwrap() {
+                InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(header)) } => {
+                    if headers.is_some() {
+                        todo!("error");
+                    }
+                    headers = Some(header);
+                },
+                InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) } => {
+                    if headers.is_none() {
+                        todo!("error");
+                    }
+                    chunks.push(chunk)
+                },
+                InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) } => {
+                    if chunks.is_empty() || trailers.is_some() {
+                        todo!("error");
+                    }
+                    trailers = Some(trailers);
+                },
+                _ => todo!("error")
+            }
+        }
+
+        let headers = headers.unwrap();
+
+        let record = recorded_grpc_api_request!(
+            "invoke_worker_http_handler",
+            worker_id = proto_target_worker_id_string(&headers.worker_id),
+            uri = headers.uri,
+        );
+
+        let result = self
+            .invoke_worker_http_handler_internal(headers, chunks, trailers)
             .instrument(record.span.clone())
-            .await?;
-        } else {
-            todo!("error");
-        };
-
-
+            .await;
 
         todo!("");
 
-
-        // let record = recorded_grpc_api_request!(
-        //     "invoke_worker_http_handler",
-        //     worker_id = proto_target_worker_id_string(&request.worker_id),
-        //     path = request.path,
-        // );
-
-        // let result = self
-        //     .invoke_worker_http_handler(request)
-        //     .instrument(record.span.clone())
-        //     .await;
         // match result {
         //     Ok(response) => record.succeed(Ok(Response::new(response))),
         //     Err(err) => record.fail(
@@ -2874,25 +2952,25 @@ fn grpc_method_to_hyper_method(method: Option<golem::worker::HttpMethod>) -> Res
     Ok(hyper_method)
 }
 
-fn split_stream<S, F>(stream: S, predicate: F, buffer_size: usize) -> (impl Stream<Item = S::Item>, impl Stream<Item = S::Item>)
-    where
-        S: Stream + Send + 'static,
-        S::Item: Send,
-        F: Fn(&S::Item) -> bool + Send + 'static,
-    {
-        let (tx1, rx1) = tokio::sync::mpsc::channel(buffer_size);
-        let (tx2, rx2) = tokio::sync::mpsc::channel(buffer_size);
-
-        tokio::spawn(async move {
-            let mut pinned = pin!(stream);
-            while let Some(item) = pinned.next().await {
-                if predicate(&item) {
-                    let _ = tx1.send(item).await;
-                } else {
-                    let _ = tx2.send(item).await;
-                }
-            }
-        });
-
-        (ReceiverStream::new(rx1), ReceiverStream::new(rx2))
-    }
+// fn split_stream<S, F>(stream: S, predicate: F, buffer_size: usize) -> (impl Stream<Item = S::Item>, impl Stream<Item = S::Item>)
+//     where
+//         S: Stream + Send + 'static,
+//         S::Item: Send,
+//         F: Fn(&S::Item) -> bool + Send + 'static,
+//     {
+//         let (tx1, rx1) = tokio::sync::mpsc::channel(buffer_size);
+//         let (tx2, rx2) = tokio::sync::mpsc::channel(buffer_size);
+//
+//         tokio::spawn(async move {
+//             let mut pinned = pin!(stream);
+//             while let Some(item) = pinned.next().await {
+//                 if predicate(&item) {
+//                     let _ = tx1.send(item).await;
+//                 } else {
+//                     let _ = tx2.send(item).await;
+//                 }
+//             }
+//         });
+//
+//         (ReceiverStream::new(rx1), ReceiverStream::new(rx2))
+//     }
