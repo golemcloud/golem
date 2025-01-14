@@ -54,6 +54,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -65,6 +66,7 @@ use tracing::info_span;
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
+use bytes::Bytes;
 
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
@@ -739,25 +741,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         // TODO
-        let request = builder.body(()).unwrap();
-
+        // let request = builder.body(()).unwrap();
+        //
         let account_id: AccountId = header.account_id.expect("Missing account id").into();
         let component_id: ComponentId = header.worker_id.expect("Missing worker id").component_id.expect("No component id").try_into().unwrap();
 
-
-        let (trailers_sender, trailers_receiver) = tokio::sync::oneshot::channel();
-        let framed_stream = body_and_trailers.map(|e| {
+        let (trailers_sender, trailers_receiver) = tokio::sync::mpsc::channel(4);
+        let sender = trailers_sender.clone();
+        let body_stream = body_and_trailers.filter_map(|e| async move {
             use golem::workerexecutor::v1::InvokeWorkerHttpHandlerRequest;
             use golem::workerexecutor::v1::invoke_worker_http_handler_request::Data;
 
             match e {
-                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Frame::data(chunk.body_chunk)),
+                Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Chunk(chunk)) }) => Some(Ok(Bytes::from(chunk.body_chunk))),
                 Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Trailer(trailer)) }) => {
-                    trailers_sender.send(trailer);
+                    sender.send(trailer).await.unwrap();
                     None
                 },
                 Ok(InvokeWorkerHttpHandlerRequest { data: None }) => todo!("failed"),
-                Err(e) => todo!("failed"),
+                Err(_) => todo!("failed"),
                 Ok(InvokeWorkerHttpHandlerRequest { data: Some(Data::Header(_) )}) => panic!("impossible"),
             }
         });
@@ -765,17 +767,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // let raw_body = StreamBody::new(body_and_trailers);
         // StreamBody::new()
 
-        self.services.blob_storage().put_stream(
+        let path = uuid::Uuid::new_v4().to_string();
+
+        self.services.blob_storage().put_stream_oneshot(
             "http_input_bodies",
             "put",
             BlobStorageNamespace::PersistedHttpInputBodies { account_id, component_id },
-            todo!(),
-            framed_stream
-        ).await;
+            &PathBuf::from(path),
+            Box::pin(body_stream)
+        ).await.unwrap();
 
-        worker
-            .invoke_http_handler(idempotency_key, request)
-            .await?;
+        // worker
+        //     .invoke_http_handler(idempotency_key, request)
+        //     .await?;
 
         todo!("implement");
     }

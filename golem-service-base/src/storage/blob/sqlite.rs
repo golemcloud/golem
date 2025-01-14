@@ -207,7 +207,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>,
     ) -> Result<(), String> {
         let pinned = pin!(stream);
         let data = pinned.try_collect::<Vec<Bytes>>().await?;

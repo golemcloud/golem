@@ -227,7 +227,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>
+        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
 

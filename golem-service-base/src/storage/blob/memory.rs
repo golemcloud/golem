@@ -179,7 +179,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>,
     ) -> Result<(), String> {
         let dir = path
             .parent()

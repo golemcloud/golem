@@ -655,7 +655,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);

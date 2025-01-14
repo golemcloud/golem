@@ -93,7 +93,7 @@ pub trait BlobStorage: Debug {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>,
     ) -> Result<(), String>;
 
     async fn delete(
