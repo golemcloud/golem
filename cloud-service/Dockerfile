@@ -1,6 +1,6 @@
 FROM segment/chamber:2 AS chamber
 
-FROM debian:bookworm-slim
+FROM ubuntu:latest
 
 COPY --from=chamber /chamber /bin/chamber
 
