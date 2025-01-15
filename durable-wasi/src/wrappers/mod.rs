@@ -18,6 +18,7 @@ use std::fmt::{Display, Formatter};
 use crate::bindings;
 use crate::bindings::exports::wasi::clocks::wall_clock;
 
+mod cli;
 mod clock;
 
 // TODO: try to avoid having copies of these types here

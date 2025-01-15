@@ -1,11 +1,44 @@
 package golem:wasi;
 
 world durable-wasi {
+    // CLI
+    import wasi:cli/environment@0.2.0;
+    export wasi:cli/environment@0.2.0;
+
+    import wasi:cli/exit@0.2.0;
+    export wasi:cli/exit@0.2.0;
+
+    import wasi:cli/stderr@0.2.0;
+    export wasi:cli/stderr@0.2.0;
+
+    import wasi:cli/stdin@0.2.0;
+    export wasi:cli/stdin@0.2.0;
+
+    import wasi:cli/stdout@0.2.0;
+    export wasi:cli/stdout@0.2.0;
+
+    import wasi:cli/terminal-input@0.2.0;
+    export wasi:cli/terminal-input@0.2.0;
+
+    import wasi:cli/terminal-output@0.2.0;
+    export wasi:cli/terminal-output@0.2.0;
+
+    import wasi:cli/terminal-stderr@0.2.0;
+    export wasi:cli/terminal-stderr@0.2.0;
+
+    import wasi:cli/terminal-stdin@0.2.0;
+    export wasi:cli/terminal-stdin@0.2.0;
+
+    import wasi:cli/terminal-stdout@0.2.0;
+    export wasi:cli/terminal-stdout@0.2.0;
+
+    // Clocks
     import wasi:clocks/monotonic-clock@0.2.0;
     export wasi:clocks/monotonic-clock@0.2.0;
 
     import wasi:clocks/wall-clock@0.2.0;
     export wasi:clocks/wall-clock@0.2.0;
 
+    // Golem durability API
     import golem:api/durability@1.2.0;
 }

@@ -89,8 +89,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let args = persisted_get_arguments(self).await?;
+        let env = persisted_get_environment(self).await?;
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -221,8 +221,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let args = persisted_get_arguments(self).await?;
+        let env = persisted_get_environment(self).await?;
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -312,8 +312,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let args = persisted_get_arguments(self).await?;
+        let env = persisted_get_environment(self).await?;
 
         let begin_index = self
             .state
@@ -822,6 +822,48 @@ async fn try_get_typed_parameters(
     }
 
     Vec::new()
+}
+
+// For backward compatibility with Golem 1.1 - before compositional durability the RPC calls
+// were calling the durable get_environment()
+async fn persisted_get_environment<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let durability = Durability::<Vec<(String, String)>, SerializableError>::new(
+        ctx,
+        "golem_environment",
+        "get_environment",
+        DurableFunctionType::ReadLocal,
+    )
+    .await?;
+
+    if durability.is_live() {
+        let result = ctx.as_wasi_view().get_environment().await;
+        durability.persist(ctx, (), result).await
+    } else {
+        durability.replay(ctx).await
+    }
+}
+
+// For backward compatibility with Golem 1.1 - before compositional durability the RPC calls
+// were calling the durable get_Arguments()
+async fn persisted_get_arguments<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> anyhow::Result<Vec<String>> {
+    let durability = Durability::<Vec<String>, SerializableError>::new(
+        ctx,
+        "golem_environment",
+        "get_arguments",
+        DurableFunctionType::ReadLocal,
+    )
+    .await?;
+
+    if durability.is_live() {
+        let result = ctx.as_wasi_view().get_arguments().await;
+        durability.persist(ctx, (), result).await
+    } else {
+        durability.replay(ctx).await
+    }
 }
 
 pub enum WasmRpcEntryPayload {

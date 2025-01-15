@@ -12855,6 +12855,488 @@ pub mod golem {
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod wasi {
+    pub mod cli {
+        #[allow(dead_code, clippy::all)]
+        pub mod environment {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the POSIX-style environment variables.
+            ///
+            /// Each environment variable is provided as a pair of string variable names
+            /// and string value.
+            ///
+            /// Morally, these are a value import, but until value imports are available
+            /// in the component model, this import function should return the same
+            /// values each time it is called.
+            pub fn get_environment() -> _rt::Vec<(_rt::String, _rt::String)> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/environment@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-environment"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<*mut u8>();
+                    let l2 = *ptr0.add(4).cast::<usize>();
+                    let base9 = l1;
+                    let len9 = l2;
+                    let mut result9 = _rt::Vec::with_capacity(len9);
+                    for i in 0..len9 {
+                        let base = base9.add(i * 16);
+                        let e9 = {
+                            let l3 = *base.add(0).cast::<*mut u8>();
+                            let l4 = *base.add(4).cast::<usize>();
+                            let len5 = l4;
+                            let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                            let l6 = *base.add(8).cast::<*mut u8>();
+                            let l7 = *base.add(12).cast::<usize>();
+                            let len8 = l7;
+                            let bytes8 = _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+                            (_rt::string_lift(bytes5), _rt::string_lift(bytes8))
+                        };
+                        result9.push(e9);
+                    }
+                    _rt::cabi_dealloc(base9, len9 * 16, 4);
+                    result9
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the POSIX-style arguments to the program.
+            pub fn get_arguments() -> _rt::Vec<_rt::String> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/environment@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-arguments"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<*mut u8>();
+                    let l2 = *ptr0.add(4).cast::<usize>();
+                    let base6 = l1;
+                    let len6 = l2;
+                    let mut result6 = _rt::Vec::with_capacity(len6);
+                    for i in 0..len6 {
+                        let base = base6.add(i * 8);
+                        let e6 = {
+                            let l3 = *base.add(0).cast::<*mut u8>();
+                            let l4 = *base.add(4).cast::<usize>();
+                            let len5 = l4;
+                            let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                            _rt::string_lift(bytes5)
+                        };
+                        result6.push(e6);
+                    }
+                    _rt::cabi_dealloc(base6, len6 * 8, 4);
+                    result6
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Return a path that programs should use as their initial current working
+            /// directory, interpreting `.` as shorthand for this.
+            pub fn initial_cwd() -> Option<_rt::String> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/environment@0.2.0")]
+                    extern "C" {
+                        #[link_name = "initial-cwd"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                let l3 = *ptr0.add(8).cast::<usize>();
+                                let len4 = l3;
+                                let bytes4 = _rt::Vec::from_raw_parts(
+                                    l2.cast(),
+                                    len4,
+                                    len4,
+                                );
+                                _rt::string_lift(bytes4)
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        #[allow(dead_code, clippy::all)]
+        pub mod exit {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Exit the current instance and any linked instances.
+            pub fn exit(status: Result<(), ()>) {
+                unsafe {
+                    let result0 = match status {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/exit@0.2.0")]
+                    extern "C" {
+                        #[link_name = "exit"]
+                        fn wit_import(_: i32);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32) {
+                        unreachable!()
+                    }
+                    wit_import(result0);
+                }
+            }
+        }
+        #[allow(dead_code, clippy::all)]
+        pub mod stderr {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_stderr() -> OutputStream {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/stderr@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-stderr"]
+                        fn wit_import() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import();
+                    super::super::super::wasi::io::streams::OutputStream::from_handle(
+                        ret as u32,
+                    )
+                }
+            }
+        }
+        #[allow(dead_code, clippy::all)]
+        pub mod stdin {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_stdin() -> InputStream {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/stdin@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-stdin"]
+                        fn wit_import() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import();
+                    super::super::super::wasi::io::streams::InputStream::from_handle(
+                        ret as u32,
+                    )
+                }
+            }
+        }
+        #[allow(dead_code, clippy::all)]
+        pub mod stdout {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_stdout() -> OutputStream {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/stdout@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-stdout"]
+                        fn wit_import() -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import() -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import();
+                    super::super::super::wasi::io::streams::OutputStream::from_handle(
+                        ret as u32,
+                    )
+                }
+            }
+        }
+        /// Terminal input.
+        ///
+        /// In the future, this may include functions for disabling echoing,
+        /// disabling input buffering so that keyboard events are sent through
+        /// immediately, querying supported features, and so on.
+        #[allow(dead_code, clippy::all)]
+        pub mod terminal_input {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// The input side of a terminal.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct TerminalInput {
+                handle: _rt::Resource<TerminalInput>,
+            }
+            impl TerminalInput {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for TerminalInput {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:cli/terminal-input@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]terminal-input"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+        }
+        /// Terminal output.
+        ///
+        /// In the future, this may include functions for querying the terminal
+        /// size, being notified of terminal size changes, querying supported
+        /// features, and so on.
+        #[allow(dead_code, clippy::all)]
+        pub mod terminal_output {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// The output side of a terminal.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct TerminalOutput {
+                handle: _rt::Resource<TerminalOutput>,
+            }
+            impl TerminalOutput {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for TerminalOutput {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:cli/terminal-output@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]terminal-output"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+        }
+        /// An interface providing an optional `terminal-output` for stderr as a
+        /// link-time authority.
+        #[allow(dead_code, clippy::all)]
+        pub mod terminal_stderr {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type TerminalOutput = super::super::super::wasi::cli::terminal_output::TerminalOutput;
+            #[allow(unused_unsafe, clippy::all)]
+            /// If stderr is connected to a terminal, return a `terminal-output` handle
+            /// allowing further interaction with it.
+            pub fn get_terminal_stderr() -> Option<TerminalOutput> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/terminal-stderr@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-terminal-stderr"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l2 = *ptr0.add(4).cast::<i32>();
+                                super::super::super::wasi::cli::terminal_output::TerminalOutput::from_handle(
+                                    l2 as u32,
+                                )
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        /// An interface providing an optional `terminal-input` for stdin as a
+        /// link-time authority.
+        #[allow(dead_code, clippy::all)]
+        pub mod terminal_stdin {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type TerminalInput = super::super::super::wasi::cli::terminal_input::TerminalInput;
+            #[allow(unused_unsafe, clippy::all)]
+            /// If stdin is connected to a terminal, return a `terminal-input` handle
+            /// allowing further interaction with it.
+            pub fn get_terminal_stdin() -> Option<TerminalInput> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/terminal-stdin@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-terminal-stdin"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l2 = *ptr0.add(4).cast::<i32>();
+                                super::super::super::wasi::cli::terminal_input::TerminalInput::from_handle(
+                                    l2 as u32,
+                                )
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        /// An interface providing an optional `terminal-output` for stdout as a
+        /// link-time authority.
+        #[allow(dead_code, clippy::all)]
+        pub mod terminal_stdout {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type TerminalOutput = super::super::super::wasi::cli::terminal_output::TerminalOutput;
+            #[allow(unused_unsafe, clippy::all)]
+            /// If stdout is connected to a terminal, return a `terminal-output` handle
+            /// allowing further interaction with it.
+            pub fn get_terminal_stdout() -> Option<TerminalOutput> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:cli/terminal-stdout@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-terminal-stdout"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l2 = *ptr0.add(4).cast::<i32>();
+                                super::super::super::wasi::cli::terminal_output::TerminalOutput::from_handle(
+                                    l2 as u32,
+                                )
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+    }
     pub mod clocks {
         /// WASI Monotonic Clock is a clock API intended to let users measure elapsed
         /// time.
@@ -13071,6 +13553,105 @@ pub mod wasi {
         }
     }
     pub mod io {
+        #[allow(dead_code, clippy::all)]
+        pub mod error {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// A resource which represents some error information.
+            ///
+            /// The only method provided by this resource is `to-debug-string`,
+            /// which provides some human-readable information about the error.
+            ///
+            /// In the `wasi:io` package, this resource is returned through the
+            /// `wasi:io/streams/stream-error` type.
+            ///
+            /// To provide more specific error information, other interfaces may
+            /// provide functions to further "downcast" this error into more specific
+            /// error information. For example, `error`s returned in streams derived
+            /// from filesystem types to be described using the filesystem's own
+            /// error-code type, using the function
+            /// `wasi:filesystem/types/filesystem-error-code`, which takes a parameter
+            /// `borrow<error>` and returns
+            /// `option<wasi:filesystem/types/error-code>`.
+            ///
+            /// The set of functions which can "downcast" an `error` into a more
+            /// concrete type is open.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Error {
+                handle: _rt::Resource<Error>,
+            }
+            impl Error {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Error {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:io/error@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]error"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            impl Error {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a string that is suitable to assist humans in debugging
+                /// this error.
+                ///
+                /// WARNING: The returned string should not be consumed mechanically!
+                /// It may change across platforms, hosts, or other implementation
+                /// details. Parsing this string is a major platform-compatibility
+                /// hazard.
+                pub fn to_debug_string(&self) -> _rt::String {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/error@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]error.to-debug-string"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = *ptr0.add(0).cast::<*mut u8>();
+                        let l2 = *ptr0.add(4).cast::<usize>();
+                        let len3 = l2;
+                        let bytes3 = _rt::Vec::from_raw_parts(l1.cast(), len3, len3);
+                        _rt::string_lift(bytes3)
+                    }
+                }
+            }
+        }
         /// A poll API intended to let users wait for I/O events on multiple handles
         /// at once.
         #[allow(dead_code, clippy::all)]
@@ -13229,12 +13810,1986 @@ pub mod wasi {
                 }
             }
         }
+        /// WASI I/O is an I/O abstraction API which is currently focused on providing
+        /// stream types.
+        ///
+        /// In the future, the component model is expected to add built-in stream types;
+        /// when it does, they are expected to subsume this API.
+        #[allow(dead_code, clippy::all)]
+        pub mod streams {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Error = super::super::super::wasi::io::error::Error;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// An error for input-stream and output-stream operations.
+            pub enum StreamError {
+                /// The last operation (a write or flush) failed before completion.
+                ///
+                /// More information is available in the `error` payload.
+                LastOperationFailed(Error),
+                /// The stream is closed: no more input will be accepted by the
+                /// stream. A closed output-stream will return this error on all
+                /// future operations.
+                Closed,
+            }
+            impl ::core::fmt::Debug for StreamError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        StreamError::LastOperationFailed(e) => {
+                            f.debug_tuple("StreamError::LastOperationFailed")
+                                .field(e)
+                                .finish()
+                        }
+                        StreamError::Closed => {
+                            f.debug_tuple("StreamError::Closed").finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for StreamError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            impl std::error::Error for StreamError {}
+            /// An input bytestream.
+            ///
+            /// `input-stream`s are *non-blocking* to the extent practical on underlying
+            /// platforms. I/O operations always return promptly; if fewer bytes are
+            /// promptly available than requested, they return the number of bytes promptly
+            /// available, which could even be zero. To wait for data to be available,
+            /// use the `subscribe` function to obtain a `pollable` which can be polled
+            /// for using `wasi:io/poll`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct InputStream {
+                handle: _rt::Resource<InputStream>,
+            }
+            impl InputStream {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for InputStream {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]input-stream"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// An output bytestream.
+            ///
+            /// `output-stream`s are *non-blocking* to the extent practical on
+            /// underlying platforms. Except where specified otherwise, I/O operations also
+            /// always return promptly, after the number of bytes that can be written
+            /// promptly, which could even be zero. To wait for the stream to be ready to
+            /// accept data, the `subscribe` function to obtain a `pollable` which can be
+            /// polled for using `wasi:io/poll`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutputStream {
+                handle: _rt::Resource<OutputStream>,
+            }
+            impl OutputStream {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutputStream {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]output-stream"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            impl InputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Perform a non-blocking read from the stream.
+                ///
+                /// This function returns a list of bytes containing the read data,
+                /// when successful. The returned list will contain up to `len` bytes;
+                /// it may return fewer than requested, but not more. The list is
+                /// empty when no bytes are available for reading at this time. The
+                /// pollable given by `subscribe` will be ready when more bytes are
+                /// available.
+                ///
+                /// This function fails with a `stream-error` when the operation
+                /// encounters an error, giving `last-operation-failed`, or when the
+                /// stream is closed, giving `closed`.
+                ///
+                /// When the caller gives a `len` of 0, it represents a request to
+                /// read 0 bytes. If the stream is still open, this call should
+                /// succeed and return an empty list, or otherwise fail with `closed`.
+                ///
+                /// The `len` parameter is a `u64`, which could represent a list of u8 which
+                /// is not possible to allocate in wasm32, or not desirable to allocate as
+                /// as a return value by the callee. The callee may return a list of bytes
+                /// less than `len` in size while more bytes are available for reading.
+                pub fn read(&self, len: u64) -> Result<_rt::Vec<u8>, StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]input-stream.read"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v7 = match l5 {
+                                        0 => {
+                                            let e7 = {
+                                                let l6 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l6 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e7)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v7
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl InputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Read bytes from a stream, after blocking until at least one byte can
+                /// be read. Except for blocking, behavior is identical to `read`.
+                pub fn blocking_read(
+                    &self,
+                    len: u64,
+                ) -> Result<_rt::Vec<u8>, StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]input-stream.blocking-read"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v7 = match l5 {
+                                        0 => {
+                                            let e7 = {
+                                                let l6 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l6 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e7)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v7
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl InputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Skip bytes from a stream. Returns number of bytes skipped.
+                ///
+                /// Behaves identical to `read`, except instead of returning a list
+                /// of bytes, returns the number of bytes consumed from the stream.
+                pub fn skip(&self, len: u64) -> Result<u64, StreamError> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]input-stream.skip"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr0.add(12).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl InputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Skip bytes from a stream, after blocking until at least one byte
+                /// can be skipped. Except for blocking behavior, identical to `skip`.
+                pub fn blocking_skip(&self, len: u64) -> Result<u64, StreamError> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]input-stream.blocking-skip"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr0.add(12).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl InputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Create a `pollable` which will resolve once either the specified stream
+                /// has bytes available to read or the other end of the stream has been
+                /// closed.
+                /// The created `pollable` is a child resource of the `input-stream`.
+                /// Implementations may trap if the `input-stream` is dropped before
+                /// all derived `pollable`s created with this function are dropped.
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]input-stream.subscribe"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Check readiness for writing. This function never blocks.
+                ///
+                /// Returns the number of bytes permitted for the next call to `write`,
+                /// or an error. Calling `write` with more bytes than this function has
+                /// permitted will trap.
+                ///
+                /// When this function returns 0 bytes, the `subscribe` pollable will
+                /// become ready when this function will report at least 1 byte, or an
+                /// error.
+                pub fn check_write(&self) -> Result<u64, StreamError> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.check-write"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr0.add(12).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Perform a write. This function never blocks.
+                ///
+                /// Precondition: check-write gave permit of Ok(n) and contents has a
+                /// length of less than or equal to n. Otherwise, this function will trap.
+                ///
+                /// returns Err(closed) without writing if the stream has closed since
+                /// the last call to check-write provided a permit.
+                pub fn write(&self, contents: &[u8]) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = contents;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.write"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr1.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Perform a write of up to 4096 bytes, and then flush the stream. Block
+                /// until all of these operations are complete, or an error occurs.
+                ///
+                /// This is a convenience wrapper around the use of `check-write`,
+                /// `subscribe`, `write`, and `flush`, and is implemented with the
+                /// following pseudo-code:
+                ///
+                /// ```text
+                /// let pollable = this.subscribe();
+                /// while !contents.is_empty() {
+                /// // Wait for the stream to become writable
+                /// poll-one(pollable);
+                /// let Ok(n) = this.check-write(); // eliding error handling
+                /// let len = min(n, contents.len());
+                /// let (chunk, rest) = contents.split_at(len);
+                /// this.write(chunk  );            // eliding error handling
+                /// contents = rest;
+                /// }
+                /// this.flush();
+                /// // Wait for completion of `flush`
+                /// poll-one(pollable);
+                /// // Check for any errors that arose during `flush`
+                /// let _ = this.check-write();         // eliding error handling
+                /// ```
+                pub fn blocking_write_and_flush(
+                    &self,
+                    contents: &[u8],
+                ) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = contents;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.blocking-write-and-flush"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr1.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Request to flush buffered output. This function never blocks.
+                ///
+                /// This tells the output-stream that the caller intends any buffered
+                /// output to be flushed. the output which is expected to be flushed
+                /// is all that has been passed to `write` prior to this call.
+                ///
+                /// Upon calling this function, the `output-stream` will not accept any
+                /// writes (`check-write` will return `ok(0)`) until the flush has
+                /// completed. The `subscribe` pollable will become ready when the
+                /// flush has completed and the stream can accept more writes.
+                pub fn flush(&self) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.flush"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v4 = match l2 {
+                                        0 => {
+                                            let e4 = {
+                                                let l3 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l3 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e4)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v4
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Request to flush buffered output, and block until flush completes
+                /// and stream is ready for writing again.
+                pub fn blocking_flush(&self) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.blocking-flush"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v4 = match l2 {
+                                        0 => {
+                                            let e4 = {
+                                                let l3 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l3 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e4)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v4
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Create a `pollable` which will resolve once the output-stream
+                /// is ready for more writing, or an error has occured. When this
+                /// pollable is ready, `check-write` will return `ok(n)` with n>0, or an
+                /// error.
+                ///
+                /// If the stream is closed, this pollable is always ready immediately.
+                ///
+                /// The created `pollable` is a child resource of the `output-stream`.
+                /// Implementations may trap if the `output-stream` is dropped before
+                /// all derived `pollable`s created with this function are dropped.
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.subscribe"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Write zeroes to a stream.
+                ///
+                /// this should be used precisely like `write` with the exact same
+                /// preconditions (must use check-write first), but instead of
+                /// passing a list of bytes, you simply pass the number of zero-bytes
+                /// that should be written.
+                pub fn write_zeroes(&self, len: u64) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.write-zeroes"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v4 = match l2 {
+                                        0 => {
+                                            let e4 = {
+                                                let l3 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l3 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e4)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v4
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Perform a write of up to 4096 zeroes, and then flush the stream.
+                /// Block until all of these operations are complete, or an error
+                /// occurs.
+                ///
+                /// This is a convenience wrapper around the use of `check-write`,
+                /// `subscribe`, `write-zeroes`, and `flush`, and is implemented with
+                /// the following pseudo-code:
+                ///
+                /// ```text
+                /// let pollable = this.subscribe();
+                /// while num_zeroes != 0 {
+                /// // Wait for the stream to become writable
+                /// poll-one(pollable);
+                /// let Ok(n) = this.check-write(); // eliding error handling
+                /// let len = min(n, num_zeroes);
+                /// this.write-zeroes(len);         // eliding error handling
+                /// num_zeroes -= len;
+                /// }
+                /// this.flush();
+                /// // Wait for completion of `flush`
+                /// poll-one(pollable);
+                /// // Check for any errors that arose during `flush`
+                /// let _ = this.check-write();         // eliding error handling
+                /// ```
+                pub fn blocking_write_zeroes_and_flush(
+                    &self,
+                    len: u64,
+                ) -> Result<(), StreamError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.blocking-write-zeroes-and-flush"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v4 = match l2 {
+                                        0 => {
+                                            let e4 = {
+                                                let l3 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l3 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e4)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v4
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Read from one stream and write to another.
+                ///
+                /// The behavior of splice is equivelant to:
+                /// 1. calling `check-write` on the `output-stream`
+                /// 2. calling `read` on the `input-stream` with the smaller of the
+                /// `check-write` permitted length and the `len` provided to `splice`
+                /// 3. calling `write` on the `output-stream` with that read data.
+                ///
+                /// Any error reported by the call to `check-write`, `read`, or
+                /// `write` ends the splice and reports that error.
+                ///
+                /// This function returns the number of bytes transferred; it may be less
+                /// than `len`.
+                pub fn splice(
+                    &self,
+                    src: &InputStream,
+                    len: u64,
+                ) -> Result<u64, StreamError> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.splice"]
+                            fn wit_import(_: i32, _: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            (src).handle() as i32,
+                            _rt::as_i64(&len),
+                            ptr0,
+                        );
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr0.add(12).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutputStream {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Read from one stream and write to another, with blocking.
+                ///
+                /// This is similar to `splice`, except that it blocks until the
+                /// `output-stream` is ready for writing, and the `input-stream`
+                /// is ready for reading, before performing the `splice`.
+                pub fn blocking_splice(
+                    &self,
+                    src: &InputStream,
+                    len: u64,
+                ) -> Result<u64, StreamError> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]output-stream.blocking-splice"]
+                            fn wit_import(_: i32, _: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            (src).handle() as i32,
+                            _rt::as_i64(&len),
+                            ptr0,
+                        );
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    let v5 = match l3 {
+                                        0 => {
+                                            let e5 = {
+                                                let l4 = *ptr0.add(12).cast::<i32>();
+                                                super::super::super::wasi::io::error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            StreamError::LastOperationFailed(e5)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                            StreamError::Closed
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod exports {
     pub mod wasi {
+        pub mod cli {
+            #[allow(dead_code, clippy::all)]
+            pub mod environment {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_environment_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_environment();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec5 = result0;
+                    let len5 = vec5.len();
+                    let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec5.len() * 16,
+                        4,
+                    );
+                    let result5 = if layout5.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout5);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec5.into_iter().enumerate() {
+                        let base = result5.add(i * 16);
+                        {
+                            let (t2_0, t2_1) = e;
+                            let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *base.add(4).cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                            let vec4 = (t2_1.into_bytes()).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *base.add(12).cast::<usize>() = len4;
+                            *base.add(8).cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                    }
+                    *ptr1.add(4).cast::<usize>() = len5;
+                    *ptr1.add(0).cast::<*mut u8>() = result5;
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_environment<T: Guest>(arg0: *mut u8) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    let base6 = l0;
+                    let len6 = l1;
+                    for i in 0..len6 {
+                        let base = base6.add(i * 16);
+                        {
+                            let l2 = *base.add(0).cast::<*mut u8>();
+                            let l3 = *base.add(4).cast::<usize>();
+                            _rt::cabi_dealloc(l2, l3, 1);
+                            let l4 = *base.add(8).cast::<*mut u8>();
+                            let l5 = *base.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l4, l5, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base6, len6 * 16, 4);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_arguments_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_arguments();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec3 = result0;
+                    let len3 = vec3.len();
+                    let layout3 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec3.len() * 8,
+                        4,
+                    );
+                    let result3 = if layout3.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout3);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec3.into_iter().enumerate() {
+                        let base = result3.add(i * 8);
+                        {
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *base.add(4).cast::<usize>() = len2;
+                            *base.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    }
+                    *ptr1.add(4).cast::<usize>() = len3;
+                    *ptr1.add(0).cast::<*mut u8>() = result3;
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_arguments<T: Guest>(arg0: *mut u8) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    let base4 = l0;
+                    let len4 = l1;
+                    for i in 0..len4 {
+                        let base = base4.add(i * 8);
+                        {
+                            let l2 = *base.add(0).cast::<*mut u8>();
+                            let l3 = *base.add(4).cast::<usize>();
+                            _rt::cabi_dealloc(l2, l3, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base4, len4 * 8, 4);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_initial_cwd_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::initial_cwd();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_initial_cwd<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                pub trait Guest {
+                    /// Get the POSIX-style environment variables.
+                    ///
+                    /// Each environment variable is provided as a pair of string variable names
+                    /// and string value.
+                    ///
+                    /// Morally, these are a value import, but until value imports are available
+                    /// in the component model, this import function should return the same
+                    /// values each time it is called.
+                    fn get_environment() -> _rt::Vec<(_rt::String, _rt::String)>;
+                    /// Get the POSIX-style arguments to the program.
+                    fn get_arguments() -> _rt::Vec<_rt::String>;
+                    /// Return a path that programs should use as their initial current working
+                    /// directory, interpreting `.` as shorthand for this.
+                    fn initial_cwd() -> Option<_rt::String>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_environment_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/environment@0.2.0#get-environment"] unsafe extern "C"
+                        fn export_get_environment() -> * mut u8 { $($path_to_types)*::
+                        _export_get_environment_cabi::<$ty > () } #[export_name =
+                        "cabi_post_wasi:cli/environment@0.2.0#get-environment"] unsafe
+                        extern "C" fn _post_return_get_environment(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_get_environment::<$ty > (arg0)
+                        } #[export_name = "wasi:cli/environment@0.2.0#get-arguments"]
+                        unsafe extern "C" fn export_get_arguments() -> * mut u8 {
+                        $($path_to_types)*:: _export_get_arguments_cabi::<$ty > () }
+                        #[export_name =
+                        "cabi_post_wasi:cli/environment@0.2.0#get-arguments"] unsafe
+                        extern "C" fn _post_return_get_arguments(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_get_arguments::<$ty > (arg0) }
+                        #[export_name = "wasi:cli/environment@0.2.0#initial-cwd"] unsafe
+                        extern "C" fn export_initial_cwd() -> * mut u8 {
+                        $($path_to_types)*:: _export_initial_cwd_cabi::<$ty > () }
+                        #[export_name =
+                        "cabi_post_wasi:cli/environment@0.2.0#initial-cwd"] unsafe extern
+                        "C" fn _post_return_initial_cwd(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_initial_cwd::<$ty > (arg0) }
+                        };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_environment_0_2_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 12],
+                );
+            }
+            #[allow(dead_code, clippy::all)]
+            pub mod exit {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_exit_cabi<T: Guest>(arg0: i32) {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    T::exit(
+                        match arg0 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                }
+                pub trait Guest {
+                    /// Exit the current instance and any linked instances.
+                    fn exit(status: Result<(), ()>);
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_exit_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name = "wasi:cli/exit@0.2.0#exit"]
+                        unsafe extern "C" fn export_exit(arg0 : i32,) {
+                        $($path_to_types)*:: _export_exit_cabi::<$ty > (arg0) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_exit_0_2_0_cabi;
+            }
+            #[allow(dead_code, clippy::all)]
+            pub mod stderr {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type OutputStream = super::super::super::super::wasi::io::streams::OutputStream;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_stderr_cabi<T: Guest>() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_stderr();
+                    (result0).take_handle() as i32
+                }
+                pub trait Guest {
+                    fn get_stderr() -> OutputStream;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_stderr_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/stderr@0.2.0#get-stderr"] unsafe extern "C" fn
+                        export_get_stderr() -> i32 { $($path_to_types)*::
+                        _export_get_stderr_cabi::<$ty > () } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_stderr_0_2_0_cabi;
+            }
+            #[allow(dead_code, clippy::all)]
+            pub mod stdin {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type InputStream = super::super::super::super::wasi::io::streams::InputStream;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_stdin_cabi<T: Guest>() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_stdin();
+                    (result0).take_handle() as i32
+                }
+                pub trait Guest {
+                    fn get_stdin() -> InputStream;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_stdin_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/stdin@0.2.0#get-stdin"] unsafe extern "C" fn
+                        export_get_stdin() -> i32 { $($path_to_types)*::
+                        _export_get_stdin_cabi::<$ty > () } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_stdin_0_2_0_cabi;
+            }
+            #[allow(dead_code, clippy::all)]
+            pub mod stdout {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type OutputStream = super::super::super::super::wasi::io::streams::OutputStream;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_stdout_cabi<T: Guest>() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_stdout();
+                    (result0).take_handle() as i32
+                }
+                pub trait Guest {
+                    fn get_stdout() -> OutputStream;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_stdout_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/stdout@0.2.0#get-stdout"] unsafe extern "C" fn
+                        export_get_stdout() -> i32 { $($path_to_types)*::
+                        _export_get_stdout_cabi::<$ty > () } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_stdout_0_2_0_cabi;
+            }
+            /// Terminal input.
+            ///
+            /// In the future, this may include functions for disabling echoing,
+            /// disabling input buffering so that keyboard events are sent through
+            /// immediately, querying supported features, and so on.
+            #[allow(dead_code, clippy::all)]
+            pub mod terminal_input {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                /// The input side of a terminal.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct TerminalInput {
+                    handle: _rt::Resource<TerminalInput>,
+                }
+                type _TerminalInputRep<T> = Option<T>;
+                impl TerminalInput {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `TerminalInput`.
+                    pub fn new<T: GuestTerminalInput>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _TerminalInputRep<T> = Some(val);
+                        let ptr: *mut _TerminalInputRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestTerminalInput>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestTerminalInput>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestTerminalInput>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _TerminalInputRep<T>);
+                    }
+                    fn as_ptr<T: GuestTerminalInput>(
+                        &self,
+                    ) -> *mut _TerminalInputRep<T> {
+                        TerminalInput::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`TerminalInput`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct TerminalInputBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a TerminalInput>,
+                }
+                impl<'a> TerminalInputBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestTerminalInput>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _TerminalInputRep<T> {
+                        TerminalInput::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for TerminalInput {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-input@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]terminal-input"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                pub trait Guest {
+                    type TerminalInput: GuestTerminalInput;
+                }
+                pub trait GuestTerminalInput: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-input@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]terminal-input"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-input@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]terminal-input"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_terminal_input_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:cli/terminal-input@0.2.0#[dtor]terminal-input"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: TerminalInput::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::TerminalInput > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_terminal_input_0_2_0_cabi;
+            }
+            /// Terminal output.
+            ///
+            /// In the future, this may include functions for querying the terminal
+            /// size, being notified of terminal size changes, querying supported
+            /// features, and so on.
+            #[allow(dead_code, clippy::all)]
+            pub mod terminal_output {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                /// The output side of a terminal.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct TerminalOutput {
+                    handle: _rt::Resource<TerminalOutput>,
+                }
+                type _TerminalOutputRep<T> = Option<T>;
+                impl TerminalOutput {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `TerminalOutput`.
+                    pub fn new<T: GuestTerminalOutput>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _TerminalOutputRep<T> = Some(val);
+                        let ptr: *mut _TerminalOutputRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestTerminalOutput>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestTerminalOutput>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestTerminalOutput>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _TerminalOutputRep<T>);
+                    }
+                    fn as_ptr<T: GuestTerminalOutput>(
+                        &self,
+                    ) -> *mut _TerminalOutputRep<T> {
+                        TerminalOutput::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`TerminalOutput`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct TerminalOutputBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a TerminalOutput>,
+                }
+                impl<'a> TerminalOutputBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestTerminalOutput>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _TerminalOutputRep<T> {
+                        TerminalOutput::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for TerminalOutput {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-output@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]terminal-output"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                pub trait Guest {
+                    type TerminalOutput: GuestTerminalOutput;
+                }
+                pub trait GuestTerminalOutput: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-output@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]terminal-output"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:cli/terminal-output@0.2.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]terminal-output"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_terminal_output_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:cli/terminal-output@0.2.0#[dtor]terminal-output"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: TerminalOutput::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::TerminalOutput > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_terminal_output_0_2_0_cabi;
+            }
+            /// An interface providing an optional `terminal-output` for stderr as a
+            /// link-time authority.
+            #[allow(dead_code, clippy::all)]
+            pub mod terminal_stderr {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type TerminalOutput = super::super::super::super::exports::wasi::cli::terminal_output::TerminalOutput;
+                pub type TerminalOutputBorrow<'a> = super::super::super::super::exports::wasi::cli::terminal_output::TerminalOutputBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_terminal_stderr_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_terminal_stderr();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                pub trait Guest {
+                    /// If stderr is connected to a terminal, return a `terminal-output` handle
+                    /// allowing further interaction with it.
+                    fn get_terminal_stderr() -> Option<TerminalOutput>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_terminal_stderr_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/terminal-stderr@0.2.0#get-terminal-stderr"] unsafe
+                        extern "C" fn export_get_terminal_stderr() -> * mut u8 {
+                        $($path_to_types)*:: _export_get_terminal_stderr_cabi::<$ty > ()
+                        } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_terminal_stderr_0_2_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 8],
+                );
+            }
+            /// An interface providing an optional `terminal-input` for stdin as a
+            /// link-time authority.
+            #[allow(dead_code, clippy::all)]
+            pub mod terminal_stdin {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type TerminalInput = super::super::super::super::exports::wasi::cli::terminal_input::TerminalInput;
+                pub type TerminalInputBorrow<'a> = super::super::super::super::exports::wasi::cli::terminal_input::TerminalInputBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_terminal_stdin_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_terminal_stdin();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                pub trait Guest {
+                    /// If stdin is connected to a terminal, return a `terminal-input` handle
+                    /// allowing further interaction with it.
+                    fn get_terminal_stdin() -> Option<TerminalInput>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_terminal_stdin_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/terminal-stdin@0.2.0#get-terminal-stdin"] unsafe extern
+                        "C" fn export_get_terminal_stdin() -> * mut u8 {
+                        $($path_to_types)*:: _export_get_terminal_stdin_cabi::<$ty > () }
+                        };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_terminal_stdin_0_2_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 8],
+                );
+            }
+            /// An interface providing an optional `terminal-output` for stdout as a
+            /// link-time authority.
+            #[allow(dead_code, clippy::all)]
+            pub mod terminal_stdout {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type TerminalOutput = super::super::super::super::exports::wasi::cli::terminal_output::TerminalOutput;
+                pub type TerminalOutputBorrow<'a> = super::super::super::super::exports::wasi::cli::terminal_output::TerminalOutputBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_terminal_stdout_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get_terminal_stdout();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                pub trait Guest {
+                    /// If stdout is connected to a terminal, return a `terminal-output` handle
+                    /// allowing further interaction with it.
+                    fn get_terminal_stdout() -> Option<TerminalOutput>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_cli_terminal_stdout_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:cli/terminal-stdout@0.2.0#get-terminal-stdout"] unsafe
+                        extern "C" fn export_get_terminal_stdout() -> * mut u8 {
+                        $($path_to_types)*:: _export_get_terminal_stdout_cabi::<$ty > ()
+                        } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_cli_terminal_stdout_0_2_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 8],
+                );
+            }
+        }
         pub mod clocks {
             /// WASI Monotonic Clock is a clock API intended to let users measure elapsed
             /// time.
@@ -13436,6 +15991,29 @@ pub mod exports {
 }
 #[rustfmt::skip]
 mod _rt {
+    pub use alloc_crate::vec::Vec;
+    pub use alloc_crate::string::String;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
+        if size == 0 {
+            return;
+        }
+        let layout = alloc::Layout::from_size_align_unchecked(size, align);
+        alloc::dealloc(ptr, layout);
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
     use core::fmt;
     use core::marker;
     use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -13521,7 +16099,6 @@ mod _rt {
             val != 0
         }
     }
-    pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
     pub fn as_i64<T: AsI64>(t: T) -> i64 {
         t.as_i64()
@@ -13546,7 +16123,6 @@ mod _rt {
             self as i64
         }
     }
-    pub use alloc_crate::string::String;
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
     }
@@ -13640,20 +16216,6 @@ mod _rt {
             self as f64
         }
     }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
-    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
-        if size == 0 {
-            return;
-        }
-        let layout = alloc::Layout::from_size_align_unchecked(size, align);
-        alloc::dealloc(ptr, layout);
-    }
     pub unsafe fn char_lift(val: u32) -> char {
         if cfg!(debug_assertions) {
             core::char::from_u32(val).unwrap()
@@ -13661,17 +16223,11 @@ mod _rt {
             core::char::from_u32_unchecked(val)
         }
     }
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
-        }
-    }
     #[cfg(target_arch = "wasm32")]
     pub fn run_ctors_once() {
         wit_bindgen_rt::run_ctors_once();
     }
+    pub use alloc_crate::boxed::Box;
     extern crate alloc as alloc_crate;
 }
 /// Generates `#[no_mangle]` functions to export the specified type as the
@@ -13698,6 +16254,34 @@ macro_rules! __export_durable_wasi_impl {
     };
     ($ty:ident with_types_in $($path_to_types_root:tt)*) => {
         $($path_to_types_root)*::
+        exports::wasi::cli::environment::__export_wasi_cli_environment_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::environment);
+        $($path_to_types_root)*::
+        exports::wasi::cli::exit::__export_wasi_cli_exit_0_2_0_cabi!($ty with_types_in
+        $($path_to_types_root)*:: exports::wasi::cli::exit); $($path_to_types_root)*::
+        exports::wasi::cli::stderr::__export_wasi_cli_stderr_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::stderr);
+        $($path_to_types_root)*::
+        exports::wasi::cli::stdin::__export_wasi_cli_stdin_0_2_0_cabi!($ty with_types_in
+        $($path_to_types_root)*:: exports::wasi::cli::stdin); $($path_to_types_root)*::
+        exports::wasi::cli::stdout::__export_wasi_cli_stdout_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::stdout);
+        $($path_to_types_root)*::
+        exports::wasi::cli::terminal_input::__export_wasi_cli_terminal_input_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::terminal_input);
+        $($path_to_types_root)*::
+        exports::wasi::cli::terminal_output::__export_wasi_cli_terminal_output_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::terminal_output);
+        $($path_to_types_root)*::
+        exports::wasi::cli::terminal_stderr::__export_wasi_cli_terminal_stderr_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::terminal_stderr);
+        $($path_to_types_root)*::
+        exports::wasi::cli::terminal_stdin::__export_wasi_cli_terminal_stdin_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::terminal_stdin);
+        $($path_to_types_root)*::
+        exports::wasi::cli::terminal_stdout::__export_wasi_cli_terminal_stdout_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::terminal_stdout);
+        $($path_to_types_root)*::
         exports::wasi::clocks::monotonic_clock::__export_wasi_clocks_monotonic_clock_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::clocks::monotonic_clock);
         $($path_to_types_root)*::
@@ -13710,180 +16294,237 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 8576] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfdA\x01A\x02\x01A!\x01\
-B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
-od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
-lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
-\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
-\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
-n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
-\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
-\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/mon\
-otonic-clock@0.2.0\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08\
-datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\
-\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x03\x01B@\x02\x03\x02\x01\x01\x04\0\x08po\
-llable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\
-\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\
-\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\
-\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-typ\
-e\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\
-\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim\
--u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dp\
-rim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0d\
-prim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-typ\
-e\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\
-\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\
-\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-va\
-lue\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\
-\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\
-\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\
-\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08\
-prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\
-\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-n\
-ode\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\
-\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-err\
-or\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\
-\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\
-\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\
-\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-para\
-ms*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self\
-)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\
-\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]\
-wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[\
-method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[\
-method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-va\
-lue\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/t\
-ypes@0.1.1\x05\x04\x02\x03\0\x03\x03uri\x02\x03\0\x01\x08duration\x01Bg\x02\x03\x02\
-\x01\x05\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\x02\x01\
-w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01r\x02\
-\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0c\
-component-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09wor\
-ker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\
-\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-at\
-temptsy\x09min-delay\x03\x09max-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\
-\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remo\
-te-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09\
-automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09\
-not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comp\
-arator\x03\0\x19\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18str\
-ing-filter-comparator\x03\0\x1b\x01m\x07\x07running\x04idle\x09suspended\x0binte\
-rrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\
-\x0acomparator\x1c\x05values\x04\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0ac\
-omparator\x1a\x05value\x1e\x04\0\x14worker-status-filter\x03\0!\x01r\x02\x0acomp\
-arator\x1a\x05valuew\x04\0\x15worker-version-filter\x03\0#\x01r\x02\x0acomparato\
-r\x1a\x05valuew\x04\0\x18worker-created-at-filter\x03\0%\x01r\x03\x04names\x0aco\
-mparator\x1c\x05values\x04\0\x11worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\
-\0\x06status\x01\"\0\x07version\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16\
-worker-property-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-fil\
-ter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01\
-o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04args1\x03env3\x06status\x1e\x11compon\
-ent-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-worker\
-s\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\
-\0\x18[constructor]get-workers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\
-\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01\
-p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise\
--id\x0f\x04data?\0\x7f\x04\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\
-\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01\
-@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\
-\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05\
-begin\x05\x01\0\x04\0\x12mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry\
--policy\x01G\x01@\x01\x10new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01\
-H\x01@\0\0\x16\x04\0\x1bget-oplog-persistence-level\x01I\x01@\x01\x15new-persist\
-ence-level\x16\x01\0\x04\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\
-\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idem\
-potence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09\
-worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01\
-N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\
-\0\x04\0\x13get-worker-metadata\x01Q\x03\0\x14golem:api/host@1.2.0\x05\x07\x02\x03\
-\0\x02\x08datetime\x02\x03\0\x03\x09wit-value\x02\x03\0\x04\x0aaccount-id\x02\x03\
-\0\x04\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0cretry-\
-policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x01Be\x02\x03\x02\x01\x08\
-\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\x04\0\x09wit-value\x03\0\x02\x02\x03\
-\x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x0b\x04\0\x11componen\
-t-version\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\
-\x01\x0d\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01\x0e\x04\0\x04uuid\x03\0\
-\x0c\x02\x03\x02\x01\x0f\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01q\x05\x0aread-\
-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-rem\
-ote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\x02ss\x01p\x13\
-\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0aparameters\x14\x04\0\x1f\
-plugin-installation-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09ti\
-mestamp\x01\x09worker-id\x0f\x11component-version\x07\x04args\x17\x03env\x14\x0a\
-account-id\x05\x06parent\x18\x0ecomponent-sizew\x20initial-total-linear-memory-s\
-izew\x16initial-active-plugins\x19\x04\0\x11create-parameters\x03\0\x1a\x01r\x05\
-\x09timestamp\x01\x0dfunction-names\x07request\x03\x08response\x03\x15wrapped-fu\
-nction-type\x12\x04\0$imported-function-invoked-parameters\x03\0\x1c\x01p\x03\x01\
-r\x04\x09timestamp\x01\x0dfunction-names\x07request\x1e\x0fidempotency-keys\x04\0\
-$exported-function-invoked-parameters\x03\0\x1f\x01r\x03\x09timestamp\x01\x08res\
-ponse\x03\x0dconsumed-fuelx\x04\0&exported-function-completed-parameters\x03\0!\x01\
-r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameters\x03\0#\x01r\x03\x09ti\
-mestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\0%\x01r\x02\x09\
-timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0'\
-\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-paramet\
-ers\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-writ\
-e-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05i\
-nput-\x04\0'exported-function-invocation-parameters\x03\0.\x01q\x02\x11exported-\
-function\x01/\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-invocation\x03\00\x01\
-r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pending-worker-invocation-parameters\
-\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\0\x12upda\
-te-description\x03\05\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-\
-description6\x04\0\x19pending-update-parameters\x03\07\x01r\x04\x09timestamp\x01\
-\x0etarget-version\x07\x12new-component-sizew\x12new-active-plugins\x19\x04\0\x1c\
-successful-update-parameters\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etarget-ve\
-rsion\x07\x07details;\x04\0\x18failed-update-parameters\x03\0<\x01r\x02\x09times\
-tamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0>\x01w\x04\0\x12worker-r\
-esource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x1acreate\
--resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\
-\x18drop-resource-parameters\x03\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\
-\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1cdescribe-resource-parameter\
-s\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\
-\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07\
-contexts\x07messages\x04\0\x0elog-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06\
-plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06\
-plugin\x16\x04\0\x1cdeactivate-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\
-\0\x19imported-function-invoked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\
-\x1bexported-function-completed\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05\
-no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13c\
-hange-retry-policy\x01(\0\x13begin-atomic-region\x01\x01\0\x11end-atomic-region\x01\
-*\0\x12begin-remote-write\x01\x01\0\x10end-remote-write\x01,\0\x19pending-worker\
--invocation\x013\0\x0epending-update\x018\0\x11successful-update\x01:\0\x0dfaile\
-d-update\x01=\0\x0bgrow-memory\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-res\
-ource\x01\xc5\0\0\x11describe-resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\
-\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\
-\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01\
-iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\0\x04\0\x16[constructor]get-oplo\
-g\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[meth\
-od]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\
-\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\
-\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.get-next\x01`\x03\0\
-\x15golem:api/oplog@1.2.0\x05\x10\x02\x03\0\x04\x11persistence-level\x02\x03\0\x05\
-\x0boplog-index\x02\x03\0\x05\x15wrapped-function-type\x02\x03\0\x03\x0evalue-an\
-d-type\x01B\x20\x02\x03\x02\x01\x11\x04\0\x11persistence-level\x03\0\0\x02\x03\x02\
-\x01\x12\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01\x13\x04\0\x15wrapped-fun\
-ction-type\x03\0\x04\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\x06\x02\x03\x02\
-\x01\x14\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\0\x05\
-\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17durable-execution-sta\
-te\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01p}\x01\
-r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\x0d\
-entry-version\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\x02\
-\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\x0d\
-function-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0dfunc\
-tion-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\x01\
-@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunction-\
-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persist-du\
-rable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08r\
-esponse\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durable-function-invo\
-cation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\
-\x18\x03\0\x1agolem:api/durability@1.2.0\x05\x15\x01B\x0f\x02\x03\x02\x01\x01\x04\
-\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\
-\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\
-\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\
-\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wasi:clocks/monoton\
-ic-clock@0.2.0\x05\x16\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08da\
-tetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x04\
-\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x17\x04\0\x17golem:wasi/durable-wasi\x04\0\
-\x0b\x12\x01\0\x0cdurable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
-wit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 11246] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xebV\x01A\x02\x01AR\x01\
+B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\x01@\
+\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial-cwd\x01\
+\x06\x03\0\x1awasi:cli/environment@0.2.0\x05\0\x01B\x03\x01j\0\0\x01@\x01\x06sta\
+tus\0\x01\0\x04\0\x04exit\x01\x01\x03\0\x13wasi:cli/exit@0.2.0\x05\x01\x01B\x04\x04\
+\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-deb\
+ug-string\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05\x02\x01B\x0a\x04\0\x08pollabl\
+e\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\
+\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\x01\
+py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\
+\x03\x02\x03\0\x02\x05error\x02\x03\0\x03\x08pollable\x01B(\x02\x03\x02\x01\x04\x04\
+\0\x05error\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x02\x01i\x01\x01\
+q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\x03\
+\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\x01\
+p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]inpu\
+t-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\x01\
+w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.skip\x01\
+\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04self\
+\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\x04\
+self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\x01\
+@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\x01\
+\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04se\
+lf\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output-s\
+tream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]output-\
+stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]outpu\
+t-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroes-\
+and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[method\
+]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\
+\x03\0\x15wasi:io/streams@0.2.0\x05\x06\x02\x03\0\x04\x0doutput-stream\x01B\x05\x02\
+\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0ag\
+et-stderr\x01\x03\x03\0\x15wasi:cli/stderr@0.2.0\x05\x08\x02\x03\0\x04\x0cinput-\
+stream\x01B\x05\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\
+\0\x02\x04\0\x09get-stdin\x01\x03\x03\0\x14wasi:cli/stdin@0.2.0\x05\x0a\x01B\x05\
+\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0a\
+get-stdout\x01\x03\x03\0\x15wasi:cli/stdout@0.2.0\x05\x0b\x01B\x01\x04\0\x0eterm\
+inal-input\x03\x01\x03\0\x1dwasi:cli/terminal-input@0.2.0\x05\x0c\x01B\x01\x04\0\
+\x0fterminal-output\x03\x01\x03\0\x1ewasi:cli/terminal-output@0.2.0\x05\x0d\x02\x03\
+\0\x09\x0fterminal-output\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\
+\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x03\0\x1e\
+wasi:cli/terminal-stderr@0.2.0\x05\x0f\x02\x03\0\x08\x0eterminal-input\x01B\x06\x02\
+\x03\x02\x01\x10\x04\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\
+\0\x12get-terminal-stdin\x01\x04\x03\0\x1dwasi:cli/terminal-stdin@0.2.0\x05\x11\x01\
+B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01\
+@\0\0\x03\x04\0\x13get-terminal-stdout\x01\x04\x03\0\x1ewasi:cli/terminal-stdout\
+@0.2.0\x05\x12\x01B\x0f\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\
+\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\
+\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\
+\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subs\
+cribe-duration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x13\x01B\x05\x01\
+r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03\
+now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.0\x05\
+\x14\x01B@\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-inde\
+x\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\
+\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\
+\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-type\x01\
+\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0a\
+tuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\x01\x03\0\x0bresult-t\
+ype\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dp\
+rim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0d\
+prim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\
+\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0d\
+wit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\
+\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\
+\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\
+\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-\
+value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01\
+}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08\
+prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0c\
+prim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01\
+s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\
+\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-an\
+d-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01\
+s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\
+\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\
+\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04se\
+lf)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]wasm-rpc.invoke-and-a\
+wait\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0-\
+\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfunction-names\
+\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-and-await\x010\x01h&\
+\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-result.subscribe\x013\
+\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-result.get\x015\x01@\x01\
+\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cext\
+ract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05\x15\x02\x03\0\x0f\x03uri\x02\x03\
+\0\x0d\x08duration\x01Bg\x02\x03\x02\x01\x16\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\
+\x17\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11\
+component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\
+\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponen\
+t-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09\
+oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-\
+id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09max-delay\x03\x0a\
+multiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0f\
+persist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11per\
+sistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate\
+-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0ale\
+ss-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05equal\x09not-e\
+qual\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1b\x01m\x07\x07\
+running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\
+\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\0\x12worker\
+-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\x14worker-s\
+tatus-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15worker-version\
+-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-created-at-f\
+ilter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\0\x11worker-env-f\
+ilter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07version\x01$\0\x0ac\
+reated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\x03\0)\x01p*\x01r\
+\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07filters.\x04\
+\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04\
+args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-countw\x04\0\x0fworke\
+r-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent\
+-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h\
+6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01\
+@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\
+\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\0\x10comple\
+te-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-promise\x01B\x01\
+@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0f\
+set-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01E\x04\0\
+\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-oper\
+ation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\x10new-retry-pol\
+icy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1bget-oplog-per\
+sistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\x04\0\x1bset-opl\
+og-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\
+\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18\
+generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04\
+mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01\
+O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\0\
+\x14golem:api/host@1.2.0\x05\x18\x02\x03\0\x0e\x08datetime\x02\x03\0\x0f\x09wit-\
+value\x02\x03\0\x10\x0aaccount-id\x02\x03\0\x10\x11component-version\x02\x03\0\x10\
+\x0boplog-index\x02\x03\0\x10\x0cretry-policy\x02\x03\0\x10\x04uuid\x02\x03\0\x10\
+\x09worker-id\x01Be\x02\x03\x02\x01\x19\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
+\x1a\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x1b\x04\0\x0aaccount-id\x03\0\x04\
+\x02\x03\x02\x01\x1c\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\x1d\x04\
+\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x1e\x04\0\x0cretry-policy\x03\0\x0a\x02\
+\x03\x02\x01\x1f\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01\x20\x04\0\x09worker-id\x03\
+\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\
+\x0cwrite-remote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function\
+-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07\
+versions\x0aparameters\x14\x04\0\x1fplugin-installation-description\x03\0\x15\x01\
+ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-ver\
+sion\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent-siz\
+ew\x20initial-total-linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11c\
+reate-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07reques\
+t\x03\x08response\x03\x15wrapped-function-type\x12\x04\0$imported-function-invok\
+ed-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07\
+request\x1e\x0fidempotency-keys\x04\0$exported-function-invoked-parameters\x03\0\
+\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-\
+function-completed-parameters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10\
+error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0f\
+jump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1ech\
+ange-retry-policy-parameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\
+\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin\
+-index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidem\
+potency-keys\x0dfunction-names\x05input-\x04\0'exported-function-invocation-para\
+meters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\
+\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pe\
+nding-worker-invocation-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0es\
+napshot-based\x014\0\x04\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\
+\x0etarget-version\x07\x12update-description6\x04\0\x19pending-update-parameters\
+\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12\
+new-active-plugins\x19\x04\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\
+\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\0\x18failed-update-param\
+eters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\
+\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bres\
+ource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\
+\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09times\
+tamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1c\
+describe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05deb\
+ug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09ti\
+mestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0\
+J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\
+\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactivate-plugin-parameter\
+s\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-invoked\x01\x1d\0\x19\
+exported-function-invoked\x01\x20\0\x1bexported-function-completed\x01\"\0\x07su\
+spend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\
+\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13begin-atomic-reg\
+ion\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\x01\0\x10end\
+-remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending-update\x018\0\
+\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memory\x01?\0\x0fcr\
+eate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe-resource\x01\xc7\
+\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11d\
+eactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\
+\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\
+\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04\
+self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09wo\
+rker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\
+\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method\
+]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.2.0\x05!\x02\x03\0\x10\x11\
+persistence-level\x02\x03\0\x11\x0boplog-index\x02\x03\0\x11\x15wrapped-function\
+-type\x02\x03\0\x0f\x0evalue-and-type\x01B\x20\x02\x03\x02\x01\"\x04\0\x11persis\
+tence-level\x03\0\0\x02\x03\x02\x01#\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01\
+$\x04\0\x15wrapped-function-type\x03\0\x04\x02\x03\x02\x01\x19\x04\0\x08datetime\
+\x03\0\x06\x02\x03\x02\x01%\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-f\
+unction-type\x03\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17\
+durable-execution-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-vers\
+ion\x03\0\x0d\x01p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0d\
+function-type\x0a\x0dentry-version\x0e\x04\0%persisted-durable-function-invocati\
+on\x03\0\x10\x01@\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-cal\
+l\x01\x12\x01@\x01\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\
+\x13\x01@\x02\x0dfunction-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable\
+-function\x01\x14\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01\
+@\x04\x0dfunction-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\
+\x04\0#persist-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07\
+request\x09\x08response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durab\
+le-function-invocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-functio\
+n-invocation\x01\x18\x03\0\x1agolem:api/durability@1.2.0\x05&\x01B\x0a\x01o\x02s\
+s\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0d\
+get-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x04\0\x1aw\
+asi:cli/environment@0.2.0\x05'\x01B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\0\
+\x04exit\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05(\x01B\x05\x02\x03\x02\x01\x07\x04\
+\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stderr\x01\x03\x04\
+\0\x15wasi:cli/stderr@0.2.0\x05)\x01B\x05\x02\x03\x02\x01\x09\x04\0\x0cinput-str\
+eam\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x04\0\x14wasi:cli/s\
+tdin@0.2.0\x05*\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\
+\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15wasi:cli/stdout@0.2.0\x05\
++\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi:cli/terminal-input@0.2.\
+0\x05,\x01B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1ewasi:cli/terminal-outp\
+ut@0.2.0\x05-\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\
+\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x04\0\x1ewasi:cl\
+i/terminal-stderr@0.2.0\x05.\x01B\x06\x02\x03\x02\x01\x10\x04\0\x0eterminal-inpu\
+t\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdin\x01\x04\x04\
+\0\x1dwasi:cli/terminal-stdin@0.2.0\x05/\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0ft\
+erminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stdo\
+ut\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x050\x01B\x0f\x02\x03\x02\x01\
+\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08dur\
+ation\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresoluti\
+on\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\
+\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wasi:clock\
+s/monotonic-clock@0.2.0\x051\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\
+\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\
+\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x052\x04\0\x17golem:wasi/durable-wasi\x04\
+\0\x0b\x12\x01\0\x0cdurable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\
+\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

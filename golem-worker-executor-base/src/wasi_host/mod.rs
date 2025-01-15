@@ -47,20 +47,35 @@ where
         wasmtime_wasi::bindings::sockets::network::LinkOptions::default();
     network_link_options.network_error_code(true);
 
-    wasmtime_wasi::bindings::cli::environment::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::cli::environment::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::cli::exit::add_to_linker_get_host(
         &mut linker,
         &exit_link_options,
-        get,
+        get_wasmtime,
     )?;
-    wasmtime_wasi::bindings::cli::stderr::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::stdin::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::stdout::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::terminal_input::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::terminal_output::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::terminal_stderr::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::terminal_stdin::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::cli::terminal_stdout::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::cli::stderr::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::cli::stdin::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::cli::stdout::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::cli::terminal_input::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::cli::terminal_output::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::cli::terminal_stderr::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::cli::terminal_stdin::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::cli::terminal_stdout::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
     wasmtime_wasi::bindings::clocks::monotonic_clock::add_to_linker_get_host(
         &mut linker,
         get_wasmtime,

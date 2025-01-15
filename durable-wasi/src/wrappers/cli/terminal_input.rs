@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::component::Resource;
+pub struct TerminalInput {
+    pub terminal_input: crate::bindings::wasi::cli::terminal_input::TerminalInput,
+}
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::stdin::{Host, InputStream};
+impl crate::bindings::exports::wasi::cli::terminal_input::GuestTerminalInput for TerminalInput {}
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_stdin(&mut self) -> anyhow::Result<Resource<InputStream>> {
-        self.observe_function_call("cli::stdin", "get_stdin");
-        self.as_wasi_view().get_stdin()
-    }
+impl crate::bindings::exports::wasi::cli::terminal_input::Guest for crate::Component {
+    type TerminalInput = TerminalInput;
 }

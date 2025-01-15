@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::component::Resource;
+use crate::bindings::exports::wasi::cli::stderr::OutputStream;
+use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::wasi::cli::stderr::get_stderr;
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::stdout::{Host, OutputStream};
-
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_stdout(&mut self) -> anyhow::Result<Resource<OutputStream>> {
-        self.observe_function_call("cli::stdout", "get_stdout");
-        self.as_wasi_view().get_stdout()
+impl crate::bindings::exports::wasi::cli::stderr::Guest for crate::Component {
+    fn get_stderr() -> OutputStream {
+        observe_function_call("cli::stderr", "get_stderr");
+        get_stderr()
     }
 }

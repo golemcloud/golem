@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use wasmtime::component::Resource;
+use crate::bindings::exports::wasi::cli::stdin::InputStream;
+use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::wasi::cli::stdin::get_stdin;
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::terminal_stdout::{Host, TerminalOutput};
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_terminal_stdout(&mut self) -> anyhow::Result<Option<Resource<TerminalOutput>>> {
-        self.observe_function_call("cli::terminal_stdout", "get_terminal_stdout");
-        self.as_wasi_view().get_terminal_stdout()
+impl crate::bindings::exports::wasi::cli::stdin::Guest for crate::Component {
+    fn get_stdin() -> InputStream {
+        observe_function_call("cli::stdin", "get_stdin");
+        get_stdin()
     }
 }

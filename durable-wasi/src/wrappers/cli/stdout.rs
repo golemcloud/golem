@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod environment;
-pub mod exit;
-pub mod stderr;
-pub mod stdin;
-pub mod stdout;
-pub mod terminal_input;
-pub mod terminal_output;
-pub mod terminal_stderr;
-pub mod terminal_stdin;
-pub mod terminal_stdout;
+use crate::bindings::exports::wasi::cli::stdout::OutputStream;
+use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::wasi::cli::stdout::get_stdout;
+
+impl crate::bindings::exports::wasi::cli::stdout::Guest for crate::Component {
+    fn get_stdout() -> OutputStream {
+        observe_function_call("cli::stdout", "get_stdout");
+        get_stdout()
+    }
+}

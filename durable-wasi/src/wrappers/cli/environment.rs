@@ -12,64 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
+use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::wasi::cli::environment::{get_arguments, get_environment, initial_cwd};
+use crate::durability::Durability;
+use crate::wrappers::SerializableError;
 
-use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::cli::environment::Host;
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+impl crate::bindings::exports::wasi::cli::environment::Guest for crate::Component {
+    fn get_environment() -> Vec<(String, String)> {
         let durability = Durability::<Vec<(String, String)>, SerializableError>::new(
-            self,
             "golem_environment",
             "get_environment",
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
         if durability.is_live() {
-            let result = Host::get_environment(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+            let result = get_environment();
+            durability.persist_infallible((), result)
         } else {
-            durability.replay(self).await
+            durability.replay_infallible()
         }
     }
 
-    async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
+    fn get_arguments() -> Vec<String> {
         let durability = Durability::<Vec<String>, SerializableError>::new(
-            self,
             "golem_environment",
             "get_arguments",
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
         if durability.is_live() {
-            let result = Host::get_arguments(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+            let result = get_arguments();
+            durability.persist_infallible((), result)
         } else {
-            durability.replay(self).await
+            durability.replay_infallible()
         }
     }
 
-    async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
+    fn initial_cwd() -> Option<String> {
         let durability = Durability::<Option<String>, SerializableError>::new(
-            self,
             "golem_environment",
             "get_arguments", // TODO: fix in 2.0 - for backward compatibility with Golem 1.0
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
         if durability.is_live() {
-            let result = Host::initial_cwd(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+            let result = initial_cwd();
+            durability.persist_infallible((), result)
         } else {
-            durability.replay(self).await
+            durability.replay_infallible()
         }
     }
 }

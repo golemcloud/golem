@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use wasmtime::component::Resource;
+pub struct TerminalOutput {
+    pub terminal_output: crate::bindings::wasi::cli::terminal_output::TerminalOutput,
+}
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::terminal_stderr::{Host, TerminalOutput};
+impl crate::bindings::exports::wasi::cli::terminal_output::GuestTerminalOutput for TerminalOutput {
+    // fn drop(&mut self, rep: Resource<TerminalOutput>) -> anyhow::Result<()> {
+    //     self.observe_function_call("cli::terminal_output::terminal_output", "drop");
+    //     HostTerminalOutput::drop(&mut self.as_wasi_view(), rep)
+    // }
+}
 
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_terminal_stderr(&mut self) -> anyhow::Result<Option<Resource<TerminalOutput>>> {
-        self.observe_function_call("cli::terminal_stderr", "get_terminal_stderr");
-        self.as_wasi_view().get_terminal_stderr()
-    }
+impl crate::bindings::exports::wasi::cli::terminal_output::Guest for crate::Component {
+    type TerminalOutput = TerminalOutput;
 }

@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::component::Resource;
-
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::stderr::{Host, OutputStream};
-
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_stderr(&mut self) -> anyhow::Result<Resource<OutputStream>> {
-        self.observe_function_call("cli::stderr", "get_stderr");
-        self.as_wasi_view().get_stderr()
-    }
-}
+mod environment;
+mod exit;
+mod stderr;
+mod stdin;
+mod stdout;
+mod terminal_input;
+mod terminal_output;
+mod terminal_stderr;
+mod terminal_stdin;
+mod terminal_stdout;

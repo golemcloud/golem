@@ -103,7 +103,6 @@ use wasmtime_wasi_http::types::{
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 pub mod blobstore;
-mod cli;
 mod filesystem;
 pub mod golem;
 pub mod http;

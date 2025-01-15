@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #[allow(unused_imports)]
+#[allow(static_mut_refs)]
 #[rustfmt::skip]
 mod bindings;
 
