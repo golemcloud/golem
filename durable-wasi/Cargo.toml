@@ -19,6 +19,7 @@ golem-common = { path = "../golem-common", version = "0.0.0", default-features =
 
 bincode = { workspace = true }
 bytes = { workspace = true }
+metrohash = "1.0.7"
 
 wit-bindgen-rt = { version = "=0.36.0", features = ["bitflags"] }
 

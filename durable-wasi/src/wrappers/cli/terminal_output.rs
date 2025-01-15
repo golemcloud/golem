@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub struct TerminalOutput {
+use crate::bindings::golem::api::durability::observe_function_call;
+
+pub struct WrappedTerminalOutput {
     pub terminal_output: crate::bindings::wasi::cli::terminal_output::TerminalOutput,
 }
 
-impl crate::bindings::exports::wasi::cli::terminal_output::GuestTerminalOutput for TerminalOutput {
-    // fn drop(&mut self, rep: Resource<TerminalOutput>) -> anyhow::Result<()> {
-    //     self.observe_function_call("cli::terminal_output::terminal_output", "drop");
-    //     HostTerminalOutput::drop(&mut self.as_wasi_view(), rep)
-    // }
+impl crate::bindings::exports::wasi::cli::terminal_output::GuestTerminalOutput
+    for WrappedTerminalOutput
+{
+}
+
+impl Drop for WrappedTerminalOutput {
+    fn drop(&mut self) {
+        observe_function_call("cli::terminal_output::terminal_output", "drop");
+    }
 }
 
 impl crate::bindings::exports::wasi::cli::terminal_output::Guest for crate::Component {
-    type TerminalOutput = TerminalOutput;
+    type TerminalOutput = WrappedTerminalOutput;
 }

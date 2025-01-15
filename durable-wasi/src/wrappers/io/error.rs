@@ -14,18 +14,23 @@
 
 use crate::bindings::golem::api::durability::observe_function_call;
 
-pub struct WrappedTerminalInput {
-    pub terminal_input: crate::bindings::wasi::cli::terminal_input::TerminalInput,
+pub struct WrappedError {
+    pub error: crate::bindings::wasi::io::error::Error,
 }
 
-impl crate::bindings::exports::wasi::cli::terminal_input::GuestTerminalInput for WrappedTerminalInput {}
-
-impl Drop for WrappedTerminalInput {
-    fn drop(&mut self) {
-        observe_function_call("cli::terminal_input::terminal_input", "drop");
+impl crate::bindings::exports::wasi::io::error::GuestError for WrappedError {
+    fn to_debug_string(&self) -> String {
+        observe_function_call("io::error", "to_debug_string");
+        self.error.to_debug_string()
     }
 }
 
-impl crate::bindings::exports::wasi::cli::terminal_input::Guest for crate::Component {
-    type TerminalInput = WrappedTerminalInput;
+impl Drop for WrappedError {
+    fn drop(&mut self) {
+        observe_function_call("io::error", "drop");
+    }
+}
+
+impl crate::bindings::exports::wasi::io::error::Guest for crate::Component {
+    type Error = WrappedError;
 }

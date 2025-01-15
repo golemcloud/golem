@@ -2856,6 +2856,7 @@ dependencies = [
  "bincode",
  "bytes 1.9.0",
  "golem-common",
+ "metrohash",
  "test-r",
  "wit-bindgen-rt",
 ]

@@ -21,7 +21,7 @@ impl crate::bindings::exports::wasi::cli::terminal_stdin::Guest for crate::Compo
         observe_function_call("cli::terminal_stdin", "get_terminal_stdin");
         get_terminal_stdin().map(|ti| {
             let wrapped =
-                crate::wrappers::cli::terminal_input::TerminalInput { terminal_input: ti };
+                crate::wrappers::cli::terminal_input::WrappedTerminalInput { terminal_input: ti };
             TerminalInput::new(wrapped)
         })
     }

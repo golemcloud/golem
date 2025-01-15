@@ -15,10 +15,12 @@
 use crate::bindings::exports::wasi::cli::stdout::OutputStream;
 use crate::bindings::golem::api::durability::observe_function_call;
 use crate::bindings::wasi::cli::stdout::get_stdout;
+use crate::wrappers::io::streams::WrappedOutputStream;
 
 impl crate::bindings::exports::wasi::cli::stdout::Guest for crate::Component {
     fn get_stdout() -> OutputStream {
         observe_function_call("cli::stdout", "get_stdout");
-        get_stdout()
+        let output_stream = get_stdout();
+        OutputStream::new(WrappedOutputStream { output_stream })
     }
 }

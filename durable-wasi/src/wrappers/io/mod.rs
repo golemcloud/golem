@@ -12,20 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::durability::observe_function_call;
-
-pub struct WrappedTerminalInput {
-    pub terminal_input: crate::bindings::wasi::cli::terminal_input::TerminalInput,
-}
-
-impl crate::bindings::exports::wasi::cli::terminal_input::GuestTerminalInput for WrappedTerminalInput {}
-
-impl Drop for WrappedTerminalInput {
-    fn drop(&mut self) {
-        observe_function_call("cli::terminal_input::terminal_input", "drop");
-    }
-}
-
-impl crate::bindings::exports::wasi::cli::terminal_input::Guest for crate::Component {
-    type TerminalInput = WrappedTerminalInput;
-}
+pub mod error;
+pub mod poll;
+pub mod streams;

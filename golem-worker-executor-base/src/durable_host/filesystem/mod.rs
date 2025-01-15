@@ -12,5 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod preopens;
+/// The filesystem/types interface is wrapped to ensure readonly guarantees of files coming
+/// from the initial file system.
 pub mod types;

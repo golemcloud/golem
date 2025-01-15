@@ -22,8 +22,10 @@ use wasmtime_wasi::{
     StreamResult, Subscribe,
 };
 
-pub mod error;
+/// The io/poll interface is wrapped for handling the special sleep error signal
 pub mod poll;
+
+/// The io/streams interface is wrapped to stream standard output and error into the worker's log event stream
 pub mod streams;
 
 #[derive(Clone)]

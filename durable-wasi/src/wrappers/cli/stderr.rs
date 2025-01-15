@@ -15,10 +15,12 @@
 use crate::bindings::exports::wasi::cli::stderr::OutputStream;
 use crate::bindings::golem::api::durability::observe_function_call;
 use crate::bindings::wasi::cli::stderr::get_stderr;
+use crate::wrappers::io::streams::WrappedOutputStream;
 
 impl crate::bindings::exports::wasi::cli::stderr::Guest for crate::Component {
     fn get_stderr() -> OutputStream {
         observe_function_call("cli::stderr", "get_stderr");
-        get_stderr()
+        let output_stream = get_stderr();
+        OutputStream::new(WrappedOutputStream { output_stream })
     }
 }

@@ -20,7 +20,7 @@ impl crate::bindings::exports::wasi::cli::terminal_stderr::Guest for crate::Comp
     fn get_terminal_stderr() -> Option<TerminalOutput> {
         observe_function_call("cli::terminal_stderr", "get_terminal_stderr");
         get_terminal_stderr().map(|to| {
-            let wrapped = crate::wrappers::cli::terminal_output::TerminalOutput {
+            let wrapped = crate::wrappers::cli::terminal_output::WrappedTerminalOutput {
                 terminal_output: to,
             };
             TerminalOutput::new(wrapped)

@@ -12,54 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-use wasmtime::component::Resource;
+use crate::bindings::exports::wasi::filesystem::preopens::Descriptor;
+use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::wasi::filesystem::preopens::get_directories;
+use crate::durability::Durability;
+use crate::wrappers::filesystem::types::WrappedDescriptor;
+use crate::wrappers::SerializableError;
+use std::path::Path;
 
-use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
+impl crate::bindings::exports::wasi::filesystem::preopens::Guest for crate::Component {
+    fn get_directories() -> Vec<(Descriptor, String)> {
         let durability = Durability::<Vec<String>, SerializableError>::new(
-            self,
             "cli::preopens",
             "get_directories",
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
-        let current_dirs = Host::get_directories(&mut self.as_wasi_view()).await?;
+        let current_dirs = get_directories();
 
         let names = {
             if durability.is_live() {
-                let result: Result<Vec<String>, anyhow::Error> = Ok(current_dirs
+                let result: Vec<String> = current_dirs
                     .iter()
                     .map(|(_, name)| name.clone())
-                    .collect::<Vec<_>>());
-                durability.persist(self, (), result).await
+                    .collect::<Vec<_>>();
+                durability.persist_infallible((), result)
             } else {
-                durability.replay(self).await
+                durability.replay_infallible()
             }
-        }?;
+        };
 
         // Filtering the current set of pre-opened directories by the serialized names
         let filtered = current_dirs
             .into_iter()
             .filter(|(_, name)| names.contains(name))
+            .map(|(descriptor, name)| {
+                let descriptor = Descriptor::new(WrappedDescriptor {
+                    descriptor,
+                    path: Path::new(&name).to_path_buf(),
+                });
+                (descriptor, name)
+            })
             .collect::<Vec<_>>();
 
         if filtered.len() == names.len() {
             // All directories were found
-            Ok(filtered)
+            filtered
         } else {
-            Err(anyhow!(
-                "Not all previously available pre-opened directories were found"
-            ))
+            panic!("Not all previously available pre-opened directories were found")
         }
     }
 }

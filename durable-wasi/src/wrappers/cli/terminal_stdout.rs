@@ -20,7 +20,7 @@ impl crate::bindings::exports::wasi::cli::terminal_stdout::Guest for crate::Comp
     fn get_terminal_stdout() -> Option<TerminalOutput> {
         observe_function_call("cli::terminal_stdout", "get_terminal_stdout");
         get_terminal_stdout().map(|to| {
-            let wrapped = crate::wrappers::cli::terminal_output::TerminalOutput {
+            let wrapped = crate::wrappers::cli::terminal_output::WrappedTerminalOutput {
                 terminal_output: to,
             };
             TerminalOutput::new(wrapped)

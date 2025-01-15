@@ -39,6 +39,23 @@ world durable-wasi {
     import wasi:clocks/wall-clock@0.2.0;
     export wasi:clocks/wall-clock@0.2.0;
 
+    // Filesystem
+    import wasi:filesystem/preopens@0.2.0;
+    export wasi:filesystem/preopens@0.2.0;
+
+    import wasi:filesystem/types@0.2.0;
+    export wasi:filesystem/types@0.2.0;
+
+    // IO
+    import wasi:io/error@0.2.0;
+    export wasi:io/error@0.2.0;
+
+    import wasi:io/poll@0.2.0;
+    export wasi:io/poll@0.2.0;
+
+    import wasi:io/streams@0.2.0;
+    export wasi:io/streams@0.2.0;
+
     // Golem durability API
     import golem:api/durability@1.2.0;
 }

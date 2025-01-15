@@ -16,8 +16,8 @@ use crate::bindings::golem::api::durability::{observe_function_call, DurableFunc
 use crate::bindings::wasi::clocks::monotonic_clock::{
     now, resolution, subscribe_instant, Duration, Instant,
 };
-use crate::bindings::wasi::io::poll::Pollable;
 use crate::durability::Durability;
+use crate::wrappers::io::poll::WrappedPollable;
 use crate::wrappers::SerializableError;
 
 impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::Component {
@@ -51,12 +51,13 @@ impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::C
         }
     }
 
-    fn subscribe_instant(when: Instant) -> Pollable {
+    fn subscribe_instant(when: Instant) -> crate::bindings::exports::wasi::io::poll::Pollable {
         observe_function_call("clocks::monotonic_clock", "subscribe_instant");
-        subscribe_instant(when)
+        let pollable = subscribe_instant(when);
+        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable { pollable })
     }
 
-    fn subscribe_duration(when: Duration) -> Pollable {
+    fn subscribe_duration(when: Duration) -> crate::bindings::exports::wasi::io::poll::Pollable {
         let durability = Durability::<Instant, SerializableError>::new(
             "monotonic_clock",
             "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
@@ -73,6 +74,7 @@ impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::C
         };
 
         let when = now.saturating_add(when);
-        subscribe_instant(when)
+        let pollable = subscribe_instant(when);
+        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable { pollable })
     }
 }

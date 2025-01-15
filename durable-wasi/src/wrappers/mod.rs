@@ -20,6 +20,8 @@ use crate::bindings::exports::wasi::clocks::wall_clock;
 
 mod cli;
 mod clock;
+mod filesystem;
+mod io;
 
 // TODO: try to avoid having copies of these types here
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -199,3 +201,8 @@ impl From<SerializableDateTime> for bindings::wasi::clocks::wall_clock::Datetime
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct SerializableFileTimes {
+    pub data_access_timestamp: Option<SerializableDateTime>,
+    pub data_modification_timestamp: Option<SerializableDateTime>,
+}

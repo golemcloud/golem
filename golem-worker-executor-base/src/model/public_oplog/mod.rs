@@ -19,10 +19,7 @@ use crate::durable_host::http::serialized::{
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
     SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
 };
-use crate::durable_host::serialized::{
-    SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
-    SerializableIpAddresses, SerializableStreamError,
-};
+use crate::durable_host::serialized::{SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress, SerializableIpAddresses, SerializableStreamError};
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult,
 };
