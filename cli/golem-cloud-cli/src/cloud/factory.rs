@@ -98,7 +98,7 @@ impl CloudServiceFactory {
         })
     }
 
-    pub async fn from_profile<'a>(
+    pub async fn from_profile(
         profile_name: &ProfileName,
         profile: &CloudProfile,
         config_dir: &Path,
