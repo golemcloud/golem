@@ -14,7 +14,7 @@ use golem_common::model::{AccountId, HasAccountId, ProjectId};
 use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
+use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;
 
 use crate::auth::CloudNamespace;
@@ -87,68 +87,37 @@ impl std::str::FromStr for TokenSecret {
     serde::Deserialize,
     Enum,
     EnumIter,
+    FromRepr,
 )]
+#[repr(i32)]
 pub enum ProjectAction {
-    ViewComponent,
-    CreateComponent,
-    UpdateComponent,
-    DeleteComponent,
-    ViewWorker,
-    CreateWorker,
-    UpdateWorker,
-    DeleteWorker,
-    ViewProjectGrants,
-    CreateProjectGrants,
-    DeleteProjectGrants,
-    ViewApiDefinition,
-    CreateApiDefinition,
-    UpdateApiDefinition,
-    DeleteApiDefinition,
+    ViewComponent = 0,
+    CreateComponent = 1,
+    UpdateComponent = 2,
+    DeleteComponent = 3,
+    ViewWorker = 4,
+    CreateWorker = 5,
+    UpdateWorker = 6,
+    DeleteWorker = 7,
+    ViewProjectGrants = 8,
+    CreateProjectGrants = 9,
+    DeleteProjectGrants = 10,
+    ViewApiDefinition = 11,
+    CreateApiDefinition = 12,
+    UpdateApiDefinition = 13,
+    DeleteApiDefinition = 14,
 }
 
 impl From<ProjectAction> for i32 {
     fn from(value: ProjectAction) -> Self {
-        match value {
-            ProjectAction::ViewComponent => 0,
-            ProjectAction::CreateComponent => 1,
-            ProjectAction::UpdateComponent => 2,
-            ProjectAction::DeleteComponent => 3,
-            ProjectAction::ViewWorker => 4,
-            ProjectAction::CreateWorker => 5,
-            ProjectAction::UpdateWorker => 6,
-            ProjectAction::DeleteWorker => 7,
-            ProjectAction::ViewProjectGrants => 8,
-            ProjectAction::CreateProjectGrants => 9,
-            ProjectAction::DeleteProjectGrants => 10,
-            ProjectAction::ViewApiDefinition => 11,
-            ProjectAction::CreateApiDefinition => 12,
-            ProjectAction::UpdateApiDefinition => 13,
-            ProjectAction::DeleteApiDefinition => 14,
-        }
+        value as i32
     }
 }
 
 impl TryFrom<i32> for ProjectAction {
     type Error = String;
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ProjectAction::ViewComponent),
-            1 => Ok(ProjectAction::CreateComponent),
-            2 => Ok(ProjectAction::UpdateComponent),
-            3 => Ok(ProjectAction::DeleteComponent),
-            4 => Ok(ProjectAction::ViewWorker),
-            5 => Ok(ProjectAction::CreateWorker),
-            6 => Ok(ProjectAction::UpdateWorker),
-            7 => Ok(ProjectAction::DeleteWorker),
-            8 => Ok(ProjectAction::ViewProjectGrants),
-            9 => Ok(ProjectAction::CreateProjectGrants),
-            10 => Ok(ProjectAction::DeleteProjectGrants),
-            11 => Ok(ProjectAction::ViewApiDefinition),
-            12 => Ok(ProjectAction::CreateApiDefinition),
-            13 => Ok(ProjectAction::UpdateApiDefinition),
-            14 => Ok(ProjectAction::DeleteApiDefinition),
-            _ => Err(format!("Invalid project action: {}", value)),
-        }
+        ProjectAction::from_repr(value).ok_or_else(|| format!("Invalid project action: {}", value))
     }
 }
 
@@ -289,18 +258,20 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActions
     serde::Deserialize,
     Enum,
     EnumIter,
+    FromRepr,
 )]
+#[repr(i32)]
 pub enum Role {
-    Admin,
-    MarketingAdmin,
-    ViewProject,
-    DeleteProject,
-    CreateProject,
-    UpdateProject,
-    InstanceServer,
-    ViewPlugin,
-    CreatePlugin,
-    DeletePlugin,
+    Admin = 0,
+    MarketingAdmin = 1,
+    ViewProject = 2,
+    DeleteProject = 3,
+    CreateProject = 4,
+    UpdateProject = 5,
+    InstanceServer = 6,
+    ViewPlugin = 7,
+    CreatePlugin = 8,
+    DeletePlugin = 9,
 }
 
 impl Role {
@@ -324,18 +295,7 @@ impl Role {
 
 impl From<Role> for i32 {
     fn from(value: Role) -> Self {
-        match value {
-            Role::Admin => 0,
-            Role::MarketingAdmin => 1,
-            Role::ViewProject => 2,
-            Role::DeleteProject => 3,
-            Role::CreateProject => 4,
-            Role::InstanceServer => 5,
-            Role::ViewPlugin => 6,
-            Role::CreatePlugin => 7,
-            Role::DeletePlugin => 8,
-            Role::UpdateProject => 9,
-        }
+        value as i32
     }
 }
 
@@ -343,18 +303,7 @@ impl TryFrom<i32> for Role {
     type Error = String;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Role::Admin),
-            1 => Ok(Role::MarketingAdmin),
-            2 => Ok(Role::ViewProject),
-            3 => Ok(Role::DeleteProject),
-            4 => Ok(Role::CreateProject),
-            5 => Ok(Role::InstanceServer),
-            6 => Ok(Role::ViewPlugin),
-            7 => Ok(Role::CreatePlugin),
-            8 => Ok(Role::DeletePlugin),
-            _ => Err(format!("Invalid role: {}", value)),
-        }
+        Role::from_repr(value).ok_or_else(|| format!("Invalid role: {}", value))
     }
 }
 
@@ -391,6 +340,39 @@ impl Display for Role {
             Role::CreatePlugin => write!(f, "CreatePlugin"),
             Role::DeletePlugin => write!(f, "DeletePlugin"),
             Role::UpdateProject => write!(f, "UpdateProject"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn role_to_from() {
+        for role in Role::iter() {
+            let role_as_i32: i32 = role.clone().into();
+            let deserialized_role = Role::try_from(role_as_i32).unwrap();
+            assert_eq!(role, deserialized_role);
+
+            let role_as_str = role.to_string();
+            let deserialized_role = Role::from_str(&role_as_str).unwrap();
+            assert_eq!(role, deserialized_role);
+            assert_eq!(role, deserialized_role);
+        }
+    }
+
+    #[test]
+    fn project_action_to_from() {
+        for action in ProjectAction::iter() {
+            let action_as_i32: i32 = action.clone().into();
+            let deserialized_action = ProjectAction::try_from(action_as_i32).unwrap();
+            assert_eq!(action, deserialized_action);
+
+            let action_as_str = action.to_string();
+            let deserialized_action = ProjectAction::from_str(&action_as_str).unwrap();
+            assert_eq!(action, deserialized_action);
         }
     }
 }
