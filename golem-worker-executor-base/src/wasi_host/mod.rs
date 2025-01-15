@@ -15,24 +15,28 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxWasiView};
 use crate::workerctx::WorkerCtx;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::{
     DirPerms, FilePerms, ResourceTable, StdinStream, StdoutStream, WasiCtx, WasiCtxBuilder,
+    WasiImpl,
 };
 
 pub mod helpers;
 pub mod logging;
 
-pub fn create_linker<Ctx: WorkerCtx + Send + Sync, F>(
+pub fn create_linker<Ctx: WorkerCtx + Send + Sync, F, G>(
     engine: &Engine,
     get: F,
+    get_wasmtime: G,
 ) -> wasmtime::Result<Linker<Ctx>>
 where
     F: for<'a> Fn(&'a mut Ctx) -> &'a mut DurableWorkerCtx<Ctx> + Send,
     F: Copy + Send + Sync + 'static,
+    G: for<'a> Fn(&'a mut Ctx) -> WasiImpl<DurableWorkerCtxWasiView<'a, Ctx>> + Send,
+    G: Copy + Send + Sync + 'static,
 {
     let mut linker = Linker::new(engine);
 
@@ -57,7 +61,10 @@ where
     wasmtime_wasi::bindings::cli::terminal_stderr::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::cli::terminal_stdin::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::cli::terminal_stdout::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::clocks::monotonic_clock::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::clocks::monotonic_clock::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
     wasmtime_wasi::bindings::clocks::wall_clock::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::filesystem::preopens::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::filesystem::types::add_to_linker_get_host(&mut linker, get)?;

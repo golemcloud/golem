@@ -16,7 +16,6 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::preview2::golem;
 use crate::preview2::golem::api1_2_0;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
@@ -207,11 +206,17 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
     ) -> anyhow::Result<api1_2_0::durability::DurableExecutionState> {
         let state = DurabilityHost::durable_execution_state(self);
-        let persistence_level: golem::api0_2_0::host::PersistenceLevel =
-            state.persistence_level.into();
         Ok(api1_2_0::durability::DurableExecutionState {
             is_live: state.is_live,
-            persistence_level: persistence_level.into(),
+            persistence_level: match state.persistence_level {
+                PersistenceLevel::PersistNothing => {
+                    api1_2_0::durability::PersistenceLevel::PersistNothing
+                }
+                PersistenceLevel::PersistRemoteSideEffects => {
+                    api1_2_0::durability::PersistenceLevel::PersistRemoteSideEffects
+                }
+                PersistenceLevel::Smart => api1_2_0::durability::PersistenceLevel::Smart,
+            },
         })
     }
 

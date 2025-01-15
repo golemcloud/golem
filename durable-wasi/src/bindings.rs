@@ -13429,7 +13429,7 @@ mod _rt {
     pub trait AsI64 {
         fn as_i64(self) -> i64;
     }
-    impl<T: Copy + AsI64> AsI64 for &T {
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
         fn as_i64(self) -> i64 {
             (*self).as_i64()
         }
@@ -13437,7 +13437,7 @@ mod _rt {
     impl AsI64 for i64 {
         #[inline]
         fn as_i64(self) -> i64 {
-            self
+            self as i64
         }
     }
     impl AsI64 for u64 {
@@ -13453,7 +13453,7 @@ mod _rt {
     pub trait AsI32 {
         fn as_i32(self) -> i32;
     }
-    impl<T: Copy + AsI32> AsI32 for &T {
+    impl<'a, T: Copy + AsI32> AsI32 for &'a T {
         fn as_i32(self) -> i32 {
             (*self).as_i32()
         }
@@ -13461,7 +13461,7 @@ mod _rt {
     impl AsI32 for i32 {
         #[inline]
         fn as_i32(self) -> i32 {
-            self
+            self as i32
         }
     }
     impl AsI32 for u32 {
@@ -13512,7 +13512,7 @@ mod _rt {
     pub trait AsF32 {
         fn as_f32(self) -> f32;
     }
-    impl<T: Copy + AsF32> AsF32 for &T {
+    impl<'a, T: Copy + AsF32> AsF32 for &'a T {
         fn as_f32(self) -> f32 {
             (*self).as_f32()
         }
@@ -13520,7 +13520,7 @@ mod _rt {
     impl AsF32 for f32 {
         #[inline]
         fn as_f32(self) -> f32 {
-            self
+            self as f32
         }
     }
     pub fn as_f64<T: AsF64>(t: T) -> f64 {
@@ -13529,7 +13529,7 @@ mod _rt {
     pub trait AsF64 {
         fn as_f64(self) -> f64;
     }
-    impl<T: Copy + AsF64> AsF64 for &T {
+    impl<'a, T: Copy + AsF64> AsF64 for &'a T {
         fn as_f64(self) -> f64 {
             (*self).as_f64()
         }
@@ -13537,7 +13537,7 @@ mod _rt {
     impl AsF64 for f64 {
         #[inline]
         fn as_f64(self) -> f64 {
-            self
+            self as f64
         }
     }
     pub unsafe fn invalid_enum_discriminant<T>() -> T {

@@ -22,7 +22,7 @@ use crate::services::AdditionalDeps;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
-use golem_worker_executor_base::durable_host::DurableWorkerCtx;
+use golem_worker_executor_base::durable_host::{DurableWorkerCtx, DurableWorkerCtxWasiView};
 use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0, api1_2_0};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -56,6 +56,7 @@ use tokio::task::JoinSet;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
+use wasmtime_wasi::WasiImpl;
 
 #[cfg(test)]
 test_r::enable!();
@@ -201,7 +202,7 @@ impl Bootstrap<Context> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
-        let mut linker = create_linker(engine, get_durable_ctx)?;
+        let mut linker = create_linker(engine, get_durable_ctx, get_wastime_impl)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
@@ -216,6 +217,10 @@ impl Bootstrap<Context> for ServerBootstrap {
 
 fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
     &mut ctx.durable_ctx
+}
+
+fn get_wastime_impl<'a>(ctx: &'a mut Context) -> WasiImpl<DurableWorkerCtxWasiView<'a, Context>> {
+    ctx.durable_ctx.as_wasi_view()
 }
 
 pub async fn run(

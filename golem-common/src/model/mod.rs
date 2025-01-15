@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::oplog::{
-    IndexedResourceKey, OplogEntry, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
+    IndexedResourceKey, OplogEntry, TimestampedUpdateDescription, WorkerResourceId,
 };
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
