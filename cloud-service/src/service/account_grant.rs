@@ -110,13 +110,19 @@ impl AccountGrantService for AccountGrantServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<Vec<Role>, AccountGrantServiceError> {
         self.check_authorization(account_id, auth)?;
-        match self.account_grant_repo.get(account_id).await {
-            Ok(roles) => Ok(roles),
+        let mut roles = match self.account_grant_repo.get(account_id).await {
+            Ok(roles) => roles,
             Err(error) => {
                 error!("DB call failed. {:?}", error);
-                Err(error.into())
+                return Err(error.into());
             }
-        }
+        };
+
+        // TODO: Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
+        roles.extend(Role::all_project_roles());
+        roles.extend(Role::all_plugin_roles());
+
+        Ok(roles)
     }
 
     async fn add(

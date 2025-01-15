@@ -237,9 +237,10 @@ impl LoginApi {
                 Some(r) => {
                     let url = url::Url::parse(&r)
                         .map_err(|_| LoginError::bad_request("Invalid redirect URL"))?;
-                    if url.domain().map_or(false, |d| {
-                        d.starts_with("localhost") || d.contains("golem.cloud")
-                    }) {
+                    if url
+                        .domain()
+                        .is_some_and(|d| d.starts_with("localhost") || d.contains("golem.cloud"))
+                    {
                         Some(url)
                     } else {
                         return Err(LoginError::bad_request("Invalid redirect domain"));

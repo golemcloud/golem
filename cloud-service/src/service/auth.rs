@@ -5,7 +5,6 @@ use std::sync::Arc;
 use crate::auth::AccountAuthorisation;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::token::{TokenService, TokenServiceError};
-use cloud_common::model::Role;
 use golem_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
@@ -81,18 +80,13 @@ impl AuthService for AuthServiceDefault {
             .get_by_secret(secret)
             .await?
             .ok_or(AuthServiceError::invalid_token("Unknown token secret."))?;
-        let mut account_roles = self
+        let account_roles = self
             .account_grant_service
             .get(&token.account_id, &AccountAuthorisation::admin())
             .await?;
-        account_roles.extend(Role::all_project_roles()); // TODO; Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
-        account_roles.extend(Role::all_plugin_roles()); // TODO; Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
         let now = chrono::Utc::now();
         if token.expires_at > now {
-            Ok(AccountAuthorisation::new(
-                token,
-                account_roles.into_iter().collect(),
-            ))
+            Ok(AccountAuthorisation::new(token, account_roles))
         } else {
             Err(AuthServiceError::invalid_token("Expired auth token."))
         }
