@@ -70,10 +70,10 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     pub fn persist<SIn, Ok, Err>(&self, input: SIn, result: Result<Ok, Err>) -> Result<Ok, Err>
     where
         Ok: Clone,
-        Err: From<SErr> + Send + Sync,
-        SIn: Debug + Encode + Send + Sync,
-        SErr: Debug + Encode + for<'a> From<&'a Err> + Send + Sync,
-        SOk: Debug + Encode + From<Ok> + Send + Sync,
+        Err: From<SErr>,
+        SIn: Debug + Encode,
+        SErr: Debug + Encode + for<'a> From<&'a Err>,
+        SOk: Debug + Encode + From<Ok>,
     {
         let serializable_result: Result<SOk, SErr> = result
             .as_ref()
@@ -87,9 +87,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     pub fn persist_infallible<SIn, Ok>(&self, input: SIn, result: Ok) -> Ok
     where
         Ok: Clone,
-        SIn: Debug + Encode + Send + Sync,
-        SOk: Debug + Encode + From<Ok> + Send + Sync,
-        SErr: Debug + Encode + Send + Sync,
+        SIn: Debug + Encode,
+        SOk: Debug + Encode + From<Ok>,
+        SErr: Debug + Encode,
     {
         let serializable_result: Result<SOk, SErr> = Ok(result.clone().into());
 
@@ -99,9 +99,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
     pub fn persist_serializable<SIn>(&self, input: SIn, result: Result<SOk, SErr>)
     where
-        SIn: Debug + Encode + Send + Sync,
-        SOk: Debug + Encode + Send + Sync,
-        SErr: Debug + Encode + Send + Sync,
+        SIn: Debug + Encode,
+        SOk: Debug + Encode,
+        SErr: Debug + Encode,
     {
         let function_name = self.function_name();
         if !matches!(
@@ -127,9 +127,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     //
     // pub fn persist_typed_value<SIn>(&self, input: SIn, result: Result<SOk, SErr>)
     // where
-    //     SIn: Debug + IntoValue + Send + Sync,
-    //     SOk: Debug + IntoValue + Send + Sync,
-    //     SErr: Debug + IntoValue + Send + Sync,
+    //     SIn: Debug + IntoValue,
+    //     SOk: Debug + IntoValue,
+    //     SErr: Debug + IntoValue,
     // {
     //     let function_name = self.function_name();
     //     if self.durable_execution_state.persistence_level != PersistenceLevel::PersistNothing {
@@ -174,21 +174,22 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     where
         Ok: From<SOk>,
         Err: From<SErr>,
-        SErr: Debug + Encode + Decode + Send + Sync,
-        SOk: Debug + Encode + Decode + Send + Sync,
+        SErr: Debug + Encode + Decode,
+        SOk: Debug + Encode + Decode,
     {
         Self::replay_serializable(self)
             .map(|sok| sok.into())
             .map_err(|serr| serr.into())
     }
 
-    pub fn replay_infallible(&self) -> SOk
+    pub fn replay_infallible<Ok>(&self) -> Ok
     where
+        Ok: From<SOk>,
         SOk: Decode,
         SErr: Decode + Display,
     {
         let result: Result<SOk, SErr> = self.replay_serializable();
-        result.unwrap_or_else(|err| {
+        result.map(|sok| sok.into()).unwrap_or_else(|err| {
             panic!(
                 "Function {} previously failed with {}",
                 self.function_name(),

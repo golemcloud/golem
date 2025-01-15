@@ -12,47 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
+use crate::bindings::exports::wasi::clocks::wall_clock::Datetime;
+use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::wasi::clocks::wall_clock::{now, resolution};
+use crate::durability::Durability;
+use crate::wrappers::{SerializableDateTime, SerializableError};
+use std::mem::transmute;
 
-use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
-
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Datetime> {
+impl crate::bindings::exports::wasi::clocks::wall_clock::Guest for crate::Component {
+    fn now() -> Datetime {
         let durability = Durability::<SerializableDateTime, SerializableError>::new(
-            self,
             "wall_clock",
             "now",
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
         if durability.is_live() {
-            let result = Host::now(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+            let result = unsafe { transmute(now()) };
+            durability.persist_infallible((), result)
         } else {
-            durability.replay(self).await
+            durability.replay_infallible()
         }
     }
 
-    async fn resolution(&mut self) -> anyhow::Result<Datetime> {
+    fn resolution() -> Datetime {
         let durability = Durability::<SerializableDateTime, SerializableError>::new(
-            self,
             "wall_clock",
             "resolution",
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        );
 
         if durability.is_live() {
-            let result = Host::resolution(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+            let result = unsafe { transmute(resolution()) };
+            durability.persist_infallible((), result)
         } else {
-            durability.replay(self).await
+            durability.replay_infallible()
         }
     }
 }

@@ -15,6 +15,8 @@
 use bincode::{Decode, Encode};
 use golem_common::base_model::{ComponentId, PromiseId, ShardId, WorkerId};
 use std::fmt::{Display, Formatter};
+use crate::bindings;
+use crate::bindings::exports::wasi::clocks::wall_clock;
 
 mod clock;
 
@@ -151,3 +153,48 @@ impl Display for SerializableError {
         }
     }
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct SerializableDateTime {
+    pub seconds: u64,
+    pub nanoseconds: u32,
+}
+
+impl From<wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: wall_clock::Datetime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+
+impl From<SerializableDateTime> for wall_clock::Datetime {
+    fn from(value: SerializableDateTime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+
+
+impl From<bindings::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: bindings::wasi::clocks::wall_clock::Datetime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+
+impl From<SerializableDateTime> for bindings::wasi::clocks::wall_clock::Datetime {
+    fn from(value: SerializableDateTime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+

@@ -13331,6 +13331,106 @@ pub mod exports {
                 #[doc(hidden)]
                 pub(crate) use __export_wasi_clocks_monotonic_clock_0_2_0_cabi;
             }
+            /// WASI Wall Clock is a clock API intended to let users query the current
+            /// time. The name "wall" makes an analogy to a "clock on the wall", which
+            /// is not necessarily monotonic as it may be reset.
+            ///
+            /// It is intended to be portable at least between Unix-family platforms and
+            /// Windows.
+            ///
+            /// A wall clock is a clock which measures the date and time according to
+            /// some external reference.
+            ///
+            /// External references may be reset, so this clock is not necessarily
+            /// monotonic, making it unsuitable for measuring elapsed time.
+            ///
+            /// It is intended for reporting the current date and time for humans.
+            #[allow(dead_code, clippy::all)]
+            pub mod wall_clock {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                /// A time and date in seconds plus nanoseconds.
+                #[repr(C)]
+                #[derive(Clone, Copy)]
+                pub struct Datetime {
+                    pub seconds: u64,
+                    pub nanoseconds: u32,
+                }
+                impl ::core::fmt::Debug for Datetime {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("Datetime")
+                            .field("seconds", &self.seconds)
+                            .field("nanoseconds", &self.nanoseconds)
+                            .finish()
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_now_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::now();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let Datetime { seconds: seconds2, nanoseconds: nanoseconds2 } = result0;
+                    *ptr1.add(0).cast::<i64>() = _rt::as_i64(seconds2);
+                    *ptr1.add(8).cast::<i32>() = _rt::as_i32(nanoseconds2);
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_resolution_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::resolution();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let Datetime { seconds: seconds2, nanoseconds: nanoseconds2 } = result0;
+                    *ptr1.add(0).cast::<i64>() = _rt::as_i64(seconds2);
+                    *ptr1.add(8).cast::<i32>() = _rt::as_i32(nanoseconds2);
+                    ptr1
+                }
+                pub trait Guest {
+                    /// Read the current value of the clock.
+                    ///
+                    /// This clock is not monotonic, therefore calling this function repeatedly
+                    /// will not necessarily produce a sequence of non-decreasing values.
+                    ///
+                    /// The returned timestamps represent the number of seconds since
+                    /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
+                    /// also known as [Unix Time].
+                    ///
+                    /// The nanoseconds field of the output is always less than 1000000000.
+                    ///
+                    /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
+                    /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
+                    fn now() -> Datetime;
+                    /// Query the resolution of the clock.
+                    ///
+                    /// The nanoseconds field of the output is always less than 1000000000.
+                    fn resolution() -> Datetime;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_clocks_wall_clock_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:clocks/wall-clock@0.2.0#now"] unsafe extern "C" fn
+                        export_now() -> * mut u8 { $($path_to_types)*::
+                        _export_now_cabi::<$ty > () } #[export_name =
+                        "wasi:clocks/wall-clock@0.2.0#resolution"] unsafe extern "C" fn
+                        export_resolution() -> * mut u8 { $($path_to_types)*::
+                        _export_resolution_cabi::<$ty > () } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_clocks_wall_clock_0_2_0_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 16],
+                );
+            }
         }
     }
 }
@@ -13600,6 +13700,9 @@ macro_rules! __export_durable_wasi_impl {
         $($path_to_types_root)*::
         exports::wasi::clocks::monotonic_clock::__export_wasi_clocks_monotonic_clock_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::clocks::monotonic_clock);
+        $($path_to_types_root)*::
+        exports::wasi::clocks::wall_clock::__export_wasi_clocks_wall_clock_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::clocks::wall_clock);
     };
 }
 #[doc(inline)]
@@ -13607,95 +13710,95 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 8473] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x96A\x01A\x02\x01A\x1f\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 8576] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfdA\x01A\x02\x01A!\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
+\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
 \x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
 n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
 \x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/mon\
-otonic-clock@0.2.0\x05\x02\x01B@\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\0\x01\
-z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05\
-owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\
-\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\
-\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0afl\
-ags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\
-\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0d\
-prim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0d\
-prim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\
-\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-t\
-ype\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\
-\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\
-\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0d\
-variant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-v\
-alue\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\
-\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01\
-w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0c\
-prim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\
-\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\
-\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\
-\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01\
-s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0\
-#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\
-\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\
-\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]w\
-asm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
-function-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self\
-)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-a\
-nd-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-re\
-sult.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-re\
-sult.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vn\
-t\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05\x03\x02\x03\
-\0\x02\x03uri\x02\x03\0\x01\x08duration\x01Bg\x02\x03\x02\x01\x04\x04\0\x03uri\x03\
-\0\0\x02\x03\x02\x01\x05\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\
-\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-b\
-itsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\
-\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\
-\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05val\
-ues\x04\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\
-\x09max-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\
-\0\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05sma\
-rt\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-ba\
-sed\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equ\
-al\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\
-\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\
-\0\x1b\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06fa\
-iled\x06exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05va\
-lues\x04\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\
-\x04\0\x14worker-status-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\
-\x15worker-version-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18w\
-orker-created-at-filter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\
-\0\x11worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07v\
-ersion\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\
-\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\
-\x07filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09\
-worker-id\x0d\x04args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-coun\
-tw\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\
-\x03\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-\
-workers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers\
-.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromi\
-se-id\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\
-\x04\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete\
--promise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\
-\x01\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-\
-commit\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\
-\x12mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\
-\x10new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\
-\x1bget-oplog-persistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\
-\x04\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence\
--mode\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01\
-@\0\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0eta\
-rget-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11\
-get-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-work\
-er-metadata\x01Q\x03\0\x14golem:api/host@1.2.0\x05\x06\x01B\x05\x01r\x02\x07seco\
-ndsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\
-\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x07\x02\x03\
-\0\x04\x08datetime\x02\x03\0\x02\x09wit-value\x02\x03\0\x03\x0aaccount-id\x02\x03\
-\0\x03\x11component-version\x02\x03\0\x03\x0boplog-index\x02\x03\0\x03\x0cretry-\
-policy\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x09worker-id\x01Be\x02\x03\x02\x01\x08\
+otonic-clock@0.2.0\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08\
+datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\
+\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x03\x01B@\x02\x03\x02\x01\x01\x04\0\x08po\
+llable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\
+\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\
+\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\
+\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-typ\
+e\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\
+\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim\
+-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dp\
+rim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0d\
+prim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-typ\
+e\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\
+\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\
+\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-va\
+lue\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\
+\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\
+\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\
+\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08\
+prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\
+\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-n\
+ode\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\
+\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-err\
+or\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\
+\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\
+\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\
+\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-para\
+ms*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self\
+)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\
+\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]\
+wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[\
+method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[\
+method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-va\
+lue\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/t\
+ypes@0.1.1\x05\x04\x02\x03\0\x03\x03uri\x02\x03\0\x01\x08duration\x01Bg\x02\x03\x02\
+\x01\x05\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\x02\x01\
+w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01r\x02\
+\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0c\
+component-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09wor\
+ker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\
+\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-at\
+temptsy\x09min-delay\x03\x09max-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\
+\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remo\
+te-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09\
+automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09\
+not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comp\
+arator\x03\0\x19\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18str\
+ing-filter-comparator\x03\0\x1b\x01m\x07\x07running\x04idle\x09suspended\x0binte\
+rrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\
+\x0acomparator\x1c\x05values\x04\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0ac\
+omparator\x1a\x05value\x1e\x04\0\x14worker-status-filter\x03\0!\x01r\x02\x0acomp\
+arator\x1a\x05valuew\x04\0\x15worker-version-filter\x03\0#\x01r\x02\x0acomparato\
+r\x1a\x05valuew\x04\0\x18worker-created-at-filter\x03\0%\x01r\x03\x04names\x0aco\
+mparator\x1c\x05values\x04\0\x11worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\
+\0\x06status\x01\"\0\x07version\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16\
+worker-property-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-fil\
+ter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01\
+o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04args1\x03env3\x06status\x1e\x11compon\
+ent-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-worker\
+s\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\
+\0\x18[constructor]get-workers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\
+\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01\
+p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise\
+-id\x0f\x04data?\0\x7f\x04\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\
+\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01\
+@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\
+\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05\
+begin\x05\x01\0\x04\0\x12mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry\
+-policy\x01G\x01@\x01\x10new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01\
+H\x01@\0\0\x16\x04\0\x1bget-oplog-persistence-level\x01I\x01@\x01\x15new-persist\
+ence-level\x16\x01\0\x04\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\
+\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idem\
+potence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09\
+worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01\
+N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\
+\0\x04\0\x13get-worker-metadata\x01Q\x03\0\x14golem:api/host@1.2.0\x05\x07\x02\x03\
+\0\x02\x08datetime\x02\x03\0\x03\x09wit-value\x02\x03\0\x04\x0aaccount-id\x02\x03\
+\0\x04\x11component-version\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\x0cretry-\
+policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x09worker-id\x01Be\x02\x03\x02\x01\x08\
 \x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\x04\0\x09wit-value\x03\0\x02\x02\x03\
 \x02\x01\x0a\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x0b\x04\0\x11componen\
 t-version\x03\0\x06\x02\x03\x02\x01\x0c\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\
@@ -13753,8 +13856,8 @@ g\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[meth
 od]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\
 \x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\
 \x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.get-next\x01`\x03\0\
-\x15golem:api/oplog@1.2.0\x05\x10\x02\x03\0\x03\x11persistence-level\x02\x03\0\x05\
-\x0boplog-index\x02\x03\0\x05\x15wrapped-function-type\x02\x03\0\x02\x0evalue-an\
+\x15golem:api/oplog@1.2.0\x05\x10\x02\x03\0\x04\x11persistence-level\x02\x03\0\x05\
+\x0boplog-index\x02\x03\0\x05\x15wrapped-function-type\x02\x03\0\x03\x0evalue-an\
 d-type\x01B\x20\x02\x03\x02\x01\x11\x04\0\x11persistence-level\x03\0\0\x02\x03\x02\
 \x01\x12\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01\x13\x04\0\x15wrapped-fun\
 ction-type\x03\0\x04\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\x06\x02\x03\x02\
@@ -13776,9 +13879,11 @@ cation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01
 \0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\
 \x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\
 \x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wasi:clocks/monoton\
-ic-clock@0.2.0\x05\x16\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cd\
-urable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
-0.220.0\x10wit-bindgen-rust\x060.36.0";
+ic-clock@0.2.0\x05\x16\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08da\
+tetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x04\
+\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x17\x04\0\x17golem:wasi/durable-wasi\x04\0\
+\x0b\x12\x01\0\x0cdurable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
+wit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

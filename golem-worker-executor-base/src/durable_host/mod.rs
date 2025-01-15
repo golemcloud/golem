@@ -104,7 +104,6 @@ use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 pub mod blobstore;
 mod cli;
-mod clocks;
 mod filesystem;
 pub mod golem;
 pub mod http;

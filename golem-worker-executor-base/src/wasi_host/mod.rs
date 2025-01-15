@@ -65,7 +65,7 @@ where
         &mut linker,
         get_wasmtime,
     )?;
-    wasmtime_wasi::bindings::clocks::wall_clock::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::clocks::wall_clock::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::filesystem::preopens::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::filesystem::types::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::io::error::add_to_linker_get_host(&mut linker, get)?;
