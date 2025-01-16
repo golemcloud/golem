@@ -446,7 +446,7 @@ impl Debug for OpenOplogs {
 }
 
 #[async_trait]
-trait OplogConstructor: Clone {
+pub trait OplogConstructor: Clone {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
