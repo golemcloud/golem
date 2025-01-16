@@ -1172,27 +1172,12 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
-dependencies = [
- "bit-vec 0.6.3",
-]
-
-[[package]]
-name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec 0.8.0",
+ "bit-vec",
 ]
-
-[[package]]
-name = "bit-vec"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
 
 [[package]]
 name = "bit-vec"
@@ -1465,7 +1450,7 @@ dependencies = [
  "bytes 1.9.0",
  "cargo-component-core",
  "cargo-config2",
- "cargo_metadata 0.19.1",
+ "cargo_metadata",
  "clap",
  "futures",
  "heck 0.5.0",
@@ -1543,20 +1528,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "cargo_metadata"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
-dependencies = [
- "camino",
- "cargo-platform",
- "semver",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1865,7 +1836,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68578f196d2a33ff61b27fae256c3164f65e36382648e30666dde05b8cc9dfdf"
 dependencies = [
  "async-trait",
- "convert_case 0.6.0",
+ "convert_case",
  "json5",
  "nom",
  "pathdiff",
@@ -1960,12 +1931,6 @@ name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
-
-[[package]]
-name = "convert_case"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "convert_case"
@@ -2622,19 +2587,6 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "0.99.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f33878137e4dafd7fa914ad4e259e18a4e8e532b9617a2d0150262bf53abfce"
-dependencies = [
- "convert_case 0.4.0",
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 2.0.96",
-]
-
-[[package]]
-name = "derive_more"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
@@ -3172,11 +3124,11 @@ checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
 name = "fancy-regex"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531e46835a22af56d1e3b66f04844bed63158bc094a628bec1d321d9b4c44bf2"
+checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
 dependencies = [
- "bit-set 0.5.3",
+ "bit-set",
  "regex-automata 0.4.9",
  "regex-syntax 0.8.5",
 ]
@@ -3799,7 +3751,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.9.0",
- "cargo_metadata 0.19.1",
+ "cargo_metadata",
  "futures-core",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3830,7 +3782,7 @@ dependencies = [
  "clap_complete",
  "cli-table",
  "colored",
- "derive_more 1.0.0",
+ "derive_more",
  "dirs 5.0.1",
  "env_logger 0.11.6",
  "futures-util",
@@ -3925,7 +3877,7 @@ dependencies = [
  "combine",
  "console-subscriber",
  "dashmap",
- "derive_more 1.0.0",
+ "derive_more",
  "figment",
  "fred",
  "git-version",
@@ -4082,16 +4034,15 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c0bcbbedbbecc9c66f2349150cbeb1b9e9704958611af624fbf11ea7202c4d9"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem-examples.git?branch=update_to_golem_main#01cd39f3f12a91e10252e5ceb1793758a31842de"
 dependencies = [
  "Inflector",
- "cargo_metadata 0.18.1",
+ "cargo_metadata",
  "clap",
  "colored",
  "copy_dir",
- "derive_more 0.99.18",
+ "derive_more",
  "dir-diff",
  "fancy-regex",
  "golem-wit",
@@ -4111,7 +4062,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
 dependencies = [
  "clap",
- "convert_case 0.6.0",
+ "convert_case",
  "fmt",
  "indexmap 2.7.0",
  "indoc",
@@ -4311,7 +4262,7 @@ dependencies = [
  "async-trait",
  "bigdecimal",
  "bincode",
- "cargo_metadata 0.19.1",
+ "cargo_metadata",
  "git-version",
  "golem-wasm-ast",
  "poem-openapi",
@@ -4433,7 +4384,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
- "cargo_metadata 0.19.1",
+ "cargo_metadata",
  "chrono",
  "console-subscriber",
  "dashmap",
@@ -4513,7 +4464,7 @@ dependencies = [
  "bincode",
  "bytes 1.9.0",
  "console-subscriber",
- "derive_more 1.0.0",
+ "derive_more",
  "figment",
  "futures",
  "futures-util",
@@ -4568,7 +4519,7 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "criterion",
- "derive_more 1.0.0",
+ "derive_more",
  "fastrand",
  "figment",
  "fred",
@@ -7349,7 +7300,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes 1.9.0",
  "chrono",
- "derive_more 1.0.0",
+ "derive_more",
  "futures-util",
  "humantime",
  "indexmap 2.7.0",
@@ -7681,8 +7632,8 @@ version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14cae93065090804185d3b75f0bf93b8eeda30c7a9b4a33d3bdb3988d6229e50"
 dependencies = [
- "bit-set 0.8.0",
- "bit-vec 0.8.0",
+ "bit-set",
+ "bit-vec",
  "bitflags 2.7.0",
  "lazy_static 1.5.0",
  "num-traits",
