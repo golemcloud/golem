@@ -76,7 +76,7 @@ function getBaseUrl() {
   //For demonstration purposes, if we use ngrok or port forwarding, the protocol might be set to https. Therefore, we use NEXT_PUBLIC_IS_LOCAL to implicitly treat it as a local environment.
   const protocol = process.env.NEXT_PUBLIC_IS_LOCAL!== "true" && isSecure ? 'wss://' : 'ws://';
   const host = process.env.NEXT_PUBLIC_BACKEND_API_URL?.replace(/^https?:\/\//, '');
-  return `${protocol}${host}`;
+  return process.env.NEXT_PUBLIC_WEB_SOCKET_URL || `${protocol}${host}`;
 }
 
 export const useWebSocketWithPath = (path: string) => {
