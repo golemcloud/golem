@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::wasi::logging::logging::{Host, Level};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -21,8 +21,6 @@ use golem_common::model::{LogLevel, WorkerEvent};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        self.observe_function_call("logging::handler", "log");
-
         let log_level = match level {
             Level::Critical => LogLevel::Critical,
             Level::Error => LogLevel::Error,

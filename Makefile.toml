@@ -70,6 +70,7 @@ cp wit/deps/clocks durable-wasi/wit/deps
 cp wit/deps/filesystem durable-wasi/wit/deps
 cp wit/deps/http durable-wasi/wit/deps
 cp wit/deps/io durable-wasi/wit/deps
+cp wit/deps/logging durable-wasi/wit/deps
 cp wit/deps/random durable-wasi/wit/deps
 cp wit/deps/sockets durable-wasi/wit/deps
 

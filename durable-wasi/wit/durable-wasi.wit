@@ -56,6 +56,10 @@ world durable-wasi {
     import wasi:io/streams@0.2.0;
     export wasi:io/streams@0.2.0;
 
+    // Logging
+    import wasi:logging/logging;
+    export wasi:logging/logging;
+
     // Golem durability API
     import golem:durability/durability@1.2.0;
 }

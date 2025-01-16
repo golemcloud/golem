@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Logging is wrapped because we forward the log entries to the worker's log event stream
-#[allow(clippy::module_inception)]
-pub mod logging;
+use crate::bindings::exports::wasi::logging::logging::Level;
+use crate::bindings::golem::durability::durability::observe_function_call;
+use crate::bindings::wasi::logging::logging::log;
+use std::mem::transmute;
+
+impl crate::bindings::exports::wasi::logging::logging::Guest for crate::Component {
+    fn log(level: Level, context: String, message: String) {
+        observe_function_call("logging::handler", "log");
+        let level = unsafe { transmute(level) };
+        log(level, &context, &message)
+    }
+}

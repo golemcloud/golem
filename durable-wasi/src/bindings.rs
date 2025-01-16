@@ -17557,6 +17557,108 @@ pub mod wasi {
             }
         }
     }
+    pub mod logging {
+        /// WASI Logging is a logging API intended to let users emit log messages with
+        /// simple priority levels and context values.
+        #[allow(dead_code, clippy::all)]
+        pub mod logging {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            /// A log level, describing a kind of message.
+            #[repr(u8)]
+            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            pub enum Level {
+                /// Describes messages about the values of variables and the flow of
+                /// control within a program.
+                Trace,
+                /// Describes messages likely to be of interest to someone debugging a
+                /// program.
+                Debug,
+                /// Describes messages likely to be of interest to someone monitoring a
+                /// program.
+                Info,
+                /// Describes messages indicating hazardous situations.
+                Warn,
+                /// Describes messages indicating serious errors.
+                Error,
+                /// Describes messages indicating fatal errors.
+                Critical,
+            }
+            impl ::core::fmt::Debug for Level {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Level::Trace => f.debug_tuple("Level::Trace").finish(),
+                        Level::Debug => f.debug_tuple("Level::Debug").finish(),
+                        Level::Info => f.debug_tuple("Level::Info").finish(),
+                        Level::Warn => f.debug_tuple("Level::Warn").finish(),
+                        Level::Error => f.debug_tuple("Level::Error").finish(),
+                        Level::Critical => f.debug_tuple("Level::Critical").finish(),
+                    }
+                }
+            }
+            impl Level {
+                #[doc(hidden)]
+                pub unsafe fn _lift(val: u8) -> Level {
+                    if !cfg!(debug_assertions) {
+                        return ::core::mem::transmute(val);
+                    }
+                    match val {
+                        0 => Level::Trace,
+                        1 => Level::Debug,
+                        2 => Level::Info,
+                        3 => Level::Warn,
+                        4 => Level::Error,
+                        5 => Level::Critical,
+                        _ => panic!("invalid enum discriminant"),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Emit a log message.
+            ///
+            /// A log message has a `level` describing what kind of message is being
+            /// sent, a context, which is an uninterpreted string meant to help
+            /// consumers group similar messages, and a string containing the message
+            /// text.
+            pub fn log(level: Level, context: &str, message: &str) {
+                unsafe {
+                    let vec0 = context;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let vec1 = message;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:logging/logging")]
+                    extern "C" {
+                        #[link_name = "log"]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8, _: usize) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        level.clone() as i32,
+                        ptr0.cast_mut(),
+                        len0,
+                        ptr1.cast_mut(),
+                        len1,
+                    );
+                }
+            }
+        }
+    }
 }
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
@@ -23011,6 +23113,109 @@ pub mod exports {
                 );
             }
         }
+        pub mod logging {
+            /// WASI Logging is a logging API intended to let users emit log messages with
+            /// simple priority levels and context values.
+            #[allow(dead_code, clippy::all)]
+            pub mod logging {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                /// A log level, describing a kind of message.
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+                pub enum Level {
+                    /// Describes messages about the values of variables and the flow of
+                    /// control within a program.
+                    Trace,
+                    /// Describes messages likely to be of interest to someone debugging a
+                    /// program.
+                    Debug,
+                    /// Describes messages likely to be of interest to someone monitoring a
+                    /// program.
+                    Info,
+                    /// Describes messages indicating hazardous situations.
+                    Warn,
+                    /// Describes messages indicating serious errors.
+                    Error,
+                    /// Describes messages indicating fatal errors.
+                    Critical,
+                }
+                impl ::core::fmt::Debug for Level {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            Level::Trace => f.debug_tuple("Level::Trace").finish(),
+                            Level::Debug => f.debug_tuple("Level::Debug").finish(),
+                            Level::Info => f.debug_tuple("Level::Info").finish(),
+                            Level::Warn => f.debug_tuple("Level::Warn").finish(),
+                            Level::Error => f.debug_tuple("Level::Error").finish(),
+                            Level::Critical => f.debug_tuple("Level::Critical").finish(),
+                        }
+                    }
+                }
+                impl Level {
+                    #[doc(hidden)]
+                    pub unsafe fn _lift(val: u8) -> Level {
+                        if !cfg!(debug_assertions) {
+                            return ::core::mem::transmute(val);
+                        }
+                        match val {
+                            0 => Level::Trace,
+                            1 => Level::Debug,
+                            2 => Level::Info,
+                            3 => Level::Warn,
+                            4 => Level::Error,
+                            5 => Level::Critical,
+                            _ => panic!("invalid enum discriminant"),
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_log_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: *mut u8,
+                    arg4: usize,
+                ) {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let len1 = arg4;
+                    let bytes1 = _rt::Vec::from_raw_parts(arg3.cast(), len1, len1);
+                    T::log(
+                        Level::_lift(arg0 as u8),
+                        _rt::string_lift(bytes0),
+                        _rt::string_lift(bytes1),
+                    );
+                }
+                pub trait Guest {
+                    /// Emit a log message.
+                    ///
+                    /// A log message has a `level` describing what kind of message is being
+                    /// sent, a context, which is an uninterpreted string meant to help
+                    /// consumers group similar messages, and a string containing the message
+                    /// text.
+                    fn log(level: Level, context: _rt::String, message: _rt::String);
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_logging_logging_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name = "wasi:logging/logging#log"]
+                        unsafe extern "C" fn export_log(arg0 : i32, arg1 : * mut u8, arg2
+                        : usize, arg3 : * mut u8, arg4 : usize,) { $($path_to_types)*::
+                        _export_log_cabi::<$ty > (arg0, arg1, arg2, arg3, arg4) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_logging_logging_cabi;
+            }
+        }
     }
 }
 #[rustfmt::skip]
@@ -23324,6 +23529,9 @@ macro_rules! __export_durable_wasi_impl {
         $($path_to_types_root)*::
         exports::wasi::filesystem::preopens::__export_wasi_filesystem_preopens_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::filesystem::preopens);
+        $($path_to_types_root)*::
+        exports::wasi::logging::logging::__export_wasi_logging_logging_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::logging::logging);
     };
 }
 #[doc(inline)]
@@ -23331,9 +23539,9 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 18783] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdb\x91\x01\x01A\x02\
-\x01Ab\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 19017] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc5\x93\x01\x01A\x02\
+\x01Af\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01\
 ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0biniti\
 al-cwd\x01\x06\x03\0\x1awasi:cli/environment@0.2.0\x05\0\x01B\x03\x01j\0\0\x01@\x01\
 \x06status\0\x01\0\x04\0\x04exit\x01\x01\x03\0\x13wasi:cli/exit@0.2.0\x05\x01\x01\
@@ -23444,269 +23652,274 @@ j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry
 \x04\0\x15filesystem-error-code\x01T\x03\0\x1bwasi:filesystem/types@0.2.0\x05\x17\
 \x02\x03\0\x0f\x0adescriptor\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\
 \0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\
-\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05\x19\x01B@\x02\x03\x02\x01\x05\x04\0\
-\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-i\
-d\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02\
-s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01\
-o\x02\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enu\
-m-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\
-\x03\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0d\
-prim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0d\
-prim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\
-\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string\
--type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01\
-r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\
-\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crec\
-ord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-val\
-ue\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\
-\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u3\
-2\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01\
-z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-cha\
-r\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08\
-wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01\
-r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotoco\
-l-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01\
-s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-r\
-esult\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01\
-(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffuncti\
-on-params*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04\
-self)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01\
-.\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method\
-]wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&\
-[method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20\
-[method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-v\
-alue\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/\
-types@0.1.1\x05\x1a\x02\x03\0\x11\x03uri\x02\x03\0\x0d\x08duration\x01Bg\x02\x03\
-\x02\x01\x1b\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x1c\x04\0\x08duration\x03\0\x02\
-\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01\
-r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\
-\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09\
-worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-\
-id\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0c\
-max-attemptsy\x09min-delay\x03\x09max-delay\x03\x0amultiplieru\x11max-jitter-fac\
-tor\x12\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersi\
-st-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x15\x01\
-m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05\
-equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11fi\
-lter-comparator\x03\0\x19\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\
-\0\x18string-filter-comparator\x03\0\x1b\x01m\x07\x07running\x04idle\x09suspende\
-d\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1d\
-\x01r\x02\x0acomparator\x1c\x05values\x04\0\x12worker-name-filter\x03\0\x1f\x01r\
-\x02\x0acomparator\x1a\x05value\x1e\x04\0\x14worker-status-filter\x03\0!\x01r\x02\
-\x0acomparator\x1a\x05valuew\x04\0\x15worker-version-filter\x03\0#\x01r\x02\x0ac\
-omparator\x1a\x05valuew\x04\0\x18worker-created-at-filter\x03\0%\x01r\x03\x04nam\
-es\x0acomparator\x1c\x05values\x04\0\x11worker-env-filter\x03\0'\x01q\x05\x04nam\
-e\x01\x20\0\x06status\x01\"\0\x07version\x01$\0\x0acreated-at\x01&\0\x03env\x01(\
-\0\x04\0\x16worker-property-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11wo\
-rker-all-filter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11worker-any-filter\x03\
-\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04args1\x03env3\x06status\x1e\
-\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\04\x04\0\x0b\
-get-workers\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\x0b\x06filter7\x07preci\
-se\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h6\x01p5\x01k;\x01@\x01\x04s\
-elf:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-\
-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0dawait-promise\x01@\x01\
-@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\0\x10complete-promise\x01A\x01@\x01\x0a\
-promise-id\x0f\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\x05\x04\0\x0fget-oplo\
-g-index\x01C\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\
-\x08replicas}\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14mark-begin-operation\x01\
-C\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operation\x01F\x01@\0\0\x14\x04\0\
-\x10get-retry-policy\x01G\x01@\x01\x10new-retry-policy\x14\x01\0\x04\0\x10set-re\
-try-policy\x01H\x01@\0\0\x16\x04\0\x1bget-oplog-persistence-level\x01I\x01@\x01\x15\
-new-persistence-level\x16\x01\0\x04\0\x1bset-oplog-persistence-level\x01J\x01@\0\
-\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\
-\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency-key\x01\
-M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\x0dupd\
-ate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09work\
-er-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\0\x14golem:api/host@1.1.\
-0\x05\x1d\x02\x03\0\x11\x09wit-value\x02\x03\0\x12\x0aaccount-id\x02\x03\0\x12\x11\
-component-version\x02\x03\0\x12\x0boplog-index\x02\x03\0\x12\x0cretry-policy\x02\
-\x03\0\x12\x04uuid\x02\x03\0\x12\x09worker-id\x01Be\x02\x03\x02\x01\x16\x04\0\x08\
-datetime\x03\0\0\x02\x03\x02\x01\x1e\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\
-\x1f\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01\x20\x04\0\x11component-versio\
-n\x03\0\x06\x02\x03\x02\x01!\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\"\x04\
-\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01#\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\
-\x01$\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-\
-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\x10\
-\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finst\
-allation-id\x0d\x04names\x07versions\x0aparameters\x14\x04\0\x1fplugin-installat\
-ion-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09w\
-orker-id\x0f\x11component-version\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06\
-parent\x18\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-ac\
-tive-plugins\x19\x04\0\x11create-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0d\
-function-names\x07request\x03\x08response\x03\x15wrapped-function-type\x12\x04\0\
-$imported-function-invoked-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\
-\x0dfunction-names\x07request\x1e\x0fidempotency-keys\x04\0$exported-function-in\
-voked-parameters\x03\0\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed\
--fuelx\x04\0&exported-function-completed-parameters\x03\0!\x01r\x02\x09timestamp\
-\x01\x05errors\x04\0\x10error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05sta\
-rt\x09\x03end\x09\x04\0\x0fjump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cr\
-etry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0'\x01r\x02\x09times\
-tamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\
-\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\
-\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05input-\x04\0'exporte\
-d-function-invocation-parameters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0d\
-manual-update\x01\x07\0\x04\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\
-\x0ainvocation1\x04\0$pending-worker-invocation-parameters\x03\02\x01p}\x01q\x02\
-\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\0\x12update-description\x03\05\x01\
-r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-description6\x04\0\x19pen\
-ding-update-parameters\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12\
-new-component-sizew\x12new-active-plugins\x19\x04\0\x1csuccessful-update-paramet\
-ers\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\
-\0\x18failed-update-parameters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16\
-grow-memory-parameters\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09\
-timestamp\x01\x0bresource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01\
-r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\
-\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource\
--params\x1e\x04\0\x1cdescribe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06s\
-tderr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\
-\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elo\
-g-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-pl\
-ugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactiva\
-te-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-in\
-voked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\x1bexported-function-comp\
-leted\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01\
-&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13\
-begin-atomic-region\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\
-\x01\0\x10end-remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending\
--update\x018\0\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memor\
-y\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe\
--resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\
-\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09\
-get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05\
-start\x09\0\xd4\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\
-\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\
-\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01\
-[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\
-\0\x1d[method]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x05%\x02\
-\x03\0\x12\x11persistence-level\x02\x03\0\x13\x0boplog-index\x02\x03\0\x13\x15wr\
-apped-function-type\x02\x03\0\x11\x0evalue-and-type\x01B\x20\x02\x03\x02\x01&\x04\
-\0\x11persistence-level\x03\0\0\x02\x03\x02\x01'\x04\0\x0boplog-index\x03\0\x02\x02\
-\x03\x02\x01(\x04\0\x15wrapped-function-type\x03\0\x04\x02\x03\x02\x01\x16\x04\0\
-\x08datetime\x03\0\x06\x02\x03\x02\x01)\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15\
-durable-function-type\x03\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\
-\x04\0\x17durable-execution-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-\
-entry-version\x03\0\x0d\x01p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08res\
-ponse\x0f\x0dfunction-type\x0a\x0dentry-version\x0e\x04\0%persisted-durable-func\
-tion-invocation\x03\0\x10\x01@\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe\
--function-call\x01\x12\x01@\x01\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durabl\
-e-function\x01\x13\x01@\x02\x0dfunction-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14\
-end-durable-function\x01\x14\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-sta\
-te\x01\x15\x01@\x04\x0dfunction-names\x07request\x0f\x08response\x0f\x0dfunction\
--type\x0a\x01\0\x04\0#persist-durable-function-invocation\x01\x16\x01@\x04\x0dfu\
-nction-names\x07request\x09\x08response\x09\x0dfunction-type\x0a\x01\0\x04\0)per\
-sist-typed-durable-function-invocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted\
--durable-function-invocation\x01\x18\x03\0!golem:durability/durability@1.2.0\x05\
-*\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\
-\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial\
--cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05+\x01B\x03\x01j\0\0\x01@\x01\
-\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05,\x01B\x04\
-\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to\
--debug-string\x01\x02\x04\0\x13wasi:io/error@0.2.0\x05-\x01B\x0a\x04\0\x08pollab\
-le\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\
-\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\
-\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.\
-0\x05.\x01B(\x02\x03\x02\x01\x04\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x05\x04\0\
-\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06c\
-losed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0d\
-output-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03\
-lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-strea\
-m.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\
-\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-ski\
-p\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subs\
-cribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.ch\
-eck-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\
-\x1b[method]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-wri\
-te-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.f\
-lush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\
-\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\
-\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]o\
-utput-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\
-\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]o\
-utput-stream.blocking-splice\x01\x18\x04\0\x15wasi:io/streams@0.2.0\x05/\x01B\x05\
-\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0a\
-get-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x050\x01B\x05\x02\x03\x02\x01\x09\
-\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x04\
-\0\x14wasi:cli/stdin@0.2.0\x051\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-str\
-eam\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15wasi:cli/\
-stdout@0.2.0\x052\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi:cli/ter\
-minal-input@0.2.0\x053\x01B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1ewasi:c\
-li/terminal-output@0.2.0\x054\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-out\
-put\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x04\
-\0\x1ewasi:cli/terminal-stderr@0.2.0\x055\x01B\x06\x02\x03\x02\x01\x10\x04\0\x0e\
-terminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdi\
-n\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x056\x01B\x06\x02\x03\x02\x01\x0e\
-\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-te\
-rminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x057\x01B\x0f\x02\x03\
-\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\
-\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0ar\
-esolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\
-\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wa\
-si:clocks/monotonic-clock@0.2.0\x058\x01B\x05\x01r\x02\x07secondsw\x0bnanosecond\
-sy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresoluti\
-on\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x059\x01Br\x02\x03\x02\x01\x09\x04\
-\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\
-\x03\x02\x01\x15\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\
-\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10c\
-haracter-device\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\
-\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\
-\x13data-integrity-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10des\
-criptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\
-\x01n\x04\x06create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\
-\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-\
-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bdata-modification-timestam\
-p\x14\x17status-change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\
-\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\
-\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06a\
-ccess\x0bwould-block\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05\
-exist\x0efile-too-large\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07\
-invalid\x02io\x0cis-directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-\
-too-long\x09no-device\x08no-entry\x07no-lock\x13insufficient-memory\x12insuffici\
-ent-space\x0dnot-directory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-\
-tty\x0eno-such-device\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinval\
-id-seek\x0etext-file-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\
-\x06normal\x0asequential\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06\
-advice\x03\0\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\
-\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01\
-i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descri\
-ptor.read-via-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\
-\x09\0(\x04\0#[method]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0\
-$[method]descriptor.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06o\
-ffset\x09\x06length\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\
-\x01@\x01\x04self#\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\
-\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\
-\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\
-\x04self#\x04size\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04s\
-elf#\x15data-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c\
-[method]descriptor.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\
-\x04self#\x06length\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01\
-j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method\
-]descriptor.write\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![meth\
-od]descriptor.read-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\
-\x04self#\x04paths\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\
-\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\
-\x04self#\x0apath-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\
-\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bda\
-ta-modification-timestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01\
-@\x05\x04self#\x0eold-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-path\
-s\0+\x04\0\x1a[method]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\
-\x04self#\x0apath-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\
-\x1a[method]descriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\
-\0\xc6\0\x04\0\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.r\
-emove-directory-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new\
--paths\0+\x04\0\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-pa\
-ths\x08new-paths\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]de\
-scriptor.unlink-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]des\
-criptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\
-\x20[method]descriptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04\
-paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01\
-j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry\
--stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\
-\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesystem/types@0.2.0\x05:\x01\
-B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01\
-p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\x1ewasi:filesystem/pre\
-opens@0.2.0\x05;\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cdurable\
--wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.\
-0\x10wit-bindgen-rust\x060.36.0";
+\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05\x19\x01B\x04\x01m\x06\x05trace\x05d\
+ebug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05lev\
+el\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/\
+logging\x05\x1a\x01B@\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0a\
+node-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05owned\x08bo\
+rrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02\
+s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0breco\
+rd-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0aflags-type\
+\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\x01\x03\
+\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32\
+-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-\
+s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0ep\
+rim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\
+\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\0\x08\
+wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\
+\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0dvarian\
+t-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-value\x01\
+\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\x01\x1a\
+\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07\
+prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-\
+float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\
+\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01\
+r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\x15\
+\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\
+\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0#\
+\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\x08\
+location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01\
+$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]wasm-\
+rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffun\
+ction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self)\x0d\
+function-names\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-and-aw\
+ait\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-result.\
+subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-result.\
+get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vnt\"\0\
+\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05\x1b\x02\x03\0\
+\x12\x03uri\x02\x03\0\x0d\x08duration\x01Bg\x02\x03\x02\x01\x1c\x04\0\x03uri\x03\
+\0\0\x02\x03\x02\x01\x1d\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\
+\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-b\
+itsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\
+\x01r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\
+\x09worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05val\
+ues\x04\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\
+\x09max-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\
+\0\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05sma\
+rt\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-ba\
+sed\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equ\
+al\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\
+\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\
+\0\x1b\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06fa\
+iled\x06exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05va\
+lues\x04\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\
+\x04\0\x14worker-status-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\
+\x15worker-version-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18w\
+orker-created-at-filter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\
+\0\x11worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07v\
+ersion\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\
+\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\
+\x07filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09\
+worker-id\x0d\x04args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-coun\
+tw\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\
+\x03\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-\
+workers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers\
+.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromi\
+se-id\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\
+\x04\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete\
+-promise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\
+\x01\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-\
+commit\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\
+\x12mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\
+\x10new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\
+\x1bget-oplog-persistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\
+\x04\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence\
+-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01\
+@\0\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0eta\
+rget-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11\
+get-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-work\
+er-metadata\x01Q\x03\0\x14golem:api/host@1.1.0\x05\x1e\x02\x03\0\x12\x09wit-valu\
+e\x02\x03\0\x13\x0aaccount-id\x02\x03\0\x13\x11component-version\x02\x03\0\x13\x0b\
+oplog-index\x02\x03\0\x13\x0cretry-policy\x02\x03\0\x13\x04uuid\x02\x03\0\x13\x09\
+worker-id\x01Be\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x1f\
+\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x20\x04\0\x0aaccount-id\x03\0\x04\x02\
+\x03\x02\x01!\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x01\"\x04\0\x0bop\
+log-index\x03\0\x08\x02\x03\x02\x01#\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\
+\x01$\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01%\x04\0\x09worker-id\x03\0\x0e\x01k\
+\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-r\
+emote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\0\
+\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0a\
+parameters\x14\x04\0\x1fplugin-installation-description\x03\0\x15\x01ps\x01k\x0f\
+\x01p\x16\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-version\x07\x04\
+args\x17\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent-sizew\x20initia\
+l-total-linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11create-parame\
+ters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\x08res\
+ponse\x03\x15wrapped-function-type\x12\x04\0$imported-function-invoked-parameter\
+s\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07request\x1e\x0f\
+idempotency-keys\x04\0$exported-function-invoked-parameters\x03\0\x1f\x01r\x03\x09\
+timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-complete\
+d-parameters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameter\
+s\x03\0#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-paramet\
+ers\x03\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-p\
+olicy-parameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cen\
+d-atomic-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\
+\0\x1bend-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidempotency-keys\x0d\
+function-names\x05input-\x04\0'exported-function-invocation-parameters\x03\0.\x01\
+q\x02\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-inv\
+ocation\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pending-worker-inv\
+ocation-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x01\
+4\0\x04\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\x0etarget-versi\
+on\x07\x12update-description6\x04\0\x19pending-update-parameters\x03\07\x01r\x04\
+\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12new-active-plu\
+gins\x19\x04\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\x09timestam\
+p\x01\x0etarget-version\x07\x07details;\x04\0\x18failed-update-parameters\x03\0<\
+\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0>\x01w\
+\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\
+\0\x04\0\x1acreate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\x0bresou\
+rce-id\xc1\0\x04\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09timestamp\x01\x0b\
+resource-id\xc1\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1cdescribe-res\
+ource-parameters\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04\
+warn\x05error\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09timestamp\x01\x05\
+level\xc9\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0J\x01r\x02\x09t\
+imestamp\x01\x06plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\0L\x01r\x02\x09\
+timestamp\x01\x06plugin\x16\x04\0\x1cdeactivate-plugin-parameters\x03\0N\x01q\x1b\
+\x06create\x01\x1b\0\x19imported-function-invoked\x01\x1d\0\x19exported-function\
+-invoked\x01\x20\0\x1bexported-function-completed\x01\"\0\x07suspend\x01\x01\0\x05\
+error\x01$\0\x05no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\x01\x01\0\x06exite\
+d\x01\x01\0\x13change-retry-policy\x01(\0\x13begin-atomic-region\x01\x01\0\x11en\
+d-atomic-region\x01*\0\x12begin-remote-write\x01\x01\0\x10end-remote-write\x01,\0\
+\x19pending-worker-invocation\x013\0\x0epending-update\x018\0\x11successful-upda\
+te\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memory\x01?\0\x0fcreate-resource\x01\xc3\
+\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe-resource\x01\xc7\0\0\x03log\x01\xcb\
+\0\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11deactivate-plugin\x01\
+\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-\
+oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\0\x04\0\x16[con\
+structor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8\
+\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04t\
+exts\0\xda\0\x04\0\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01\
+p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.\
+get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x05&\x02\x03\0\x13\x11persistence-l\
+evel\x02\x03\0\x14\x0boplog-index\x02\x03\0\x14\x15wrapped-function-type\x02\x03\
+\0\x12\x0evalue-and-type\x01B\x20\x02\x03\x02\x01'\x04\0\x11persistence-level\x03\
+\0\0\x02\x03\x02\x01(\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01)\x04\0\x15w\
+rapped-function-type\x03\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\x06\x02\
+\x03\x02\x01*\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\
+\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17durable-executi\
+on-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01\
+p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\
+\x0dentry-version\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\
+\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\
+\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0d\
+function-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\
+\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunct\
+ion-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persis\
+t-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08\
+response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durable-function-inv\
+ocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\
+\x18\x03\0!golem:durability/durability@1.2.0\x05+\x01B\x0a\x01o\x02ss\x01p\0\x01\
+@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0dget-argum\
+ents\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x04\0\x1awasi:cli/e\
+nvironment@0.2.0\x05,\x01B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\0\x04exit\
+\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05-\x01B\x04\x04\0\x05error\x03\x01\x01h\0\
+\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\x04\0\x13\
+wasi:io/error@0.2.0\x05.\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04s\
+elf\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\
+\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\
+\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.0\x05/\x01B(\x02\x03\x02\x01\x04\
+\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x02\x01i\x01\
+\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\
+\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\
+\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]\
+input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\
+\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.s\
+kip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04\
+self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\
+\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\
+\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\
+\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04\
+self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output\
+-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]outpu\
+t-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]out\
+put-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroe\
+s-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[meth\
+od]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\
+\x04\0\x15wasi:io/streams@0.2.0\x050\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutpu\
+t-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stderr\x01\x03\x04\0\x15wasi\
+:cli/stderr@0.2.0\x051\x01B\x05\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\
+\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x04\0\x14wasi:cli/stdin@0.2.0\x05\
+2\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\
+\x04\0\x0aget-stdout\x01\x03\x04\0\x15wasi:cli/stdout@0.2.0\x053\x01B\x01\x04\0\x0e\
+terminal-input\x03\x01\x04\0\x1dwasi:cli/terminal-input@0.2.0\x054\x01B\x01\x04\0\
+\x0fterminal-output\x03\x01\x04\0\x1ewasi:cli/terminal-output@0.2.0\x055\x01B\x06\
+\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\
+\x03\x04\0\x13get-terminal-stderr\x01\x04\x04\0\x1ewasi:cli/terminal-stderr@0.2.\
+0\x056\x01B\x06\x02\x03\x02\x01\x10\x04\0\x0eterminal-input\x03\0\0\x01i\x01\x01\
+k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdin\x01\x04\x04\0\x1dwasi:cli/termina\
+l-stdin@0.2.0\x057\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\
+\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stdout\x01\x04\x04\0\x1ewa\
+si:cli/terminal-stdout@0.2.0\x058\x01B\x0f\x02\x03\x02\x01\x05\x04\0\x08pollable\
+\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\
+\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01\
+@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\
+\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wasi:clocks/monotonic-clock@0.2.0\
+\x059\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
+@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x04\0\x1cwasi:clocks/\
+wall-clock@0.2.0\x05:\x01Br\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x02\
+\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x15\x04\0\x05e\
+rror\x03\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08fil\
+esize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10character-device\x09direc\
+tory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\0\x0fdescriptor-type\
+\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\x13data-integrity-sy\
+nc\x14requested-write-sync\x10mutate-directory\x04\0\x10descriptor-flags\x03\0\x0c\
+\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\x01n\x04\x06create\x09\
+directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0al\
+ink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-count\x13\x04size\x09\x15\
+data-access-timestamp\x14\x1bdata-modification-timestamp\x14\x17status-change-ti\
+mestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03now\0\
+\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\x0b\x04\
+names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06access\x0bwould-block\x07alrea\
+dy\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05exist\x0efile-too-large\x15\
+illegal-byte-sequence\x0bin-progress\x0binterrupted\x07invalid\x02io\x0cis-direc\
+tory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-too-long\x09no-device\x08\
+no-entry\x07no-lock\x13insufficient-memory\x12insufficient-space\x0dnot-director\
+y\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-tty\x0eno-such-device\x08\
+overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinvalid-seek\x0etext-file-busy\
+\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\x06normal\x0asequential\x06\
+random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01r\x02\x05\
+lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\x1f\x04\0\x0adescriptor\x03\x01\
+\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\x1c\x01@\x02\
+\x04self#\x06offset\x09\0%\x04\0\"[method]descriptor.read-via-stream\x01&\x01i\x03\
+\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\x09\0(\x04\0#[method]descriptor.w\
+rite-via-stream\x01)\x01@\x01\x04self#\0(\x04\0$[method]descriptor.append-via-st\
+ream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06offset\x09\x06length\x09\x06advice\
+\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\x01@\x01\x04self#\0+\x04\0\x1c[m\
+ethod]descriptor.sync-data\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04self#\0.\x04\0\x1c\
+[method]descriptor.get-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\x04self#\00\x04\0\
+\x1b[method]descriptor.get-type\x011\x01@\x02\x04self#\x04size\x09\0+\x04\0\x1b[\
+method]descriptor.set-size\x012\x01@\x03\x04self#\x15data-access-timestamp\x18\x1b\
+data-modification-timestamp\x18\0+\x04\0\x1c[method]descriptor.set-times\x013\x01\
+p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\x04self#\x06length\x09\x06offset\x09\
+\06\x04\0\x17[method]descriptor.read\x017\x01j\x01\x09\x01\x1c\x01@\x03\x04self#\
+\x06buffer4\x06offset\x09\08\x04\0\x18[method]descriptor.write\x019\x01i\"\x01j\x01\
+:\x01\x1c\x01@\x01\x04self#\0;\x04\0![method]descriptor.read-directory\x01<\x04\0\
+\x17[method]descriptor.sync\x01-\x01@\x02\x04self#\x04paths\0+\x04\0&[method]des\
+criptor.create-directory-at\x01=\x01j\x01\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\
+\x17[method]descriptor.stat\x01?\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0>\
+\x04\0\x1a[method]descriptor.stat-at\x01@\x01@\x05\x04self#\x0apath-flags\x0f\x04\
+paths\x15data-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1f\
+[method]descriptor.set-times-at\x01A\x01@\x05\x04self#\x0eold-path-flags\x0f\x08\
+old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1a[method]descriptor.link-at\
+\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x0a\
+open-flags\x11\x05flags\x0d\0\xc4\0\x04\0\x1a[method]descriptor.open-at\x01E\x01\
+j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\x1e[method]descriptor.re\
+adlink-at\x01G\x04\0&[method]descriptor.remove-directory-at\x01=\x01@\x04\x04sel\
+f#\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1c[method]descriptor.r\
+ename-at\x01H\x01@\x03\x04self#\x08old-paths\x08new-paths\0+\x04\0\x1d[method]de\
+scriptor.symlink-at\x01I\x04\0![method]descriptor.unlink-file-at\x01=\x01@\x02\x04\
+self#\x05other#\0\x7f\x04\0![method]descriptor.is-same-object\x01J\x01j\x01\x20\x01\
+\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\x20[method]descriptor.metadata-hash\x01L\x01\
+@\x03\x04self#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\0#[method]descriptor.metad\
+ata-hash-at\x01M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\
+\xd0\0\x04\03[method]directory-entry-stream.read-directory-entry\x01Q\x01h\x05\x01\
+k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15filesystem-error-code\x01T\x04\0\x1b\
+wasi:filesystem/types@0.2.0\x05;\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescripto\
+r\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\
+\x05\x04\0\x1ewasi:filesystem/preopens@0.2.0\x05<\x01B\x04\x01m\x06\x05trace\x05\
+debug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05le\
+vel\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x04\0\x14wasi:logging\
+/logging\x05=\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cdurable-wa\
+si\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10\
+wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

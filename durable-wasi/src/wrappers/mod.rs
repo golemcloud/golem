@@ -22,6 +22,7 @@ mod cli;
 mod clock;
 mod filesystem;
 mod io;
+mod logging;
 
 // TODO: try to avoid having copies of these types here
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
