@@ -4,7 +4,7 @@ import { Loader } from "lucide-react";
 import { ApiDefinition, ApiRoute } from "../types/api";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ErrorBoundary from "./erro-boundary";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Button2 } from "./ui/button";
 
@@ -24,6 +24,8 @@ export function RouteList({
   // const [route, setRoute] = useState<ApiRoute | null>(null);
   const router=useRouter();
   const {apiId}=useCustomParam();
+  const params = useSearchParams();
+  const version= params?.get("version");
   return (
     <>
       <Box>
@@ -55,7 +57,7 @@ export function RouteList({
                       className="px-4 py-6 flex justify-between border rounded-lg dark:hover:bg-[#373737] hover:bg-[#C0C0C0] cursor-pointer"
                       onClick={(e) => {
                         e.preventDefault();
-                        router.push(`/apis/${apiId}/${routeId}`)
+                        router.push(`/apis/${apiId}/${routeId}${version? `?version=${version}`: ''}`)
                       }}
                     >
                       <Typography gutterBottom className="font-bold">
