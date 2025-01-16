@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use wasmtime::component::Resource;
+use crate::bindings::golem::durability::durability::observe_function_call;
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::sockets::instance_network::{Host, Network};
+pub struct WrappedNetwork {
+    pub network: crate::bindings::wasi::sockets::instance_network::Network,
+}
 
-#[async_trait]
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn instance_network(&mut self) -> anyhow::Result<Resource<Network>> {
-        self.observe_function_call("sockets::instance_network", "instance_network");
-        Host::instance_network(&mut self.as_wasi_view())
+impl crate::bindings::exports::wasi::sockets::network::GuestNetwork for WrappedNetwork {}
+
+impl Drop for WrappedNetwork {
+    fn drop(&mut self) {
+        observe_function_call("sockets::network", "drop_network");
     }
+}
+
+impl crate::bindings::exports::wasi::sockets::network::Guest for crate::Component {
+    type Network = WrappedNetwork;
 }

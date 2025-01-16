@@ -54,7 +54,7 @@ impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::C
     fn subscribe_instant(when: Instant) -> crate::bindings::exports::wasi::io::poll::Pollable {
         observe_function_call("clocks::monotonic_clock", "subscribe_instant");
         let pollable = subscribe_instant(when);
-        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable { pollable })
+        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable::Proxy(pollable))
     }
 
     fn subscribe_duration(when: Duration) -> crate::bindings::exports::wasi::io::poll::Pollable {
@@ -75,6 +75,6 @@ impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::C
 
         let when = now.saturating_add(when);
         let pollable = subscribe_instant(when);
-        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable { pollable })
+        crate::bindings::exports::wasi::io::poll::Pollable::new(WrappedPollable::Proxy(pollable))
     }
 }

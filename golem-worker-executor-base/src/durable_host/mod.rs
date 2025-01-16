@@ -110,7 +110,6 @@ pub mod io;
 pub mod keyvalue;
 mod logging;
 pub mod serialized;
-mod sockets;
 pub mod wasm_rpc;
 
 mod durability;

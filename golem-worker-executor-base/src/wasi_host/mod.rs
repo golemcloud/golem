@@ -81,25 +81,43 @@ where
         get_wasmtime,
     )?;
     wasmtime_wasi::bindings::clocks::wall_clock::add_to_linker_get_host(&mut linker, get_wasmtime)?;
-    wasmtime_wasi::bindings::filesystem::preopens::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::filesystem::preopens::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
     wasmtime_wasi::bindings::filesystem::types::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::io::error::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::io::poll::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::io::streams::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::random::random::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::random::insecure::add_to_linker_get_host(&mut linker, get_wasmtime)?;
-    wasmtime_wasi::bindings::random::insecure_seed::add_to_linker_get_host(&mut linker, get_wasmtime)?;
-    wasmtime_wasi::bindings::sockets::instance_network::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::sockets::ip_name_lookup::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::random::insecure_seed::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::sockets::instance_network::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::sockets::ip_name_lookup::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
     wasmtime_wasi::bindings::sockets::network::add_to_linker_get_host(
         &mut linker,
         &network_link_options,
-        get,
+        get_wasmtime,
     )?;
-    wasmtime_wasi::bindings::sockets::tcp::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::sockets::tcp_create_socket::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::sockets::udp::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::sockets::udp_create_socket::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::sockets::tcp::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::sockets::tcp_create_socket::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
+    wasmtime_wasi::bindings::sockets::udp::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::sockets::udp_create_socket::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime,
+    )?;
 
     wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
         &mut linker,

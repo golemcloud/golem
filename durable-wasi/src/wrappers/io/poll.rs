@@ -17,20 +17,28 @@ use crate::bindings::golem::durability::durability::{observe_function_call, Dura
 use crate::bindings::wasi::io::poll::poll;
 use crate::durability::Durability;
 use crate::wrappers::SerializableError;
+use std::collections::HashMap;
 
-pub struct WrappedPollable {
-    pub pollable: crate::bindings::wasi::io::poll::Pollable,
+pub enum WrappedPollable {
+    Proxy(crate::bindings::wasi::io::poll::Pollable),
+    Ready,
 }
 
 impl crate::bindings::exports::wasi::io::poll::GuestPollable for WrappedPollable {
     fn ready(&self) -> bool {
         observe_function_call("io::poll:pollable", "ready");
-        self.pollable.ready()
+        match self {
+            Self::Proxy(pollable) => pollable.ready(),
+            Self::Ready => true,
+        }
     }
 
     fn block(&self) {
         observe_function_call("io::poll:pollable", "block");
-        self.pollable.block()
+        match self {
+            Self::Proxy(pollable) => pollable.block(),
+            Self::Ready => {}
+        }
     }
 }
 
@@ -51,11 +59,31 @@ impl crate::bindings::exports::wasi::io::poll::Guest for crate::Component {
         );
 
         if durability.is_live() {
-            let pollables = in_
-                .iter()
-                .map(|pollable| &pollable.get::<WrappedPollable>().pollable)
-                .collect::<Vec<_>>();
-            let result = poll(&pollables);
+            let mut mapping = HashMap::new();
+            let mut readies = Vec::new();
+            let mut pollables = Vec::new();
+
+            for (idx, pollable) in in_.iter().enumerate() {
+                match pollable.get::<WrappedPollable>() {
+                    WrappedPollable::Proxy(pollable) => {
+                        mapping.insert(pollables.len(), idx);
+                        pollables.push(pollable);
+                    }
+                    WrappedPollable::Ready => {
+                        readies.push(idx);
+                    }
+                }
+            }
+
+            let inner_result = poll(&pollables);
+            let mut result = Vec::new();
+            for idx in inner_result {
+                result.push(*mapping.get(&(idx as usize)).unwrap() as u32);
+            }
+            for idx in readies {
+                result.push(idx as u32);
+            }
+            result.sort();
             durability.persist_infallible((), result)
         } else {
             durability.replay_infallible()

@@ -149,7 +149,7 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
     fn subscribe(&self) -> Pollable {
         observe_function_call("io::streams::input_stream", "subscribe");
         let pollable = self.input_stream.subscribe();
-        Pollable::new(crate::wrappers::io::poll::WrappedPollable { pollable })
+        Pollable::new(crate::wrappers::io::poll::WrappedPollable::Proxy(pollable))
     }
 }
 
@@ -202,7 +202,7 @@ impl crate::bindings::exports::wasi::io::streams::GuestOutputStream for WrappedO
     fn subscribe(&self) -> Pollable {
         observe_function_call("io::streams::output_stream", "subscribe");
         let pollable = self.output_stream.subscribe();
-        Pollable::new(crate::wrappers::io::poll::WrappedPollable { pollable })
+        Pollable::new(crate::wrappers::io::poll::WrappedPollable::Proxy(pollable))
     }
 
     fn write_zeroes(&self, len: u64) -> Result<(), StreamError> {

@@ -24,6 +24,7 @@ metrohash = "1.0.7"
 wit-bindgen-rt = { version = "=0.36.0", features = ["bitflags"] }
 
 [dev-dependencies]
+proptest = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
