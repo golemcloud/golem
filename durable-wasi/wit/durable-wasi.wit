@@ -60,6 +60,16 @@ world durable-wasi {
     import wasi:logging/logging;
     export wasi:logging/logging;
 
+    // Random
+    import wasi:random/insecure@0.2.0;
+    export wasi:random/insecure@0.2.0;
+
+    import wasi:random/insecure-seed@0.2.0;
+    export wasi:random/insecure-seed@0.2.0;
+
+    import wasi:random/random@0.2.0;
+    export wasi:random/random@0.2.0;
+
     // Golem durability API
     import golem:durability/durability@1.2.0;
 }

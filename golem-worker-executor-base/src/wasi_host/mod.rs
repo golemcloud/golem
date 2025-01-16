@@ -86,9 +86,9 @@ where
     wasmtime_wasi::bindings::io::error::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::io::poll::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::io::streams::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::random::random::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::random::insecure::add_to_linker_get_host(&mut linker, get)?;
-    wasmtime_wasi::bindings::random::insecure_seed::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi::bindings::random::random::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::random::insecure::add_to_linker_get_host(&mut linker, get_wasmtime)?;
+    wasmtime_wasi::bindings::random::insecure_seed::add_to_linker_get_host(&mut linker, get_wasmtime)?;
     wasmtime_wasi::bindings::sockets::instance_network::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::ip_name_lookup::add_to_linker_get_host(&mut linker, get)?;
     wasmtime_wasi::bindings::sockets::network::add_to_linker_get_host(

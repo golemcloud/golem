@@ -109,7 +109,6 @@ pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
-mod random;
 pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
