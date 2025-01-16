@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 
 pub struct WrappedTerminalOutput {
     pub terminal_output: crate::bindings::wasi::cli::terminal_output::TerminalOutput,

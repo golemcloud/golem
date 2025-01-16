@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::golem::durability::durability::DurableFunctionType;
 use crate::bindings::wasi::cli::environment::{get_arguments, get_environment, initial_cwd};
 use crate::durability::Durability;
 use crate::wrappers::SerializableError;

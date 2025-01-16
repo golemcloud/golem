@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::exit::exit;
 
 impl crate::bindings::exports::wasi::cli::exit::Guest for crate::Component {

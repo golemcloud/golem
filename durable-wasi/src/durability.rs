@@ -15,7 +15,7 @@
 // NOTE: Similar to `Durability` in `golem-worker-executor-base`, but builds on the
 // sync guest bindings to `golem:api/durability`.
 
-use crate::bindings::golem::api::durability::{
+use crate::bindings::golem::durability::durability::{
     begin_durable_function, current_durable_execution_state, end_durable_function,
     observe_function_call, persist_durable_function_invocation,
     read_persisted_durable_function_invocation, DurableExecutionState, DurableFunctionType,

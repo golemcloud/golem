@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::cli::terminal_stdin::TerminalInput;
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::terminal_stdin::get_terminal_stdin;
 
 impl crate::bindings::exports::wasi::cli::terminal_stdin::Guest for crate::Component {

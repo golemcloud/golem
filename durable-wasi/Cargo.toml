@@ -40,7 +40,8 @@ world = "durable-wasi"
 
 [package.metadata.component.target.dependencies]
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
-"golem:api" = { path = "wit/deps/golem-1.2" }
+"golem:api" = { path = "wit/deps/golem-1.1" }
+"golem:durability" = { path = "wit/deps/golem-durability" }
 
 "wasi:cli" = { path = "wit/deps/cli" }
 "wasi:clocks" = { path = "wit/deps/clocks" }

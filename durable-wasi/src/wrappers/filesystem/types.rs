@@ -18,7 +18,7 @@ use crate::bindings::exports::wasi::filesystem::types::{
     DirectoryEntryStream, ErrorBorrow, ErrorCode, Filesize, InputStream, MetadataHashValue,
     NewTimestamp, OpenFlags, OutputStream, PathFlags,
 };
-use crate::bindings::golem::api::durability::{observe_function_call, DurableFunctionType};
+use crate::bindings::golem::durability::durability::{observe_function_call, DurableFunctionType};
 use crate::bindings::wasi::filesystem::types::filesystem_error_code;
 use crate::durability::Durability;
 use crate::wrappers::io::error::WrappedError;

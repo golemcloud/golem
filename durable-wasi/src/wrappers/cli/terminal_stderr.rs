@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::cli::terminal_output::TerminalOutput;
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::terminal_stderr::get_terminal_stderr;
 
 impl crate::bindings::exports::wasi::cli::terminal_stderr::Guest for crate::Component {

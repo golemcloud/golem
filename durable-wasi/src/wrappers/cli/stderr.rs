@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::cli::stderr::OutputStream;
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::stderr::get_stderr;
 use crate::wrappers::io::streams::WrappedOutputStream;
 

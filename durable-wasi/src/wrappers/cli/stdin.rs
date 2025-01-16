@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::cli::stdin::InputStream;
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::stdin::get_stdin;
 use crate::wrappers::io::streams::WrappedInputStream;
 

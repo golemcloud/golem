@@ -57,5 +57,5 @@ world durable-wasi {
     export wasi:io/streams@0.2.0;
 
     // Golem durability API
-    import golem:api/durability@1.2.0;
+    import golem:durability/durability@1.2.0;
 }

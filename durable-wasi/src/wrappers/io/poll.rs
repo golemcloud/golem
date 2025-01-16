@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::io::poll::PollableBorrow;
-use crate::bindings::golem::api::durability::{observe_function_call, DurableFunctionType};
+use crate::bindings::golem::durability::durability::{observe_function_call, DurableFunctionType};
 use crate::bindings::wasi::io::poll::poll;
 use crate::durability::Durability;
 use crate::wrappers::SerializableError;

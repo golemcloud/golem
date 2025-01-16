@@ -13,7 +13,7 @@
 // limitations
 
 use crate::bindings::exports::wasi::cli::terminal_stdout::TerminalOutput;
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::cli::terminal_stdout::get_terminal_stdout;
 
 impl crate::bindings::exports::wasi::cli::terminal_stdout::Guest for crate::Component {

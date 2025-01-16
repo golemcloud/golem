@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::durability::{observe_function_call, DurableFunctionType};
+use crate::bindings::golem::durability::durability::{observe_function_call, DurableFunctionType};
 use crate::bindings::wasi::clocks::monotonic_clock::{
     now, resolution, subscribe_instant, Duration, Instant,
 };

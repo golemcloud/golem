@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::filesystem::preopens::Descriptor;
-use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::golem::durability::durability::DurableFunctionType;
 use crate::bindings::wasi::filesystem::preopens::get_directories;
 use crate::durability::Durability;
 use crate::wrappers::filesystem::types::WrappedDescriptor;

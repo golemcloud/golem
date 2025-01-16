@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::clocks::wall_clock::Datetime;
-use crate::bindings::golem::api::durability::DurableFunctionType;
+use crate::bindings::golem::durability::durability::DurableFunctionType;
 use crate::bindings::wasi::clocks::wall_clock::{now, resolution};
 use crate::durability::Durability;
 use crate::wrappers::{SerializableDateTime, SerializableError};

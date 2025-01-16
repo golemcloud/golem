@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bindings::exports::wasi::io::streams::{InputStreamBorrow, Pollable, StreamError};
-use crate::bindings::golem::api::durability::observe_function_call;
+use crate::bindings::golem::durability::durability::observe_function_call;
 
 impl From<crate::bindings::wasi::io::streams::StreamError> for StreamError {
     fn from(value: crate::bindings::wasi::io::streams::StreamError) -> Self {
