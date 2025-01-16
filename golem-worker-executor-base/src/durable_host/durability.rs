@@ -16,7 +16,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::preview2::golem::api1_2_0;
+use crate::preview2::golem::durability::durability;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -104,62 +104,62 @@ pub trait DurabilityHost {
     ) -> Result<PersistedDurableFunctionInvocation, GolemError>;
 }
 
-impl From<api1_2_0::durability::DurableFunctionType> for DurableFunctionType {
-    fn from(value: api1_2_0::durability::DurableFunctionType) -> Self {
+impl From<durability::DurableFunctionType> for DurableFunctionType {
+    fn from(value: durability::DurableFunctionType) -> Self {
         match value {
-            api1_2_0::durability::DurableFunctionType::WriteRemote => {
+            durability::DurableFunctionType::WriteRemote => {
                 DurableFunctionType::WriteRemote
             }
-            api1_2_0::durability::DurableFunctionType::WriteLocal => {
+            durability::DurableFunctionType::WriteLocal => {
                 DurableFunctionType::WriteLocal
             }
-            api1_2_0::durability::DurableFunctionType::WriteRemoteBatched(oplog_index) => {
+            durability::DurableFunctionType::WriteRemoteBatched(oplog_index) => {
                 DurableFunctionType::WriteRemoteBatched(oplog_index.map(OplogIndex::from_u64))
             }
-            api1_2_0::durability::DurableFunctionType::ReadRemote => {
+            durability::DurableFunctionType::ReadRemote => {
                 DurableFunctionType::ReadRemote
             }
-            api1_2_0::durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
+            durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
         }
     }
 }
 
-impl From<DurableFunctionType> for api1_2_0::durability::DurableFunctionType {
+impl From<DurableFunctionType> for durability::DurableFunctionType {
     fn from(value: DurableFunctionType) -> Self {
         match value {
             DurableFunctionType::WriteRemote => {
-                api1_2_0::durability::DurableFunctionType::WriteRemote
+                durability::DurableFunctionType::WriteRemote
             }
             DurableFunctionType::WriteLocal => {
-                api1_2_0::durability::DurableFunctionType::WriteLocal
+                durability::DurableFunctionType::WriteLocal
             }
             DurableFunctionType::WriteRemoteBatched(oplog_index) => {
-                api1_2_0::durability::DurableFunctionType::WriteRemoteBatched(
+                durability::DurableFunctionType::WriteRemoteBatched(
                     oplog_index.map(|idx| idx.into()),
                 )
             }
             DurableFunctionType::ReadRemote => {
-                api1_2_0::durability::DurableFunctionType::ReadRemote
+                durability::DurableFunctionType::ReadRemote
             }
-            DurableFunctionType::ReadLocal => api1_2_0::durability::DurableFunctionType::ReadLocal,
+            DurableFunctionType::ReadLocal => durability::DurableFunctionType::ReadLocal,
         }
     }
 }
 
-impl From<OplogEntryVersion> for api1_2_0::durability::OplogEntryVersion {
+impl From<OplogEntryVersion> for durability::OplogEntryVersion {
     fn from(value: OplogEntryVersion) -> Self {
         match value {
-            OplogEntryVersion::V1 => api1_2_0::durability::OplogEntryVersion::V1,
-            OplogEntryVersion::V2 => api1_2_0::durability::OplogEntryVersion::V2,
+            OplogEntryVersion::V1 => durability::OplogEntryVersion::V1,
+            OplogEntryVersion::V2 => durability::OplogEntryVersion::V2,
         }
     }
 }
 
 impl From<PersistedDurableFunctionInvocation>
-    for api1_2_0::durability::PersistedDurableFunctionInvocation
+    for durability::PersistedDurableFunctionInvocation
 {
     fn from(value: PersistedDurableFunctionInvocation) -> Self {
-        api1_2_0::durability::PersistedDurableFunctionInvocation {
+        durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
             function_name: value.function_name,
             response: value.response,
@@ -170,7 +170,7 @@ impl From<PersistedDurableFunctionInvocation>
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn observe_function_call(
         &mut self,
         iface: String,
@@ -182,16 +182,16 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
 
     async fn begin_durable_function(
         &mut self,
-        function_type: api1_2_0::durability::DurableFunctionType,
-    ) -> anyhow::Result<api1_2_0::durability::OplogIndex> {
+        function_type: durability::DurableFunctionType,
+    ) -> anyhow::Result<durability::OplogIndex> {
         let oplog_idx = DurabilityHost::begin_durable_function(self, &function_type.into()).await?;
         Ok(oplog_idx.into())
     }
 
     async fn end_durable_function(
         &mut self,
-        function_type: api1_2_0::durability::DurableFunctionType,
-        begin_index: api1_2_0::durability::OplogIndex,
+        function_type: durability::DurableFunctionType,
+        begin_index: durability::OplogIndex,
     ) -> anyhow::Result<()> {
         DurabilityHost::end_durable_function(
             self,
@@ -204,18 +204,18 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
 
     async fn current_durable_execution_state(
         &mut self,
-    ) -> anyhow::Result<api1_2_0::durability::DurableExecutionState> {
+    ) -> anyhow::Result<durability::DurableExecutionState> {
         let state = DurabilityHost::durable_execution_state(self);
-        Ok(api1_2_0::durability::DurableExecutionState {
+        Ok(durability::DurableExecutionState {
             is_live: state.is_live,
             persistence_level: match state.persistence_level {
                 PersistenceLevel::PersistNothing => {
-                    api1_2_0::durability::PersistenceLevel::PersistNothing
+                    durability::PersistenceLevel::PersistNothing
                 }
                 PersistenceLevel::PersistRemoteSideEffects => {
-                    api1_2_0::durability::PersistenceLevel::PersistRemoteSideEffects
+                    durability::PersistenceLevel::PersistRemoteSideEffects
                 }
-                PersistenceLevel::Smart => api1_2_0::durability::PersistenceLevel::Smart,
+                PersistenceLevel::Smart => durability::PersistenceLevel::Smart,
             },
         })
     }
@@ -225,7 +225,7 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
         function_name: String,
         request: Vec<u8>,
         response: Vec<u8>,
-        function_type: api1_2_0::durability::DurableFunctionType,
+        function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
         DurabilityHost::persist_durable_function_invocation(
             self,
@@ -241,19 +241,19 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
     async fn persist_typed_durable_function_invocation(
         &mut self,
         function_name: String,
-        request: api1_2_0::durability::ValueAndType,
-        response: api1_2_0::durability::ValueAndType,
-        function_type: api1_2_0::durability::DurableFunctionType,
+        request: durability::ValueAndType,
+        response: durability::ValueAndType,
+        function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
         let request = unsafe {
             transmute::<
-                api1_2_0::durability::ValueAndType,
+                durability::ValueAndType,
                 golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
             >(request)
         };
         let response = unsafe {
             transmute::<
-                api1_2_0::durability::ValueAndType,
+                durability::ValueAndType,
                 golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
             >(response)
         };
@@ -270,7 +270,7 @@ impl<Ctx: WorkerCtx> api1_2_0::durability::Host for DurableWorkerCtx<Ctx> {
 
     async fn read_persisted_durable_function_invocation(
         &mut self,
-    ) -> anyhow::Result<api1_2_0::durability::PersistedDurableFunctionInvocation> {
+    ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
         Ok(invocation.into())
     }
