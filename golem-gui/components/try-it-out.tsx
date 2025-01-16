@@ -151,15 +151,19 @@ export default function TryItOut({
     return curlCommand;
   }
 
+  const transformPath = (path: string, pathParams: Record<string, string>): string => {
+    return path.replace(/{([^}]+)}/g, (_, key) => pathParams[key] || `{${key}}`);
+  };
   const handleSubmit = async (data: FormData) => {
     if (!deployment) {
       return;
     }
 
     try{
+      const tansformedPath = transformPath(route.path, data?.request?.path)
       const curl = await copyCurlToClipboard(
         route.method,
-        `https://${deployment.site.subdomain}.${deployment.site.host}${route.path}`,
+        `https://${deployment.site.subdomain}.${deployment.site.host}${tansformedPath}`,
         data?.request?.body
       );
       setCurl(curl);

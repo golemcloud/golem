@@ -123,7 +123,7 @@ const NewRouteForm = ({
       }
       const routeId = encodeURIComponent(`${newRoute.path}|${newRoute.method}`);
       if(!noRedirect){
-        router.replace(`/apis/${apiId}/${routeId}`);
+        router.replace(`/apis/${apiId}/${routeId}${version? `?version=${version}`: ''}`);
       }
       onSuccess?.();
     } catch (error) {
