@@ -74,7 +74,7 @@ cp wit/deps/random durable-wasi/wit/deps
 cp wit/deps/sockets durable-wasi/wit/deps
 
 cp wit/deps/golem-1.1 durable-wasi/wit/deps
-cp wit/deps/golem-1.2 durable-wasi/wit/deps
+cp wit/deps/golem-durability durable-wasi/wit/deps
 cp wit/deps/wasm-rpc durable-wasi/wit/deps
 """
 
