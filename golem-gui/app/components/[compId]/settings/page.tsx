@@ -55,7 +55,10 @@ const WorkerSettings = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
-      {error || (!isLoading && !component) && <ErrorBoundary message={error || "No Component Found!"} />}
+      {error ||
+        (!isLoading && !component && (
+          <ErrorBoundary message={error || "No Component Found!"} />
+        ))}
       <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           <div className="border rounded-b-lg">
@@ -121,7 +124,7 @@ const WorkerSettings = () => {
                             setVersion(Number(value));
                           },
                         }))}
-                        prefix={version ? `v${version}`: ""}
+                        prefix={version || version == 0 ? `v${version}` : ""}
                       />
                       <Button2
                         variant="primary"
@@ -145,9 +148,13 @@ const WorkerSettings = () => {
                       createdAt={component.createdAt}
                     />
                   ) : (
-                    <Stack direction="row" justifyContent={"center"}  mt={2}>
-                     <Typography>{isLoading ?"Loading component info..." : "No Component Found"}</Typography>
-                     </Stack>
+                    <Stack direction="row" justifyContent={"center"} mt={2}>
+                      <Typography>
+                        {isLoading
+                          ? "Loading component info..."
+                          : "No Component Found"}
+                      </Typography>
+                    </Stack>
                   )}
                 </div>
               )}

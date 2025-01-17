@@ -21,7 +21,7 @@ import { PieChart, Pie,Cell, ResponsiveContainer } from "recharts";
 import CreateWorker from "@/components/create-worker";
 import CustomModal from "@/components/CustomModal";
 import useComponents from "@/lib/hooks/use-component";
-import {  useRouter } from "next/navigation";
+import {  useRouter, useSearchParams } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
@@ -31,24 +31,35 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 const Overview = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { compId } = useCustomParam();
+  const params = useSearchParams();
+  const version = params?.get("version");
   const router = useRouter();
 
   const { components, isLoading: componentDataLoading, error } = useComponents(
     compId,
-    "latest"
+    version ?? "latest"
   );
   const [latestComponent] = components;
 
-  const { workers, isLoading, error:workerError } = useWorkers(compId);
+  const finalversion = version || latestComponent?.versionedComponentId?.version
 
-  const getNewSearchParams = (
+
+  const { workers, isLoading, error:workerError } = useWorkers(compId, finalversion);
+
+
+  const getNewSearchParams = (params:{
     key: string,
-    value: string[] | string | number
+    value: string[] | string | number | Record<string,string|number>}[]
   ) => {
     const searchParams = new URLSearchParams();
-    if (value && Array.isArray(value)) {
-      searchParams.set(key, JSON.stringify(value));
-    }
+    params.forEach(({key, value})=>{
+      if (value && (Array.isArray(value) || typeof value === "object")) {
+        searchParams.set(key, JSON.stringify(value));
+      }else {
+        searchParams.set(key, `${value}`);
+      }
+    })
+   
     return searchParams.toString();
   };
 
@@ -66,9 +77,10 @@ const Overview = () => {
         isLoading: isLoading,
         handleClick: () =>
           router.push(
-            `/components/${compId}/workers?${getNewSearchParams(
-              "workerStatus",
-              ["Running", "Idle", "Suspended"]
+            `/components/${compId}/workers?${getNewSearchParams([
+              {key: "workerStatus", value: ["Running", "Idle", "Suspended"]},
+              ...(finalversion ? [{key: "workerVersion", value:{ version: Number(finalversion), comparator: "Equal" }}]: [])
+            ] 
             )}`
           ),
       },
@@ -80,8 +92,10 @@ const Overview = () => {
         handleClick: () =>
           router.push(
             `/components/${compId}/workers?${getNewSearchParams(
-              "workerStatus",
-              ["Running"]
+              [
+                {key: "workerStatus", value: ["Running"]},
+                ...(finalversion ? [{key: "workerVersion", value: { version: Number(finalversion), comparator: "Equal" }}]: [])
+              ] 
             )}`
           ),
       },
@@ -93,14 +107,16 @@ const Overview = () => {
         handleClick: () => {
           router.push(
             `/components/${compId}/workers?${getNewSearchParams(
-              "workerStatus",
-              ["Failed"]
+              [
+                {key: "workerStatus", value: ["Failed"]},
+                ...(finalversion ? [{key: "workerVersion", value: { version: Number(finalversion), comparator: "Equal" }}]: [])
+              ] 
             )}`
           );
         },
       },
     ];
-  }, [workers, isLoading, router, compId]);
+  }, [workers, isLoading, router, compId, finalversion]);
 
   const stats = useMemo(() => {
     return [
@@ -124,7 +140,7 @@ const Overview = () => {
           )
         : expo.name
     );
-  }, [latestComponent?.versionedComponentId?.version]);
+  }, [latestComponent?.metadata?.exports]);
 
   const handleClose = () => setIsOpen(false);
 
