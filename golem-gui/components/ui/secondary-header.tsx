@@ -28,14 +28,15 @@ import DeploymentCreationPage from "../deployment-creation";
 import NewRouteForm from "../new-route";
 import DeleteApiVersion from "../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
-import CreateComponentForm from "@/components/new-component";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { ComponentVersionFilter } from "../component-version-filter";
+import CreateWorker from "../create-worker";
 const actionsMap = {
   new_version: "Create New Version",
   new_route: "Create New Route",
   delete_api_version: "Delete Api Version",
   deployment: "Create New Deployment",
+  new_worker: "Create New Worker"
 } as Record<string, string>;
 type secondaryHeaderProps = {
   onClick?: () => void;
@@ -234,7 +235,7 @@ export default function SecondaryHeader({
                 size="md"
                 onClick={(e) => {
                   e.preventDefault();
-                  setOpen("new_component");
+                  setOpen("new_worker");
                 }}
               >
                 New
@@ -375,8 +376,8 @@ export default function SecondaryHeader({
             onSuccess={handleClose}
           />
         )}
-        {open == "new_component" && (
-          <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
+        {open == "new_worker" && (
+          <CreateWorker onSuccess={handleClose} compId={compId}/>
         )}
       </CustomModal>
     </Box>

@@ -15,8 +15,10 @@ const operationMap = {
   "update_api": "Update Api",
   "delete_api": "Delete Api",
   "download_api": "Download Api",
-  "update_route": "Update",
+  "update_route": "Update Route",
   "delete_route": "Delete Route",
+  "view_route": "View Route",
+  "view_api": "View Api",
 } as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import RouteDetails from "../[routeId]/page";
