@@ -1504,7 +1504,9 @@ impl RunningWorker {
                     waiting_for_command.store(false, Ordering::Release);
                     match cmd {
                         WorkerCommand::ResumeReplay => {
-                            Ctx::resume_replay(&mut *store, &instance)
+                            let mut store = store.lock().await;
+
+                            Ctx::resume_replay(&mut store, &instance)
                                 .await
                                 .expect("resume_replay failed");
                         }
