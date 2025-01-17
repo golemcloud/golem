@@ -1506,7 +1506,7 @@ impl RunningWorker {
                         WorkerCommand::ResumeReplay => {
                             let mut store = store.lock().await;
 
-                            Ctx::resume_replay(&mut store, &instance)
+                            Ctx::resume_replay(&mut *store, &instance)
                                 .await
                                 .expect("resume_replay failed");
                         }

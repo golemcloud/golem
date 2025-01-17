@@ -1385,8 +1385,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<RetryDecision, GolemError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
-        let mut count = 0;
-
         store.as_context_mut().data_mut().set_running();
 
         if store
