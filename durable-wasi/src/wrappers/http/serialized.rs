@@ -13,17 +13,10 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
-use http::{HeaderName, HeaderValue, Version};
 
 use std::collections::HashMap;
 use std::str::FromStr;
-
-use crate::durable_host::serialized::SerializableError;
-use wasmtime_wasi_http::bindings::http::types::{
-    DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
-};
-use wasmtime_wasi_http::body::HostIncomingBody;
-use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
+use crate::wrappers::SerializableError;
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub enum SerializedHttpVersion {

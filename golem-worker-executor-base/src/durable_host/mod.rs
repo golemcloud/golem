@@ -1760,27 +1760,6 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     stderr_entries.join("")
 }
 
-/// Indicates which step of the http request handling is responsible for closing an open
-/// http request (by calling end_function)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HttpRequestCloseOwner {
-    FutureIncomingResponseDrop,
-    IncomingResponseDrop,
-    IncomingBodyDropOrFinish,
-    InputStreamClosed,
-}
-
-/// State associated with ongoing http requests, on top of the underlying wasi-http implementation
-#[derive(Debug, Clone)]
-struct HttpRequestState {
-    /// Who is responsible for calling end_function and removing entries from the table
-    pub close_owner: HttpRequestCloseOwner,
-    /// The handle of the FutureIncomingResponse that is registered into the open_function_table
-    pub root_handle: u32,
-    /// Information about the request to be included in the oplog
-    pub request: SerializableHttpRequest,
-}
-
 pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     oplog: Arc<dyn Oplog + Send + Sync>,
@@ -1804,9 +1783,6 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
     open_function_table: HashMap<u32, OplogIndex>,
-
-    /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
-    open_http_requests: HashMap<u32, HttpRequestState>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -1869,7 +1845,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_function_table: HashMap::new(),
-            open_http_requests: HashMap::new(),
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),
             component_metadata,

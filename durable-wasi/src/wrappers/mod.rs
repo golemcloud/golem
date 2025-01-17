@@ -26,6 +26,7 @@ mod io;
 mod logging;
 mod random;
 mod sockets;
+mod http;
 
 // TODO: try to avoid having copies of these types here
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]

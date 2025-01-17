@@ -16210,6 +16210,6126 @@ pub mod wasi {
             }
         }
     }
+    pub mod http {
+        /// This interface defines all of the types and methods for implementing
+        /// HTTP Requests and Responses, both incoming and outgoing, as well as
+        /// their headers, trailers, and bodies.
+        #[allow(dead_code, clippy::all)]
+        pub mod types {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
+            pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+            pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+            pub type IoError = super::super::super::wasi::io::error::Error;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// This type corresponds to HTTP standard Methods.
+            #[derive(Clone)]
+            pub enum Method {
+                Get,
+                Head,
+                Post,
+                Put,
+                Delete,
+                Connect,
+                Options,
+                Trace,
+                Patch,
+                Other(_rt::String),
+            }
+            impl ::core::fmt::Debug for Method {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Method::Get => f.debug_tuple("Method::Get").finish(),
+                        Method::Head => f.debug_tuple("Method::Head").finish(),
+                        Method::Post => f.debug_tuple("Method::Post").finish(),
+                        Method::Put => f.debug_tuple("Method::Put").finish(),
+                        Method::Delete => f.debug_tuple("Method::Delete").finish(),
+                        Method::Connect => f.debug_tuple("Method::Connect").finish(),
+                        Method::Options => f.debug_tuple("Method::Options").finish(),
+                        Method::Trace => f.debug_tuple("Method::Trace").finish(),
+                        Method::Patch => f.debug_tuple("Method::Patch").finish(),
+                        Method::Other(e) => {
+                            f.debug_tuple("Method::Other").field(e).finish()
+                        }
+                    }
+                }
+            }
+            /// This type corresponds to HTTP standard Related Schemes.
+            #[derive(Clone)]
+            pub enum Scheme {
+                Http,
+                Https,
+                Other(_rt::String),
+            }
+            impl ::core::fmt::Debug for Scheme {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        Scheme::Http => f.debug_tuple("Scheme::Http").finish(),
+                        Scheme::Https => f.debug_tuple("Scheme::Https").finish(),
+                        Scheme::Other(e) => {
+                            f.debug_tuple("Scheme::Other").field(e).finish()
+                        }
+                    }
+                }
+            }
+            /// Defines the case payload type for `DNS-error` above:
+            #[derive(Clone)]
+            pub struct DnsErrorPayload {
+                pub rcode: Option<_rt::String>,
+                pub info_code: Option<u16>,
+            }
+            impl ::core::fmt::Debug for DnsErrorPayload {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("DnsErrorPayload")
+                        .field("rcode", &self.rcode)
+                        .field("info-code", &self.info_code)
+                        .finish()
+                }
+            }
+            /// Defines the case payload type for `TLS-alert-received` above:
+            #[derive(Clone)]
+            pub struct TlsAlertReceivedPayload {
+                pub alert_id: Option<u8>,
+                pub alert_message: Option<_rt::String>,
+            }
+            impl ::core::fmt::Debug for TlsAlertReceivedPayload {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("TlsAlertReceivedPayload")
+                        .field("alert-id", &self.alert_id)
+                        .field("alert-message", &self.alert_message)
+                        .finish()
+                }
+            }
+            /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
+            #[derive(Clone)]
+            pub struct FieldSizePayload {
+                pub field_name: Option<_rt::String>,
+                pub field_size: Option<u32>,
+            }
+            impl ::core::fmt::Debug for FieldSizePayload {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("FieldSizePayload")
+                        .field("field-name", &self.field_name)
+                        .field("field-size", &self.field_size)
+                        .finish()
+                }
+            }
+            /// These cases are inspired by the IANA HTTP Proxy Error Types:
+            /// https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types
+            #[derive(Clone)]
+            pub enum ErrorCode {
+                DnsTimeout,
+                DnsError(DnsErrorPayload),
+                DestinationNotFound,
+                DestinationUnavailable,
+                DestinationIpProhibited,
+                DestinationIpUnroutable,
+                ConnectionRefused,
+                ConnectionTerminated,
+                ConnectionTimeout,
+                ConnectionReadTimeout,
+                ConnectionWriteTimeout,
+                ConnectionLimitReached,
+                TlsProtocolError,
+                TlsCertificateError,
+                TlsAlertReceived(TlsAlertReceivedPayload),
+                HttpRequestDenied,
+                HttpRequestLengthRequired,
+                HttpRequestBodySize(Option<u64>),
+                HttpRequestMethodInvalid,
+                HttpRequestUriInvalid,
+                HttpRequestUriTooLong,
+                HttpRequestHeaderSectionSize(Option<u32>),
+                HttpRequestHeaderSize(Option<FieldSizePayload>),
+                HttpRequestTrailerSectionSize(Option<u32>),
+                HttpRequestTrailerSize(FieldSizePayload),
+                HttpResponseIncomplete,
+                HttpResponseHeaderSectionSize(Option<u32>),
+                HttpResponseHeaderSize(FieldSizePayload),
+                HttpResponseBodySize(Option<u64>),
+                HttpResponseTrailerSectionSize(Option<u32>),
+                HttpResponseTrailerSize(FieldSizePayload),
+                HttpResponseTransferCoding(Option<_rt::String>),
+                HttpResponseContentCoding(Option<_rt::String>),
+                HttpResponseTimeout,
+                HttpUpgradeFailed,
+                HttpProtocolError,
+                LoopDetected,
+                ConfigurationError,
+                /// This is a catch-all error for anything that doesn't fit cleanly into a
+                /// more specific case. It also includes an optional string for an
+                /// unstructured description of the error. Users should not depend on the
+                /// string for diagnosing errors, as it's not required to be consistent
+                /// between implementations.
+                InternalError(Option<_rt::String>),
+            }
+            impl ::core::fmt::Debug for ErrorCode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        ErrorCode::DnsTimeout => {
+                            f.debug_tuple("ErrorCode::DnsTimeout").finish()
+                        }
+                        ErrorCode::DnsError(e) => {
+                            f.debug_tuple("ErrorCode::DnsError").field(e).finish()
+                        }
+                        ErrorCode::DestinationNotFound => {
+                            f.debug_tuple("ErrorCode::DestinationNotFound").finish()
+                        }
+                        ErrorCode::DestinationUnavailable => {
+                            f.debug_tuple("ErrorCode::DestinationUnavailable").finish()
+                        }
+                        ErrorCode::DestinationIpProhibited => {
+                            f.debug_tuple("ErrorCode::DestinationIpProhibited").finish()
+                        }
+                        ErrorCode::DestinationIpUnroutable => {
+                            f.debug_tuple("ErrorCode::DestinationIpUnroutable").finish()
+                        }
+                        ErrorCode::ConnectionRefused => {
+                            f.debug_tuple("ErrorCode::ConnectionRefused").finish()
+                        }
+                        ErrorCode::ConnectionTerminated => {
+                            f.debug_tuple("ErrorCode::ConnectionTerminated").finish()
+                        }
+                        ErrorCode::ConnectionTimeout => {
+                            f.debug_tuple("ErrorCode::ConnectionTimeout").finish()
+                        }
+                        ErrorCode::ConnectionReadTimeout => {
+                            f.debug_tuple("ErrorCode::ConnectionReadTimeout").finish()
+                        }
+                        ErrorCode::ConnectionWriteTimeout => {
+                            f.debug_tuple("ErrorCode::ConnectionWriteTimeout").finish()
+                        }
+                        ErrorCode::ConnectionLimitReached => {
+                            f.debug_tuple("ErrorCode::ConnectionLimitReached").finish()
+                        }
+                        ErrorCode::TlsProtocolError => {
+                            f.debug_tuple("ErrorCode::TlsProtocolError").finish()
+                        }
+                        ErrorCode::TlsCertificateError => {
+                            f.debug_tuple("ErrorCode::TlsCertificateError").finish()
+                        }
+                        ErrorCode::TlsAlertReceived(e) => {
+                            f.debug_tuple("ErrorCode::TlsAlertReceived")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestDenied => {
+                            f.debug_tuple("ErrorCode::HttpRequestDenied").finish()
+                        }
+                        ErrorCode::HttpRequestLengthRequired => {
+                            f.debug_tuple("ErrorCode::HttpRequestLengthRequired")
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestBodySize(e) => {
+                            f.debug_tuple("ErrorCode::HttpRequestBodySize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestMethodInvalid => {
+                            f.debug_tuple("ErrorCode::HttpRequestMethodInvalid").finish()
+                        }
+                        ErrorCode::HttpRequestUriInvalid => {
+                            f.debug_tuple("ErrorCode::HttpRequestUriInvalid").finish()
+                        }
+                        ErrorCode::HttpRequestUriTooLong => {
+                            f.debug_tuple("ErrorCode::HttpRequestUriTooLong").finish()
+                        }
+                        ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpRequestHeaderSectionSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestHeaderSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpRequestHeaderSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpRequestTrailerSectionSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpRequestTrailerSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpRequestTrailerSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseIncomplete => {
+                            f.debug_tuple("ErrorCode::HttpResponseIncomplete").finish()
+                        }
+                        ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseHeaderSectionSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseHeaderSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseHeaderSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseBodySize(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseBodySize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseTrailerSectionSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseTrailerSize(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseTrailerSize")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseTransferCoding(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseTransferCoding")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseContentCoding(e) => {
+                            f.debug_tuple("ErrorCode::HttpResponseContentCoding")
+                                .field(e)
+                                .finish()
+                        }
+                        ErrorCode::HttpResponseTimeout => {
+                            f.debug_tuple("ErrorCode::HttpResponseTimeout").finish()
+                        }
+                        ErrorCode::HttpUpgradeFailed => {
+                            f.debug_tuple("ErrorCode::HttpUpgradeFailed").finish()
+                        }
+                        ErrorCode::HttpProtocolError => {
+                            f.debug_tuple("ErrorCode::HttpProtocolError").finish()
+                        }
+                        ErrorCode::LoopDetected => {
+                            f.debug_tuple("ErrorCode::LoopDetected").finish()
+                        }
+                        ErrorCode::ConfigurationError => {
+                            f.debug_tuple("ErrorCode::ConfigurationError").finish()
+                        }
+                        ErrorCode::InternalError(e) => {
+                            f.debug_tuple("ErrorCode::InternalError").field(e).finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for ErrorCode {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            impl std::error::Error for ErrorCode {}
+            /// This type enumerates the different kinds of errors that may occur when
+            /// setting or appending to a `fields` resource.
+            #[derive(Clone, Copy)]
+            pub enum HeaderError {
+                /// This error indicates that a `field-key` or `field-value` was
+                /// syntactically invalid when used with an operation that sets headers in a
+                /// `fields`.
+                InvalidSyntax,
+                /// This error indicates that a forbidden `field-key` was used when trying
+                /// to set a header in a `fields`.
+                Forbidden,
+                /// This error indicates that the operation on the `fields` was not
+                /// permitted because the fields are immutable.
+                Immutable,
+            }
+            impl ::core::fmt::Debug for HeaderError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        HeaderError::InvalidSyntax => {
+                            f.debug_tuple("HeaderError::InvalidSyntax").finish()
+                        }
+                        HeaderError::Forbidden => {
+                            f.debug_tuple("HeaderError::Forbidden").finish()
+                        }
+                        HeaderError::Immutable => {
+                            f.debug_tuple("HeaderError::Immutable").finish()
+                        }
+                    }
+                }
+            }
+            impl ::core::fmt::Display for HeaderError {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                }
+            }
+            impl std::error::Error for HeaderError {}
+            /// Field keys are always strings.
+            pub type FieldKey = _rt::String;
+            /// Field values should always be ASCII strings. However, in
+            /// reality, HTTP implementations often have to interpret malformed values,
+            /// so they are provided as a list of bytes.
+            pub type FieldValue = _rt::Vec<u8>;
+            /// This following block defines the `fields` resource which corresponds to
+            /// HTTP standard Fields. Fields are a common representation used for both
+            /// Headers and Trailers.
+            ///
+            /// A `fields` may be mutable or immutable. A `fields` created using the
+            /// constructor, `from-list`, or `clone` will be mutable, but a `fields`
+            /// resource given by other means (including, but not limited to,
+            /// `incoming-request.headers`, `outgoing-request.headers`) might be be
+            /// immutable. In an immutable fields, the `set`, `append`, and `delete`
+            /// operations will fail with `header-error.immutable`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Fields {
+                handle: _rt::Resource<Fields>,
+            }
+            impl Fields {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Fields {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]fields"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Headers is an alias for Fields.
+            pub type Headers = Fields;
+            /// Trailers is an alias for Fields.
+            pub type Trailers = Fields;
+            /// Represents an incoming HTTP Request.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct IncomingRequest {
+                handle: _rt::Resource<IncomingRequest>,
+            }
+            impl IncomingRequest {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for IncomingRequest {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]incoming-request"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents an outgoing HTTP Request.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutgoingRequest {
+                handle: _rt::Resource<OutgoingRequest>,
+            }
+            impl OutgoingRequest {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutgoingRequest {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]outgoing-request"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Parameters for making an HTTP Request. Each of these parameters is
+            /// currently an optional timeout applicable to the transport layer of the
+            /// HTTP protocol.
+            ///
+            /// These timeouts are separate from any the user may use to bound a
+            /// blocking call to `wasi:io/poll.poll`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct RequestOptions {
+                handle: _rt::Resource<RequestOptions>,
+            }
+            impl RequestOptions {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for RequestOptions {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]request-options"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents the ability to send an HTTP Response.
+            ///
+            /// This resource is used by the `wasi:http/incoming-handler` interface to
+            /// allow a Response to be sent corresponding to the Request provided as the
+            /// other argument to `incoming-handler.handle`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct ResponseOutparam {
+                handle: _rt::Resource<ResponseOutparam>,
+            }
+            impl ResponseOutparam {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for ResponseOutparam {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]response-outparam"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// This type corresponds to the HTTP standard Status Code.
+            pub type StatusCode = u16;
+            /// Represents an incoming HTTP Response.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct IncomingResponse {
+                handle: _rt::Resource<IncomingResponse>,
+            }
+            impl IncomingResponse {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for IncomingResponse {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]incoming-response"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents an incoming HTTP Request or Response's Body.
+            ///
+            /// A body has both its contents - a stream of bytes - and a (possibly
+            /// empty) set of trailers, indicating that the full contents of the
+            /// body have been received. This resource represents the contents as
+            /// an `input-stream` and the delivery of trailers as a `future-trailers`,
+            /// and ensures that the user of this interface may only be consuming either
+            /// the body contents or waiting on trailers at any given time.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct IncomingBody {
+                handle: _rt::Resource<IncomingBody>,
+            }
+            impl IncomingBody {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for IncomingBody {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]incoming-body"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents a future which may eventaully return trailers, or an error.
+            ///
+            /// In the case that the incoming HTTP Request or Response did not have any
+            /// trailers, this future will resolve to the empty set of trailers once the
+            /// complete Request or Response body has been received.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureTrailers {
+                handle: _rt::Resource<FutureTrailers>,
+            }
+            impl FutureTrailers {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureTrailers {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-trailers"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents an outgoing HTTP Response.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutgoingResponse {
+                handle: _rt::Resource<OutgoingResponse>,
+            }
+            impl OutgoingResponse {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutgoingResponse {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]outgoing-response"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents an outgoing HTTP Request or Response's Body.
+            ///
+            /// A body has both its contents - a stream of bytes - and a (possibly
+            /// empty) set of trailers, inducating the full contents of the body
+            /// have been sent. This resource represents the contents as an
+            /// `output-stream` child resource, and the completion of the body (with
+            /// optional trailers) with a static function that consumes the
+            /// `outgoing-body` resource, and ensures that the user of this interface
+            /// may not write to the body contents after the body has been finished.
+            ///
+            /// If the user code drops this resource, as opposed to calling the static
+            /// method `finish`, the implementation should treat the body as incomplete,
+            /// and that an error has occured. The implementation should propogate this
+            /// error to the HTTP protocol by whatever means it has available,
+            /// including: corrupting the body on the wire, aborting the associated
+            /// Request, or sending a late status code for the Response.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutgoingBody {
+                handle: _rt::Resource<OutgoingBody>,
+            }
+            impl OutgoingBody {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutgoingBody {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]outgoing-body"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// Represents a future which may eventaully return an incoming HTTP
+            /// Response, or an error.
+            ///
+            /// This resource is returned by the `wasi:http/outgoing-handler` interface to
+            /// provide the HTTP Response corresponding to the sent Request.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureIncomingResponse {
+                handle: _rt::Resource<FutureIncomingResponse>,
+            }
+            impl FutureIncomingResponse {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureIncomingResponse {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-incoming-response"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Attempts to extract a http-related `error` from the wasi:io `error`
+            /// provided.
+            ///
+            /// Stream operations which return
+            /// `wasi:io/stream/stream-error::last-operation-failed` have a payload of
+            /// type `wasi:io/error/error` with more information about the operation
+            /// that failed. This payload can be passed through to this function to see
+            /// if there's http-related information about the error to return.
+            ///
+            /// Note that this function is fallible because not all io-errors are
+            /// http-related errors.
+            pub fn http_error_code(err: &IoError) -> Option<ErrorCode> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 40]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "http-error-code"]
+                        fn wit_import(_: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((err).handle() as i32, ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l2 = i32::from(*ptr0.add(8).cast::<u8>());
+                                let v64 = match l2 {
+                                    0 => ErrorCode::DnsTimeout,
+                                    1 => {
+                                        let e64 = {
+                                            let l3 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            let l7 = i32::from(*ptr0.add(28).cast::<u8>());
+                                            DnsErrorPayload {
+                                                rcode: match l3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l4 = *ptr0.add(20).cast::<*mut u8>();
+                                                            let l5 = *ptr0.add(24).cast::<usize>();
+                                                            let len6 = l5;
+                                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                                l4.cast(),
+                                                                len6,
+                                                                len6,
+                                                            );
+                                                            _rt::string_lift(bytes6)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                info_code: match l7 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l8 = i32::from(*ptr0.add(30).cast::<u16>());
+                                                            l8 as u16
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        ErrorCode::DnsError(e64)
+                                    }
+                                    2 => ErrorCode::DestinationNotFound,
+                                    3 => ErrorCode::DestinationUnavailable,
+                                    4 => ErrorCode::DestinationIpProhibited,
+                                    5 => ErrorCode::DestinationIpUnroutable,
+                                    6 => ErrorCode::ConnectionRefused,
+                                    7 => ErrorCode::ConnectionTerminated,
+                                    8 => ErrorCode::ConnectionTimeout,
+                                    9 => ErrorCode::ConnectionReadTimeout,
+                                    10 => ErrorCode::ConnectionWriteTimeout,
+                                    11 => ErrorCode::ConnectionLimitReached,
+                                    12 => ErrorCode::TlsProtocolError,
+                                    13 => ErrorCode::TlsCertificateError,
+                                    14 => {
+                                        let e64 = {
+                                            let l9 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            let l11 = i32::from(*ptr0.add(20).cast::<u8>());
+                                            TlsAlertReceivedPayload {
+                                                alert_id: match l9 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l10 = i32::from(*ptr0.add(17).cast::<u8>());
+                                                            l10 as u8
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                alert_message: match l11 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l12 = *ptr0.add(24).cast::<*mut u8>();
+                                                            let l13 = *ptr0.add(28).cast::<usize>();
+                                                            let len14 = l13;
+                                                            let bytes14 = _rt::Vec::from_raw_parts(
+                                                                l12.cast(),
+                                                                len14,
+                                                                len14,
+                                                            );
+                                                            _rt::string_lift(bytes14)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        ErrorCode::TlsAlertReceived(e64)
+                                    }
+                                    15 => ErrorCode::HttpRequestDenied,
+                                    16 => ErrorCode::HttpRequestLengthRequired,
+                                    17 => {
+                                        let e64 = {
+                                            let l15 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l15 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l16 = *ptr0.add(24).cast::<i64>();
+                                                        l16 as u64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpRequestBodySize(e64)
+                                    }
+                                    18 => ErrorCode::HttpRequestMethodInvalid,
+                                    19 => ErrorCode::HttpRequestUriInvalid,
+                                    20 => ErrorCode::HttpRequestUriTooLong,
+                                    21 => {
+                                        let e64 = {
+                                            let l17 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l17 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l18 = *ptr0.add(20).cast::<i32>();
+                                                        l18 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpRequestHeaderSectionSize(e64)
+                                    }
+                                    22 => {
+                                        let e64 = {
+                                            let l19 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l19 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l20 = i32::from(*ptr0.add(20).cast::<u8>());
+                                                        let l24 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                        FieldSizePayload {
+                                                            field_name: match l20 {
+                                                                0 => None,
+                                                                1 => {
+                                                                    let e = {
+                                                                        let l21 = *ptr0.add(24).cast::<*mut u8>();
+                                                                        let l22 = *ptr0.add(28).cast::<usize>();
+                                                                        let len23 = l22;
+                                                                        let bytes23 = _rt::Vec::from_raw_parts(
+                                                                            l21.cast(),
+                                                                            len23,
+                                                                            len23,
+                                                                        );
+                                                                        _rt::string_lift(bytes23)
+                                                                    };
+                                                                    Some(e)
+                                                                }
+                                                                _ => _rt::invalid_enum_discriminant(),
+                                                            },
+                                                            field_size: match l24 {
+                                                                0 => None,
+                                                                1 => {
+                                                                    let e = {
+                                                                        let l25 = *ptr0.add(36).cast::<i32>();
+                                                                        l25 as u32
+                                                                    };
+                                                                    Some(e)
+                                                                }
+                                                                _ => _rt::invalid_enum_discriminant(),
+                                                            },
+                                                        }
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpRequestHeaderSize(e64)
+                                    }
+                                    23 => {
+                                        let e64 = {
+                                            let l26 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l26 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l27 = *ptr0.add(20).cast::<i32>();
+                                                        l27 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpRequestTrailerSectionSize(e64)
+                                    }
+                                    24 => {
+                                        let e64 = {
+                                            let l28 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            let l32 = i32::from(*ptr0.add(28).cast::<u8>());
+                                            FieldSizePayload {
+                                                field_name: match l28 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l29 = *ptr0.add(20).cast::<*mut u8>();
+                                                            let l30 = *ptr0.add(24).cast::<usize>();
+                                                            let len31 = l30;
+                                                            let bytes31 = _rt::Vec::from_raw_parts(
+                                                                l29.cast(),
+                                                                len31,
+                                                                len31,
+                                                            );
+                                                            _rt::string_lift(bytes31)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l33 = *ptr0.add(32).cast::<i32>();
+                                                            l33 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        ErrorCode::HttpRequestTrailerSize(e64)
+                                    }
+                                    25 => ErrorCode::HttpResponseIncomplete,
+                                    26 => {
+                                        let e64 = {
+                                            let l34 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l34 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l35 = *ptr0.add(20).cast::<i32>();
+                                                        l35 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseHeaderSectionSize(e64)
+                                    }
+                                    27 => {
+                                        let e64 = {
+                                            let l36 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            let l40 = i32::from(*ptr0.add(28).cast::<u8>());
+                                            FieldSizePayload {
+                                                field_name: match l36 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l37 = *ptr0.add(20).cast::<*mut u8>();
+                                                            let l38 = *ptr0.add(24).cast::<usize>();
+                                                            let len39 = l38;
+                                                            let bytes39 = _rt::Vec::from_raw_parts(
+                                                                l37.cast(),
+                                                                len39,
+                                                                len39,
+                                                            );
+                                                            _rt::string_lift(bytes39)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l40 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l41 = *ptr0.add(32).cast::<i32>();
+                                                            l41 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseHeaderSize(e64)
+                                    }
+                                    28 => {
+                                        let e64 = {
+                                            let l42 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l42 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l43 = *ptr0.add(24).cast::<i64>();
+                                                        l43 as u64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseBodySize(e64)
+                                    }
+                                    29 => {
+                                        let e64 = {
+                                            let l44 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l44 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l45 = *ptr0.add(20).cast::<i32>();
+                                                        l45 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseTrailerSectionSize(e64)
+                                    }
+                                    30 => {
+                                        let e64 = {
+                                            let l46 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            let l50 = i32::from(*ptr0.add(28).cast::<u8>());
+                                            FieldSizePayload {
+                                                field_name: match l46 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l47 = *ptr0.add(20).cast::<*mut u8>();
+                                                            let l48 = *ptr0.add(24).cast::<usize>();
+                                                            let len49 = l48;
+                                                            let bytes49 = _rt::Vec::from_raw_parts(
+                                                                l47.cast(),
+                                                                len49,
+                                                                len49,
+                                                            );
+                                                            _rt::string_lift(bytes49)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l50 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l51 = *ptr0.add(32).cast::<i32>();
+                                                            l51 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseTrailerSize(e64)
+                                    }
+                                    31 => {
+                                        let e64 = {
+                                            let l52 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l52 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l53 = *ptr0.add(20).cast::<*mut u8>();
+                                                        let l54 = *ptr0.add(24).cast::<usize>();
+                                                        let len55 = l54;
+                                                        let bytes55 = _rt::Vec::from_raw_parts(
+                                                            l53.cast(),
+                                                            len55,
+                                                            len55,
+                                                        );
+                                                        _rt::string_lift(bytes55)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseTransferCoding(e64)
+                                    }
+                                    32 => {
+                                        let e64 = {
+                                            let l56 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l56 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l57 = *ptr0.add(20).cast::<*mut u8>();
+                                                        let l58 = *ptr0.add(24).cast::<usize>();
+                                                        let len59 = l58;
+                                                        let bytes59 = _rt::Vec::from_raw_parts(
+                                                            l57.cast(),
+                                                            len59,
+                                                            len59,
+                                                        );
+                                                        _rt::string_lift(bytes59)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::HttpResponseContentCoding(e64)
+                                    }
+                                    33 => ErrorCode::HttpResponseTimeout,
+                                    34 => ErrorCode::HttpUpgradeFailed,
+                                    35 => ErrorCode::HttpProtocolError,
+                                    36 => ErrorCode::LoopDetected,
+                                    37 => ErrorCode::ConfigurationError,
+                                    n => {
+                                        debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                        let e64 = {
+                                            let l60 = i32::from(*ptr0.add(16).cast::<u8>());
+                                            match l60 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l61 = *ptr0.add(20).cast::<*mut u8>();
+                                                        let l62 = *ptr0.add(24).cast::<usize>();
+                                                        let len63 = l62;
+                                                        let bytes63 = _rt::Vec::from_raw_parts(
+                                                            l61.cast(),
+                                                            len63,
+                                                            len63,
+                                                        );
+                                                        _rt::string_lift(bytes63)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        ErrorCode::InternalError(e64)
+                                    }
+                                };
+                                v64
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Construct an empty HTTP Fields.
+                ///
+                /// The resulting `fields` is mutable.
+                pub fn new() -> Self {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[constructor]fields"]
+                            fn wit_import() -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import() -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import();
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Construct an HTTP Fields.
+                ///
+                /// The resulting `fields` is mutable.
+                ///
+                /// The list represents each key-value pair in the Fields. Keys
+                /// which have multiple values are represented by multiple entries in this
+                /// list with the same key.
+                ///
+                /// The tuple is a pair of the field key, represented as a string, and
+                /// Value, represented as a list of bytes. In a valid Fields, all keys
+                /// and values are valid UTF-8 strings. However, values are not always
+                /// well-formed, so they are represented as a raw list of bytes.
+                ///
+                /// An error result will be returned if any header or value was
+                /// syntactically invalid, or if a header was forbidden.
+                pub fn from_list(
+                    entries: &[(FieldKey, FieldValue)],
+                ) -> Result<Fields, HeaderError> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let vec3 = entries;
+                        let len3 = vec3.len();
+                        let layout3 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec3.len() * 16,
+                            4,
+                        );
+                        let result3 = if layout3.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout3);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec3.into_iter().enumerate() {
+                            let base = result3.add(i * 16);
+                            {
+                                let (t0_0, t0_1) = e;
+                                let vec1 = t0_0;
+                                let ptr1 = vec1.as_ptr().cast::<u8>();
+                                let len1 = vec1.len();
+                                *base.add(4).cast::<usize>() = len1;
+                                *base.add(0).cast::<*mut u8>() = ptr1.cast_mut();
+                                let vec2 = t0_1;
+                                let ptr2 = vec2.as_ptr().cast::<u8>();
+                                let len2 = vec2.len();
+                                *base.add(12).cast::<usize>() = len2;
+                                *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                            }
+                        }
+                        let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]fields.from-list"]
+                            fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(result3, len3, ptr4);
+                        let l5 = i32::from(*ptr4.add(0).cast::<u8>());
+                        if layout3.size() != 0 {
+                            _rt::alloc::dealloc(result3.cast(), layout3);
+                        }
+                        match l5 {
+                            0 => {
+                                let e = {
+                                    let l6 = *ptr4.add(4).cast::<i32>();
+                                    Fields::from_handle(l6 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l7 = i32::from(*ptr4.add(4).cast::<u8>());
+                                    let v8 = match l7 {
+                                        0 => HeaderError::InvalidSyntax,
+                                        1 => HeaderError::Forbidden,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            HeaderError::Immutable
+                                        }
+                                    };
+                                    v8
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get all of the values corresponding to a key. If the key is not present
+                /// in this `fields`, an empty list is returned. However, if the key is
+                /// present but empty, this is represented by a list with one or more
+                /// empty field-values present.
+                pub fn get(&self, name: &FieldKey) -> _rt::Vec<FieldValue> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.get"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = *ptr1.add(0).cast::<*mut u8>();
+                        let l3 = *ptr1.add(4).cast::<usize>();
+                        let base7 = l2;
+                        let len7 = l3;
+                        let mut result7 = _rt::Vec::with_capacity(len7);
+                        for i in 0..len7 {
+                            let base = base7.add(i * 8);
+                            let e7 = {
+                                let l4 = *base.add(0).cast::<*mut u8>();
+                                let l5 = *base.add(4).cast::<usize>();
+                                let len6 = l5;
+                                _rt::Vec::from_raw_parts(l4.cast(), len6, len6)
+                            };
+                            result7.push(e7);
+                        }
+                        _rt::cabi_dealloc(base7, len7 * 8, 4);
+                        result7
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns `true` when the key is present in this `fields`. If the key is
+                /// syntactically invalid, `false` is returned.
+                pub fn has(&self, name: &FieldKey) -> bool {
+                    unsafe {
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.has"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                        );
+                        _rt::bool_lift(ret as u8)
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set all of the values for a key. Clears any existing values for that
+                /// key, if they have been set.
+                ///
+                /// Fails with `header-error.immutable` if the `fields` are immutable.
+                pub fn set(
+                    &self,
+                    name: &FieldKey,
+                    value: &[FieldValue],
+                ) -> Result<(), HeaderError> {
+                    unsafe {
+                        #[repr(align(1))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 2]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 2],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec2 = value;
+                        let len2 = vec2.len();
+                        let layout2 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec2.len() * 8,
+                            4,
+                        );
+                        let result2 = if layout2.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout2).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout2);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec2.into_iter().enumerate() {
+                            let base = result2.add(i * 8);
+                            {
+                                let vec1 = e;
+                                let ptr1 = vec1.as_ptr().cast::<u8>();
+                                let len1 = vec1.len();
+                                *base.add(4).cast::<usize>() = len1;
+                                *base.add(0).cast::<*mut u8>() = ptr1.cast_mut();
+                            }
+                        }
+                        let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.set"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result2,
+                            len2,
+                            ptr3,
+                        );
+                        let l4 = i32::from(*ptr3.add(0).cast::<u8>());
+                        if layout2.size() != 0 {
+                            _rt::alloc::dealloc(result2.cast(), layout2);
+                        }
+                        match l4 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = i32::from(*ptr3.add(1).cast::<u8>());
+                                    let v6 = match l5 {
+                                        0 => HeaderError::InvalidSyntax,
+                                        1 => HeaderError::Forbidden,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            HeaderError::Immutable
+                                        }
+                                    };
+                                    v6
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Delete all values for a key. Does nothing if no values for the key
+                /// exist.
+                ///
+                /// Fails with `header-error.immutable` if the `fields` are immutable.
+                pub fn delete(&self, name: &FieldKey) -> Result<(), HeaderError> {
+                    unsafe {
+                        #[repr(align(1))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 2]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 2],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.delete"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr1.add(1).cast::<u8>());
+                                    let v4 = match l3 {
+                                        0 => HeaderError::InvalidSyntax,
+                                        1 => HeaderError::Forbidden,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            HeaderError::Immutable
+                                        }
+                                    };
+                                    v4
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Append a value for a key. Does not change or delete any existing
+                /// values for that key.
+                ///
+                /// Fails with `header-error.immutable` if the `fields` are immutable.
+                pub fn append(
+                    &self,
+                    name: &FieldKey,
+                    value: &FieldValue,
+                ) -> Result<(), HeaderError> {
+                    unsafe {
+                        #[repr(align(1))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 2]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 2],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec1 = value;
+                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                        let len1 = vec1.len();
+                        let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.append"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            ptr1.cast_mut(),
+                            len1,
+                            ptr2,
+                        );
+                        let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                        match l3 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = i32::from(*ptr2.add(1).cast::<u8>());
+                                    let v5 = match l4 {
+                                        0 => HeaderError::InvalidSyntax,
+                                        1 => HeaderError::Forbidden,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            HeaderError::Immutable
+                                        }
+                                    };
+                                    v5
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Retrieve the full set of keys and values in the Fields. Like the
+                /// constructor, the list represents each key-value pair.
+                ///
+                /// The outer list represents each key-value pair in the Fields. Keys
+                /// which have multiple values are represented by multiple entries in this
+                /// list with the same key.
+                pub fn entries(&self) -> _rt::Vec<(FieldKey, FieldValue)> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.entries"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = *ptr0.add(0).cast::<*mut u8>();
+                        let l2 = *ptr0.add(4).cast::<usize>();
+                        let base9 = l1;
+                        let len9 = l2;
+                        let mut result9 = _rt::Vec::with_capacity(len9);
+                        for i in 0..len9 {
+                            let base = base9.add(i * 16);
+                            let e9 = {
+                                let l3 = *base.add(0).cast::<*mut u8>();
+                                let l4 = *base.add(4).cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(
+                                    l3.cast(),
+                                    len5,
+                                    len5,
+                                );
+                                let l6 = *base.add(8).cast::<*mut u8>();
+                                let l7 = *base.add(12).cast::<usize>();
+                                let len8 = l7;
+                                (
+                                    _rt::string_lift(bytes5),
+                                    _rt::Vec::from_raw_parts(l6.cast(), len8, len8),
+                                )
+                            };
+                            result9.push(e9);
+                        }
+                        _rt::cabi_dealloc(base9, len9 * 16, 4);
+                        result9
+                    }
+                }
+            }
+            impl Fields {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Make a deep copy of the Fields. Equivelant in behavior to calling the
+                /// `fields` constructor on the return value of `entries`. The resulting
+                /// `fields` is mutable.
+                pub fn clone(&self) -> Fields {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]fields.clone"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the method of the incoming request.
+                pub fn method(&self) -> Method {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.method"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        let v5 = match l1 {
+                            0 => Method::Get,
+                            1 => Method::Head,
+                            2 => Method::Post,
+                            3 => Method::Put,
+                            4 => Method::Delete,
+                            5 => Method::Connect,
+                            6 => Method::Options,
+                            7 => Method::Trace,
+                            8 => Method::Patch,
+                            n => {
+                                debug_assert_eq!(n, 9, "invalid enum discriminant");
+                                let e5 = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Method::Other(e5)
+                            }
+                        };
+                        v5
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the path with query parameters from the request, as a string.
+                pub fn path_with_query(&self) -> Option<_rt::String> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.path-with-query"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the protocol scheme from the request.
+                pub fn scheme(&self) -> Option<Scheme> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.scheme"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v6 = match l2 {
+                                        0 => Scheme::Http,
+                                        1 => Scheme::Https,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            let e6 = {
+                                                let l3 = *ptr0.add(8).cast::<*mut u8>();
+                                                let l4 = *ptr0.add(12).cast::<usize>();
+                                                let len5 = l4;
+                                                let bytes5 = _rt::Vec::from_raw_parts(
+                                                    l3.cast(),
+                                                    len5,
+                                                    len5,
+                                                );
+                                                _rt::string_lift(bytes5)
+                                            };
+                                            Scheme::Other(e6)
+                                        }
+                                    };
+                                    v6
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the authority from the request, if it was present.
+                pub fn authority(&self) -> Option<_rt::String> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.authority"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the `headers` associated with the request.
+                ///
+                /// The returned `headers` resource is immutable: `set`, `append`, and
+                /// `delete` operations will fail with `header-error.immutable`.
+                ///
+                /// The `headers` returned are a child resource: it must be dropped before
+                /// the parent `incoming-request` is dropped. Dropping this
+                /// `incoming-request` before all children are dropped will trap.
+                pub fn headers(&self) -> Headers {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.headers"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl IncomingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Gives the `incoming-body` associated with this request. Will only
+                /// return success at most once, and subsequent calls will return error.
+                pub fn consume(&self) -> Result<IncomingBody, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-request.consume"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    IncomingBody::from_handle(l2 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Construct a new `outgoing-request` with a default `method` of `GET`, and
+                /// `none` values for `path-with-query`, `scheme`, and `authority`.
+                ///
+                /// * `headers` is the HTTP Headers for the Request.
+                ///
+                /// It is possible to construct, or manipulate with the accessor functions
+                /// below, an `outgoing-request` with an invalid combination of `scheme`
+                /// and `authority`, or `headers` which are not permitted to be sent.
+                /// It is the obligation of the `outgoing-handler.handle` implementation
+                /// to reject invalid constructions of `outgoing-request`.
+                pub fn new(headers: Headers) -> Self {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[constructor]outgoing-request"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((&headers).take_handle() as i32);
+                        OutgoingRequest::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the resource corresponding to the outgoing Body for this
+                /// Request.
+                ///
+                /// Returns success on the first call: the `outgoing-body` resource for
+                /// this `outgoing-request` can be retrieved at most once. Subsequent
+                /// calls will return error.
+                pub fn body(&self) -> Result<OutgoingBody, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.body"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    OutgoingBody::from_handle(l2 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the Method for the Request.
+                pub fn method(&self) -> Method {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.method"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        let v5 = match l1 {
+                            0 => Method::Get,
+                            1 => Method::Head,
+                            2 => Method::Post,
+                            3 => Method::Put,
+                            4 => Method::Delete,
+                            5 => Method::Connect,
+                            6 => Method::Options,
+                            7 => Method::Trace,
+                            8 => Method::Patch,
+                            n => {
+                                debug_assert_eq!(n, 9, "invalid enum discriminant");
+                                let e5 = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Method::Other(e5)
+                            }
+                        };
+                        v5
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the Method for the Request. Fails if the string present in a
+                /// `method.other` argument is not a syntactically valid method.
+                pub fn set_method(&self, method: &Method) -> Result<(), ()> {
+                    unsafe {
+                        let (result1_0, result1_1, result1_2) = match method {
+                            Method::Get => (0i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Head => (1i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Post => (2i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Put => (3i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Delete => (4i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Connect => (5i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Options => (6i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Trace => (7i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Patch => (8i32, ::core::ptr::null_mut(), 0usize),
+                            Method::Other(e) => {
+                                let vec0 = e;
+                                let ptr0 = vec0.as_ptr().cast::<u8>();
+                                let len0 = vec0.len();
+                                (9i32, ptr0.cast_mut(), len0)
+                            }
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.set-method"]
+                            fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result1_0,
+                            result1_1,
+                            result1_2,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the combination of the HTTP Path and Query for the Request.
+                /// When `none`, this represents an empty Path and empty Query.
+                pub fn path_with_query(&self) -> Option<_rt::String> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.path-with-query"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the combination of the HTTP Path and Query for the Request.
+                /// When `none`, this represents an empty Path and empty Query. Fails is the
+                /// string given is not a syntactically valid path and query uri component.
+                pub fn set_path_with_query(
+                    &self,
+                    path_with_query: Option<&str>,
+                ) -> Result<(), ()> {
+                    unsafe {
+                        let (result1_0, result1_1, result1_2) = match path_with_query {
+                            Some(e) => {
+                                let vec0 = e;
+                                let ptr0 = vec0.as_ptr().cast::<u8>();
+                                let len0 = vec0.len();
+                                (1i32, ptr0.cast_mut(), len0)
+                            }
+                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.set-path-with-query"]
+                            fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result1_0,
+                            result1_1,
+                            result1_2,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the HTTP Related Scheme for the Request. When `none`, the
+                /// implementation may choose an appropriate default scheme.
+                pub fn scheme(&self) -> Option<Scheme> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.scheme"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    let v6 = match l2 {
+                                        0 => Scheme::Http,
+                                        1 => Scheme::Https,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            let e6 = {
+                                                let l3 = *ptr0.add(8).cast::<*mut u8>();
+                                                let l4 = *ptr0.add(12).cast::<usize>();
+                                                let len5 = l4;
+                                                let bytes5 = _rt::Vec::from_raw_parts(
+                                                    l3.cast(),
+                                                    len5,
+                                                    len5,
+                                                );
+                                                _rt::string_lift(bytes5)
+                                            };
+                                            Scheme::Other(e6)
+                                        }
+                                    };
+                                    v6
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the HTTP Related Scheme for the Request. When `none`, the
+                /// implementation may choose an appropriate default scheme. Fails if the
+                /// string given is not a syntactically valid uri scheme.
+                pub fn set_scheme(&self, scheme: Option<&Scheme>) -> Result<(), ()> {
+                    unsafe {
+                        let (result2_0, result2_1, result2_2, result2_3) = match scheme {
+                            Some(e) => {
+                                let (result1_0, result1_1, result1_2) = match e {
+                                    Scheme::Http => (0i32, ::core::ptr::null_mut(), 0usize),
+                                    Scheme::Https => (1i32, ::core::ptr::null_mut(), 0usize),
+                                    Scheme::Other(e) => {
+                                        let vec0 = e;
+                                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                                        let len0 = vec0.len();
+                                        (2i32, ptr0.cast_mut(), len0)
+                                    }
+                                };
+                                (1i32, result1_0, result1_1, result1_2)
+                            }
+                            None => (0i32, 0i32, ::core::ptr::null_mut(), 0usize),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.set-scheme"]
+                            fn wit_import(
+                                _: i32,
+                                _: i32,
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                            ) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                        ) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result2_0,
+                            result2_1,
+                            result2_2,
+                            result2_3,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the HTTP Authority for the Request. A value of `none` may be used
+                /// with Related Schemes which do not require an Authority. The HTTP and
+                /// HTTPS schemes always require an authority.
+                pub fn authority(&self) -> Option<_rt::String> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.authority"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the HTTP Authority for the Request. A value of `none` may be used
+                /// with Related Schemes which do not require an Authority. The HTTP and
+                /// HTTPS schemes always require an authority. Fails if the string given is
+                /// not a syntactically valid uri authority.
+                pub fn set_authority(&self, authority: Option<&str>) -> Result<(), ()> {
+                    unsafe {
+                        let (result1_0, result1_1, result1_2) = match authority {
+                            Some(e) => {
+                                let vec0 = e;
+                                let ptr0 = vec0.as_ptr().cast::<u8>();
+                                let len0 = vec0.len();
+                                (1i32, ptr0.cast_mut(), len0)
+                            }
+                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.set-authority"]
+                            fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result1_0,
+                            result1_1,
+                            result1_2,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingRequest {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the headers associated with the Request.
+                ///
+                /// The returned `headers` resource is immutable: `set`, `append`, and
+                /// `delete` operations will fail with `header-error.immutable`.
+                ///
+                /// This headers resource is a child: it must be dropped before the parent
+                /// `outgoing-request` is dropped, or its ownership is transfered to
+                /// another component by e.g. `outgoing-handler.handle`.
+                pub fn headers(&self) -> Headers {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-request.headers"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Construct a default `request-options` value.
+                pub fn new() -> Self {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[constructor]request-options"]
+                            fn wit_import() -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import() -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import();
+                        RequestOptions::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// The timeout for the initial connect to the HTTP Server.
+                pub fn connect_timeout(&self) -> Option<Duration> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.connect-timeout"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the timeout for the initial connect to the HTTP Server. An error
+                /// return value indicates that this timeout is not supported.
+                pub fn set_connect_timeout(
+                    &self,
+                    duration: Option<Duration>,
+                ) -> Result<(), ()> {
+                    unsafe {
+                        let (result0_0, result0_1) = match duration {
+                            Some(e) => (1i32, _rt::as_i64(e)),
+                            None => (0i32, 0i64),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.set-connect-timeout"]
+                            fn wit_import(_: i32, _: i32, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result0_0,
+                            result0_1,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// The timeout for receiving the first byte of the Response body.
+                pub fn first_byte_timeout(&self) -> Option<Duration> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.first-byte-timeout"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the timeout for receiving the first byte of the Response body. An
+                /// error return value indicates that this timeout is not supported.
+                pub fn set_first_byte_timeout(
+                    &self,
+                    duration: Option<Duration>,
+                ) -> Result<(), ()> {
+                    unsafe {
+                        let (result0_0, result0_1) = match duration {
+                            Some(e) => (1i32, _rt::as_i64(e)),
+                            None => (0i32, 0i64),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.set-first-byte-timeout"]
+                            fn wit_import(_: i32, _: i32, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result0_0,
+                            result0_1,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// The timeout for receiving subsequent chunks of bytes in the Response
+                /// body stream.
+                pub fn between_bytes_timeout(&self) -> Option<Duration> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.between-bytes-timeout"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl RequestOptions {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the timeout for receiving subsequent chunks of bytes in the Response
+                /// body stream. An error return value indicates that this timeout is not
+                /// supported.
+                pub fn set_between_bytes_timeout(
+                    &self,
+                    duration: Option<Duration>,
+                ) -> Result<(), ()> {
+                    unsafe {
+                        let (result0_0, result0_1) = match duration {
+                            Some(e) => (1i32, _rt::as_i64(e)),
+                            None => (0i32, 0i64),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]request-options.set-between-bytes-timeout"]
+                            fn wit_import(_: i32, _: i32, _: i64) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i64) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result0_0,
+                            result0_1,
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl ResponseOutparam {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the value of the `response-outparam` to either send a response,
+                /// or indicate an error.
+                ///
+                /// This method consumes the `response-outparam` to ensure that it is
+                /// called at most once. If it is never called, the implementation
+                /// will respond with an error.
+                ///
+                /// The user may provide an `error` to `response` to allow the
+                /// implementation determine how to respond with an HTTP error response.
+                pub fn set(
+                    param: ResponseOutparam,
+                    response: Result<OutgoingResponse, ErrorCode>,
+                ) {
+                    unsafe {
+                        let (
+                            result38_0,
+                            result38_1,
+                            result38_2,
+                            result38_3,
+                            result38_4,
+                            result38_5,
+                            result38_6,
+                            result38_7,
+                        ) = match &response {
+                            Ok(e) => {
+                                (
+                                    0i32,
+                                    (e).take_handle() as i32,
+                                    0i32,
+                                    ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                    ::core::ptr::null_mut(),
+                                    ::core::ptr::null_mut(),
+                                    0usize,
+                                    0i32,
+                                )
+                            }
+                            Err(e) => {
+                                let (
+                                    result37_0,
+                                    result37_1,
+                                    result37_2,
+                                    result37_3,
+                                    result37_4,
+                                    result37_5,
+                                    result37_6,
+                                ) = match e {
+                                    ErrorCode::DnsTimeout => {
+                                        (
+                                            0i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::DnsError(e) => {
+                                        let DnsErrorPayload {
+                                            rcode: rcode0,
+                                            info_code: info_code0,
+                                        } = e;
+                                        let (result2_0, result2_1, result2_2) = match rcode0 {
+                                            Some(e) => {
+                                                let vec1 = e;
+                                                let ptr1 = vec1.as_ptr().cast::<u8>();
+                                                let len1 = vec1.len();
+                                                (1i32, ptr1.cast_mut(), len1)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        let (result3_0, result3_1) = match info_code0 {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            1i32,
+                                            result2_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result2_1);
+                                                t
+                                            },
+                                            result2_2 as *mut u8,
+                                            result3_0 as *mut u8,
+                                            result3_1 as usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::DestinationNotFound => {
+                                        (
+                                            2i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::DestinationUnavailable => {
+                                        (
+                                            3i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::DestinationIpProhibited => {
+                                        (
+                                            4i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::DestinationIpUnroutable => {
+                                        (
+                                            5i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionRefused => {
+                                        (
+                                            6i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionTerminated => {
+                                        (
+                                            7i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionTimeout => {
+                                        (
+                                            8i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionReadTimeout => {
+                                        (
+                                            9i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionWriteTimeout => {
+                                        (
+                                            10i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConnectionLimitReached => {
+                                        (
+                                            11i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::TlsProtocolError => {
+                                        (
+                                            12i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::TlsCertificateError => {
+                                        (
+                                            13i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::TlsAlertReceived(e) => {
+                                        let TlsAlertReceivedPayload {
+                                            alert_id: alert_id4,
+                                            alert_message: alert_message4,
+                                        } = e;
+                                        let (result5_0, result5_1) = match alert_id4 {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        let (result7_0, result7_1, result7_2) = match alert_message4 {
+                                            Some(e) => {
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                (1i32, ptr6.cast_mut(), len6)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        (
+                                            14i32,
+                                            result5_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result5_1) as u64),
+                                            result7_0 as *mut u8,
+                                            result7_1,
+                                            result7_2,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestDenied => {
+                                        (
+                                            15i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestLengthRequired => {
+                                        (
+                                            16i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestBodySize(e) => {
+                                        let (result8_0, result8_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i64(e)),
+                                            None => (0i32, 0i64),
+                                        };
+                                        (
+                                            17i32,
+                                            result8_0,
+                                            ::core::mem::MaybeUninit::new(result8_1 as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestMethodInvalid => {
+                                        (
+                                            18i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestUriInvalid => {
+                                        (
+                                            19i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestUriTooLong => {
+                                        (
+                                            20i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                        let (result9_0, result9_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            21i32,
+                                            result9_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result9_1) as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestHeaderSize(e) => {
+                                        let (
+                                            result14_0,
+                                            result14_1,
+                                            result14_2,
+                                            result14_3,
+                                            result14_4,
+                                            result14_5,
+                                        ) = match e {
+                                            Some(e) => {
+                                                let FieldSizePayload {
+                                                    field_name: field_name10,
+                                                    field_size: field_size10,
+                                                } = e;
+                                                let (result12_0, result12_1, result12_2) = match field_name10 {
+                                                    Some(e) => {
+                                                        let vec11 = e;
+                                                        let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                        let len11 = vec11.len();
+                                                        (1i32, ptr11.cast_mut(), len11)
+                                                    }
+                                                    None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                                };
+                                                let (result13_0, result13_1) = match field_size10 {
+                                                    Some(e) => (1i32, _rt::as_i32(e)),
+                                                    None => (0i32, 0i32),
+                                                };
+                                                (
+                                                    1i32,
+                                                    result12_0,
+                                                    result12_1,
+                                                    result12_2,
+                                                    result13_0,
+                                                    result13_1,
+                                                )
+                                            }
+                                            None => {
+                                                (0i32, 0i32, ::core::ptr::null_mut(), 0usize, 0i32, 0i32)
+                                            }
+                                        };
+                                        (
+                                            22i32,
+                                            result14_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result14_1) as u64),
+                                            result14_2,
+                                            result14_3 as *mut u8,
+                                            result14_4 as usize,
+                                            result14_5,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                        let (result15_0, result15_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            23i32,
+                                            result15_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result15_1) as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpRequestTrailerSize(e) => {
+                                        let FieldSizePayload {
+                                            field_name: field_name16,
+                                            field_size: field_size16,
+                                        } = e;
+                                        let (result18_0, result18_1, result18_2) = match field_name16 {
+                                            Some(e) => {
+                                                let vec17 = e;
+                                                let ptr17 = vec17.as_ptr().cast::<u8>();
+                                                let len17 = vec17.len();
+                                                (1i32, ptr17.cast_mut(), len17)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        let (result19_0, result19_1) = match field_size16 {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            24i32,
+                                            result18_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result18_1);
+                                                t
+                                            },
+                                            result18_2 as *mut u8,
+                                            result19_0 as *mut u8,
+                                            result19_1 as usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseIncomplete => {
+                                        (
+                                            25i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                        let (result20_0, result20_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            26i32,
+                                            result20_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result20_1) as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseHeaderSize(e) => {
+                                        let FieldSizePayload {
+                                            field_name: field_name21,
+                                            field_size: field_size21,
+                                        } = e;
+                                        let (result23_0, result23_1, result23_2) = match field_name21 {
+                                            Some(e) => {
+                                                let vec22 = e;
+                                                let ptr22 = vec22.as_ptr().cast::<u8>();
+                                                let len22 = vec22.len();
+                                                (1i32, ptr22.cast_mut(), len22)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        let (result24_0, result24_1) = match field_size21 {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            27i32,
+                                            result23_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result23_1);
+                                                t
+                                            },
+                                            result23_2 as *mut u8,
+                                            result24_0 as *mut u8,
+                                            result24_1 as usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseBodySize(e) => {
+                                        let (result25_0, result25_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i64(e)),
+                                            None => (0i32, 0i64),
+                                        };
+                                        (
+                                            28i32,
+                                            result25_0,
+                                            ::core::mem::MaybeUninit::new(result25_1 as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                        let (result26_0, result26_1) = match e {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            29i32,
+                                            result26_0,
+                                            ::core::mem::MaybeUninit::new(i64::from(result26_1) as u64),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseTrailerSize(e) => {
+                                        let FieldSizePayload {
+                                            field_name: field_name27,
+                                            field_size: field_size27,
+                                        } = e;
+                                        let (result29_0, result29_1, result29_2) = match field_name27 {
+                                            Some(e) => {
+                                                let vec28 = e;
+                                                let ptr28 = vec28.as_ptr().cast::<u8>();
+                                                let len28 = vec28.len();
+                                                (1i32, ptr28.cast_mut(), len28)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        let (result30_0, result30_1) = match field_size27 {
+                                            Some(e) => (1i32, _rt::as_i32(e)),
+                                            None => (0i32, 0i32),
+                                        };
+                                        (
+                                            30i32,
+                                            result29_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result29_1);
+                                                t
+                                            },
+                                            result29_2 as *mut u8,
+                                            result30_0 as *mut u8,
+                                            result30_1 as usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseTransferCoding(e) => {
+                                        let (result32_0, result32_1, result32_2) = match e {
+                                            Some(e) => {
+                                                let vec31 = e;
+                                                let ptr31 = vec31.as_ptr().cast::<u8>();
+                                                let len31 = vec31.len();
+                                                (1i32, ptr31.cast_mut(), len31)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        (
+                                            31i32,
+                                            result32_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result32_1);
+                                                t
+                                            },
+                                            result32_2 as *mut u8,
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseContentCoding(e) => {
+                                        let (result34_0, result34_1, result34_2) = match e {
+                                            Some(e) => {
+                                                let vec33 = e;
+                                                let ptr33 = vec33.as_ptr().cast::<u8>();
+                                                let len33 = vec33.len();
+                                                (1i32, ptr33.cast_mut(), len33)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        (
+                                            32i32,
+                                            result34_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result34_1);
+                                                t
+                                            },
+                                            result34_2 as *mut u8,
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpResponseTimeout => {
+                                        (
+                                            33i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpUpgradeFailed => {
+                                        (
+                                            34i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::HttpProtocolError => {
+                                        (
+                                            35i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::LoopDetected => {
+                                        (
+                                            36i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::ConfigurationError => {
+                                        (
+                                            37i32,
+                                            0i32,
+                                            ::core::mem::MaybeUninit::<u64>::zeroed(),
+                                            ::core::ptr::null_mut(),
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                    ErrorCode::InternalError(e) => {
+                                        let (result36_0, result36_1, result36_2) = match e {
+                                            Some(e) => {
+                                                let vec35 = e;
+                                                let ptr35 = vec35.as_ptr().cast::<u8>();
+                                                let len35 = vec35.len();
+                                                (1i32, ptr35.cast_mut(), len35)
+                                            }
+                                            None => (0i32, ::core::ptr::null_mut(), 0usize),
+                                        };
+                                        (
+                                            38i32,
+                                            result36_0,
+                                            {
+                                                let mut t = ::core::mem::MaybeUninit::<u64>::uninit();
+                                                t.as_mut_ptr().cast::<*mut u8>().write(result36_1);
+                                                t
+                                            },
+                                            result36_2 as *mut u8,
+                                            ::core::ptr::null_mut(),
+                                            0usize,
+                                            0i32,
+                                        )
+                                    }
+                                };
+                                (
+                                    1i32,
+                                    result37_0,
+                                    result37_1,
+                                    result37_2,
+                                    result37_3,
+                                    result37_4,
+                                    result37_5,
+                                    result37_6,
+                                )
+                            }
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]response-outparam.set"]
+                            fn wit_import(
+                                _: i32,
+                                _: i32,
+                                _: i32,
+                                _: i32,
+                                _: ::core::mem::MaybeUninit<u64>,
+                                _: *mut u8,
+                                _: *mut u8,
+                                _: usize,
+                                _: i32,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                            _: ::core::mem::MaybeUninit<u64>,
+                            _: *mut u8,
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (&param).take_handle() as i32,
+                            result38_0,
+                            result38_1,
+                            result38_2,
+                            result38_3,
+                            result38_4,
+                            result38_5,
+                            result38_6,
+                            result38_7,
+                        );
+                    }
+                }
+            }
+            impl IncomingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the status code from the incoming response.
+                pub fn status(&self) -> StatusCode {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-response.status"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        ret as u16
+                    }
+                }
+            }
+            impl IncomingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the headers from the incoming response.
+                ///
+                /// The returned `headers` resource is immutable: `set`, `append`, and
+                /// `delete` operations will fail with `header-error.immutable`.
+                ///
+                /// This headers resource is a child: it must be dropped before the parent
+                /// `incoming-response` is dropped.
+                pub fn headers(&self) -> Headers {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-response.headers"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl IncomingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the incoming body. May be called at most once. Returns error
+                /// if called additional times.
+                pub fn consume(&self) -> Result<IncomingBody, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-response.consume"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    IncomingBody::from_handle(l2 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingBody {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the contents of the body, as a stream of bytes.
+                ///
+                /// Returns success on first call: the stream representing the contents
+                /// can be retrieved at most once. Subsequent calls will return error.
+                ///
+                /// The returned `input-stream` resource is a child: it must be dropped
+                /// before the parent `incoming-body` is dropped, or consumed by
+                /// `incoming-body.finish`.
+                ///
+                /// This invariant ensures that the implementation can determine whether
+                /// the user is consuming the contents of the body, waiting on the
+                /// `future-trailers` to be ready, or neither. This allows for network
+                /// backpressure is to be applied when the user is consuming the body,
+                /// and for that backpressure to not inhibit delivery of the trailers if
+                /// the user does not read the entire body.
+                pub fn stream(&self) -> Result<InputStream, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-body.stream"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::InputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingBody {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Takes ownership of `incoming-body`, and returns a `future-trailers`.
+                /// This function will trap if the `input-stream` child is still alive.
+                pub fn finish(this: IncomingBody) -> FutureTrailers {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]incoming-body.finish"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((&this).take_handle() as i32);
+                        FutureTrailers::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl FutureTrailers {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a pollable which becomes ready when either the trailers have
+                /// been received, or an error has occured. When this pollable is ready,
+                /// the `get` method will return `some`.
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-trailers.subscribe"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            impl FutureTrailers {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the contents of the trailers, or an error which occured,
+                /// once the future is ready.
+                ///
+                /// The outer `option` represents future readiness. Users can wait on this
+                /// `option` to become `some` using the `subscribe` method.
+                ///
+                /// The outer `result` is used to retrieve the trailers or error at most
+                /// once. It will be success on the first call in which the outer option
+                /// is `some`, and error on subsequent calls.
+                ///
+                /// The inner `result` represents that either the HTTP Request or Response
+                /// body, as well as any trailers, were received successfully, or that an
+                /// error occured receiving them. The optional `trailers` indicates whether
+                /// or not trailers were present in the body.
+                ///
+                /// When some `trailers` are returned by this method, the `trailers`
+                /// resource is immutable, and a child. Use of the `set`, `append`, or
+                /// `delete` methods will return an error, and the resource must be
+                /// dropped before the parent `future-trailers` is dropped.
+                pub fn get(
+                    &self,
+                ) -> Option<Result<Result<Option<Trailers>, ErrorCode>, ()>> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 56]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 56],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-trailers.get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = i32::from(*ptr0.add(16).cast::<u8>());
+                                                match l3 {
+                                                    0 => {
+                                                        let e = {
+                                                            let l4 = i32::from(*ptr0.add(24).cast::<u8>());
+                                                            match l4 {
+                                                                0 => None,
+                                                                1 => {
+                                                                    let e = {
+                                                                        let l5 = *ptr0.add(28).cast::<i32>();
+                                                                        Fields::from_handle(l5 as u32)
+                                                                    };
+                                                                    Some(e)
+                                                                }
+                                                                _ => _rt::invalid_enum_discriminant(),
+                                                            }
+                                                        };
+                                                        Ok(e)
+                                                    }
+                                                    1 => {
+                                                        let e = {
+                                                            let l6 = i32::from(*ptr0.add(24).cast::<u8>());
+                                                            let v68 = match l6 {
+                                                                0 => ErrorCode::DnsTimeout,
+                                                                1 => {
+                                                                    let e68 = {
+                                                                        let l7 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l11 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        DnsErrorPayload {
+                                                                            rcode: match l7 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l8 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l9 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len10 = l9;
+                                                                                        let bytes10 = _rt::Vec::from_raw_parts(
+                                                                                            l8.cast(),
+                                                                                            len10,
+                                                                                            len10,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes10)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            info_code: match l11 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l12 = i32::from(*ptr0.add(46).cast::<u16>());
+                                                                                        l12 as u16
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::DnsError(e68)
+                                                                }
+                                                                2 => ErrorCode::DestinationNotFound,
+                                                                3 => ErrorCode::DestinationUnavailable,
+                                                                4 => ErrorCode::DestinationIpProhibited,
+                                                                5 => ErrorCode::DestinationIpUnroutable,
+                                                                6 => ErrorCode::ConnectionRefused,
+                                                                7 => ErrorCode::ConnectionTerminated,
+                                                                8 => ErrorCode::ConnectionTimeout,
+                                                                9 => ErrorCode::ConnectionReadTimeout,
+                                                                10 => ErrorCode::ConnectionWriteTimeout,
+                                                                11 => ErrorCode::ConnectionLimitReached,
+                                                                12 => ErrorCode::TlsProtocolError,
+                                                                13 => ErrorCode::TlsCertificateError,
+                                                                14 => {
+                                                                    let e68 = {
+                                                                        let l13 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l15 = i32::from(*ptr0.add(36).cast::<u8>());
+                                                                        TlsAlertReceivedPayload {
+                                                                            alert_id: match l13 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l14 = i32::from(*ptr0.add(33).cast::<u8>());
+                                                                                        l14 as u8
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            alert_message: match l15 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l16 = *ptr0.add(40).cast::<*mut u8>();
+                                                                                        let l17 = *ptr0.add(44).cast::<usize>();
+                                                                                        let len18 = l17;
+                                                                                        let bytes18 = _rt::Vec::from_raw_parts(
+                                                                                            l16.cast(),
+                                                                                            len18,
+                                                                                            len18,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes18)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::TlsAlertReceived(e68)
+                                                                }
+                                                                15 => ErrorCode::HttpRequestDenied,
+                                                                16 => ErrorCode::HttpRequestLengthRequired,
+                                                                17 => {
+                                                                    let e68 = {
+                                                                        let l19 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l19 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l20 = *ptr0.add(40).cast::<i64>();
+                                                                                    l20 as u64
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestBodySize(e68)
+                                                                }
+                                                                18 => ErrorCode::HttpRequestMethodInvalid,
+                                                                19 => ErrorCode::HttpRequestUriInvalid,
+                                                                20 => ErrorCode::HttpRequestUriTooLong,
+                                                                21 => {
+                                                                    let e68 = {
+                                                                        let l21 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l21 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l22 = *ptr0.add(36).cast::<i32>();
+                                                                                    l22 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestHeaderSectionSize(e68)
+                                                                }
+                                                                22 => {
+                                                                    let e68 = {
+                                                                        let l23 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l23 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l24 = i32::from(*ptr0.add(36).cast::<u8>());
+                                                                                    let l28 = i32::from(*ptr0.add(48).cast::<u8>());
+                                                                                    FieldSizePayload {
+                                                                                        field_name: match l24 {
+                                                                                            0 => None,
+                                                                                            1 => {
+                                                                                                let e = {
+                                                                                                    let l25 = *ptr0.add(40).cast::<*mut u8>();
+                                                                                                    let l26 = *ptr0.add(44).cast::<usize>();
+                                                                                                    let len27 = l26;
+                                                                                                    let bytes27 = _rt::Vec::from_raw_parts(
+                                                                                                        l25.cast(),
+                                                                                                        len27,
+                                                                                                        len27,
+                                                                                                    );
+                                                                                                    _rt::string_lift(bytes27)
+                                                                                                };
+                                                                                                Some(e)
+                                                                                            }
+                                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                                        },
+                                                                                        field_size: match l28 {
+                                                                                            0 => None,
+                                                                                            1 => {
+                                                                                                let e = {
+                                                                                                    let l29 = *ptr0.add(52).cast::<i32>();
+                                                                                                    l29 as u32
+                                                                                                };
+                                                                                                Some(e)
+                                                                                            }
+                                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                                        },
+                                                                                    }
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestHeaderSize(e68)
+                                                                }
+                                                                23 => {
+                                                                    let e68 = {
+                                                                        let l30 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l30 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l31 = *ptr0.add(36).cast::<i32>();
+                                                                                    l31 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestTrailerSectionSize(e68)
+                                                                }
+                                                                24 => {
+                                                                    let e68 = {
+                                                                        let l32 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l36 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l32 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l33 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l34 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len35 = l34;
+                                                                                        let bytes35 = _rt::Vec::from_raw_parts(
+                                                                                            l33.cast(),
+                                                                                            len35,
+                                                                                            len35,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes35)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l36 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l37 = *ptr0.add(48).cast::<i32>();
+                                                                                        l37 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestTrailerSize(e68)
+                                                                }
+                                                                25 => ErrorCode::HttpResponseIncomplete,
+                                                                26 => {
+                                                                    let e68 = {
+                                                                        let l38 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l38 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l39 = *ptr0.add(36).cast::<i32>();
+                                                                                    l39 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseHeaderSectionSize(e68)
+                                                                }
+                                                                27 => {
+                                                                    let e68 = {
+                                                                        let l40 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l44 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l40 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l41 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l42 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len43 = l42;
+                                                                                        let bytes43 = _rt::Vec::from_raw_parts(
+                                                                                            l41.cast(),
+                                                                                            len43,
+                                                                                            len43,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes43)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l44 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l45 = *ptr0.add(48).cast::<i32>();
+                                                                                        l45 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseHeaderSize(e68)
+                                                                }
+                                                                28 => {
+                                                                    let e68 = {
+                                                                        let l46 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l46 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l47 = *ptr0.add(40).cast::<i64>();
+                                                                                    l47 as u64
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseBodySize(e68)
+                                                                }
+                                                                29 => {
+                                                                    let e68 = {
+                                                                        let l48 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l48 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l49 = *ptr0.add(36).cast::<i32>();
+                                                                                    l49 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTrailerSectionSize(e68)
+                                                                }
+                                                                30 => {
+                                                                    let e68 = {
+                                                                        let l50 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l54 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l50 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l51 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l52 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len53 = l52;
+                                                                                        let bytes53 = _rt::Vec::from_raw_parts(
+                                                                                            l51.cast(),
+                                                                                            len53,
+                                                                                            len53,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes53)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l54 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l55 = *ptr0.add(48).cast::<i32>();
+                                                                                        l55 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTrailerSize(e68)
+                                                                }
+                                                                31 => {
+                                                                    let e68 = {
+                                                                        let l56 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l56 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l57 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l58 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len59 = l58;
+                                                                                    let bytes59 = _rt::Vec::from_raw_parts(
+                                                                                        l57.cast(),
+                                                                                        len59,
+                                                                                        len59,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes59)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTransferCoding(e68)
+                                                                }
+                                                                32 => {
+                                                                    let e68 = {
+                                                                        let l60 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l60 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l61 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l62 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len63 = l62;
+                                                                                    let bytes63 = _rt::Vec::from_raw_parts(
+                                                                                        l61.cast(),
+                                                                                        len63,
+                                                                                        len63,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes63)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseContentCoding(e68)
+                                                                }
+                                                                33 => ErrorCode::HttpResponseTimeout,
+                                                                34 => ErrorCode::HttpUpgradeFailed,
+                                                                35 => ErrorCode::HttpProtocolError,
+                                                                36 => ErrorCode::LoopDetected,
+                                                                37 => ErrorCode::ConfigurationError,
+                                                                n => {
+                                                                    debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                                                    let e68 = {
+                                                                        let l64 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l64 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l65 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l66 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len67 = l66;
+                                                                                    let bytes67 = _rt::Vec::from_raw_parts(
+                                                                                        l65.cast(),
+                                                                                        len67,
+                                                                                        len67,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes67)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::InternalError(e68)
+                                                                }
+                                                            };
+                                                            v68
+                                                        };
+                                                        Err(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = ();
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Construct an `outgoing-response`, with a default `status-code` of `200`.
+                /// If a different `status-code` is needed, it must be set via the
+                /// `set-status-code` method.
+                ///
+                /// * `headers` is the HTTP Headers for the Response.
+                pub fn new(headers: Headers) -> Self {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[constructor]outgoing-response"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((&headers).take_handle() as i32);
+                        OutgoingResponse::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl OutgoingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the HTTP Status Code for the Response.
+                pub fn status_code(&self) -> StatusCode {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-response.status-code"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        ret as u16
+                    }
+                }
+            }
+            impl OutgoingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Set the HTTP Status Code for the Response. Fails if the status-code
+                /// given is not a valid http status code.
+                pub fn set_status_code(
+                    &self,
+                    status_code: StatusCode,
+                ) -> Result<(), ()> {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-response.set-status-code"]
+                            fn wit_import(_: i32, _: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            _rt::as_i32(status_code),
+                        );
+                        match ret {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Get the headers associated with the Request.
+                ///
+                /// The returned `headers` resource is immutable: `set`, `append`, and
+                /// `delete` operations will fail with `header-error.immutable`.
+                ///
+                /// This headers resource is a child: it must be dropped before the parent
+                /// `outgoing-request` is dropped, or its ownership is transfered to
+                /// another component by e.g. `outgoing-handler.handle`.
+                pub fn headers(&self) -> Headers {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-response.headers"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        Fields::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl OutgoingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the resource corresponding to the outgoing Body for this Response.
+                ///
+                /// Returns success on the first call: the `outgoing-body` resource for
+                /// this `outgoing-response` can be retrieved at most once. Subsequent
+                /// calls will return error.
+                pub fn body(&self) -> Result<OutgoingBody, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-response.body"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    OutgoingBody::from_handle(l2 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingBody {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a stream for writing the body contents.
+                ///
+                /// The returned `output-stream` is a child resource: it must be dropped
+                /// before the parent `outgoing-body` resource is dropped (or finished),
+                /// otherwise the `outgoing-body` drop or `finish` will trap.
+                ///
+                /// Returns success on the first call: the `output-stream` resource for
+                /// this `outgoing-body` may be retrieved at most once. Subsequent calls
+                /// will return error.
+                pub fn write(&self) -> Result<OutputStream, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-body.write"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::OutputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingBody {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Finalize an outgoing body, optionally providing trailers. This must be
+                /// called to signal that the response is complete. If the `outgoing-body`
+                /// is dropped without calling `outgoing-body.finalize`, the implementation
+                /// should treat the body as corrupted.
+                ///
+                /// Fails if the body's `outgoing-request` or `outgoing-response` was
+                /// constructed with a Content-Length header, and the contents written
+                /// to the body (via `write`) does not match the value given in the
+                /// Content-Length.
+                pub fn finish(
+                    this: OutgoingBody,
+                    trailers: Option<Trailers>,
+                ) -> Result<(), ErrorCode> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 40],
+                        );
+                        let (result0_0, result0_1) = match &trailers {
+                            Some(e) => (1i32, (e).take_handle() as i32),
+                            None => (0i32, 0i32),
+                        };
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[static]outgoing-body.finish"]
+                            fn wit_import(_: i32, _: i32, _: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (&this).take_handle() as i32,
+                            result0_0,
+                            result0_1,
+                            ptr1,
+                        );
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr1.add(8).cast::<u8>());
+                                    let v65 = match l3 {
+                                        0 => ErrorCode::DnsTimeout,
+                                        1 => {
+                                            let e65 = {
+                                                let l4 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                let l8 = i32::from(*ptr1.add(28).cast::<u8>());
+                                                DnsErrorPayload {
+                                                    rcode: match l4 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l5 = *ptr1.add(20).cast::<*mut u8>();
+                                                                let l6 = *ptr1.add(24).cast::<usize>();
+                                                                let len7 = l6;
+                                                                let bytes7 = _rt::Vec::from_raw_parts(
+                                                                    l5.cast(),
+                                                                    len7,
+                                                                    len7,
+                                                                );
+                                                                _rt::string_lift(bytes7)
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                    info_code: match l8 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l9 = i32::from(*ptr1.add(30).cast::<u16>());
+                                                                l9 as u16
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                }
+                                            };
+                                            ErrorCode::DnsError(e65)
+                                        }
+                                        2 => ErrorCode::DestinationNotFound,
+                                        3 => ErrorCode::DestinationUnavailable,
+                                        4 => ErrorCode::DestinationIpProhibited,
+                                        5 => ErrorCode::DestinationIpUnroutable,
+                                        6 => ErrorCode::ConnectionRefused,
+                                        7 => ErrorCode::ConnectionTerminated,
+                                        8 => ErrorCode::ConnectionTimeout,
+                                        9 => ErrorCode::ConnectionReadTimeout,
+                                        10 => ErrorCode::ConnectionWriteTimeout,
+                                        11 => ErrorCode::ConnectionLimitReached,
+                                        12 => ErrorCode::TlsProtocolError,
+                                        13 => ErrorCode::TlsCertificateError,
+                                        14 => {
+                                            let e65 = {
+                                                let l10 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                let l12 = i32::from(*ptr1.add(20).cast::<u8>());
+                                                TlsAlertReceivedPayload {
+                                                    alert_id: match l10 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l11 = i32::from(*ptr1.add(17).cast::<u8>());
+                                                                l11 as u8
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                    alert_message: match l12 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l13 = *ptr1.add(24).cast::<*mut u8>();
+                                                                let l14 = *ptr1.add(28).cast::<usize>();
+                                                                let len15 = l14;
+                                                                let bytes15 = _rt::Vec::from_raw_parts(
+                                                                    l13.cast(),
+                                                                    len15,
+                                                                    len15,
+                                                                );
+                                                                _rt::string_lift(bytes15)
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                }
+                                            };
+                                            ErrorCode::TlsAlertReceived(e65)
+                                        }
+                                        15 => ErrorCode::HttpRequestDenied,
+                                        16 => ErrorCode::HttpRequestLengthRequired,
+                                        17 => {
+                                            let e65 = {
+                                                let l16 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l16 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l17 = *ptr1.add(24).cast::<i64>();
+                                                            l17 as u64
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpRequestBodySize(e65)
+                                        }
+                                        18 => ErrorCode::HttpRequestMethodInvalid,
+                                        19 => ErrorCode::HttpRequestUriInvalid,
+                                        20 => ErrorCode::HttpRequestUriTooLong,
+                                        21 => {
+                                            let e65 = {
+                                                let l18 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l18 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l19 = *ptr1.add(20).cast::<i32>();
+                                                            l19 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSectionSize(e65)
+                                        }
+                                        22 => {
+                                            let e65 = {
+                                                let l20 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l20 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l21 = i32::from(*ptr1.add(20).cast::<u8>());
+                                                            let l25 = i32::from(*ptr1.add(32).cast::<u8>());
+                                                            FieldSizePayload {
+                                                                field_name: match l21 {
+                                                                    0 => None,
+                                                                    1 => {
+                                                                        let e = {
+                                                                            let l22 = *ptr1.add(24).cast::<*mut u8>();
+                                                                            let l23 = *ptr1.add(28).cast::<usize>();
+                                                                            let len24 = l23;
+                                                                            let bytes24 = _rt::Vec::from_raw_parts(
+                                                                                l22.cast(),
+                                                                                len24,
+                                                                                len24,
+                                                                            );
+                                                                            _rt::string_lift(bytes24)
+                                                                        };
+                                                                        Some(e)
+                                                                    }
+                                                                    _ => _rt::invalid_enum_discriminant(),
+                                                                },
+                                                                field_size: match l25 {
+                                                                    0 => None,
+                                                                    1 => {
+                                                                        let e = {
+                                                                            let l26 = *ptr1.add(36).cast::<i32>();
+                                                                            l26 as u32
+                                                                        };
+                                                                        Some(e)
+                                                                    }
+                                                                    _ => _rt::invalid_enum_discriminant(),
+                                                                },
+                                                            }
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSize(e65)
+                                        }
+                                        23 => {
+                                            let e65 = {
+                                                let l27 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l27 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l28 = *ptr1.add(20).cast::<i32>();
+                                                            l28 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSectionSize(e65)
+                                        }
+                                        24 => {
+                                            let e65 = {
+                                                let l29 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                let l33 = i32::from(*ptr1.add(28).cast::<u8>());
+                                                FieldSizePayload {
+                                                    field_name: match l29 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l30 = *ptr1.add(20).cast::<*mut u8>();
+                                                                let l31 = *ptr1.add(24).cast::<usize>();
+                                                                let len32 = l31;
+                                                                let bytes32 = _rt::Vec::from_raw_parts(
+                                                                    l30.cast(),
+                                                                    len32,
+                                                                    len32,
+                                                                );
+                                                                _rt::string_lift(bytes32)
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                    field_size: match l33 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l34 = *ptr1.add(32).cast::<i32>();
+                                                                l34 as u32
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSize(e65)
+                                        }
+                                        25 => ErrorCode::HttpResponseIncomplete,
+                                        26 => {
+                                            let e65 = {
+                                                let l35 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l35 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l36 = *ptr1.add(20).cast::<i32>();
+                                                            l36 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSectionSize(e65)
+                                        }
+                                        27 => {
+                                            let e65 = {
+                                                let l37 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                let l41 = i32::from(*ptr1.add(28).cast::<u8>());
+                                                FieldSizePayload {
+                                                    field_name: match l37 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l38 = *ptr1.add(20).cast::<*mut u8>();
+                                                                let l39 = *ptr1.add(24).cast::<usize>();
+                                                                let len40 = l39;
+                                                                let bytes40 = _rt::Vec::from_raw_parts(
+                                                                    l38.cast(),
+                                                                    len40,
+                                                                    len40,
+                                                                );
+                                                                _rt::string_lift(bytes40)
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                    field_size: match l41 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l42 = *ptr1.add(32).cast::<i32>();
+                                                                l42 as u32
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSize(e65)
+                                        }
+                                        28 => {
+                                            let e65 = {
+                                                let l43 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l43 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l44 = *ptr1.add(24).cast::<i64>();
+                                                            l44 as u64
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseBodySize(e65)
+                                        }
+                                        29 => {
+                                            let e65 = {
+                                                let l45 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l45 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l46 = *ptr1.add(20).cast::<i32>();
+                                                            l46 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSectionSize(e65)
+                                        }
+                                        30 => {
+                                            let e65 = {
+                                                let l47 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                let l51 = i32::from(*ptr1.add(28).cast::<u8>());
+                                                FieldSizePayload {
+                                                    field_name: match l47 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l48 = *ptr1.add(20).cast::<*mut u8>();
+                                                                let l49 = *ptr1.add(24).cast::<usize>();
+                                                                let len50 = l49;
+                                                                let bytes50 = _rt::Vec::from_raw_parts(
+                                                                    l48.cast(),
+                                                                    len50,
+                                                                    len50,
+                                                                );
+                                                                _rt::string_lift(bytes50)
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                    field_size: match l51 {
+                                                        0 => None,
+                                                        1 => {
+                                                            let e = {
+                                                                let l52 = *ptr1.add(32).cast::<i32>();
+                                                                l52 as u32
+                                                            };
+                                                            Some(e)
+                                                        }
+                                                        _ => _rt::invalid_enum_discriminant(),
+                                                    },
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSize(e65)
+                                        }
+                                        31 => {
+                                            let e65 = {
+                                                let l53 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l53 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l54 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l55 = *ptr1.add(24).cast::<usize>();
+                                                            let len56 = l55;
+                                                            let bytes56 = _rt::Vec::from_raw_parts(
+                                                                l54.cast(),
+                                                                len56,
+                                                                len56,
+                                                            );
+                                                            _rt::string_lift(bytes56)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseTransferCoding(e65)
+                                        }
+                                        32 => {
+                                            let e65 = {
+                                                let l57 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l57 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l58 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l59 = *ptr1.add(24).cast::<usize>();
+                                                            let len60 = l59;
+                                                            let bytes60 = _rt::Vec::from_raw_parts(
+                                                                l58.cast(),
+                                                                len60,
+                                                                len60,
+                                                            );
+                                                            _rt::string_lift(bytes60)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::HttpResponseContentCoding(e65)
+                                        }
+                                        33 => ErrorCode::HttpResponseTimeout,
+                                        34 => ErrorCode::HttpUpgradeFailed,
+                                        35 => ErrorCode::HttpProtocolError,
+                                        36 => ErrorCode::LoopDetected,
+                                        37 => ErrorCode::ConfigurationError,
+                                        n => {
+                                            debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                            let e65 = {
+                                                let l61 = i32::from(*ptr1.add(16).cast::<u8>());
+                                                match l61 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l62 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l63 = *ptr1.add(24).cast::<usize>();
+                                                            let len64 = l63;
+                                                            let bytes64 = _rt::Vec::from_raw_parts(
+                                                                l62.cast(),
+                                                                len64,
+                                                                len64,
+                                                            );
+                                                            _rt::string_lift(bytes64)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            ErrorCode::InternalError(e65)
+                                        }
+                                    };
+                                    v65
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl FutureIncomingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a pollable which becomes ready when either the Response has
+                /// been received, or an error has occured. When this pollable is ready,
+                /// the `get` method will return `some`.
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-incoming-response.subscribe"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            impl FutureIncomingResponse {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns the incoming HTTP Response, or an error, once one is ready.
+                ///
+                /// The outer `option` represents future readiness. Users can wait on this
+                /// `option` to become `some` using the `subscribe` method.
+                ///
+                /// The outer `result` is used to retrieve the response or error at most
+                /// once. It will be success on the first call in which the outer option
+                /// is `some`, and error on subsequent calls.
+                ///
+                /// The inner `result` represents that either the incoming HTTP Response
+                /// status and headers have recieved successfully, or that an error
+                /// occured. Errors may also occur while consuming the response body,
+                /// but those will be reported by the `incoming-body` and its
+                /// `output-stream` child.
+                pub fn get(
+                    &self,
+                ) -> Option<Result<Result<IncomingResponse, ErrorCode>, ()>> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 56]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 56],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-incoming-response.get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(8).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = i32::from(*ptr0.add(16).cast::<u8>());
+                                                match l3 {
+                                                    0 => {
+                                                        let e = {
+                                                            let l4 = *ptr0.add(24).cast::<i32>();
+                                                            IncomingResponse::from_handle(l4 as u32)
+                                                        };
+                                                        Ok(e)
+                                                    }
+                                                    1 => {
+                                                        let e = {
+                                                            let l5 = i32::from(*ptr0.add(24).cast::<u8>());
+                                                            let v67 = match l5 {
+                                                                0 => ErrorCode::DnsTimeout,
+                                                                1 => {
+                                                                    let e67 = {
+                                                                        let l6 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l10 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        DnsErrorPayload {
+                                                                            rcode: match l6 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l7 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l8 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len9 = l8;
+                                                                                        let bytes9 = _rt::Vec::from_raw_parts(
+                                                                                            l7.cast(),
+                                                                                            len9,
+                                                                                            len9,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes9)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            info_code: match l10 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l11 = i32::from(*ptr0.add(46).cast::<u16>());
+                                                                                        l11 as u16
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::DnsError(e67)
+                                                                }
+                                                                2 => ErrorCode::DestinationNotFound,
+                                                                3 => ErrorCode::DestinationUnavailable,
+                                                                4 => ErrorCode::DestinationIpProhibited,
+                                                                5 => ErrorCode::DestinationIpUnroutable,
+                                                                6 => ErrorCode::ConnectionRefused,
+                                                                7 => ErrorCode::ConnectionTerminated,
+                                                                8 => ErrorCode::ConnectionTimeout,
+                                                                9 => ErrorCode::ConnectionReadTimeout,
+                                                                10 => ErrorCode::ConnectionWriteTimeout,
+                                                                11 => ErrorCode::ConnectionLimitReached,
+                                                                12 => ErrorCode::TlsProtocolError,
+                                                                13 => ErrorCode::TlsCertificateError,
+                                                                14 => {
+                                                                    let e67 = {
+                                                                        let l12 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l14 = i32::from(*ptr0.add(36).cast::<u8>());
+                                                                        TlsAlertReceivedPayload {
+                                                                            alert_id: match l12 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l13 = i32::from(*ptr0.add(33).cast::<u8>());
+                                                                                        l13 as u8
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            alert_message: match l14 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l15 = *ptr0.add(40).cast::<*mut u8>();
+                                                                                        let l16 = *ptr0.add(44).cast::<usize>();
+                                                                                        let len17 = l16;
+                                                                                        let bytes17 = _rt::Vec::from_raw_parts(
+                                                                                            l15.cast(),
+                                                                                            len17,
+                                                                                            len17,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes17)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::TlsAlertReceived(e67)
+                                                                }
+                                                                15 => ErrorCode::HttpRequestDenied,
+                                                                16 => ErrorCode::HttpRequestLengthRequired,
+                                                                17 => {
+                                                                    let e67 = {
+                                                                        let l18 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l18 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l19 = *ptr0.add(40).cast::<i64>();
+                                                                                    l19 as u64
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestBodySize(e67)
+                                                                }
+                                                                18 => ErrorCode::HttpRequestMethodInvalid,
+                                                                19 => ErrorCode::HttpRequestUriInvalid,
+                                                                20 => ErrorCode::HttpRequestUriTooLong,
+                                                                21 => {
+                                                                    let e67 = {
+                                                                        let l20 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l20 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l21 = *ptr0.add(36).cast::<i32>();
+                                                                                    l21 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestHeaderSectionSize(e67)
+                                                                }
+                                                                22 => {
+                                                                    let e67 = {
+                                                                        let l22 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l22 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l23 = i32::from(*ptr0.add(36).cast::<u8>());
+                                                                                    let l27 = i32::from(*ptr0.add(48).cast::<u8>());
+                                                                                    FieldSizePayload {
+                                                                                        field_name: match l23 {
+                                                                                            0 => None,
+                                                                                            1 => {
+                                                                                                let e = {
+                                                                                                    let l24 = *ptr0.add(40).cast::<*mut u8>();
+                                                                                                    let l25 = *ptr0.add(44).cast::<usize>();
+                                                                                                    let len26 = l25;
+                                                                                                    let bytes26 = _rt::Vec::from_raw_parts(
+                                                                                                        l24.cast(),
+                                                                                                        len26,
+                                                                                                        len26,
+                                                                                                    );
+                                                                                                    _rt::string_lift(bytes26)
+                                                                                                };
+                                                                                                Some(e)
+                                                                                            }
+                                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                                        },
+                                                                                        field_size: match l27 {
+                                                                                            0 => None,
+                                                                                            1 => {
+                                                                                                let e = {
+                                                                                                    let l28 = *ptr0.add(52).cast::<i32>();
+                                                                                                    l28 as u32
+                                                                                                };
+                                                                                                Some(e)
+                                                                                            }
+                                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                                        },
+                                                                                    }
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestHeaderSize(e67)
+                                                                }
+                                                                23 => {
+                                                                    let e67 = {
+                                                                        let l29 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l29 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l30 = *ptr0.add(36).cast::<i32>();
+                                                                                    l30 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestTrailerSectionSize(e67)
+                                                                }
+                                                                24 => {
+                                                                    let e67 = {
+                                                                        let l31 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l35 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l31 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l32 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l33 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len34 = l33;
+                                                                                        let bytes34 = _rt::Vec::from_raw_parts(
+                                                                                            l32.cast(),
+                                                                                            len34,
+                                                                                            len34,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes34)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l35 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l36 = *ptr0.add(48).cast::<i32>();
+                                                                                        l36 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpRequestTrailerSize(e67)
+                                                                }
+                                                                25 => ErrorCode::HttpResponseIncomplete,
+                                                                26 => {
+                                                                    let e67 = {
+                                                                        let l37 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l37 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l38 = *ptr0.add(36).cast::<i32>();
+                                                                                    l38 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseHeaderSectionSize(e67)
+                                                                }
+                                                                27 => {
+                                                                    let e67 = {
+                                                                        let l39 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l43 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l39 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l40 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l41 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len42 = l41;
+                                                                                        let bytes42 = _rt::Vec::from_raw_parts(
+                                                                                            l40.cast(),
+                                                                                            len42,
+                                                                                            len42,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes42)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l43 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l44 = *ptr0.add(48).cast::<i32>();
+                                                                                        l44 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseHeaderSize(e67)
+                                                                }
+                                                                28 => {
+                                                                    let e67 = {
+                                                                        let l45 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l45 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l46 = *ptr0.add(40).cast::<i64>();
+                                                                                    l46 as u64
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseBodySize(e67)
+                                                                }
+                                                                29 => {
+                                                                    let e67 = {
+                                                                        let l47 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l47 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l48 = *ptr0.add(36).cast::<i32>();
+                                                                                    l48 as u32
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTrailerSectionSize(e67)
+                                                                }
+                                                                30 => {
+                                                                    let e67 = {
+                                                                        let l49 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        let l53 = i32::from(*ptr0.add(44).cast::<u8>());
+                                                                        FieldSizePayload {
+                                                                            field_name: match l49 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l50 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                        let l51 = *ptr0.add(40).cast::<usize>();
+                                                                                        let len52 = l51;
+                                                                                        let bytes52 = _rt::Vec::from_raw_parts(
+                                                                                            l50.cast(),
+                                                                                            len52,
+                                                                                            len52,
+                                                                                        );
+                                                                                        _rt::string_lift(bytes52)
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                            field_size: match l53 {
+                                                                                0 => None,
+                                                                                1 => {
+                                                                                    let e = {
+                                                                                        let l54 = *ptr0.add(48).cast::<i32>();
+                                                                                        l54 as u32
+                                                                                    };
+                                                                                    Some(e)
+                                                                                }
+                                                                                _ => _rt::invalid_enum_discriminant(),
+                                                                            },
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTrailerSize(e67)
+                                                                }
+                                                                31 => {
+                                                                    let e67 = {
+                                                                        let l55 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l55 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l56 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l57 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len58 = l57;
+                                                                                    let bytes58 = _rt::Vec::from_raw_parts(
+                                                                                        l56.cast(),
+                                                                                        len58,
+                                                                                        len58,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes58)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseTransferCoding(e67)
+                                                                }
+                                                                32 => {
+                                                                    let e67 = {
+                                                                        let l59 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l59 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l60 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l61 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len62 = l61;
+                                                                                    let bytes62 = _rt::Vec::from_raw_parts(
+                                                                                        l60.cast(),
+                                                                                        len62,
+                                                                                        len62,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes62)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::HttpResponseContentCoding(e67)
+                                                                }
+                                                                33 => ErrorCode::HttpResponseTimeout,
+                                                                34 => ErrorCode::HttpUpgradeFailed,
+                                                                35 => ErrorCode::HttpProtocolError,
+                                                                36 => ErrorCode::LoopDetected,
+                                                                37 => ErrorCode::ConfigurationError,
+                                                                n => {
+                                                                    debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                                                    let e67 = {
+                                                                        let l63 = i32::from(*ptr0.add(32).cast::<u8>());
+                                                                        match l63 {
+                                                                            0 => None,
+                                                                            1 => {
+                                                                                let e = {
+                                                                                    let l64 = *ptr0.add(36).cast::<*mut u8>();
+                                                                                    let l65 = *ptr0.add(40).cast::<usize>();
+                                                                                    let len66 = l65;
+                                                                                    let bytes66 = _rt::Vec::from_raw_parts(
+                                                                                        l64.cast(),
+                                                                                        len66,
+                                                                                        len66,
+                                                                                    );
+                                                                                    _rt::string_lift(bytes66)
+                                                                                };
+                                                                                Some(e)
+                                                                            }
+                                                                            _ => _rt::invalid_enum_discriminant(),
+                                                                        }
+                                                                    };
+                                                                    ErrorCode::InternalError(e67)
+                                                                }
+                                                            };
+                                                            v67
+                                                        };
+                                                        Err(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = ();
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
+        /// This interface defines a handler of outgoing HTTP Requests. It should be
+        /// imported by components which wish to make HTTP Requests.
+        #[allow(dead_code, clippy::all)]
+        pub mod outgoing_handler {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type OutgoingRequest = super::super::super::wasi::http::types::OutgoingRequest;
+            pub type RequestOptions = super::super::super::wasi::http::types::RequestOptions;
+            pub type FutureIncomingResponse = super::super::super::wasi::http::types::FutureIncomingResponse;
+            pub type ErrorCode = super::super::super::wasi::http::types::ErrorCode;
+            #[allow(unused_unsafe, clippy::all)]
+            /// This function is invoked with an outgoing HTTP Request, and it returns
+            /// a resource `future-incoming-response` which represents an HTTP Response
+            /// which may arrive in the future.
+            ///
+            /// The `options` argument accepts optional parameters for the HTTP
+            /// protocol's transport layer.
+            ///
+            /// This function may return an error if the `outgoing-request` is invalid
+            /// or not allowed to be made. Otherwise, protocol errors are reported
+            /// through the `future-incoming-response`.
+            pub fn handle(
+                request: OutgoingRequest,
+                options: Option<RequestOptions>,
+            ) -> Result<FutureIncomingResponse, ErrorCode> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 40]);
+                    let (result0_0, result0_1) = match &options {
+                        Some(e) => (1i32, (e).take_handle() as i32),
+                        None => (0i32, 0i32),
+                    };
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:http/outgoing-handler@0.2.0")]
+                    extern "C" {
+                        #[link_name = "handle"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        (&request).take_handle() as i32,
+                        result0_0,
+                        result0_1,
+                        ptr1,
+                    );
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i32>();
+                                super::super::super::wasi::http::types::FutureIncomingResponse::from_handle(
+                                    l3 as u32,
+                                )
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = i32::from(*ptr1.add(8).cast::<u8>());
+                                use super::super::super::wasi::http::types::ErrorCode as V66;
+                                let v66 = match l4 {
+                                    0 => V66::DnsTimeout,
+                                    1 => {
+                                        let e66 = {
+                                            let l5 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            let l9 = i32::from(*ptr1.add(28).cast::<u8>());
+                                            super::super::super::wasi::http::types::DnsErrorPayload {
+                                                rcode: match l5 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l6 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l7 = *ptr1.add(24).cast::<usize>();
+                                                            let len8 = l7;
+                                                            let bytes8 = _rt::Vec::from_raw_parts(
+                                                                l6.cast(),
+                                                                len8,
+                                                                len8,
+                                                            );
+                                                            _rt::string_lift(bytes8)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                info_code: match l9 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l10 = i32::from(*ptr1.add(30).cast::<u16>());
+                                                            l10 as u16
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        V66::DnsError(e66)
+                                    }
+                                    2 => V66::DestinationNotFound,
+                                    3 => V66::DestinationUnavailable,
+                                    4 => V66::DestinationIpProhibited,
+                                    5 => V66::DestinationIpUnroutable,
+                                    6 => V66::ConnectionRefused,
+                                    7 => V66::ConnectionTerminated,
+                                    8 => V66::ConnectionTimeout,
+                                    9 => V66::ConnectionReadTimeout,
+                                    10 => V66::ConnectionWriteTimeout,
+                                    11 => V66::ConnectionLimitReached,
+                                    12 => V66::TlsProtocolError,
+                                    13 => V66::TlsCertificateError,
+                                    14 => {
+                                        let e66 = {
+                                            let l11 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            let l13 = i32::from(*ptr1.add(20).cast::<u8>());
+                                            super::super::super::wasi::http::types::TlsAlertReceivedPayload {
+                                                alert_id: match l11 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l12 = i32::from(*ptr1.add(17).cast::<u8>());
+                                                            l12 as u8
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                alert_message: match l13 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l14 = *ptr1.add(24).cast::<*mut u8>();
+                                                            let l15 = *ptr1.add(28).cast::<usize>();
+                                                            let len16 = l15;
+                                                            let bytes16 = _rt::Vec::from_raw_parts(
+                                                                l14.cast(),
+                                                                len16,
+                                                                len16,
+                                                            );
+                                                            _rt::string_lift(bytes16)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        V66::TlsAlertReceived(e66)
+                                    }
+                                    15 => V66::HttpRequestDenied,
+                                    16 => V66::HttpRequestLengthRequired,
+                                    17 => {
+                                        let e66 = {
+                                            let l17 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l17 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l18 = *ptr1.add(24).cast::<i64>();
+                                                        l18 as u64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpRequestBodySize(e66)
+                                    }
+                                    18 => V66::HttpRequestMethodInvalid,
+                                    19 => V66::HttpRequestUriInvalid,
+                                    20 => V66::HttpRequestUriTooLong,
+                                    21 => {
+                                        let e66 = {
+                                            let l19 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l19 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l20 = *ptr1.add(20).cast::<i32>();
+                                                        l20 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpRequestHeaderSectionSize(e66)
+                                    }
+                                    22 => {
+                                        let e66 = {
+                                            let l21 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l21 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l22 = i32::from(*ptr1.add(20).cast::<u8>());
+                                                        let l26 = i32::from(*ptr1.add(32).cast::<u8>());
+                                                        super::super::super::wasi::http::types::FieldSizePayload {
+                                                            field_name: match l22 {
+                                                                0 => None,
+                                                                1 => {
+                                                                    let e = {
+                                                                        let l23 = *ptr1.add(24).cast::<*mut u8>();
+                                                                        let l24 = *ptr1.add(28).cast::<usize>();
+                                                                        let len25 = l24;
+                                                                        let bytes25 = _rt::Vec::from_raw_parts(
+                                                                            l23.cast(),
+                                                                            len25,
+                                                                            len25,
+                                                                        );
+                                                                        _rt::string_lift(bytes25)
+                                                                    };
+                                                                    Some(e)
+                                                                }
+                                                                _ => _rt::invalid_enum_discriminant(),
+                                                            },
+                                                            field_size: match l26 {
+                                                                0 => None,
+                                                                1 => {
+                                                                    let e = {
+                                                                        let l27 = *ptr1.add(36).cast::<i32>();
+                                                                        l27 as u32
+                                                                    };
+                                                                    Some(e)
+                                                                }
+                                                                _ => _rt::invalid_enum_discriminant(),
+                                                            },
+                                                        }
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpRequestHeaderSize(e66)
+                                    }
+                                    23 => {
+                                        let e66 = {
+                                            let l28 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l28 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l29 = *ptr1.add(20).cast::<i32>();
+                                                        l29 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpRequestTrailerSectionSize(e66)
+                                    }
+                                    24 => {
+                                        let e66 = {
+                                            let l30 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            let l34 = i32::from(*ptr1.add(28).cast::<u8>());
+                                            super::super::super::wasi::http::types::FieldSizePayload {
+                                                field_name: match l30 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l31 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l32 = *ptr1.add(24).cast::<usize>();
+                                                            let len33 = l32;
+                                                            let bytes33 = _rt::Vec::from_raw_parts(
+                                                                l31.cast(),
+                                                                len33,
+                                                                len33,
+                                                            );
+                                                            _rt::string_lift(bytes33)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l34 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l35 = *ptr1.add(32).cast::<i32>();
+                                                            l35 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        V66::HttpRequestTrailerSize(e66)
+                                    }
+                                    25 => V66::HttpResponseIncomplete,
+                                    26 => {
+                                        let e66 = {
+                                            let l36 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l36 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l37 = *ptr1.add(20).cast::<i32>();
+                                                        l37 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpResponseHeaderSectionSize(e66)
+                                    }
+                                    27 => {
+                                        let e66 = {
+                                            let l38 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            let l42 = i32::from(*ptr1.add(28).cast::<u8>());
+                                            super::super::super::wasi::http::types::FieldSizePayload {
+                                                field_name: match l38 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l39 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l40 = *ptr1.add(24).cast::<usize>();
+                                                            let len41 = l40;
+                                                            let bytes41 = _rt::Vec::from_raw_parts(
+                                                                l39.cast(),
+                                                                len41,
+                                                                len41,
+                                                            );
+                                                            _rt::string_lift(bytes41)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l42 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l43 = *ptr1.add(32).cast::<i32>();
+                                                            l43 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        V66::HttpResponseHeaderSize(e66)
+                                    }
+                                    28 => {
+                                        let e66 = {
+                                            let l44 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l44 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l45 = *ptr1.add(24).cast::<i64>();
+                                                        l45 as u64
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpResponseBodySize(e66)
+                                    }
+                                    29 => {
+                                        let e66 = {
+                                            let l46 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l46 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l47 = *ptr1.add(20).cast::<i32>();
+                                                        l47 as u32
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpResponseTrailerSectionSize(e66)
+                                    }
+                                    30 => {
+                                        let e66 = {
+                                            let l48 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            let l52 = i32::from(*ptr1.add(28).cast::<u8>());
+                                            super::super::super::wasi::http::types::FieldSizePayload {
+                                                field_name: match l48 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l49 = *ptr1.add(20).cast::<*mut u8>();
+                                                            let l50 = *ptr1.add(24).cast::<usize>();
+                                                            let len51 = l50;
+                                                            let bytes51 = _rt::Vec::from_raw_parts(
+                                                                l49.cast(),
+                                                                len51,
+                                                                len51,
+                                                            );
+                                                            _rt::string_lift(bytes51)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l52 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l53 = *ptr1.add(32).cast::<i32>();
+                                                            l53 as u32
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            }
+                                        };
+                                        V66::HttpResponseTrailerSize(e66)
+                                    }
+                                    31 => {
+                                        let e66 = {
+                                            let l54 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l54 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l55 = *ptr1.add(20).cast::<*mut u8>();
+                                                        let l56 = *ptr1.add(24).cast::<usize>();
+                                                        let len57 = l56;
+                                                        let bytes57 = _rt::Vec::from_raw_parts(
+                                                            l55.cast(),
+                                                            len57,
+                                                            len57,
+                                                        );
+                                                        _rt::string_lift(bytes57)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpResponseTransferCoding(e66)
+                                    }
+                                    32 => {
+                                        let e66 = {
+                                            let l58 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l58 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l59 = *ptr1.add(20).cast::<*mut u8>();
+                                                        let l60 = *ptr1.add(24).cast::<usize>();
+                                                        let len61 = l60;
+                                                        let bytes61 = _rt::Vec::from_raw_parts(
+                                                            l59.cast(),
+                                                            len61,
+                                                            len61,
+                                                        );
+                                                        _rt::string_lift(bytes61)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::HttpResponseContentCoding(e66)
+                                    }
+                                    33 => V66::HttpResponseTimeout,
+                                    34 => V66::HttpUpgradeFailed,
+                                    35 => V66::HttpProtocolError,
+                                    36 => V66::LoopDetected,
+                                    37 => V66::ConfigurationError,
+                                    n => {
+                                        debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                        let e66 = {
+                                            let l62 = i32::from(*ptr1.add(16).cast::<u8>());
+                                            match l62 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let l63 = *ptr1.add(20).cast::<*mut u8>();
+                                                        let l64 = *ptr1.add(24).cast::<usize>();
+                                                        let len65 = l64;
+                                                        let bytes65 = _rt::Vec::from_raw_parts(
+                                                            l63.cast(),
+                                                            len65,
+                                                            len65,
+                                                        );
+                                                        _rt::string_lift(bytes65)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            }
+                                        };
+                                        V66::InternalError(e66)
+                                    }
+                                };
+                                v66
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+    }
     pub mod io {
         #[allow(dead_code, clippy::all)]
         pub mod error {
@@ -25813,6 +31933,7701 @@ pub mod exports {
                 );
             }
         }
+        pub mod http {
+            /// This interface defines all of the types and methods for implementing
+            /// HTTP Requests and Responses, both incoming and outgoing, as well as
+            /// their headers, trailers, and bodies.
+            #[allow(dead_code, clippy::all)]
+            pub mod types {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Duration = super::super::super::super::exports::wasi::clocks::monotonic_clock::Duration;
+                pub type InputStream = super::super::super::super::exports::wasi::io::streams::InputStream;
+                pub type InputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::InputStreamBorrow<
+                    'a,
+                >;
+                pub type OutputStream = super::super::super::super::exports::wasi::io::streams::OutputStream;
+                pub type OutputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::OutputStreamBorrow<
+                    'a,
+                >;
+                pub type IoError = super::super::super::super::exports::wasi::io::error::Error;
+                pub type IoErrorBorrow<'a> = super::super::super::super::exports::wasi::io::error::ErrorBorrow<
+                    'a,
+                >;
+                pub type Pollable = super::super::super::super::exports::wasi::io::poll::Pollable;
+                pub type PollableBorrow<'a> = super::super::super::super::exports::wasi::io::poll::PollableBorrow<
+                    'a,
+                >;
+                /// This type corresponds to HTTP standard Methods.
+                #[derive(Clone)]
+                pub enum Method {
+                    Get,
+                    Head,
+                    Post,
+                    Put,
+                    Delete,
+                    Connect,
+                    Options,
+                    Trace,
+                    Patch,
+                    Other(_rt::String),
+                }
+                impl ::core::fmt::Debug for Method {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            Method::Get => f.debug_tuple("Method::Get").finish(),
+                            Method::Head => f.debug_tuple("Method::Head").finish(),
+                            Method::Post => f.debug_tuple("Method::Post").finish(),
+                            Method::Put => f.debug_tuple("Method::Put").finish(),
+                            Method::Delete => f.debug_tuple("Method::Delete").finish(),
+                            Method::Connect => f.debug_tuple("Method::Connect").finish(),
+                            Method::Options => f.debug_tuple("Method::Options").finish(),
+                            Method::Trace => f.debug_tuple("Method::Trace").finish(),
+                            Method::Patch => f.debug_tuple("Method::Patch").finish(),
+                            Method::Other(e) => {
+                                f.debug_tuple("Method::Other").field(e).finish()
+                            }
+                        }
+                    }
+                }
+                /// This type corresponds to HTTP standard Related Schemes.
+                #[derive(Clone)]
+                pub enum Scheme {
+                    Http,
+                    Https,
+                    Other(_rt::String),
+                }
+                impl ::core::fmt::Debug for Scheme {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            Scheme::Http => f.debug_tuple("Scheme::Http").finish(),
+                            Scheme::Https => f.debug_tuple("Scheme::Https").finish(),
+                            Scheme::Other(e) => {
+                                f.debug_tuple("Scheme::Other").field(e).finish()
+                            }
+                        }
+                    }
+                }
+                /// Defines the case payload type for `DNS-error` above:
+                #[derive(Clone)]
+                pub struct DnsErrorPayload {
+                    pub rcode: Option<_rt::String>,
+                    pub info_code: Option<u16>,
+                }
+                impl ::core::fmt::Debug for DnsErrorPayload {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("DnsErrorPayload")
+                            .field("rcode", &self.rcode)
+                            .field("info-code", &self.info_code)
+                            .finish()
+                    }
+                }
+                /// Defines the case payload type for `TLS-alert-received` above:
+                #[derive(Clone)]
+                pub struct TlsAlertReceivedPayload {
+                    pub alert_id: Option<u8>,
+                    pub alert_message: Option<_rt::String>,
+                }
+                impl ::core::fmt::Debug for TlsAlertReceivedPayload {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("TlsAlertReceivedPayload")
+                            .field("alert-id", &self.alert_id)
+                            .field("alert-message", &self.alert_message)
+                            .finish()
+                    }
+                }
+                /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
+                #[derive(Clone)]
+                pub struct FieldSizePayload {
+                    pub field_name: Option<_rt::String>,
+                    pub field_size: Option<u32>,
+                }
+                impl ::core::fmt::Debug for FieldSizePayload {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("FieldSizePayload")
+                            .field("field-name", &self.field_name)
+                            .field("field-size", &self.field_size)
+                            .finish()
+                    }
+                }
+                /// These cases are inspired by the IANA HTTP Proxy Error Types:
+                /// https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types
+                #[derive(Clone)]
+                pub enum ErrorCode {
+                    DnsTimeout,
+                    DnsError(DnsErrorPayload),
+                    DestinationNotFound,
+                    DestinationUnavailable,
+                    DestinationIpProhibited,
+                    DestinationIpUnroutable,
+                    ConnectionRefused,
+                    ConnectionTerminated,
+                    ConnectionTimeout,
+                    ConnectionReadTimeout,
+                    ConnectionWriteTimeout,
+                    ConnectionLimitReached,
+                    TlsProtocolError,
+                    TlsCertificateError,
+                    TlsAlertReceived(TlsAlertReceivedPayload),
+                    HttpRequestDenied,
+                    HttpRequestLengthRequired,
+                    HttpRequestBodySize(Option<u64>),
+                    HttpRequestMethodInvalid,
+                    HttpRequestUriInvalid,
+                    HttpRequestUriTooLong,
+                    HttpRequestHeaderSectionSize(Option<u32>),
+                    HttpRequestHeaderSize(Option<FieldSizePayload>),
+                    HttpRequestTrailerSectionSize(Option<u32>),
+                    HttpRequestTrailerSize(FieldSizePayload),
+                    HttpResponseIncomplete,
+                    HttpResponseHeaderSectionSize(Option<u32>),
+                    HttpResponseHeaderSize(FieldSizePayload),
+                    HttpResponseBodySize(Option<u64>),
+                    HttpResponseTrailerSectionSize(Option<u32>),
+                    HttpResponseTrailerSize(FieldSizePayload),
+                    HttpResponseTransferCoding(Option<_rt::String>),
+                    HttpResponseContentCoding(Option<_rt::String>),
+                    HttpResponseTimeout,
+                    HttpUpgradeFailed,
+                    HttpProtocolError,
+                    LoopDetected,
+                    ConfigurationError,
+                    /// This is a catch-all error for anything that doesn't fit cleanly into a
+                    /// more specific case. It also includes an optional string for an
+                    /// unstructured description of the error. Users should not depend on the
+                    /// string for diagnosing errors, as it's not required to be consistent
+                    /// between implementations.
+                    InternalError(Option<_rt::String>),
+                }
+                impl ::core::fmt::Debug for ErrorCode {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            ErrorCode::DnsTimeout => {
+                                f.debug_tuple("ErrorCode::DnsTimeout").finish()
+                            }
+                            ErrorCode::DnsError(e) => {
+                                f.debug_tuple("ErrorCode::DnsError").field(e).finish()
+                            }
+                            ErrorCode::DestinationNotFound => {
+                                f.debug_tuple("ErrorCode::DestinationNotFound").finish()
+                            }
+                            ErrorCode::DestinationUnavailable => {
+                                f.debug_tuple("ErrorCode::DestinationUnavailable").finish()
+                            }
+                            ErrorCode::DestinationIpProhibited => {
+                                f.debug_tuple("ErrorCode::DestinationIpProhibited").finish()
+                            }
+                            ErrorCode::DestinationIpUnroutable => {
+                                f.debug_tuple("ErrorCode::DestinationIpUnroutable").finish()
+                            }
+                            ErrorCode::ConnectionRefused => {
+                                f.debug_tuple("ErrorCode::ConnectionRefused").finish()
+                            }
+                            ErrorCode::ConnectionTerminated => {
+                                f.debug_tuple("ErrorCode::ConnectionTerminated").finish()
+                            }
+                            ErrorCode::ConnectionTimeout => {
+                                f.debug_tuple("ErrorCode::ConnectionTimeout").finish()
+                            }
+                            ErrorCode::ConnectionReadTimeout => {
+                                f.debug_tuple("ErrorCode::ConnectionReadTimeout").finish()
+                            }
+                            ErrorCode::ConnectionWriteTimeout => {
+                                f.debug_tuple("ErrorCode::ConnectionWriteTimeout").finish()
+                            }
+                            ErrorCode::ConnectionLimitReached => {
+                                f.debug_tuple("ErrorCode::ConnectionLimitReached").finish()
+                            }
+                            ErrorCode::TlsProtocolError => {
+                                f.debug_tuple("ErrorCode::TlsProtocolError").finish()
+                            }
+                            ErrorCode::TlsCertificateError => {
+                                f.debug_tuple("ErrorCode::TlsCertificateError").finish()
+                            }
+                            ErrorCode::TlsAlertReceived(e) => {
+                                f.debug_tuple("ErrorCode::TlsAlertReceived")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestDenied => {
+                                f.debug_tuple("ErrorCode::HttpRequestDenied").finish()
+                            }
+                            ErrorCode::HttpRequestLengthRequired => {
+                                f.debug_tuple("ErrorCode::HttpRequestLengthRequired")
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestBodySize(e) => {
+                                f.debug_tuple("ErrorCode::HttpRequestBodySize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestMethodInvalid => {
+                                f.debug_tuple("ErrorCode::HttpRequestMethodInvalid")
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestUriInvalid => {
+                                f.debug_tuple("ErrorCode::HttpRequestUriInvalid").finish()
+                            }
+                            ErrorCode::HttpRequestUriTooLong => {
+                                f.debug_tuple("ErrorCode::HttpRequestUriTooLong").finish()
+                            }
+                            ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpRequestHeaderSectionSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestHeaderSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpRequestHeaderSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpRequestTrailerSectionSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpRequestTrailerSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpRequestTrailerSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseIncomplete => {
+                                f.debug_tuple("ErrorCode::HttpResponseIncomplete").finish()
+                            }
+                            ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseHeaderSectionSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseHeaderSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseHeaderSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseBodySize(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseBodySize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseTrailerSectionSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseTrailerSize(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseTrailerSize")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseTransferCoding(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseTransferCoding")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseContentCoding(e) => {
+                                f.debug_tuple("ErrorCode::HttpResponseContentCoding")
+                                    .field(e)
+                                    .finish()
+                            }
+                            ErrorCode::HttpResponseTimeout => {
+                                f.debug_tuple("ErrorCode::HttpResponseTimeout").finish()
+                            }
+                            ErrorCode::HttpUpgradeFailed => {
+                                f.debug_tuple("ErrorCode::HttpUpgradeFailed").finish()
+                            }
+                            ErrorCode::HttpProtocolError => {
+                                f.debug_tuple("ErrorCode::HttpProtocolError").finish()
+                            }
+                            ErrorCode::LoopDetected => {
+                                f.debug_tuple("ErrorCode::LoopDetected").finish()
+                            }
+                            ErrorCode::ConfigurationError => {
+                                f.debug_tuple("ErrorCode::ConfigurationError").finish()
+                            }
+                            ErrorCode::InternalError(e) => {
+                                f.debug_tuple("ErrorCode::InternalError").field(e).finish()
+                            }
+                        }
+                    }
+                }
+                impl ::core::fmt::Display for ErrorCode {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        write!(f, "{:?}", self)
+                    }
+                }
+                impl std::error::Error for ErrorCode {}
+                /// This type enumerates the different kinds of errors that may occur when
+                /// setting or appending to a `fields` resource.
+                #[derive(Clone, Copy)]
+                pub enum HeaderError {
+                    /// This error indicates that a `field-key` or `field-value` was
+                    /// syntactically invalid when used with an operation that sets headers in a
+                    /// `fields`.
+                    InvalidSyntax,
+                    /// This error indicates that a forbidden `field-key` was used when trying
+                    /// to set a header in a `fields`.
+                    Forbidden,
+                    /// This error indicates that the operation on the `fields` was not
+                    /// permitted because the fields are immutable.
+                    Immutable,
+                }
+                impl ::core::fmt::Debug for HeaderError {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            HeaderError::InvalidSyntax => {
+                                f.debug_tuple("HeaderError::InvalidSyntax").finish()
+                            }
+                            HeaderError::Forbidden => {
+                                f.debug_tuple("HeaderError::Forbidden").finish()
+                            }
+                            HeaderError::Immutable => {
+                                f.debug_tuple("HeaderError::Immutable").finish()
+                            }
+                        }
+                    }
+                }
+                impl ::core::fmt::Display for HeaderError {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        write!(f, "{:?}", self)
+                    }
+                }
+                impl std::error::Error for HeaderError {}
+                /// Field keys are always strings.
+                pub type FieldKey = _rt::String;
+                /// Field values should always be ASCII strings. However, in
+                /// reality, HTTP implementations often have to interpret malformed values,
+                /// so they are provided as a list of bytes.
+                pub type FieldValue = _rt::Vec<u8>;
+                /// This following block defines the `fields` resource which corresponds to
+                /// HTTP standard Fields. Fields are a common representation used for both
+                /// Headers and Trailers.
+                ///
+                /// A `fields` may be mutable or immutable. A `fields` created using the
+                /// constructor, `from-list`, or `clone` will be mutable, but a `fields`
+                /// resource given by other means (including, but not limited to,
+                /// `incoming-request.headers`, `outgoing-request.headers`) might be be
+                /// immutable. In an immutable fields, the `set`, `append`, and `delete`
+                /// operations will fail with `header-error.immutable`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Fields {
+                    handle: _rt::Resource<Fields>,
+                }
+                type _FieldsRep<T> = Option<T>;
+                impl Fields {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `Fields`.
+                    pub fn new<T: GuestFields>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FieldsRep<T> = Some(val);
+                        let ptr: *mut _FieldsRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFields>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFields>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFields>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _FieldsRep<T>);
+                    }
+                    fn as_ptr<T: GuestFields>(&self) -> *mut _FieldsRep<T> {
+                        Fields::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`Fields`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FieldsBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a Fields>,
+                }
+                impl<'a> FieldsBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFields>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FieldsRep<T> {
+                        Fields::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for Fields {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]fields"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Headers is an alias for Fields.
+                pub type Headers = Fields;
+                /// Headers is an alias for Fields.
+                pub type HeadersBorrow<'a> = FieldsBorrow<'a>;
+                /// Trailers is an alias for Fields.
+                pub type Trailers = Fields;
+                /// Trailers is an alias for Fields.
+                pub type TrailersBorrow<'a> = FieldsBorrow<'a>;
+                /// Represents an incoming HTTP Request.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingRequest {
+                    handle: _rt::Resource<IncomingRequest>,
+                }
+                type _IncomingRequestRep<T> = Option<T>;
+                impl IncomingRequest {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `IncomingRequest`.
+                    pub fn new<T: GuestIncomingRequest>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _IncomingRequestRep<T> = Some(val);
+                        let ptr: *mut _IncomingRequestRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestIncomingRequest>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestIncomingRequest>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestIncomingRequest>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _IncomingRequestRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestIncomingRequest>(
+                        &self,
+                    ) -> *mut _IncomingRequestRep<T> {
+                        IncomingRequest::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`IncomingRequest`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingRequestBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a IncomingRequest>,
+                }
+                impl<'a> IncomingRequestBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestIncomingRequest>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _IncomingRequestRep<T> {
+                        IncomingRequest::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for IncomingRequest {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]incoming-request"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents an outgoing HTTP Request.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingRequest {
+                    handle: _rt::Resource<OutgoingRequest>,
+                }
+                type _OutgoingRequestRep<T> = Option<T>;
+                impl OutgoingRequest {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `OutgoingRequest`.
+                    pub fn new<T: GuestOutgoingRequest>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _OutgoingRequestRep<T> = Some(val);
+                        let ptr: *mut _OutgoingRequestRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestOutgoingRequest>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestOutgoingRequest>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestOutgoingRequest>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _OutgoingRequestRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestOutgoingRequest>(
+                        &self,
+                    ) -> *mut _OutgoingRequestRep<T> {
+                        OutgoingRequest::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`OutgoingRequest`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingRequestBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a OutgoingRequest>,
+                }
+                impl<'a> OutgoingRequestBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestOutgoingRequest>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _OutgoingRequestRep<T> {
+                        OutgoingRequest::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for OutgoingRequest {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]outgoing-request"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Parameters for making an HTTP Request. Each of these parameters is
+                /// currently an optional timeout applicable to the transport layer of the
+                /// HTTP protocol.
+                ///
+                /// These timeouts are separate from any the user may use to bound a
+                /// blocking call to `wasi:io/poll.poll`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct RequestOptions {
+                    handle: _rt::Resource<RequestOptions>,
+                }
+                type _RequestOptionsRep<T> = Option<T>;
+                impl RequestOptions {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `RequestOptions`.
+                    pub fn new<T: GuestRequestOptions>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _RequestOptionsRep<T> = Some(val);
+                        let ptr: *mut _RequestOptionsRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestRequestOptions>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestRequestOptions>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestRequestOptions>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _RequestOptionsRep<T>);
+                    }
+                    fn as_ptr<T: GuestRequestOptions>(
+                        &self,
+                    ) -> *mut _RequestOptionsRep<T> {
+                        RequestOptions::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`RequestOptions`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct RequestOptionsBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a RequestOptions>,
+                }
+                impl<'a> RequestOptionsBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestRequestOptions>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _RequestOptionsRep<T> {
+                        RequestOptions::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for RequestOptions {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]request-options"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents the ability to send an HTTP Response.
+                ///
+                /// This resource is used by the `wasi:http/incoming-handler` interface to
+                /// allow a Response to be sent corresponding to the Request provided as the
+                /// other argument to `incoming-handler.handle`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct ResponseOutparam {
+                    handle: _rt::Resource<ResponseOutparam>,
+                }
+                type _ResponseOutparamRep<T> = Option<T>;
+                impl ResponseOutparam {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `ResponseOutparam`.
+                    pub fn new<T: GuestResponseOutparam>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _ResponseOutparamRep<T> = Some(val);
+                        let ptr: *mut _ResponseOutparamRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestResponseOutparam>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestResponseOutparam>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestResponseOutparam>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _ResponseOutparamRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestResponseOutparam>(
+                        &self,
+                    ) -> *mut _ResponseOutparamRep<T> {
+                        ResponseOutparam::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`ResponseOutparam`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct ResponseOutparamBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a ResponseOutparam>,
+                }
+                impl<'a> ResponseOutparamBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestResponseOutparam>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _ResponseOutparamRep<T> {
+                        ResponseOutparam::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for ResponseOutparam {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]response-outparam"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// This type corresponds to the HTTP standard Status Code.
+                pub type StatusCode = u16;
+                /// Represents an incoming HTTP Response.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingResponse {
+                    handle: _rt::Resource<IncomingResponse>,
+                }
+                type _IncomingResponseRep<T> = Option<T>;
+                impl IncomingResponse {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `IncomingResponse`.
+                    pub fn new<T: GuestIncomingResponse>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _IncomingResponseRep<T> = Some(val);
+                        let ptr: *mut _IncomingResponseRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestIncomingResponse>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestIncomingResponse>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestIncomingResponse>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _IncomingResponseRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestIncomingResponse>(
+                        &self,
+                    ) -> *mut _IncomingResponseRep<T> {
+                        IncomingResponse::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`IncomingResponse`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingResponseBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a IncomingResponse>,
+                }
+                impl<'a> IncomingResponseBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestIncomingResponse>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _IncomingResponseRep<T> {
+                        IncomingResponse::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for IncomingResponse {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]incoming-response"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents an incoming HTTP Request or Response's Body.
+                ///
+                /// A body has both its contents - a stream of bytes - and a (possibly
+                /// empty) set of trailers, indicating that the full contents of the
+                /// body have been received. This resource represents the contents as
+                /// an `input-stream` and the delivery of trailers as a `future-trailers`,
+                /// and ensures that the user of this interface may only be consuming either
+                /// the body contents or waiting on trailers at any given time.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingBody {
+                    handle: _rt::Resource<IncomingBody>,
+                }
+                type _IncomingBodyRep<T> = Option<T>;
+                impl IncomingBody {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `IncomingBody`.
+                    pub fn new<T: GuestIncomingBody>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _IncomingBodyRep<T> = Some(val);
+                        let ptr: *mut _IncomingBodyRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestIncomingBody>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestIncomingBody>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestIncomingBody>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _IncomingBodyRep<T>);
+                    }
+                    fn as_ptr<T: GuestIncomingBody>(&self) -> *mut _IncomingBodyRep<T> {
+                        IncomingBody::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`IncomingBody`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingBodyBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a IncomingBody>,
+                }
+                impl<'a> IncomingBodyBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestIncomingBody>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _IncomingBodyRep<T> {
+                        IncomingBody::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for IncomingBody {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]incoming-body"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents a future which may eventaully return trailers, or an error.
+                ///
+                /// In the case that the incoming HTTP Request or Response did not have any
+                /// trailers, this future will resolve to the empty set of trailers once the
+                /// complete Request or Response body has been received.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureTrailers {
+                    handle: _rt::Resource<FutureTrailers>,
+                }
+                type _FutureTrailersRep<T> = Option<T>;
+                impl FutureTrailers {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureTrailers`.
+                    pub fn new<T: GuestFutureTrailers>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureTrailersRep<T> = Some(val);
+                        let ptr: *mut _FutureTrailersRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureTrailers>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureTrailers>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureTrailers>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _FutureTrailersRep<T>);
+                    }
+                    fn as_ptr<T: GuestFutureTrailers>(
+                        &self,
+                    ) -> *mut _FutureTrailersRep<T> {
+                        FutureTrailers::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureTrailers`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureTrailersBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureTrailers>,
+                }
+                impl<'a> FutureTrailersBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureTrailers>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureTrailersRep<T> {
+                        FutureTrailers::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureTrailers {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-trailers"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents an outgoing HTTP Response.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingResponse {
+                    handle: _rt::Resource<OutgoingResponse>,
+                }
+                type _OutgoingResponseRep<T> = Option<T>;
+                impl OutgoingResponse {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `OutgoingResponse`.
+                    pub fn new<T: GuestOutgoingResponse>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _OutgoingResponseRep<T> = Some(val);
+                        let ptr: *mut _OutgoingResponseRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestOutgoingResponse>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestOutgoingResponse>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestOutgoingResponse>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _OutgoingResponseRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestOutgoingResponse>(
+                        &self,
+                    ) -> *mut _OutgoingResponseRep<T> {
+                        OutgoingResponse::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`OutgoingResponse`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingResponseBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a OutgoingResponse>,
+                }
+                impl<'a> OutgoingResponseBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestOutgoingResponse>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _OutgoingResponseRep<T> {
+                        OutgoingResponse::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for OutgoingResponse {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]outgoing-response"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents an outgoing HTTP Request or Response's Body.
+                ///
+                /// A body has both its contents - a stream of bytes - and a (possibly
+                /// empty) set of trailers, inducating the full contents of the body
+                /// have been sent. This resource represents the contents as an
+                /// `output-stream` child resource, and the completion of the body (with
+                /// optional trailers) with a static function that consumes the
+                /// `outgoing-body` resource, and ensures that the user of this interface
+                /// may not write to the body contents after the body has been finished.
+                ///
+                /// If the user code drops this resource, as opposed to calling the static
+                /// method `finish`, the implementation should treat the body as incomplete,
+                /// and that an error has occured. The implementation should propogate this
+                /// error to the HTTP protocol by whatever means it has available,
+                /// including: corrupting the body on the wire, aborting the associated
+                /// Request, or sending a late status code for the Response.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingBody {
+                    handle: _rt::Resource<OutgoingBody>,
+                }
+                type _OutgoingBodyRep<T> = Option<T>;
+                impl OutgoingBody {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `OutgoingBody`.
+                    pub fn new<T: GuestOutgoingBody>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _OutgoingBodyRep<T> = Some(val);
+                        let ptr: *mut _OutgoingBodyRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestOutgoingBody>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestOutgoingBody>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestOutgoingBody>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _OutgoingBodyRep<T>);
+                    }
+                    fn as_ptr<T: GuestOutgoingBody>(&self) -> *mut _OutgoingBodyRep<T> {
+                        OutgoingBody::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`OutgoingBody`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingBodyBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a OutgoingBody>,
+                }
+                impl<'a> OutgoingBodyBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestOutgoingBody>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _OutgoingBodyRep<T> {
+                        OutgoingBody::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for OutgoingBody {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]outgoing-body"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// Represents a future which may eventaully return an incoming HTTP
+                /// Response, or an error.
+                ///
+                /// This resource is returned by the `wasi:http/outgoing-handler` interface to
+                /// provide the HTTP Response corresponding to the sent Request.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureIncomingResponse {
+                    handle: _rt::Resource<FutureIncomingResponse>,
+                }
+                type _FutureIncomingResponseRep<T> = Option<T>;
+                impl FutureIncomingResponse {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureIncomingResponse`.
+                    pub fn new<T: GuestFutureIncomingResponse>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureIncomingResponseRep<T> = Some(val);
+                        let ptr: *mut _FutureIncomingResponseRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureIncomingResponse>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureIncomingResponse>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureIncomingResponse>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _FutureIncomingResponseRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestFutureIncomingResponse>(
+                        &self,
+                    ) -> *mut _FutureIncomingResponseRep<T> {
+                        FutureIncomingResponse::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureIncomingResponse`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureIncomingResponseBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureIncomingResponse>,
+                }
+                impl<'a> FutureIncomingResponseBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureIncomingResponse>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureIncomingResponseRep<T> {
+                        FutureIncomingResponse::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureIncomingResponse {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-incoming-response"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_http_error_code_cabi<T: Guest>(
+                    arg0: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::http_error_code(
+                        IoErrorBorrow::lift(arg0 as u32 as usize),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                ErrorCode::DnsTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                }
+                                ErrorCode::DnsError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                    let DnsErrorPayload {
+                                        rcode: rcode2,
+                                        info_code: info_code2,
+                                    } = e;
+                                    match rcode2 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                                            let len3 = vec3.len();
+                                            ::core::mem::forget(vec3);
+                                            *ptr1.add(24).cast::<usize>() = len3;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr3.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match info_code2 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(30).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::DestinationNotFound => {
+                                    *ptr1.add(8).cast::<u8>() = (2i32) as u8;
+                                }
+                                ErrorCode::DestinationUnavailable => {
+                                    *ptr1.add(8).cast::<u8>() = (3i32) as u8;
+                                }
+                                ErrorCode::DestinationIpProhibited => {
+                                    *ptr1.add(8).cast::<u8>() = (4i32) as u8;
+                                }
+                                ErrorCode::DestinationIpUnroutable => {
+                                    *ptr1.add(8).cast::<u8>() = (5i32) as u8;
+                                }
+                                ErrorCode::ConnectionRefused => {
+                                    *ptr1.add(8).cast::<u8>() = (6i32) as u8;
+                                }
+                                ErrorCode::ConnectionTerminated => {
+                                    *ptr1.add(8).cast::<u8>() = (7i32) as u8;
+                                }
+                                ErrorCode::ConnectionTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (8i32) as u8;
+                                }
+                                ErrorCode::ConnectionReadTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (9i32) as u8;
+                                }
+                                ErrorCode::ConnectionWriteTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (10i32) as u8;
+                                }
+                                ErrorCode::ConnectionLimitReached => {
+                                    *ptr1.add(8).cast::<u8>() = (11i32) as u8;
+                                }
+                                ErrorCode::TlsProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (12i32) as u8;
+                                }
+                                ErrorCode::TlsCertificateError => {
+                                    *ptr1.add(8).cast::<u8>() = (13i32) as u8;
+                                }
+                                ErrorCode::TlsAlertReceived(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (14i32) as u8;
+                                    let TlsAlertReceivedPayload {
+                                        alert_id: alert_id4,
+                                        alert_message: alert_message4,
+                                    } = e;
+                                    match alert_id4 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(17).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match alert_message4 {
+                                        Some(e) => {
+                                            *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                                            let len5 = vec5.len();
+                                            ::core::mem::forget(vec5);
+                                            *ptr1.add(28).cast::<usize>() = len5;
+                                            *ptr1.add(24).cast::<*mut u8>() = ptr5.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestDenied => {
+                                    *ptr1.add(8).cast::<u8>() = (15i32) as u8;
+                                }
+                                ErrorCode::HttpRequestLengthRequired => {
+                                    *ptr1.add(8).cast::<u8>() = (16i32) as u8;
+                                }
+                                ErrorCode::HttpRequestBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (17i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestMethodInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (18i32) as u8;
+                                }
+                                ErrorCode::HttpRequestUriInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (19i32) as u8;
+                                }
+                                ErrorCode::HttpRequestUriTooLong => {
+                                    *ptr1.add(8).cast::<u8>() = (20i32) as u8;
+                                }
+                                ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (21i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (22i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let FieldSizePayload {
+                                                field_name: field_name6,
+                                                field_size: field_size6,
+                                            } = e;
+                                            match field_name6 {
+                                                Some(e) => {
+                                                    *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                    let len7 = vec7.len();
+                                                    ::core::mem::forget(vec7);
+                                                    *ptr1.add(28).cast::<usize>() = len7;
+                                                    *ptr1.add(24).cast::<*mut u8>() = ptr7.cast_mut();
+                                                }
+                                                None => {
+                                                    *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                            match field_size6 {
+                                                Some(e) => {
+                                                    *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                    *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (23i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (24i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name8,
+                                        field_size: field_size8,
+                                    } = e;
+                                    match field_name8 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec9 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr9 = vec9.as_ptr().cast::<u8>();
+                                            let len9 = vec9.len();
+                                            ::core::mem::forget(vec9);
+                                            *ptr1.add(24).cast::<usize>() = len9;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr9.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size8 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseIncomplete => {
+                                    *ptr1.add(8).cast::<u8>() = (25i32) as u8;
+                                }
+                                ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (26i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (27i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name10,
+                                        field_size: field_size10,
+                                    } = e;
+                                    match field_name10 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec11 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                                            let len11 = vec11.len();
+                                            ::core::mem::forget(vec11);
+                                            *ptr1.add(24).cast::<usize>() = len11;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr11.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size10 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (28i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (29i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (30i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name12,
+                                        field_size: field_size12,
+                                    } = e;
+                                    match field_name12 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec13 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr13 = vec13.as_ptr().cast::<u8>();
+                                            let len13 = vec13.len();
+                                            ::core::mem::forget(vec13);
+                                            *ptr1.add(24).cast::<usize>() = len13;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr13.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size12 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTransferCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (31i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec14 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            ::core::mem::forget(vec14);
+                                            *ptr1.add(24).cast::<usize>() = len14;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr14.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseContentCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (32i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec15 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                                            let len15 = vec15.len();
+                                            ::core::mem::forget(vec15);
+                                            *ptr1.add(24).cast::<usize>() = len15;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr15.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (33i32) as u8;
+                                }
+                                ErrorCode::HttpUpgradeFailed => {
+                                    *ptr1.add(8).cast::<u8>() = (34i32) as u8;
+                                }
+                                ErrorCode::HttpProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (35i32) as u8;
+                                }
+                                ErrorCode::LoopDetected => {
+                                    *ptr1.add(8).cast::<u8>() = (36i32) as u8;
+                                }
+                                ErrorCode::ConfigurationError => {
+                                    *ptr1.add(8).cast::<u8>() = (37i32) as u8;
+                                }
+                                ErrorCode::InternalError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (38i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec16 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                            let len16 = vec16.len();
+                                            ::core::mem::forget(vec16);
+                                            *ptr1.add(24).cast::<usize>() = len16;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr16.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                            }
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_http_error_code<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(8).cast::<u8>());
+                            match l1 {
+                                0 => {}
+                                1 => {
+                                    let l2 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l2 {
+                                        0 => {}
+                                        _ => {
+                                            let l3 = *arg0.add(20).cast::<*mut u8>();
+                                            let l4 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l3, l4, 1);
+                                        }
+                                    }
+                                }
+                                2 => {}
+                                3 => {}
+                                4 => {}
+                                5 => {}
+                                6 => {}
+                                7 => {}
+                                8 => {}
+                                9 => {}
+                                10 => {}
+                                11 => {}
+                                12 => {}
+                                13 => {}
+                                14 => {
+                                    let l5 = i32::from(*arg0.add(20).cast::<u8>());
+                                    match l5 {
+                                        0 => {}
+                                        _ => {
+                                            let l6 = *arg0.add(24).cast::<*mut u8>();
+                                            let l7 = *arg0.add(28).cast::<usize>();
+                                            _rt::cabi_dealloc(l6, l7, 1);
+                                        }
+                                    }
+                                }
+                                15 => {}
+                                16 => {}
+                                17 => {}
+                                18 => {}
+                                19 => {}
+                                20 => {}
+                                21 => {}
+                                22 => {
+                                    let l8 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l8 {
+                                        0 => {}
+                                        _ => {
+                                            let l9 = i32::from(*arg0.add(20).cast::<u8>());
+                                            match l9 {
+                                                0 => {}
+                                                _ => {
+                                                    let l10 = *arg0.add(24).cast::<*mut u8>();
+                                                    let l11 = *arg0.add(28).cast::<usize>();
+                                                    _rt::cabi_dealloc(l10, l11, 1);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                23 => {}
+                                24 => {
+                                    let l12 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l12 {
+                                        0 => {}
+                                        _ => {
+                                            let l13 = *arg0.add(20).cast::<*mut u8>();
+                                            let l14 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l13, l14, 1);
+                                        }
+                                    }
+                                }
+                                25 => {}
+                                26 => {}
+                                27 => {
+                                    let l15 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l15 {
+                                        0 => {}
+                                        _ => {
+                                            let l16 = *arg0.add(20).cast::<*mut u8>();
+                                            let l17 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l16, l17, 1);
+                                        }
+                                    }
+                                }
+                                28 => {}
+                                29 => {}
+                                30 => {
+                                    let l18 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l18 {
+                                        0 => {}
+                                        _ => {
+                                            let l19 = *arg0.add(20).cast::<*mut u8>();
+                                            let l20 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l19, l20, 1);
+                                        }
+                                    }
+                                }
+                                31 => {
+                                    let l21 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l21 {
+                                        0 => {}
+                                        _ => {
+                                            let l22 = *arg0.add(20).cast::<*mut u8>();
+                                            let l23 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l22, l23, 1);
+                                        }
+                                    }
+                                }
+                                32 => {
+                                    let l24 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l24 {
+                                        0 => {}
+                                        _ => {
+                                            let l25 = *arg0.add(20).cast::<*mut u8>();
+                                            let l26 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l25, l26, 1);
+                                        }
+                                    }
+                                }
+                                33 => {}
+                                34 => {}
+                                35 => {}
+                                36 => {}
+                                37 => {}
+                                _ => {
+                                    let l27 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l27 {
+                                        0 => {}
+                                        _ => {
+                                            let l28 = *arg0.add(20).cast::<*mut u8>();
+                                            let l29 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l28, l29, 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_constructor_fields_cabi<T: GuestFields>() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = Fields::new(T::new());
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_fields_from_list_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base6 = arg0;
+                    let len6 = arg1;
+                    let mut result6 = _rt::Vec::with_capacity(len6);
+                    for i in 0..len6 {
+                        let base = base6.add(i * 16);
+                        let e6 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base.add(4).cast::<usize>();
+                            let len2 = l1;
+                            let bytes2 = _rt::Vec::from_raw_parts(l0.cast(), len2, len2);
+                            let l3 = *base.add(8).cast::<*mut u8>();
+                            let l4 = *base.add(12).cast::<usize>();
+                            let len5 = l4;
+                            (
+                                _rt::string_lift(bytes2),
+                                _rt::Vec::from_raw_parts(l3.cast(), len5, len5),
+                            )
+                        };
+                        result6.push(e6);
+                    }
+                    _rt::cabi_dealloc(base6, len6 * 16, 4);
+                    let result7 = T::from_list(result6);
+                    let ptr8 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result7 {
+                        Ok(e) => {
+                            *ptr8.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr8.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr8.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                HeaderError::InvalidSyntax => {
+                                    *ptr8.add(4).cast::<u8>() = (0i32) as u8;
+                                }
+                                HeaderError::Forbidden => {
+                                    *ptr8.add(4).cast::<u8>() = (1i32) as u8;
+                                }
+                                HeaderError::Immutable => {
+                                    *ptr8.add(4).cast::<u8>() = (2i32) as u8;
+                                }
+                            }
+                        }
+                    };
+                    ptr8
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_get_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::get(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec4 = result1;
+                    let len4 = vec4.len();
+                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec4.len() * 8,
+                        4,
+                    );
+                    let result4 = if layout4.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout4);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec4.into_iter().enumerate() {
+                        let base = result4.add(i * 8);
+                        {
+                            let vec3 = (e).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *base.add(4).cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    }
+                    *ptr2.add(4).cast::<usize>() = len4;
+                    *ptr2.add(0).cast::<*mut u8>() = result4;
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_fields_get<T: GuestFields>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    let base5 = l0;
+                    let len5 = l1;
+                    for i in 0..len5 {
+                        let base = base5.add(i * 8);
+                        {
+                            let l2 = *base.add(0).cast::<*mut u8>();
+                            let l3 = *base.add(4).cast::<usize>();
+                            let base4 = l2;
+                            let len4 = l3;
+                            _rt::cabi_dealloc(base4, len4 * 1, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base5, len5 * 8, 4);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_has_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::has(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    match result1 {
+                        true => 1,
+                        false => 0,
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_set_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: *mut u8,
+                    arg4: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let base4 = arg3;
+                    let len4 = arg4;
+                    let mut result4 = _rt::Vec::with_capacity(len4);
+                    for i in 0..len4 {
+                        let base = base4.add(i * 8);
+                        let e4 = {
+                            let l1 = *base.add(0).cast::<*mut u8>();
+                            let l2 = *base.add(4).cast::<usize>();
+                            let len3 = l2;
+                            _rt::Vec::from_raw_parts(l1.cast(), len3, len3)
+                        };
+                        result4.push(e4);
+                    }
+                    _rt::cabi_dealloc(base4, len4 * 8, 4);
+                    let result5 = T::set(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                        result4,
+                    );
+                    let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result5 {
+                        Ok(_) => {
+                            *ptr6.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr6.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                HeaderError::InvalidSyntax => {
+                                    *ptr6.add(1).cast::<u8>() = (0i32) as u8;
+                                }
+                                HeaderError::Forbidden => {
+                                    *ptr6.add(1).cast::<u8>() = (1i32) as u8;
+                                }
+                                HeaderError::Immutable => {
+                                    *ptr6.add(1).cast::<u8>() = (2i32) as u8;
+                                }
+                            }
+                        }
+                    };
+                    ptr6
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_delete_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::delete(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                HeaderError::InvalidSyntax => {
+                                    *ptr2.add(1).cast::<u8>() = (0i32) as u8;
+                                }
+                                HeaderError::Forbidden => {
+                                    *ptr2.add(1).cast::<u8>() = (1i32) as u8;
+                                }
+                                HeaderError::Immutable => {
+                                    *ptr2.add(1).cast::<u8>() = (2i32) as u8;
+                                }
+                            }
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_append_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: *mut u8,
+                    arg4: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let len1 = arg4;
+                    let result2 = T::append(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                        _rt::Vec::from_raw_parts(arg3.cast(), len1, len1),
+                    );
+                    let ptr3 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result2 {
+                        Ok(_) => {
+                            *ptr3.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr3.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                HeaderError::InvalidSyntax => {
+                                    *ptr3.add(1).cast::<u8>() = (0i32) as u8;
+                                }
+                                HeaderError::Forbidden => {
+                                    *ptr3.add(1).cast::<u8>() = (1i32) as u8;
+                                }
+                                HeaderError::Immutable => {
+                                    *ptr3.add(1).cast::<u8>() = (2i32) as u8;
+                                }
+                            }
+                        }
+                    };
+                    ptr3
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_entries_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::entries(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec5 = result0;
+                    let len5 = vec5.len();
+                    let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec5.len() * 16,
+                        4,
+                    );
+                    let result5 = if layout5.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout5);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec5.into_iter().enumerate() {
+                        let base = result5.add(i * 16);
+                        {
+                            let (t2_0, t2_1) = e;
+                            let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *base.add(4).cast::<usize>() = len3;
+                            *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                            let vec4 = (t2_1).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *base.add(12).cast::<usize>() = len4;
+                            *base.add(8).cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                    }
+                    *ptr1.add(4).cast::<usize>() = len5;
+                    *ptr1.add(0).cast::<*mut u8>() = result5;
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_fields_entries<T: GuestFields>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    let base7 = l0;
+                    let len7 = l1;
+                    for i in 0..len7 {
+                        let base = base7.add(i * 16);
+                        {
+                            let l2 = *base.add(0).cast::<*mut u8>();
+                            let l3 = *base.add(4).cast::<usize>();
+                            _rt::cabi_dealloc(l2, l3, 1);
+                            let l4 = *base.add(8).cast::<*mut u8>();
+                            let l5 = *base.add(12).cast::<usize>();
+                            let base6 = l4;
+                            let len6 = l5;
+                            _rt::cabi_dealloc(base6, len6 * 1, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base7, len7 * 16, 4);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_fields_clone_cabi<T: GuestFields>(
+                    arg0: *mut u8,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::clone(
+                        FieldsBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_method_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::method(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Method::Get => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Method::Head => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                        Method::Post => {
+                            *ptr1.add(0).cast::<u8>() = (2i32) as u8;
+                        }
+                        Method::Put => {
+                            *ptr1.add(0).cast::<u8>() = (3i32) as u8;
+                        }
+                        Method::Delete => {
+                            *ptr1.add(0).cast::<u8>() = (4i32) as u8;
+                        }
+                        Method::Connect => {
+                            *ptr1.add(0).cast::<u8>() = (5i32) as u8;
+                        }
+                        Method::Options => {
+                            *ptr1.add(0).cast::<u8>() = (6i32) as u8;
+                        }
+                        Method::Trace => {
+                            *ptr1.add(0).cast::<u8>() = (7i32) as u8;
+                        }
+                        Method::Patch => {
+                            *ptr1.add(0).cast::<u8>() = (8i32) as u8;
+                        }
+                        Method::Other(e) => {
+                            *ptr1.add(0).cast::<u8>() = (9i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    }
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_request_method<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        1 => {}
+                        2 => {}
+                        3 => {}
+                        4 => {}
+                        5 => {}
+                        6 => {}
+                        7 => {}
+                        8 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_path_with_query_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::path_with_query(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_request_path_with_query<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_scheme_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::scheme(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Scheme::Http => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                }
+                                Scheme::Https => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                }
+                                Scheme::Other(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (2i32) as u8;
+                                    let vec2 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    ::core::mem::forget(vec2);
+                                    *ptr1.add(12).cast::<usize>() = len2;
+                                    *ptr1.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                            }
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_request_scheme<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(4).cast::<u8>());
+                            match l1 {
+                                0 => {}
+                                1 => {}
+                                _ => {
+                                    let l2 = *arg0.add(8).cast::<*mut u8>();
+                                    let l3 = *arg0.add(12).cast::<usize>();
+                                    _rt::cabi_dealloc(l2, l3, 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_authority_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::authority(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_request_authority<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_headers_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::headers(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_request_consume_cabi<
+                    T: GuestIncomingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::consume(
+                        IncomingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_constructor_outgoing_request_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: i32) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = OutgoingRequest::new(
+                        T::new(Fields::from_handle(arg0 as u32)),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_body_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::body(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_method_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::method(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Method::Get => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Method::Head => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                        Method::Post => {
+                            *ptr1.add(0).cast::<u8>() = (2i32) as u8;
+                        }
+                        Method::Put => {
+                            *ptr1.add(0).cast::<u8>() = (3i32) as u8;
+                        }
+                        Method::Delete => {
+                            *ptr1.add(0).cast::<u8>() = (4i32) as u8;
+                        }
+                        Method::Connect => {
+                            *ptr1.add(0).cast::<u8>() = (5i32) as u8;
+                        }
+                        Method::Options => {
+                            *ptr1.add(0).cast::<u8>() = (6i32) as u8;
+                        }
+                        Method::Trace => {
+                            *ptr1.add(0).cast::<u8>() = (7i32) as u8;
+                        }
+                        Method::Patch => {
+                            *ptr1.add(0).cast::<u8>() = (8i32) as u8;
+                        }
+                        Method::Other(e) => {
+                            *ptr1.add(0).cast::<u8>() = (9i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    }
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_outgoing_request_method<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        1 => {}
+                        2 => {}
+                        3 => {}
+                        4 => {}
+                        5 => {}
+                        6 => {}
+                        7 => {}
+                        8 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_set_method_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8, arg1: i32, arg2: *mut u8, arg3: usize) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let v1 = match arg1 {
+                        0 => Method::Get,
+                        1 => Method::Head,
+                        2 => Method::Post,
+                        3 => Method::Put,
+                        4 => Method::Delete,
+                        5 => Method::Connect,
+                        6 => Method::Options,
+                        7 => Method::Trace,
+                        8 => Method::Patch,
+                        n => {
+                            debug_assert_eq!(n, 9, "invalid enum discriminant");
+                            let e1 = {
+                                let len0 = arg3;
+                                let bytes0 = _rt::Vec::from_raw_parts(
+                                    arg2.cast(),
+                                    len0,
+                                    len0,
+                                );
+                                _rt::string_lift(bytes0)
+                            };
+                            Method::Other(e1)
+                        }
+                    };
+                    let result2 = T::set_method(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                        v1,
+                    );
+                    let result3 = match result2 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result3
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_path_with_query_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::path_with_query(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_outgoing_request_path_with_query<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_set_path_with_query_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8, arg1: i32, arg2: *mut u8, arg3: usize) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result1 = T::set_path_with_query(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let len0 = arg3;
+                                    let bytes0 = _rt::Vec::from_raw_parts(
+                                        arg2.cast(),
+                                        len0,
+                                        len0,
+                                    );
+                                    _rt::string_lift(bytes0)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result2 = match result1 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_scheme_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::scheme(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Scheme::Http => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                }
+                                Scheme::Https => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                }
+                                Scheme::Other(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (2i32) as u8;
+                                    let vec2 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    ::core::mem::forget(vec2);
+                                    *ptr1.add(12).cast::<usize>() = len2;
+                                    *ptr1.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                            }
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_outgoing_request_scheme<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(4).cast::<u8>());
+                            match l1 {
+                                0 => {}
+                                1 => {}
+                                _ => {
+                                    let l2 = *arg0.add(8).cast::<*mut u8>();
+                                    let l3 = *arg0.add(12).cast::<usize>();
+                                    _rt::cabi_dealloc(l2, l3, 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_set_scheme_cabi<
+                    T: GuestOutgoingRequest,
+                >(
+                    arg0: *mut u8,
+                    arg1: i32,
+                    arg2: i32,
+                    arg3: *mut u8,
+                    arg4: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result2 = T::set_scheme(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let v1 = match arg2 {
+                                        0 => Scheme::Http,
+                                        1 => Scheme::Https,
+                                        n => {
+                                            debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                            let e1 = {
+                                                let len0 = arg4;
+                                                let bytes0 = _rt::Vec::from_raw_parts(
+                                                    arg3.cast(),
+                                                    len0,
+                                                    len0,
+                                                );
+                                                _rt::string_lift(bytes0)
+                                            };
+                                            Scheme::Other(e1)
+                                        }
+                                    };
+                                    v1
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result3 = match result2 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result3
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_authority_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::authority(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_outgoing_request_authority<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_set_authority_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8, arg1: i32, arg2: *mut u8, arg3: usize) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result1 = T::set_authority(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let len0 = arg3;
+                                    let bytes0 = _rt::Vec::from_raw_parts(
+                                        arg2.cast(),
+                                        len0,
+                                        len0,
+                                    );
+                                    _rt::string_lift(bytes0)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result2 = match result1 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_request_headers_cabi<
+                    T: GuestOutgoingRequest,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::headers(
+                        OutgoingRequestBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_constructor_request_options_cabi<
+                    T: GuestRequestOptions,
+                >() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = RequestOptions::new(T::new());
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_connect_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::connect_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_set_connect_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8, arg1: i32, arg2: i64) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::set_connect_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = arg2 as u64;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result1 = match result0 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_first_byte_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::first_byte_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_set_first_byte_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8, arg1: i32, arg2: i64) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::set_first_byte_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = arg2 as u64;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result1 = match result0 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_between_bytes_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::between_bytes_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_request_options_set_between_bytes_timeout_cabi<
+                    T: GuestRequestOptions,
+                >(arg0: *mut u8, arg1: i32, arg2: i64) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::set_between_bytes_timeout(
+                        RequestOptionsBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = arg2 as u64;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let result1 = match result0 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_response_outparam_set_cabi<
+                    T: GuestResponseOutparam,
+                >(
+                    arg0: i32,
+                    arg1: i32,
+                    arg2: i32,
+                    arg3: i32,
+                    arg4: ::core::mem::MaybeUninit<u64>,
+                    arg5: *mut u8,
+                    arg6: *mut u8,
+                    arg7: usize,
+                    arg8: i32,
+                ) {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    T::set(
+                        ResponseOutparam::from_handle(arg0 as u32),
+                        match arg1 {
+                            0 => {
+                                let e = OutgoingResponse::from_handle(arg2 as u32);
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let v9 = match arg2 {
+                                        0 => ErrorCode::DnsTimeout,
+                                        1 => {
+                                            let e9 = DnsErrorPayload {
+                                                rcode: match arg3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let len0 = arg5 as usize;
+                                                            let bytes0 = _rt::Vec::from_raw_parts(
+                                                                arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                                len0,
+                                                                len0,
+                                                            );
+                                                            _rt::string_lift(bytes0)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                info_code: match arg6 as i32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = arg7 as i32 as u16;
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            };
+                                            ErrorCode::DnsError(e9)
+                                        }
+                                        2 => ErrorCode::DestinationNotFound,
+                                        3 => ErrorCode::DestinationUnavailable,
+                                        4 => ErrorCode::DestinationIpProhibited,
+                                        5 => ErrorCode::DestinationIpUnroutable,
+                                        6 => ErrorCode::ConnectionRefused,
+                                        7 => ErrorCode::ConnectionTerminated,
+                                        8 => ErrorCode::ConnectionTimeout,
+                                        9 => ErrorCode::ConnectionReadTimeout,
+                                        10 => ErrorCode::ConnectionWriteTimeout,
+                                        11 => ErrorCode::ConnectionLimitReached,
+                                        12 => ErrorCode::TlsProtocolError,
+                                        13 => ErrorCode::TlsCertificateError,
+                                        14 => {
+                                            let e9 = TlsAlertReceivedPayload {
+                                                alert_id: match arg3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = arg4.assume_init() as i64 as i32 as u8;
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                alert_message: match arg5 as i32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let len1 = arg7;
+                                                            let bytes1 = _rt::Vec::from_raw_parts(
+                                                                arg6.cast(),
+                                                                len1,
+                                                                len1,
+                                                            );
+                                                            _rt::string_lift(bytes1)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            };
+                                            ErrorCode::TlsAlertReceived(e9)
+                                        }
+                                        15 => ErrorCode::HttpRequestDenied,
+                                        16 => ErrorCode::HttpRequestLengthRequired,
+                                        17 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as u64;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpRequestBodySize(e9)
+                                        }
+                                        18 => ErrorCode::HttpRequestMethodInvalid,
+                                        19 => ErrorCode::HttpRequestUriInvalid,
+                                        20 => ErrorCode::HttpRequestUriTooLong,
+                                        21 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as i32 as u32;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpRequestHeaderSectionSize(e9)
+                                        }
+                                        22 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = FieldSizePayload {
+                                                        field_name: match arg4.assume_init() as i64 as i32 {
+                                                            0 => None,
+                                                            1 => {
+                                                                let e = {
+                                                                    let len2 = arg6 as usize;
+                                                                    let bytes2 = _rt::Vec::from_raw_parts(
+                                                                        arg5.cast(),
+                                                                        len2,
+                                                                        len2,
+                                                                    );
+                                                                    _rt::string_lift(bytes2)
+                                                                };
+                                                                Some(e)
+                                                            }
+                                                            _ => _rt::invalid_enum_discriminant(),
+                                                        },
+                                                        field_size: match arg7 as i32 {
+                                                            0 => None,
+                                                            1 => {
+                                                                let e = arg8 as u32;
+                                                                Some(e)
+                                                            }
+                                                            _ => _rt::invalid_enum_discriminant(),
+                                                        },
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpRequestHeaderSize(e9)
+                                        }
+                                        23 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as i32 as u32;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpRequestTrailerSectionSize(e9)
+                                        }
+                                        24 => {
+                                            let e9 = FieldSizePayload {
+                                                field_name: match arg3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let len3 = arg5 as usize;
+                                                            let bytes3 = _rt::Vec::from_raw_parts(
+                                                                arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                                len3,
+                                                                len3,
+                                                            );
+                                                            _rt::string_lift(bytes3)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match arg6 as i32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = arg7 as i32 as u32;
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            };
+                                            ErrorCode::HttpRequestTrailerSize(e9)
+                                        }
+                                        25 => ErrorCode::HttpResponseIncomplete,
+                                        26 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as i32 as u32;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpResponseHeaderSectionSize(e9)
+                                        }
+                                        27 => {
+                                            let e9 = FieldSizePayload {
+                                                field_name: match arg3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let len4 = arg5 as usize;
+                                                            let bytes4 = _rt::Vec::from_raw_parts(
+                                                                arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                                len4,
+                                                                len4,
+                                                            );
+                                                            _rt::string_lift(bytes4)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match arg6 as i32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = arg7 as i32 as u32;
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            };
+                                            ErrorCode::HttpResponseHeaderSize(e9)
+                                        }
+                                        28 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as u64;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpResponseBodySize(e9)
+                                        }
+                                        29 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = arg4.assume_init() as i64 as i32 as u32;
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpResponseTrailerSectionSize(e9)
+                                        }
+                                        30 => {
+                                            let e9 = FieldSizePayload {
+                                                field_name: match arg3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let len5 = arg5 as usize;
+                                                            let bytes5 = _rt::Vec::from_raw_parts(
+                                                                arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                                len5,
+                                                                len5,
+                                                            );
+                                                            _rt::string_lift(bytes5)
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match arg6 as i32 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = arg7 as i32 as u32;
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                },
+                                            };
+                                            ErrorCode::HttpResponseTrailerSize(e9)
+                                        }
+                                        31 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let len6 = arg5 as usize;
+                                                        let bytes6 = _rt::Vec::from_raw_parts(
+                                                            arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                            len6,
+                                                            len6,
+                                                        );
+                                                        _rt::string_lift(bytes6)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpResponseTransferCoding(e9)
+                                        }
+                                        32 => {
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let len7 = arg5 as usize;
+                                                        let bytes7 = _rt::Vec::from_raw_parts(
+                                                            arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                            len7,
+                                                            len7,
+                                                        );
+                                                        _rt::string_lift(bytes7)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::HttpResponseContentCoding(e9)
+                                        }
+                                        33 => ErrorCode::HttpResponseTimeout,
+                                        34 => ErrorCode::HttpUpgradeFailed,
+                                        35 => ErrorCode::HttpProtocolError,
+                                        36 => ErrorCode::LoopDetected,
+                                        37 => ErrorCode::ConfigurationError,
+                                        n => {
+                                            debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                            let e9 = match arg3 {
+                                                0 => None,
+                                                1 => {
+                                                    let e = {
+                                                        let len8 = arg5 as usize;
+                                                        let bytes8 = _rt::Vec::from_raw_parts(
+                                                            arg4.as_ptr().cast::<*mut u8>().read().cast(),
+                                                            len8,
+                                                            len8,
+                                                        );
+                                                        _rt::string_lift(bytes8)
+                                                    };
+                                                    Some(e)
+                                                }
+                                                _ => _rt::invalid_enum_discriminant(),
+                                            };
+                                            ErrorCode::InternalError(e9)
+                                        }
+                                    };
+                                    v9
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_response_status_cabi<
+                    T: GuestIncomingResponse,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::status(
+                        IncomingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    _rt::as_i32(result0)
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_response_headers_cabi<
+                    T: GuestIncomingResponse,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::headers(
+                        IncomingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_response_consume_cabi<
+                    T: GuestIncomingResponse,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::consume(
+                        IncomingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_body_stream_cabi<
+                    T: GuestIncomingBody,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::stream(
+                        IncomingBodyBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_incoming_body_finish_cabi<
+                    T: GuestIncomingBody,
+                >(arg0: i32) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::finish(IncomingBody::from_handle(arg0 as u32));
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_trailers_subscribe_cabi<
+                    T: GuestFutureTrailers,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::subscribe(
+                        FutureTrailersBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_trailers_get_cabi<
+                    T: GuestFutureTrailers,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get(
+                        FutureTrailersBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                            match e {
+                                                Some(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (1i32) as u8;
+                                                    *ptr1.add(28).cast::<i32>() = (e).take_handle() as i32;
+                                                }
+                                                None => {
+                                                    *ptr1.add(24).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        Err(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                ErrorCode::DnsTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                ErrorCode::DnsError(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (1i32) as u8;
+                                                    let DnsErrorPayload {
+                                                        rcode: rcode2,
+                                                        info_code: info_code2,
+                                                    } = e;
+                                                    match rcode2 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                            let len3 = vec3.len();
+                                                            ::core::mem::forget(vec3);
+                                                            *ptr1.add(40).cast::<usize>() = len3;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr3.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match info_code2 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(46).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::DestinationNotFound => {
+                                                    *ptr1.add(24).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                ErrorCode::DestinationUnavailable => {
+                                                    *ptr1.add(24).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                ErrorCode::DestinationIpProhibited => {
+                                                    *ptr1.add(24).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                ErrorCode::DestinationIpUnroutable => {
+                                                    *ptr1.add(24).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionRefused => {
+                                                    *ptr1.add(24).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionTerminated => {
+                                                    *ptr1.add(24).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionReadTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionWriteTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionLimitReached => {
+                                                    *ptr1.add(24).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                ErrorCode::TlsProtocolError => {
+                                                    *ptr1.add(24).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                ErrorCode::TlsCertificateError => {
+                                                    *ptr1.add(24).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                ErrorCode::TlsAlertReceived(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (14i32) as u8;
+                                                    let TlsAlertReceivedPayload {
+                                                        alert_id: alert_id4,
+                                                        alert_message: alert_message4,
+                                                    } = e;
+                                                    match alert_id4 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(33).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match alert_message4 {
+                                                        Some(e) => {
+                                                            *ptr1.add(36).cast::<u8>() = (1i32) as u8;
+                                                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                                                            let len5 = vec5.len();
+                                                            ::core::mem::forget(vec5);
+                                                            *ptr1.add(44).cast::<usize>() = len5;
+                                                            *ptr1.add(40).cast::<*mut u8>() = ptr5.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(36).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestDenied => {
+                                                    *ptr1.add(24).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestLengthRequired => {
+                                                    *ptr1.add(24).cast::<u8>() = (16i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestBodySize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (17i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(40).cast::<i64>() = _rt::as_i64(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestMethodInvalid => {
+                                                    *ptr1.add(24).cast::<u8>() = (18i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestUriInvalid => {
+                                                    *ptr1.add(24).cast::<u8>() = (19i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestUriTooLong => {
+                                                    *ptr1.add(24).cast::<u8>() = (20i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (21i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestHeaderSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (22i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let FieldSizePayload {
+                                                                field_name: field_name6,
+                                                                field_size: field_size6,
+                                                            } = e;
+                                                            match field_name6 {
+                                                                Some(e) => {
+                                                                    *ptr1.add(36).cast::<u8>() = (1i32) as u8;
+                                                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                                    let len7 = vec7.len();
+                                                                    ::core::mem::forget(vec7);
+                                                                    *ptr1.add(44).cast::<usize>() = len7;
+                                                                    *ptr1.add(40).cast::<*mut u8>() = ptr7.cast_mut();
+                                                                }
+                                                                None => {
+                                                                    *ptr1.add(36).cast::<u8>() = (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match field_size6 {
+                                                                Some(e) => {
+                                                                    *ptr1.add(48).cast::<u8>() = (1i32) as u8;
+                                                                    *ptr1.add(52).cast::<i32>() = _rt::as_i32(e);
+                                                                }
+                                                                None => {
+                                                                    *ptr1.add(48).cast::<u8>() = (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (23i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestTrailerSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (24i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name8,
+                                                        field_size: field_size8,
+                                                    } = e;
+                                                    match field_name8 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec9 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr9 = vec9.as_ptr().cast::<u8>();
+                                                            let len9 = vec9.len();
+                                                            ::core::mem::forget(vec9);
+                                                            *ptr1.add(40).cast::<usize>() = len9;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr9.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size8 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseIncomplete => {
+                                                    *ptr1.add(24).cast::<u8>() = (25i32) as u8;
+                                                }
+                                                ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (26i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseHeaderSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (27i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name10,
+                                                        field_size: field_size10,
+                                                    } = e;
+                                                    match field_name10 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec11 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                            let len11 = vec11.len();
+                                                            ::core::mem::forget(vec11);
+                                                            *ptr1.add(40).cast::<usize>() = len11;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr11.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size10 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseBodySize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (28i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(40).cast::<i64>() = _rt::as_i64(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (29i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTrailerSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (30i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name12,
+                                                        field_size: field_size12,
+                                                    } = e;
+                                                    match field_name12 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec13 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr13 = vec13.as_ptr().cast::<u8>();
+                                                            let len13 = vec13.len();
+                                                            ::core::mem::forget(vec13);
+                                                            *ptr1.add(40).cast::<usize>() = len13;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr13.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size12 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTransferCoding(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (31i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec14 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                                            let len14 = vec14.len();
+                                                            ::core::mem::forget(vec14);
+                                                            *ptr1.add(40).cast::<usize>() = len14;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr14.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseContentCoding(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (32i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec15 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                                                            let len15 = vec15.len();
+                                                            ::core::mem::forget(vec15);
+                                                            *ptr1.add(40).cast::<usize>() = len15;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr15.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (33i32) as u8;
+                                                }
+                                                ErrorCode::HttpUpgradeFailed => {
+                                                    *ptr1.add(24).cast::<u8>() = (34i32) as u8;
+                                                }
+                                                ErrorCode::HttpProtocolError => {
+                                                    *ptr1.add(24).cast::<u8>() = (35i32) as u8;
+                                                }
+                                                ErrorCode::LoopDetected => {
+                                                    *ptr1.add(24).cast::<u8>() = (36i32) as u8;
+                                                }
+                                                ErrorCode::ConfigurationError => {
+                                                    *ptr1.add(24).cast::<u8>() = (37i32) as u8;
+                                                }
+                                                ErrorCode::InternalError(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (38i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec16 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                                            let len16 = vec16.len();
+                                                            ::core::mem::forget(vec16);
+                                                            *ptr1.add(40).cast::<usize>() = len16;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr16.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                            }
+                                        }
+                                    };
+                                }
+                                Err(_) => {
+                                    *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_future_trailers_get<
+                    T: GuestFutureTrailers,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(8).cast::<u8>());
+                            match l1 {
+                                0 => {
+                                    let l2 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l2 {
+                                        0 => {}
+                                        _ => {
+                                            let l3 = i32::from(*arg0.add(24).cast::<u8>());
+                                            match l3 {
+                                                0 => {}
+                                                1 => {
+                                                    let l4 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l4 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l5 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l6 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l5, l6, 1);
+                                                        }
+                                                    }
+                                                }
+                                                2 => {}
+                                                3 => {}
+                                                4 => {}
+                                                5 => {}
+                                                6 => {}
+                                                7 => {}
+                                                8 => {}
+                                                9 => {}
+                                                10 => {}
+                                                11 => {}
+                                                12 => {}
+                                                13 => {}
+                                                14 => {
+                                                    let l7 = i32::from(*arg0.add(36).cast::<u8>());
+                                                    match l7 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l8 = *arg0.add(40).cast::<*mut u8>();
+                                                            let l9 = *arg0.add(44).cast::<usize>();
+                                                            _rt::cabi_dealloc(l8, l9, 1);
+                                                        }
+                                                    }
+                                                }
+                                                15 => {}
+                                                16 => {}
+                                                17 => {}
+                                                18 => {}
+                                                19 => {}
+                                                20 => {}
+                                                21 => {}
+                                                22 => {
+                                                    let l10 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l10 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l11 = i32::from(*arg0.add(36).cast::<u8>());
+                                                            match l11 {
+                                                                0 => {}
+                                                                _ => {
+                                                                    let l12 = *arg0.add(40).cast::<*mut u8>();
+                                                                    let l13 = *arg0.add(44).cast::<usize>();
+                                                                    _rt::cabi_dealloc(l12, l13, 1);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                23 => {}
+                                                24 => {
+                                                    let l14 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l14 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l15 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l16 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l15, l16, 1);
+                                                        }
+                                                    }
+                                                }
+                                                25 => {}
+                                                26 => {}
+                                                27 => {
+                                                    let l17 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l17 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l18 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l19 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l18, l19, 1);
+                                                        }
+                                                    }
+                                                }
+                                                28 => {}
+                                                29 => {}
+                                                30 => {
+                                                    let l20 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l20 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l21 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l22 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l21, l22, 1);
+                                                        }
+                                                    }
+                                                }
+                                                31 => {
+                                                    let l23 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l23 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l24 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l25 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l24, l25, 1);
+                                                        }
+                                                    }
+                                                }
+                                                32 => {
+                                                    let l26 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l26 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l27 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l28 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l27, l28, 1);
+                                                        }
+                                                    }
+                                                }
+                                                33 => {}
+                                                34 => {}
+                                                35 => {}
+                                                36 => {}
+                                                37 => {}
+                                                _ => {
+                                                    let l29 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l29 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l30 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l31 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l30, l31, 1);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_constructor_outgoing_response_cabi<
+                    T: GuestOutgoingResponse,
+                >(arg0: i32) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = OutgoingResponse::new(
+                        T::new(Fields::from_handle(arg0 as u32)),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_response_status_code_cabi<
+                    T: GuestOutgoingResponse,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::status_code(
+                        OutgoingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    _rt::as_i32(result0)
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_response_set_status_code_cabi<
+                    T: GuestOutgoingResponse,
+                >(arg0: *mut u8, arg1: i32) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::set_status_code(
+                        OutgoingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                        arg1 as u16,
+                    );
+                    let result1 = match result0 {
+                        Ok(_) => 0i32,
+                        Err(_) => 1i32,
+                    };
+                    result1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_response_headers_cabi<
+                    T: GuestOutgoingResponse,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::headers(
+                        OutgoingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_response_body_cabi<
+                    T: GuestOutgoingResponse,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::body(
+                        OutgoingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_body_write_cabi<
+                    T: GuestOutgoingBody,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::write(
+                        OutgoingBodyBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_outgoing_body_finish_cabi<
+                    T: GuestOutgoingBody,
+                >(arg0: i32, arg1: i32, arg2: i32) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::finish(
+                        OutgoingBody::from_handle(arg0 as u32),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = Fields::from_handle(arg2 as u32);
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(_) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                ErrorCode::DnsTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                }
+                                ErrorCode::DnsError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                    let DnsErrorPayload {
+                                        rcode: rcode2,
+                                        info_code: info_code2,
+                                    } = e;
+                                    match rcode2 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                                            let len3 = vec3.len();
+                                            ::core::mem::forget(vec3);
+                                            *ptr1.add(24).cast::<usize>() = len3;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr3.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match info_code2 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(30).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::DestinationNotFound => {
+                                    *ptr1.add(8).cast::<u8>() = (2i32) as u8;
+                                }
+                                ErrorCode::DestinationUnavailable => {
+                                    *ptr1.add(8).cast::<u8>() = (3i32) as u8;
+                                }
+                                ErrorCode::DestinationIpProhibited => {
+                                    *ptr1.add(8).cast::<u8>() = (4i32) as u8;
+                                }
+                                ErrorCode::DestinationIpUnroutable => {
+                                    *ptr1.add(8).cast::<u8>() = (5i32) as u8;
+                                }
+                                ErrorCode::ConnectionRefused => {
+                                    *ptr1.add(8).cast::<u8>() = (6i32) as u8;
+                                }
+                                ErrorCode::ConnectionTerminated => {
+                                    *ptr1.add(8).cast::<u8>() = (7i32) as u8;
+                                }
+                                ErrorCode::ConnectionTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (8i32) as u8;
+                                }
+                                ErrorCode::ConnectionReadTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (9i32) as u8;
+                                }
+                                ErrorCode::ConnectionWriteTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (10i32) as u8;
+                                }
+                                ErrorCode::ConnectionLimitReached => {
+                                    *ptr1.add(8).cast::<u8>() = (11i32) as u8;
+                                }
+                                ErrorCode::TlsProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (12i32) as u8;
+                                }
+                                ErrorCode::TlsCertificateError => {
+                                    *ptr1.add(8).cast::<u8>() = (13i32) as u8;
+                                }
+                                ErrorCode::TlsAlertReceived(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (14i32) as u8;
+                                    let TlsAlertReceivedPayload {
+                                        alert_id: alert_id4,
+                                        alert_message: alert_message4,
+                                    } = e;
+                                    match alert_id4 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(17).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match alert_message4 {
+                                        Some(e) => {
+                                            *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                                            let len5 = vec5.len();
+                                            ::core::mem::forget(vec5);
+                                            *ptr1.add(28).cast::<usize>() = len5;
+                                            *ptr1.add(24).cast::<*mut u8>() = ptr5.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestDenied => {
+                                    *ptr1.add(8).cast::<u8>() = (15i32) as u8;
+                                }
+                                ErrorCode::HttpRequestLengthRequired => {
+                                    *ptr1.add(8).cast::<u8>() = (16i32) as u8;
+                                }
+                                ErrorCode::HttpRequestBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (17i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestMethodInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (18i32) as u8;
+                                }
+                                ErrorCode::HttpRequestUriInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (19i32) as u8;
+                                }
+                                ErrorCode::HttpRequestUriTooLong => {
+                                    *ptr1.add(8).cast::<u8>() = (20i32) as u8;
+                                }
+                                ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (21i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (22i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let FieldSizePayload {
+                                                field_name: field_name6,
+                                                field_size: field_size6,
+                                            } = e;
+                                            match field_name6 {
+                                                Some(e) => {
+                                                    *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                    let len7 = vec7.len();
+                                                    ::core::mem::forget(vec7);
+                                                    *ptr1.add(28).cast::<usize>() = len7;
+                                                    *ptr1.add(24).cast::<*mut u8>() = ptr7.cast_mut();
+                                                }
+                                                None => {
+                                                    *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                            match field_size6 {
+                                                Some(e) => {
+                                                    *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                    *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (23i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpRequestTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (24i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name8,
+                                        field_size: field_size8,
+                                    } = e;
+                                    match field_name8 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec9 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr9 = vec9.as_ptr().cast::<u8>();
+                                            let len9 = vec9.len();
+                                            ::core::mem::forget(vec9);
+                                            *ptr1.add(24).cast::<usize>() = len9;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr9.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size8 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseIncomplete => {
+                                    *ptr1.add(8).cast::<u8>() = (25i32) as u8;
+                                }
+                                ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (26i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (27i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name10,
+                                        field_size: field_size10,
+                                    } = e;
+                                    match field_name10 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec11 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                                            let len11 = vec11.len();
+                                            ::core::mem::forget(vec11);
+                                            *ptr1.add(24).cast::<usize>() = len11;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr11.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size10 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (28i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (29i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (30i32) as u8;
+                                    let FieldSizePayload {
+                                        field_name: field_name12,
+                                        field_size: field_size12,
+                                    } = e;
+                                    match field_name12 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec13 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr13 = vec13.as_ptr().cast::<u8>();
+                                            let len13 = vec13.len();
+                                            ::core::mem::forget(vec13);
+                                            *ptr1.add(24).cast::<usize>() = len13;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr13.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size12 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTransferCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (31i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec14 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            ::core::mem::forget(vec14);
+                                            *ptr1.add(24).cast::<usize>() = len14;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr14.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseContentCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (32i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec15 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                                            let len15 = vec15.len();
+                                            ::core::mem::forget(vec15);
+                                            *ptr1.add(24).cast::<usize>() = len15;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr15.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                ErrorCode::HttpResponseTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (33i32) as u8;
+                                }
+                                ErrorCode::HttpUpgradeFailed => {
+                                    *ptr1.add(8).cast::<u8>() = (34i32) as u8;
+                                }
+                                ErrorCode::HttpProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (35i32) as u8;
+                                }
+                                ErrorCode::LoopDetected => {
+                                    *ptr1.add(8).cast::<u8>() = (36i32) as u8;
+                                }
+                                ErrorCode::ConfigurationError => {
+                                    *ptr1.add(8).cast::<u8>() = (37i32) as u8;
+                                }
+                                ErrorCode::InternalError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (38i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec16 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                            let len16 = vec16.len();
+                                            ::core::mem::forget(vec16);
+                                            *ptr1.add(24).cast::<usize>() = len16;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr16.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                            }
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_static_outgoing_body_finish<
+                    T: GuestOutgoingBody,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(8).cast::<u8>());
+                            match l1 {
+                                0 => {}
+                                1 => {
+                                    let l2 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l2 {
+                                        0 => {}
+                                        _ => {
+                                            let l3 = *arg0.add(20).cast::<*mut u8>();
+                                            let l4 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l3, l4, 1);
+                                        }
+                                    }
+                                }
+                                2 => {}
+                                3 => {}
+                                4 => {}
+                                5 => {}
+                                6 => {}
+                                7 => {}
+                                8 => {}
+                                9 => {}
+                                10 => {}
+                                11 => {}
+                                12 => {}
+                                13 => {}
+                                14 => {
+                                    let l5 = i32::from(*arg0.add(20).cast::<u8>());
+                                    match l5 {
+                                        0 => {}
+                                        _ => {
+                                            let l6 = *arg0.add(24).cast::<*mut u8>();
+                                            let l7 = *arg0.add(28).cast::<usize>();
+                                            _rt::cabi_dealloc(l6, l7, 1);
+                                        }
+                                    }
+                                }
+                                15 => {}
+                                16 => {}
+                                17 => {}
+                                18 => {}
+                                19 => {}
+                                20 => {}
+                                21 => {}
+                                22 => {
+                                    let l8 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l8 {
+                                        0 => {}
+                                        _ => {
+                                            let l9 = i32::from(*arg0.add(20).cast::<u8>());
+                                            match l9 {
+                                                0 => {}
+                                                _ => {
+                                                    let l10 = *arg0.add(24).cast::<*mut u8>();
+                                                    let l11 = *arg0.add(28).cast::<usize>();
+                                                    _rt::cabi_dealloc(l10, l11, 1);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                23 => {}
+                                24 => {
+                                    let l12 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l12 {
+                                        0 => {}
+                                        _ => {
+                                            let l13 = *arg0.add(20).cast::<*mut u8>();
+                                            let l14 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l13, l14, 1);
+                                        }
+                                    }
+                                }
+                                25 => {}
+                                26 => {}
+                                27 => {
+                                    let l15 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l15 {
+                                        0 => {}
+                                        _ => {
+                                            let l16 = *arg0.add(20).cast::<*mut u8>();
+                                            let l17 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l16, l17, 1);
+                                        }
+                                    }
+                                }
+                                28 => {}
+                                29 => {}
+                                30 => {
+                                    let l18 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l18 {
+                                        0 => {}
+                                        _ => {
+                                            let l19 = *arg0.add(20).cast::<*mut u8>();
+                                            let l20 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l19, l20, 1);
+                                        }
+                                    }
+                                }
+                                31 => {
+                                    let l21 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l21 {
+                                        0 => {}
+                                        _ => {
+                                            let l22 = *arg0.add(20).cast::<*mut u8>();
+                                            let l23 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l22, l23, 1);
+                                        }
+                                    }
+                                }
+                                32 => {
+                                    let l24 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l24 {
+                                        0 => {}
+                                        _ => {
+                                            let l25 = *arg0.add(20).cast::<*mut u8>();
+                                            let l26 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l25, l26, 1);
+                                        }
+                                    }
+                                }
+                                33 => {}
+                                34 => {}
+                                35 => {}
+                                36 => {}
+                                37 => {}
+                                _ => {
+                                    let l27 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l27 {
+                                        0 => {}
+                                        _ => {
+                                            let l28 = *arg0.add(20).cast::<*mut u8>();
+                                            let l29 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l28, l29, 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_incoming_response_subscribe_cabi<
+                    T: GuestFutureIncomingResponse,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::subscribe(
+                        FutureIncomingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_incoming_response_get_cabi<
+                    T: GuestFutureIncomingResponse,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::get(
+                        FutureIncomingResponseBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                    match e {
+                                        Ok(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                            *ptr1.add(24).cast::<i32>() = (e).take_handle() as i32;
+                                        }
+                                        Err(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            match e {
+                                                ErrorCode::DnsTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                ErrorCode::DnsError(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (1i32) as u8;
+                                                    let DnsErrorPayload {
+                                                        rcode: rcode2,
+                                                        info_code: info_code2,
+                                                    } = e;
+                                                    match rcode2 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                            let len3 = vec3.len();
+                                                            ::core::mem::forget(vec3);
+                                                            *ptr1.add(40).cast::<usize>() = len3;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr3.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match info_code2 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(46).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::DestinationNotFound => {
+                                                    *ptr1.add(24).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                ErrorCode::DestinationUnavailable => {
+                                                    *ptr1.add(24).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                ErrorCode::DestinationIpProhibited => {
+                                                    *ptr1.add(24).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                ErrorCode::DestinationIpUnroutable => {
+                                                    *ptr1.add(24).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionRefused => {
+                                                    *ptr1.add(24).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionTerminated => {
+                                                    *ptr1.add(24).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionReadTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionWriteTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                ErrorCode::ConnectionLimitReached => {
+                                                    *ptr1.add(24).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                ErrorCode::TlsProtocolError => {
+                                                    *ptr1.add(24).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                ErrorCode::TlsCertificateError => {
+                                                    *ptr1.add(24).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                ErrorCode::TlsAlertReceived(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (14i32) as u8;
+                                                    let TlsAlertReceivedPayload {
+                                                        alert_id: alert_id4,
+                                                        alert_message: alert_message4,
+                                                    } = e;
+                                                    match alert_id4 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(33).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match alert_message4 {
+                                                        Some(e) => {
+                                                            *ptr1.add(36).cast::<u8>() = (1i32) as u8;
+                                                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                                                            let len5 = vec5.len();
+                                                            ::core::mem::forget(vec5);
+                                                            *ptr1.add(44).cast::<usize>() = len5;
+                                                            *ptr1.add(40).cast::<*mut u8>() = ptr5.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(36).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestDenied => {
+                                                    *ptr1.add(24).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestLengthRequired => {
+                                                    *ptr1.add(24).cast::<u8>() = (16i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestBodySize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (17i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(40).cast::<i64>() = _rt::as_i64(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestMethodInvalid => {
+                                                    *ptr1.add(24).cast::<u8>() = (18i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestUriInvalid => {
+                                                    *ptr1.add(24).cast::<u8>() = (19i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestUriTooLong => {
+                                                    *ptr1.add(24).cast::<u8>() = (20i32) as u8;
+                                                }
+                                                ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (21i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestHeaderSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (22i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let FieldSizePayload {
+                                                                field_name: field_name6,
+                                                                field_size: field_size6,
+                                                            } = e;
+                                                            match field_name6 {
+                                                                Some(e) => {
+                                                                    *ptr1.add(36).cast::<u8>() = (1i32) as u8;
+                                                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                                    let len7 = vec7.len();
+                                                                    ::core::mem::forget(vec7);
+                                                                    *ptr1.add(44).cast::<usize>() = len7;
+                                                                    *ptr1.add(40).cast::<*mut u8>() = ptr7.cast_mut();
+                                                                }
+                                                                None => {
+                                                                    *ptr1.add(36).cast::<u8>() = (0i32) as u8;
+                                                                }
+                                                            };
+                                                            match field_size6 {
+                                                                Some(e) => {
+                                                                    *ptr1.add(48).cast::<u8>() = (1i32) as u8;
+                                                                    *ptr1.add(52).cast::<i32>() = _rt::as_i32(e);
+                                                                }
+                                                                None => {
+                                                                    *ptr1.add(48).cast::<u8>() = (0i32) as u8;
+                                                                }
+                                                            };
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (23i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpRequestTrailerSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (24i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name8,
+                                                        field_size: field_size8,
+                                                    } = e;
+                                                    match field_name8 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec9 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr9 = vec9.as_ptr().cast::<u8>();
+                                                            let len9 = vec9.len();
+                                                            ::core::mem::forget(vec9);
+                                                            *ptr1.add(40).cast::<usize>() = len9;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr9.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size8 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseIncomplete => {
+                                                    *ptr1.add(24).cast::<u8>() = (25i32) as u8;
+                                                }
+                                                ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (26i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseHeaderSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (27i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name10,
+                                                        field_size: field_size10,
+                                                    } = e;
+                                                    match field_name10 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec11 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                            let len11 = vec11.len();
+                                                            ::core::mem::forget(vec11);
+                                                            *ptr1.add(40).cast::<usize>() = len11;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr11.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size10 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseBodySize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (28i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(40).cast::<i64>() = _rt::as_i64(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (29i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTrailerSize(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (30i32) as u8;
+                                                    let FieldSizePayload {
+                                                        field_name: field_name12,
+                                                        field_size: field_size12,
+                                                    } = e;
+                                                    match field_name12 {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec13 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr13 = vec13.as_ptr().cast::<u8>();
+                                                            let len13 = vec13.len();
+                                                            ::core::mem::forget(vec13);
+                                                            *ptr1.add(40).cast::<usize>() = len13;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr13.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                    match field_size12 {
+                                                        Some(e) => {
+                                                            *ptr1.add(44).cast::<u8>() = (1i32) as u8;
+                                                            *ptr1.add(48).cast::<i32>() = _rt::as_i32(e);
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(44).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTransferCoding(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (31i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec14 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                                            let len14 = vec14.len();
+                                                            ::core::mem::forget(vec14);
+                                                            *ptr1.add(40).cast::<usize>() = len14;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr14.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseContentCoding(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (32i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec15 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                                                            let len15 = vec15.len();
+                                                            ::core::mem::forget(vec15);
+                                                            *ptr1.add(40).cast::<usize>() = len15;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr15.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                                ErrorCode::HttpResponseTimeout => {
+                                                    *ptr1.add(24).cast::<u8>() = (33i32) as u8;
+                                                }
+                                                ErrorCode::HttpUpgradeFailed => {
+                                                    *ptr1.add(24).cast::<u8>() = (34i32) as u8;
+                                                }
+                                                ErrorCode::HttpProtocolError => {
+                                                    *ptr1.add(24).cast::<u8>() = (35i32) as u8;
+                                                }
+                                                ErrorCode::LoopDetected => {
+                                                    *ptr1.add(24).cast::<u8>() = (36i32) as u8;
+                                                }
+                                                ErrorCode::ConfigurationError => {
+                                                    *ptr1.add(24).cast::<u8>() = (37i32) as u8;
+                                                }
+                                                ErrorCode::InternalError(e) => {
+                                                    *ptr1.add(24).cast::<u8>() = (38i32) as u8;
+                                                    match e {
+                                                        Some(e) => {
+                                                            *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                            let vec16 = (e.into_bytes()).into_boxed_slice();
+                                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                                            let len16 = vec16.len();
+                                                            ::core::mem::forget(vec16);
+                                                            *ptr1.add(40).cast::<usize>() = len16;
+                                                            *ptr1.add(36).cast::<*mut u8>() = ptr16.cast_mut();
+                                                        }
+                                                        None => {
+                                                            *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                        }
+                                                    };
+                                                }
+                                            }
+                                        }
+                                    };
+                                }
+                                Err(_) => {
+                                    *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_future_incoming_response_get<
+                    T: GuestFutureIncomingResponse,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(8).cast::<u8>());
+                            match l1 {
+                                0 => {
+                                    let l2 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l2 {
+                                        0 => {}
+                                        _ => {
+                                            let l3 = i32::from(*arg0.add(24).cast::<u8>());
+                                            match l3 {
+                                                0 => {}
+                                                1 => {
+                                                    let l4 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l4 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l5 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l6 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l5, l6, 1);
+                                                        }
+                                                    }
+                                                }
+                                                2 => {}
+                                                3 => {}
+                                                4 => {}
+                                                5 => {}
+                                                6 => {}
+                                                7 => {}
+                                                8 => {}
+                                                9 => {}
+                                                10 => {}
+                                                11 => {}
+                                                12 => {}
+                                                13 => {}
+                                                14 => {
+                                                    let l7 = i32::from(*arg0.add(36).cast::<u8>());
+                                                    match l7 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l8 = *arg0.add(40).cast::<*mut u8>();
+                                                            let l9 = *arg0.add(44).cast::<usize>();
+                                                            _rt::cabi_dealloc(l8, l9, 1);
+                                                        }
+                                                    }
+                                                }
+                                                15 => {}
+                                                16 => {}
+                                                17 => {}
+                                                18 => {}
+                                                19 => {}
+                                                20 => {}
+                                                21 => {}
+                                                22 => {
+                                                    let l10 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l10 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l11 = i32::from(*arg0.add(36).cast::<u8>());
+                                                            match l11 {
+                                                                0 => {}
+                                                                _ => {
+                                                                    let l12 = *arg0.add(40).cast::<*mut u8>();
+                                                                    let l13 = *arg0.add(44).cast::<usize>();
+                                                                    _rt::cabi_dealloc(l12, l13, 1);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                23 => {}
+                                                24 => {
+                                                    let l14 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l14 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l15 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l16 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l15, l16, 1);
+                                                        }
+                                                    }
+                                                }
+                                                25 => {}
+                                                26 => {}
+                                                27 => {
+                                                    let l17 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l17 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l18 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l19 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l18, l19, 1);
+                                                        }
+                                                    }
+                                                }
+                                                28 => {}
+                                                29 => {}
+                                                30 => {
+                                                    let l20 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l20 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l21 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l22 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l21, l22, 1);
+                                                        }
+                                                    }
+                                                }
+                                                31 => {
+                                                    let l23 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l23 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l24 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l25 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l24, l25, 1);
+                                                        }
+                                                    }
+                                                }
+                                                32 => {
+                                                    let l26 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l26 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l27 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l28 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l27, l28, 1);
+                                                        }
+                                                    }
+                                                }
+                                                33 => {}
+                                                34 => {}
+                                                35 => {}
+                                                36 => {}
+                                                37 => {}
+                                                _ => {
+                                                    let l29 = i32::from(*arg0.add(32).cast::<u8>());
+                                                    match l29 {
+                                                        0 => {}
+                                                        _ => {
+                                                            let l30 = *arg0.add(36).cast::<*mut u8>();
+                                                            let l31 = *arg0.add(40).cast::<usize>();
+                                                            _rt::cabi_dealloc(l30, l31, 1);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                pub trait Guest {
+                    type Fields: GuestFields;
+                    type IncomingRequest: GuestIncomingRequest;
+                    type OutgoingRequest: GuestOutgoingRequest;
+                    type RequestOptions: GuestRequestOptions;
+                    type ResponseOutparam: GuestResponseOutparam;
+                    type IncomingResponse: GuestIncomingResponse;
+                    type IncomingBody: GuestIncomingBody;
+                    type FutureTrailers: GuestFutureTrailers;
+                    type OutgoingResponse: GuestOutgoingResponse;
+                    type OutgoingBody: GuestOutgoingBody;
+                    type FutureIncomingResponse: GuestFutureIncomingResponse;
+                    /// Attempts to extract a http-related `error` from the wasi:io `error`
+                    /// provided.
+                    ///
+                    /// Stream operations which return
+                    /// `wasi:io/stream/stream-error::last-operation-failed` have a payload of
+                    /// type `wasi:io/error/error` with more information about the operation
+                    /// that failed. This payload can be passed through to this function to see
+                    /// if there's http-related information about the error to return.
+                    ///
+                    /// Note that this function is fallible because not all io-errors are
+                    /// http-related errors.
+                    fn http_error_code(err: IoErrorBorrow<'_>) -> Option<ErrorCode>;
+                }
+                pub trait GuestFields: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]fields"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]fields"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Construct an empty HTTP Fields.
+                    ///
+                    /// The resulting `fields` is mutable.
+                    fn new() -> Self;
+                    /// Construct an HTTP Fields.
+                    ///
+                    /// The resulting `fields` is mutable.
+                    ///
+                    /// The list represents each key-value pair in the Fields. Keys
+                    /// which have multiple values are represented by multiple entries in this
+                    /// list with the same key.
+                    ///
+                    /// The tuple is a pair of the field key, represented as a string, and
+                    /// Value, represented as a list of bytes. In a valid Fields, all keys
+                    /// and values are valid UTF-8 strings. However, values are not always
+                    /// well-formed, so they are represented as a raw list of bytes.
+                    ///
+                    /// An error result will be returned if any header or value was
+                    /// syntactically invalid, or if a header was forbidden.
+                    fn from_list(
+                        entries: _rt::Vec<(FieldKey, FieldValue)>,
+                    ) -> Result<Fields, HeaderError>;
+                    /// Get all of the values corresponding to a key. If the key is not present
+                    /// in this `fields`, an empty list is returned. However, if the key is
+                    /// present but empty, this is represented by a list with one or more
+                    /// empty field-values present.
+                    fn get(&self, name: FieldKey) -> _rt::Vec<FieldValue>;
+                    /// Returns `true` when the key is present in this `fields`. If the key is
+                    /// syntactically invalid, `false` is returned.
+                    fn has(&self, name: FieldKey) -> bool;
+                    /// Set all of the values for a key. Clears any existing values for that
+                    /// key, if they have been set.
+                    ///
+                    /// Fails with `header-error.immutable` if the `fields` are immutable.
+                    fn set(
+                        &self,
+                        name: FieldKey,
+                        value: _rt::Vec<FieldValue>,
+                    ) -> Result<(), HeaderError>;
+                    /// Delete all values for a key. Does nothing if no values for the key
+                    /// exist.
+                    ///
+                    /// Fails with `header-error.immutable` if the `fields` are immutable.
+                    fn delete(&self, name: FieldKey) -> Result<(), HeaderError>;
+                    /// Append a value for a key. Does not change or delete any existing
+                    /// values for that key.
+                    ///
+                    /// Fails with `header-error.immutable` if the `fields` are immutable.
+                    fn append(
+                        &self,
+                        name: FieldKey,
+                        value: FieldValue,
+                    ) -> Result<(), HeaderError>;
+                    /// Retrieve the full set of keys and values in the Fields. Like the
+                    /// constructor, the list represents each key-value pair.
+                    ///
+                    /// The outer list represents each key-value pair in the Fields. Keys
+                    /// which have multiple values are represented by multiple entries in this
+                    /// list with the same key.
+                    fn entries(&self) -> _rt::Vec<(FieldKey, FieldValue)>;
+                    /// Make a deep copy of the Fields. Equivelant in behavior to calling the
+                    /// `fields` constructor on the return value of `entries`. The resulting
+                    /// `fields` is mutable.
+                    fn clone(&self) -> Fields;
+                }
+                pub trait GuestIncomingRequest: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]incoming-request"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]incoming-request"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns the method of the incoming request.
+                    fn method(&self) -> Method;
+                    /// Returns the path with query parameters from the request, as a string.
+                    fn path_with_query(&self) -> Option<_rt::String>;
+                    /// Returns the protocol scheme from the request.
+                    fn scheme(&self) -> Option<Scheme>;
+                    /// Returns the authority from the request, if it was present.
+                    fn authority(&self) -> Option<_rt::String>;
+                    /// Get the `headers` associated with the request.
+                    ///
+                    /// The returned `headers` resource is immutable: `set`, `append`, and
+                    /// `delete` operations will fail with `header-error.immutable`.
+                    ///
+                    /// The `headers` returned are a child resource: it must be dropped before
+                    /// the parent `incoming-request` is dropped. Dropping this
+                    /// `incoming-request` before all children are dropped will trap.
+                    fn headers(&self) -> Headers;
+                    /// Gives the `incoming-body` associated with this request. Will only
+                    /// return success at most once, and subsequent calls will return error.
+                    fn consume(&self) -> Result<IncomingBody, ()>;
+                }
+                pub trait GuestOutgoingRequest: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]outgoing-request"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]outgoing-request"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Construct a new `outgoing-request` with a default `method` of `GET`, and
+                    /// `none` values for `path-with-query`, `scheme`, and `authority`.
+                    ///
+                    /// * `headers` is the HTTP Headers for the Request.
+                    ///
+                    /// It is possible to construct, or manipulate with the accessor functions
+                    /// below, an `outgoing-request` with an invalid combination of `scheme`
+                    /// and `authority`, or `headers` which are not permitted to be sent.
+                    /// It is the obligation of the `outgoing-handler.handle` implementation
+                    /// to reject invalid constructions of `outgoing-request`.
+                    fn new(headers: Headers) -> Self;
+                    /// Returns the resource corresponding to the outgoing Body for this
+                    /// Request.
+                    ///
+                    /// Returns success on the first call: the `outgoing-body` resource for
+                    /// this `outgoing-request` can be retrieved at most once. Subsequent
+                    /// calls will return error.
+                    fn body(&self) -> Result<OutgoingBody, ()>;
+                    /// Get the Method for the Request.
+                    fn method(&self) -> Method;
+                    /// Set the Method for the Request. Fails if the string present in a
+                    /// `method.other` argument is not a syntactically valid method.
+                    fn set_method(&self, method: Method) -> Result<(), ()>;
+                    /// Get the combination of the HTTP Path and Query for the Request.
+                    /// When `none`, this represents an empty Path and empty Query.
+                    fn path_with_query(&self) -> Option<_rt::String>;
+                    /// Set the combination of the HTTP Path and Query for the Request.
+                    /// When `none`, this represents an empty Path and empty Query. Fails is the
+                    /// string given is not a syntactically valid path and query uri component.
+                    fn set_path_with_query(
+                        &self,
+                        path_with_query: Option<_rt::String>,
+                    ) -> Result<(), ()>;
+                    /// Get the HTTP Related Scheme for the Request. When `none`, the
+                    /// implementation may choose an appropriate default scheme.
+                    fn scheme(&self) -> Option<Scheme>;
+                    /// Set the HTTP Related Scheme for the Request. When `none`, the
+                    /// implementation may choose an appropriate default scheme. Fails if the
+                    /// string given is not a syntactically valid uri scheme.
+                    fn set_scheme(&self, scheme: Option<Scheme>) -> Result<(), ()>;
+                    /// Get the HTTP Authority for the Request. A value of `none` may be used
+                    /// with Related Schemes which do not require an Authority. The HTTP and
+                    /// HTTPS schemes always require an authority.
+                    fn authority(&self) -> Option<_rt::String>;
+                    /// Set the HTTP Authority for the Request. A value of `none` may be used
+                    /// with Related Schemes which do not require an Authority. The HTTP and
+                    /// HTTPS schemes always require an authority. Fails if the string given is
+                    /// not a syntactically valid uri authority.
+                    fn set_authority(
+                        &self,
+                        authority: Option<_rt::String>,
+                    ) -> Result<(), ()>;
+                    /// Get the headers associated with the Request.
+                    ///
+                    /// The returned `headers` resource is immutable: `set`, `append`, and
+                    /// `delete` operations will fail with `header-error.immutable`.
+                    ///
+                    /// This headers resource is a child: it must be dropped before the parent
+                    /// `outgoing-request` is dropped, or its ownership is transfered to
+                    /// another component by e.g. `outgoing-handler.handle`.
+                    fn headers(&self) -> Headers;
+                }
+                pub trait GuestRequestOptions: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]request-options"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]request-options"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Construct a default `request-options` value.
+                    fn new() -> Self;
+                    /// The timeout for the initial connect to the HTTP Server.
+                    fn connect_timeout(&self) -> Option<Duration>;
+                    /// Set the timeout for the initial connect to the HTTP Server. An error
+                    /// return value indicates that this timeout is not supported.
+                    fn set_connect_timeout(
+                        &self,
+                        duration: Option<Duration>,
+                    ) -> Result<(), ()>;
+                    /// The timeout for receiving the first byte of the Response body.
+                    fn first_byte_timeout(&self) -> Option<Duration>;
+                    /// Set the timeout for receiving the first byte of the Response body. An
+                    /// error return value indicates that this timeout is not supported.
+                    fn set_first_byte_timeout(
+                        &self,
+                        duration: Option<Duration>,
+                    ) -> Result<(), ()>;
+                    /// The timeout for receiving subsequent chunks of bytes in the Response
+                    /// body stream.
+                    fn between_bytes_timeout(&self) -> Option<Duration>;
+                    /// Set the timeout for receiving subsequent chunks of bytes in the Response
+                    /// body stream. An error return value indicates that this timeout is not
+                    /// supported.
+                    fn set_between_bytes_timeout(
+                        &self,
+                        duration: Option<Duration>,
+                    ) -> Result<(), ()>;
+                }
+                pub trait GuestResponseOutparam: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]response-outparam"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]response-outparam"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Set the value of the `response-outparam` to either send a response,
+                    /// or indicate an error.
+                    ///
+                    /// This method consumes the `response-outparam` to ensure that it is
+                    /// called at most once. If it is never called, the implementation
+                    /// will respond with an error.
+                    ///
+                    /// The user may provide an `error` to `response` to allow the
+                    /// implementation determine how to respond with an HTTP error response.
+                    fn set(
+                        param: ResponseOutparam,
+                        response: Result<OutgoingResponse, ErrorCode>,
+                    );
+                }
+                pub trait GuestIncomingResponse: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]incoming-response"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]incoming-response"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns the status code from the incoming response.
+                    fn status(&self) -> StatusCode;
+                    /// Returns the headers from the incoming response.
+                    ///
+                    /// The returned `headers` resource is immutable: `set`, `append`, and
+                    /// `delete` operations will fail with `header-error.immutable`.
+                    ///
+                    /// This headers resource is a child: it must be dropped before the parent
+                    /// `incoming-response` is dropped.
+                    fn headers(&self) -> Headers;
+                    /// Returns the incoming body. May be called at most once. Returns error
+                    /// if called additional times.
+                    fn consume(&self) -> Result<IncomingBody, ()>;
+                }
+                pub trait GuestIncomingBody: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]incoming-body"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]incoming-body"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns the contents of the body, as a stream of bytes.
+                    ///
+                    /// Returns success on first call: the stream representing the contents
+                    /// can be retrieved at most once. Subsequent calls will return error.
+                    ///
+                    /// The returned `input-stream` resource is a child: it must be dropped
+                    /// before the parent `incoming-body` is dropped, or consumed by
+                    /// `incoming-body.finish`.
+                    ///
+                    /// This invariant ensures that the implementation can determine whether
+                    /// the user is consuming the contents of the body, waiting on the
+                    /// `future-trailers` to be ready, or neither. This allows for network
+                    /// backpressure is to be applied when the user is consuming the body,
+                    /// and for that backpressure to not inhibit delivery of the trailers if
+                    /// the user does not read the entire body.
+                    fn stream(&self) -> Result<InputStream, ()>;
+                    /// Takes ownership of `incoming-body`, and returns a `future-trailers`.
+                    /// This function will trap if the `input-stream` child is still alive.
+                    fn finish(this: IncomingBody) -> FutureTrailers;
+                }
+                pub trait GuestFutureTrailers: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-trailers"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-trailers"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns a pollable which becomes ready when either the trailers have
+                    /// been received, or an error has occured. When this pollable is ready,
+                    /// the `get` method will return `some`.
+                    fn subscribe(&self) -> Pollable;
+                    /// Returns the contents of the trailers, or an error which occured,
+                    /// once the future is ready.
+                    ///
+                    /// The outer `option` represents future readiness. Users can wait on this
+                    /// `option` to become `some` using the `subscribe` method.
+                    ///
+                    /// The outer `result` is used to retrieve the trailers or error at most
+                    /// once. It will be success on the first call in which the outer option
+                    /// is `some`, and error on subsequent calls.
+                    ///
+                    /// The inner `result` represents that either the HTTP Request or Response
+                    /// body, as well as any trailers, were received successfully, or that an
+                    /// error occured receiving them. The optional `trailers` indicates whether
+                    /// or not trailers were present in the body.
+                    ///
+                    /// When some `trailers` are returned by this method, the `trailers`
+                    /// resource is immutable, and a child. Use of the `set`, `append`, or
+                    /// `delete` methods will return an error, and the resource must be
+                    /// dropped before the parent `future-trailers` is dropped.
+                    fn get(
+                        &self,
+                    ) -> Option<Result<Result<Option<Trailers>, ErrorCode>, ()>>;
+                }
+                pub trait GuestOutgoingResponse: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]outgoing-response"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]outgoing-response"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Construct an `outgoing-response`, with a default `status-code` of `200`.
+                    /// If a different `status-code` is needed, it must be set via the
+                    /// `set-status-code` method.
+                    ///
+                    /// * `headers` is the HTTP Headers for the Response.
+                    fn new(headers: Headers) -> Self;
+                    /// Get the HTTP Status Code for the Response.
+                    fn status_code(&self) -> StatusCode;
+                    /// Set the HTTP Status Code for the Response. Fails if the status-code
+                    /// given is not a valid http status code.
+                    fn set_status_code(&self, status_code: StatusCode) -> Result<(), ()>;
+                    /// Get the headers associated with the Request.
+                    ///
+                    /// The returned `headers` resource is immutable: `set`, `append`, and
+                    /// `delete` operations will fail with `header-error.immutable`.
+                    ///
+                    /// This headers resource is a child: it must be dropped before the parent
+                    /// `outgoing-request` is dropped, or its ownership is transfered to
+                    /// another component by e.g. `outgoing-handler.handle`.
+                    fn headers(&self) -> Headers;
+                    /// Returns the resource corresponding to the outgoing Body for this Response.
+                    ///
+                    /// Returns success on the first call: the `outgoing-body` resource for
+                    /// this `outgoing-response` can be retrieved at most once. Subsequent
+                    /// calls will return error.
+                    fn body(&self) -> Result<OutgoingBody, ()>;
+                }
+                pub trait GuestOutgoingBody: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]outgoing-body"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]outgoing-body"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns a stream for writing the body contents.
+                    ///
+                    /// The returned `output-stream` is a child resource: it must be dropped
+                    /// before the parent `outgoing-body` resource is dropped (or finished),
+                    /// otherwise the `outgoing-body` drop or `finish` will trap.
+                    ///
+                    /// Returns success on the first call: the `output-stream` resource for
+                    /// this `outgoing-body` may be retrieved at most once. Subsequent calls
+                    /// will return error.
+                    fn write(&self) -> Result<OutputStream, ()>;
+                    /// Finalize an outgoing body, optionally providing trailers. This must be
+                    /// called to signal that the response is complete. If the `outgoing-body`
+                    /// is dropped without calling `outgoing-body.finalize`, the implementation
+                    /// should treat the body as corrupted.
+                    ///
+                    /// Fails if the body's `outgoing-request` or `outgoing-response` was
+                    /// constructed with a Content-Length header, and the contents written
+                    /// to the body (via `write`) does not match the value given in the
+                    /// Content-Length.
+                    fn finish(
+                        this: OutgoingBody,
+                        trailers: Option<Trailers>,
+                    ) -> Result<(), ErrorCode>;
+                }
+                pub trait GuestFutureIncomingResponse: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-incoming-response"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:http/types@0.2.0")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-incoming-response"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Returns a pollable which becomes ready when either the Response has
+                    /// been received, or an error has occured. When this pollable is ready,
+                    /// the `get` method will return `some`.
+                    fn subscribe(&self) -> Pollable;
+                    /// Returns the incoming HTTP Response, or an error, once one is ready.
+                    ///
+                    /// The outer `option` represents future readiness. Users can wait on this
+                    /// `option` to become `some` using the `subscribe` method.
+                    ///
+                    /// The outer `result` is used to retrieve the response or error at most
+                    /// once. It will be success on the first call in which the outer option
+                    /// is `some`, and error on subsequent calls.
+                    ///
+                    /// The inner `result` represents that either the incoming HTTP Response
+                    /// status and headers have recieved successfully, or that an error
+                    /// occured. Errors may also occur while consuming the response body,
+                    /// but those will be reported by the `incoming-body` and its
+                    /// `output-stream` child.
+                    fn get(
+                        &self,
+                    ) -> Option<Result<Result<IncomingResponse, ErrorCode>, ()>>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_http_types_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:http/types@0.2.0#http-error-code"] unsafe extern "C" fn
+                        export_http_error_code(arg0 : i32,) -> * mut u8 {
+                        $($path_to_types)*:: _export_http_error_code_cabi::<$ty > (arg0)
+                        } #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#http-error-code"] unsafe extern
+                        "C" fn _post_return_http_error_code(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_http_error_code::<$ty > (arg0)
+                        } #[export_name = "wasi:http/types@0.2.0#[constructor]fields"]
+                        unsafe extern "C" fn export_constructor_fields() -> i32 {
+                        $($path_to_types)*:: _export_constructor_fields_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > () } #[export_name =
+                        "wasi:http/types@0.2.0#[static]fields.from-list"] unsafe extern
+                        "C" fn export_static_fields_from_list(arg0 : * mut u8, arg1 :
+                        usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_static_fields_from_list_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0, arg1) }
+                        #[export_name = "wasi:http/types@0.2.0#[method]fields.get"]
+                        unsafe extern "C" fn export_method_fields_get(arg0 : * mut u8,
+                        arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_method_fields_get_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]fields.get"] unsafe
+                        extern "C" fn _post_return_method_fields_get(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_method_fields_get::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.has"] unsafe extern "C" fn
+                        export_method_fields_has(arg0 : * mut u8, arg1 : * mut u8, arg2 :
+                        usize,) -> i32 { $($path_to_types)*::
+                        _export_method_fields_has_cabi::<<$ty as $($path_to_types)*::
+                        Guest >::Fields > (arg0, arg1, arg2) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.set"] unsafe extern "C" fn
+                        export_method_fields_set(arg0 : * mut u8, arg1 : * mut u8, arg2 :
+                        usize, arg3 : * mut u8, arg4 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_method_fields_set_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0, arg1, arg2, arg3,
+                        arg4) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.delete"] unsafe extern "C"
+                        fn export_method_fields_delete(arg0 : * mut u8, arg1 : * mut u8,
+                        arg2 : usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_fields_delete_cabi::<<$ty as $($path_to_types)*::
+                        Guest >::Fields > (arg0, arg1, arg2) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.append"] unsafe extern "C"
+                        fn export_method_fields_append(arg0 : * mut u8, arg1 : * mut u8,
+                        arg2 : usize, arg3 : * mut u8, arg4 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_method_fields_append_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0, arg1, arg2, arg3,
+                        arg4) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.entries"] unsafe extern "C"
+                        fn export_method_fields_entries(arg0 : * mut u8,) -> * mut u8 {
+                        $($path_to_types)*:: _export_method_fields_entries_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0) } #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]fields.entries"] unsafe
+                        extern "C" fn _post_return_method_fields_entries(arg0 : * mut
+                        u8,) { $($path_to_types)*::
+                        __post_return_method_fields_entries::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]fields.clone"] unsafe extern "C"
+                        fn export_method_fields_clone(arg0 : * mut u8,) -> i32 {
+                        $($path_to_types)*:: _export_method_fields_clone_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Fields > (arg0) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.method"] unsafe
+                        extern "C" fn export_method_incoming_request_method(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_request_method_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]incoming-request.method"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_request_method(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_incoming_request_method::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.path-with-query"]
+                        unsafe extern "C" fn
+                        export_method_incoming_request_path_with_query(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_request_path_with_query_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]incoming-request.path-with-query"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_request_path_with_query(arg0 : * mut
+                        u8,) { $($path_to_types)*::
+                        __post_return_method_incoming_request_path_with_query::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.scheme"] unsafe
+                        extern "C" fn export_method_incoming_request_scheme(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_request_scheme_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]incoming-request.scheme"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_request_scheme(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_incoming_request_scheme::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.authority"]
+                        unsafe extern "C" fn
+                        export_method_incoming_request_authority(arg0 : * mut u8,) -> *
+                        mut u8 { $($path_to_types)*::
+                        _export_method_incoming_request_authority_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]incoming-request.authority"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_request_authority(arg0 : * mut u8,)
+                        { $($path_to_types)*::
+                        __post_return_method_incoming_request_authority::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.headers"] unsafe
+                        extern "C" fn export_method_incoming_request_headers(arg0 : * mut
+                        u8,) -> i32 { $($path_to_types)*::
+                        _export_method_incoming_request_headers_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-request.consume"] unsafe
+                        extern "C" fn export_method_incoming_request_consume(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_request_consume_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[constructor]outgoing-request"] unsafe
+                        extern "C" fn export_constructor_outgoing_request(arg0 : i32,) ->
+                        i32 { $($path_to_types)*::
+                        _export_constructor_outgoing_request_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.body"] unsafe
+                        extern "C" fn export_method_outgoing_request_body(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_request_body_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.method"] unsafe
+                        extern "C" fn export_method_outgoing_request_method(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_request_method_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]outgoing-request.method"]
+                        unsafe extern "C" fn
+                        _post_return_method_outgoing_request_method(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_outgoing_request_method::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.set-method"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_set_method(arg0 : * mut u8, arg1 :
+                        i32, arg2 : * mut u8, arg3 : usize,) -> i32 {
+                        $($path_to_types)*::
+                        _export_method_outgoing_request_set_method_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0, arg1,
+                        arg2, arg3) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.path-with-query"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_path_with_query(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_request_path_with_query_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]outgoing-request.path-with-query"]
+                        unsafe extern "C" fn
+                        _post_return_method_outgoing_request_path_with_query(arg0 : * mut
+                        u8,) { $($path_to_types)*::
+                        __post_return_method_outgoing_request_path_with_query::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.set-path-with-query"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_set_path_with_query(arg0 : * mut
+                        u8, arg1 : i32, arg2 : * mut u8, arg3 : usize,) -> i32 {
+                        $($path_to_types)*::
+                        _export_method_outgoing_request_set_path_with_query_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::OutgoingRequest > (arg0, arg1,
+                        arg2, arg3) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.scheme"] unsafe
+                        extern "C" fn export_method_outgoing_request_scheme(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_request_scheme_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]outgoing-request.scheme"]
+                        unsafe extern "C" fn
+                        _post_return_method_outgoing_request_scheme(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_outgoing_request_scheme::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.set-scheme"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_set_scheme(arg0 : * mut u8, arg1 :
+                        i32, arg2 : i32, arg3 : * mut u8, arg4 : usize,) -> i32 {
+                        $($path_to_types)*::
+                        _export_method_outgoing_request_set_scheme_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0, arg1,
+                        arg2, arg3, arg4) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.authority"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_authority(arg0 : * mut u8,) -> *
+                        mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_request_authority_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]outgoing-request.authority"]
+                        unsafe extern "C" fn
+                        _post_return_method_outgoing_request_authority(arg0 : * mut u8,)
+                        { $($path_to_types)*::
+                        __post_return_method_outgoing_request_authority::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.set-authority"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_request_set_authority(arg0 : * mut u8,
+                        arg1 : i32, arg2 : * mut u8, arg3 : usize,) -> i32 {
+                        $($path_to_types)*::
+                        _export_method_outgoing_request_set_authority_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0, arg1,
+                        arg2, arg3) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-request.headers"] unsafe
+                        extern "C" fn export_method_outgoing_request_headers(arg0 : * mut
+                        u8,) -> i32 { $($path_to_types)*::
+                        _export_method_outgoing_request_headers_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[constructor]request-options"] unsafe
+                        extern "C" fn export_constructor_request_options() -> i32 {
+                        $($path_to_types)*::
+                        _export_constructor_request_options_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::RequestOptions > () } #[export_name
+                        =
+                        "wasi:http/types@0.2.0#[method]request-options.connect-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_connect_timeout(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_request_options_connect_timeout_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::RequestOptions > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]request-options.set-connect-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_set_connect_timeout(arg0 : * mut
+                        u8, arg1 : i32, arg2 : i64,) -> i32 { $($path_to_types)*::
+                        _export_method_request_options_set_connect_timeout_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::RequestOptions > (arg0, arg1, arg2)
+                        } #[export_name =
+                        "wasi:http/types@0.2.0#[method]request-options.first-byte-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_first_byte_timeout(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_request_options_first_byte_timeout_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::RequestOptions > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]request-options.set-first-byte-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_set_first_byte_timeout(arg0 : * mut
+                        u8, arg1 : i32, arg2 : i64,) -> i32 { $($path_to_types)*::
+                        _export_method_request_options_set_first_byte_timeout_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::RequestOptions > (arg0, arg1,
+                        arg2) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]request-options.between-bytes-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_between_bytes_timeout(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_request_options_between_bytes_timeout_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::RequestOptions > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]request-options.set-between-bytes-timeout"]
+                        unsafe extern "C" fn
+                        export_method_request_options_set_between_bytes_timeout(arg0 : *
+                        mut u8, arg1 : i32, arg2 : i64,) -> i32 { $($path_to_types)*::
+                        _export_method_request_options_set_between_bytes_timeout_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::RequestOptions > (arg0, arg1,
+                        arg2) } #[export_name =
+                        "wasi:http/types@0.2.0#[static]response-outparam.set"] unsafe
+                        extern "C" fn export_static_response_outparam_set(arg0 : i32,
+                        arg1 : i32, arg2 : i32, arg3 : i32, arg4 :
+                        ::core::mem::MaybeUninit::< u64 >, arg5 : * mut u8, arg6 : * mut
+                        u8, arg7 : usize, arg8 : i32,) { $($path_to_types)*::
+                        _export_static_response_outparam_set_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::ResponseOutparam > (arg0, arg1,
+                        arg2, arg3, arg4, arg5, arg6, arg7, arg8) } #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-response.status"] unsafe
+                        extern "C" fn export_method_incoming_response_status(arg0 : * mut
+                        u8,) -> i32 { $($path_to_types)*::
+                        _export_method_incoming_response_status_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-response.headers"] unsafe
+                        extern "C" fn export_method_incoming_response_headers(arg0 : *
+                        mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_incoming_response_headers_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-response.consume"] unsafe
+                        extern "C" fn export_method_incoming_response_consume(arg0 : *
+                        mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_response_consume_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]incoming-body.stream"] unsafe
+                        extern "C" fn export_method_incoming_body_stream(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_body_stream_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingBody > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[static]incoming-body.finish"] unsafe
+                        extern "C" fn export_static_incoming_body_finish(arg0 : i32,) ->
+                        i32 { $($path_to_types)*::
+                        _export_static_incoming_body_finish_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingBody > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]future-trailers.subscribe"] unsafe
+                        extern "C" fn export_method_future_trailers_subscribe(arg0 : *
+                        mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_trailers_subscribe_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureTrailers > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]future-trailers.get"] unsafe
+                        extern "C" fn export_method_future_trailers_get(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_future_trailers_get_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureTrailers > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]future-trailers.get"]
+                        unsafe extern "C" fn _post_return_method_future_trailers_get(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_future_trailers_get::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureTrailers > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[constructor]outgoing-response"] unsafe
+                        extern "C" fn export_constructor_outgoing_response(arg0 : i32,)
+                        -> i32 { $($path_to_types)*::
+                        _export_constructor_outgoing_response_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-response.status-code"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_response_status_code(arg0 : * mut u8,) ->
+                        i32 { $($path_to_types)*::
+                        _export_method_outgoing_response_status_code_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-response.set-status-code"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_response_set_status_code(arg0 : * mut u8,
+                        arg1 : i32,) -> i32 { $($path_to_types)*::
+                        _export_method_outgoing_response_set_status_code_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (arg0, arg1) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-response.headers"] unsafe
+                        extern "C" fn export_method_outgoing_response_headers(arg0 : *
+                        mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_outgoing_response_headers_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-response.body"] unsafe
+                        extern "C" fn export_method_outgoing_response_body(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_response_body_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]outgoing-body.write"] unsafe
+                        extern "C" fn export_method_outgoing_body_write(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_body_write_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingBody > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[static]outgoing-body.finish"] unsafe
+                        extern "C" fn export_static_outgoing_body_finish(arg0 : i32, arg1
+                        : i32, arg2 : i32,) -> * mut u8 { $($path_to_types)*::
+                        _export_static_outgoing_body_finish_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingBody > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[static]outgoing-body.finish"]
+                        unsafe extern "C" fn
+                        _post_return_static_outgoing_body_finish(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_static_outgoing_body_finish::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingBody > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]future-incoming-response.subscribe"]
+                        unsafe extern "C" fn
+                        export_method_future_incoming_response_subscribe(arg0 : * mut
+                        u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_incoming_response_subscribe_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureIncomingResponse > (arg0) }
+                        #[export_name =
+                        "wasi:http/types@0.2.0#[method]future-incoming-response.get"]
+                        unsafe extern "C" fn
+                        export_method_future_incoming_response_get(arg0 : * mut u8,) -> *
+                        mut u8 { $($path_to_types)*::
+                        _export_method_future_incoming_response_get_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureIncomingResponse > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:http/types@0.2.0#[method]future-incoming-response.get"]
+                        unsafe extern "C" fn
+                        _post_return_method_future_incoming_response_get(arg0 : * mut
+                        u8,) { $($path_to_types)*::
+                        __post_return_method_future_incoming_response_get::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureIncomingResponse > (arg0) }
+                        const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]fields"] #[allow(non_snake_case)]
+                        unsafe extern "C" fn dtor(rep : * mut u8) { $($path_to_types)*::
+                        Fields::dtor::< <$ty as $($path_to_types)*:: Guest >::Fields >
+                        (rep) } }; const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]incoming-request"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: IncomingRequest::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::IncomingRequest > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]outgoing-request"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: OutgoingRequest::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::OutgoingRequest > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]request-options"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: RequestOptions::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::RequestOptions > (rep) } }; const _
+                        : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]response-outparam"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: ResponseOutparam::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::ResponseOutparam > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]incoming-response"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: IncomingResponse::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::IncomingResponse > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]incoming-body"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: IncomingBody::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::IncomingBody > (rep) } }; const _ :
+                        () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]future-trailers"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureTrailers::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::FutureTrailers > (rep) } }; const _
+                        : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]outgoing-response"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: OutgoingResponse::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::OutgoingResponse > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]outgoing-body"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: OutgoingBody::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::OutgoingBody > (rep) } }; const _ :
+                        () = { #[doc(hidden)] #[export_name =
+                        "wasi:http/types@0.2.0#[dtor]future-incoming-response"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureIncomingResponse::dtor::< <$ty
+                        as $($path_to_types)*:: Guest >::FutureIncomingResponse > (rep) }
+                        }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_http_types_0_2_0_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 56]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 56],
+                );
+            }
+            /// This interface defines a handler of outgoing HTTP Requests. It should be
+            /// imported by components which wish to make HTTP Requests.
+            #[allow(dead_code, clippy::all)]
+            pub mod outgoing_handler {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type OutgoingRequest = super::super::super::super::exports::wasi::http::types::OutgoingRequest;
+                pub type OutgoingRequestBorrow<'a> = super::super::super::super::exports::wasi::http::types::OutgoingRequestBorrow<
+                    'a,
+                >;
+                pub type RequestOptions = super::super::super::super::exports::wasi::http::types::RequestOptions;
+                pub type RequestOptionsBorrow<'a> = super::super::super::super::exports::wasi::http::types::RequestOptionsBorrow<
+                    'a,
+                >;
+                pub type FutureIncomingResponse = super::super::super::super::exports::wasi::http::types::FutureIncomingResponse;
+                pub type FutureIncomingResponseBorrow<'a> = super::super::super::super::exports::wasi::http::types::FutureIncomingResponseBorrow<
+                    'a,
+                >;
+                pub type ErrorCode = super::super::super::super::exports::wasi::http::types::ErrorCode;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_handle_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: i32,
+                    arg2: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::handle(
+                        super::super::super::super::exports::wasi::http::types::OutgoingRequest::from_handle(
+                            arg0 as u32,
+                        ),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = super::super::super::super::exports::wasi::http::types::RequestOptions::from_handle(
+                                    arg2 as u32,
+                                );
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            use super::super::super::super::exports::wasi::http::types::ErrorCode as V17;
+                            match e {
+                                V17::DnsTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                }
+                                V17::DnsError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                    let super::super::super::super::exports::wasi::http::types::DnsErrorPayload {
+                                        rcode: rcode2,
+                                        info_code: info_code2,
+                                    } = e;
+                                    match rcode2 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                                            let len3 = vec3.len();
+                                            ::core::mem::forget(vec3);
+                                            *ptr1.add(24).cast::<usize>() = len3;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr3.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match info_code2 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(30).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::DestinationNotFound => {
+                                    *ptr1.add(8).cast::<u8>() = (2i32) as u8;
+                                }
+                                V17::DestinationUnavailable => {
+                                    *ptr1.add(8).cast::<u8>() = (3i32) as u8;
+                                }
+                                V17::DestinationIpProhibited => {
+                                    *ptr1.add(8).cast::<u8>() = (4i32) as u8;
+                                }
+                                V17::DestinationIpUnroutable => {
+                                    *ptr1.add(8).cast::<u8>() = (5i32) as u8;
+                                }
+                                V17::ConnectionRefused => {
+                                    *ptr1.add(8).cast::<u8>() = (6i32) as u8;
+                                }
+                                V17::ConnectionTerminated => {
+                                    *ptr1.add(8).cast::<u8>() = (7i32) as u8;
+                                }
+                                V17::ConnectionTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (8i32) as u8;
+                                }
+                                V17::ConnectionReadTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (9i32) as u8;
+                                }
+                                V17::ConnectionWriteTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (10i32) as u8;
+                                }
+                                V17::ConnectionLimitReached => {
+                                    *ptr1.add(8).cast::<u8>() = (11i32) as u8;
+                                }
+                                V17::TlsProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (12i32) as u8;
+                                }
+                                V17::TlsCertificateError => {
+                                    *ptr1.add(8).cast::<u8>() = (13i32) as u8;
+                                }
+                                V17::TlsAlertReceived(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (14i32) as u8;
+                                    let super::super::super::super::exports::wasi::http::types::TlsAlertReceivedPayload {
+                                        alert_id: alert_id4,
+                                        alert_message: alert_message4,
+                                    } = e;
+                                    match alert_id4 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(17).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match alert_message4 {
+                                        Some(e) => {
+                                            *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                                            let len5 = vec5.len();
+                                            ::core::mem::forget(vec5);
+                                            *ptr1.add(28).cast::<usize>() = len5;
+                                            *ptr1.add(24).cast::<*mut u8>() = ptr5.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpRequestDenied => {
+                                    *ptr1.add(8).cast::<u8>() = (15i32) as u8;
+                                }
+                                V17::HttpRequestLengthRequired => {
+                                    *ptr1.add(8).cast::<u8>() = (16i32) as u8;
+                                }
+                                V17::HttpRequestBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (17i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpRequestMethodInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (18i32) as u8;
+                                }
+                                V17::HttpRequestUriInvalid => {
+                                    *ptr1.add(8).cast::<u8>() = (19i32) as u8;
+                                }
+                                V17::HttpRequestUriTooLong => {
+                                    *ptr1.add(8).cast::<u8>() = (20i32) as u8;
+                                }
+                                V17::HttpRequestHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (21i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpRequestHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (22i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let super::super::super::super::exports::wasi::http::types::FieldSizePayload {
+                                                field_name: field_name6,
+                                                field_size: field_size6,
+                                            } = e;
+                                            match field_name6 {
+                                                Some(e) => {
+                                                    *ptr1.add(20).cast::<u8>() = (1i32) as u8;
+                                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                    let len7 = vec7.len();
+                                                    ::core::mem::forget(vec7);
+                                                    *ptr1.add(28).cast::<usize>() = len7;
+                                                    *ptr1.add(24).cast::<*mut u8>() = ptr7.cast_mut();
+                                                }
+                                                None => {
+                                                    *ptr1.add(20).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                            match field_size6 {
+                                                Some(e) => {
+                                                    *ptr1.add(32).cast::<u8>() = (1i32) as u8;
+                                                    *ptr1.add(36).cast::<i32>() = _rt::as_i32(e);
+                                                }
+                                                None => {
+                                                    *ptr1.add(32).cast::<u8>() = (0i32) as u8;
+                                                }
+                                            };
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpRequestTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (23i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpRequestTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (24i32) as u8;
+                                    let super::super::super::super::exports::wasi::http::types::FieldSizePayload {
+                                        field_name: field_name8,
+                                        field_size: field_size8,
+                                    } = e;
+                                    match field_name8 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec9 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr9 = vec9.as_ptr().cast::<u8>();
+                                            let len9 = vec9.len();
+                                            ::core::mem::forget(vec9);
+                                            *ptr1.add(24).cast::<usize>() = len9;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr9.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size8 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseIncomplete => {
+                                    *ptr1.add(8).cast::<u8>() = (25i32) as u8;
+                                }
+                                V17::HttpResponseHeaderSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (26i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseHeaderSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (27i32) as u8;
+                                    let super::super::super::super::exports::wasi::http::types::FieldSizePayload {
+                                        field_name: field_name10,
+                                        field_size: field_size10,
+                                    } = e;
+                                    match field_name10 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec11 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                                            let len11 = vec11.len();
+                                            ::core::mem::forget(vec11);
+                                            *ptr1.add(24).cast::<usize>() = len11;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr11.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size10 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseBodySize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (28i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(24).cast::<i64>() = _rt::as_i64(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseTrailerSectionSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (29i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(20).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseTrailerSize(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (30i32) as u8;
+                                    let super::super::super::super::exports::wasi::http::types::FieldSizePayload {
+                                        field_name: field_name12,
+                                        field_size: field_size12,
+                                    } = e;
+                                    match field_name12 {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec13 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr13 = vec13.as_ptr().cast::<u8>();
+                                            let len13 = vec13.len();
+                                            ::core::mem::forget(vec13);
+                                            *ptr1.add(24).cast::<usize>() = len13;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr13.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                    match field_size12 {
+                                        Some(e) => {
+                                            *ptr1.add(28).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(32).cast::<i32>() = _rt::as_i32(e);
+                                        }
+                                        None => {
+                                            *ptr1.add(28).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseTransferCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (31i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec14 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                                            let len14 = vec14.len();
+                                            ::core::mem::forget(vec14);
+                                            *ptr1.add(24).cast::<usize>() = len14;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr14.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseContentCoding(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (32i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec15 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                                            let len15 = vec15.len();
+                                            ::core::mem::forget(vec15);
+                                            *ptr1.add(24).cast::<usize>() = len15;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr15.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                V17::HttpResponseTimeout => {
+                                    *ptr1.add(8).cast::<u8>() = (33i32) as u8;
+                                }
+                                V17::HttpUpgradeFailed => {
+                                    *ptr1.add(8).cast::<u8>() = (34i32) as u8;
+                                }
+                                V17::HttpProtocolError => {
+                                    *ptr1.add(8).cast::<u8>() = (35i32) as u8;
+                                }
+                                V17::LoopDetected => {
+                                    *ptr1.add(8).cast::<u8>() = (36i32) as u8;
+                                }
+                                V17::ConfigurationError => {
+                                    *ptr1.add(8).cast::<u8>() = (37i32) as u8;
+                                }
+                                V17::InternalError(e) => {
+                                    *ptr1.add(8).cast::<u8>() = (38i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(16).cast::<u8>() = (1i32) as u8;
+                                            let vec16 = (e.into_bytes()).into_boxed_slice();
+                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                            let len16 = vec16.len();
+                                            ::core::mem::forget(vec16);
+                                            *ptr1.add(24).cast::<usize>() = len16;
+                                            *ptr1.add(20).cast::<*mut u8>() = ptr16.cast_mut();
+                                        }
+                                        None => {
+                                            *ptr1.add(16).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                            }
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_handle<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = i32::from(*arg0.add(8).cast::<u8>());
+                            match l1 {
+                                0 => {}
+                                1 => {
+                                    let l2 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l2 {
+                                        0 => {}
+                                        _ => {
+                                            let l3 = *arg0.add(20).cast::<*mut u8>();
+                                            let l4 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l3, l4, 1);
+                                        }
+                                    }
+                                }
+                                2 => {}
+                                3 => {}
+                                4 => {}
+                                5 => {}
+                                6 => {}
+                                7 => {}
+                                8 => {}
+                                9 => {}
+                                10 => {}
+                                11 => {}
+                                12 => {}
+                                13 => {}
+                                14 => {
+                                    let l5 = i32::from(*arg0.add(20).cast::<u8>());
+                                    match l5 {
+                                        0 => {}
+                                        _ => {
+                                            let l6 = *arg0.add(24).cast::<*mut u8>();
+                                            let l7 = *arg0.add(28).cast::<usize>();
+                                            _rt::cabi_dealloc(l6, l7, 1);
+                                        }
+                                    }
+                                }
+                                15 => {}
+                                16 => {}
+                                17 => {}
+                                18 => {}
+                                19 => {}
+                                20 => {}
+                                21 => {}
+                                22 => {
+                                    let l8 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l8 {
+                                        0 => {}
+                                        _ => {
+                                            let l9 = i32::from(*arg0.add(20).cast::<u8>());
+                                            match l9 {
+                                                0 => {}
+                                                _ => {
+                                                    let l10 = *arg0.add(24).cast::<*mut u8>();
+                                                    let l11 = *arg0.add(28).cast::<usize>();
+                                                    _rt::cabi_dealloc(l10, l11, 1);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                23 => {}
+                                24 => {
+                                    let l12 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l12 {
+                                        0 => {}
+                                        _ => {
+                                            let l13 = *arg0.add(20).cast::<*mut u8>();
+                                            let l14 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l13, l14, 1);
+                                        }
+                                    }
+                                }
+                                25 => {}
+                                26 => {}
+                                27 => {
+                                    let l15 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l15 {
+                                        0 => {}
+                                        _ => {
+                                            let l16 = *arg0.add(20).cast::<*mut u8>();
+                                            let l17 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l16, l17, 1);
+                                        }
+                                    }
+                                }
+                                28 => {}
+                                29 => {}
+                                30 => {
+                                    let l18 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l18 {
+                                        0 => {}
+                                        _ => {
+                                            let l19 = *arg0.add(20).cast::<*mut u8>();
+                                            let l20 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l19, l20, 1);
+                                        }
+                                    }
+                                }
+                                31 => {
+                                    let l21 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l21 {
+                                        0 => {}
+                                        _ => {
+                                            let l22 = *arg0.add(20).cast::<*mut u8>();
+                                            let l23 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l22, l23, 1);
+                                        }
+                                    }
+                                }
+                                32 => {
+                                    let l24 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l24 {
+                                        0 => {}
+                                        _ => {
+                                            let l25 = *arg0.add(20).cast::<*mut u8>();
+                                            let l26 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l25, l26, 1);
+                                        }
+                                    }
+                                }
+                                33 => {}
+                                34 => {}
+                                35 => {}
+                                36 => {}
+                                37 => {}
+                                _ => {
+                                    let l27 = i32::from(*arg0.add(16).cast::<u8>());
+                                    match l27 {
+                                        0 => {}
+                                        _ => {
+                                            let l28 = *arg0.add(20).cast::<*mut u8>();
+                                            let l29 = *arg0.add(24).cast::<usize>();
+                                            _rt::cabi_dealloc(l28, l29, 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                pub trait Guest {
+                    /// This function is invoked with an outgoing HTTP Request, and it returns
+                    /// a resource `future-incoming-response` which represents an HTTP Response
+                    /// which may arrive in the future.
+                    ///
+                    /// The `options` argument accepts optional parameters for the HTTP
+                    /// protocol's transport layer.
+                    ///
+                    /// This function may return an error if the `outgoing-request` is invalid
+                    /// or not allowed to be made. Otherwise, protocol errors are reported
+                    /// through the `future-incoming-response`.
+                    fn handle(
+                        request: OutgoingRequest,
+                        options: Option<RequestOptions>,
+                    ) -> Result<FutureIncomingResponse, ErrorCode>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_http_outgoing_handler_0_2_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:http/outgoing-handler@0.2.0#handle"] unsafe extern "C" fn
+                        export_handle(arg0 : i32, arg1 : i32, arg2 : i32,) -> * mut u8 {
+                        $($path_to_types)*:: _export_handle_cabi::<$ty > (arg0, arg1,
+                        arg2) } #[export_name =
+                        "cabi_post_wasi:http/outgoing-handler@0.2.0#handle"] unsafe
+                        extern "C" fn _post_return_handle(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_handle::<$ty > (arg0) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_http_outgoing_handler_0_2_0_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 40],
+                );
+            }
+        }
         pub mod io {
             #[allow(dead_code, clippy::all)]
             pub mod error {
@@ -28119,22 +41934,22 @@ pub mod exports {
                             ErrorCode::AccessDenied => {
                                 "Access denied.
 
-          POSIX equivalent: EACCES, EPERM"
+                                                                        POSIX equivalent: EACCES, EPERM"
                             }
                             ErrorCode::NotSupported => {
                                 "The operation is not supported.
 
-          POSIX equivalent: EOPNOTSUPP"
+                                                                        POSIX equivalent: EOPNOTSUPP"
                             }
                             ErrorCode::InvalidArgument => {
                                 "One of the arguments is invalid.
 
-          POSIX equivalent: EINVAL"
+                                                                        POSIX equivalent: EINVAL"
                             }
                             ErrorCode::OutOfMemory => {
                                 "Not enough memory to complete the operation.
 
-          POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
+                                                                        POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
                             }
                             ErrorCode::Timeout => {
                                 "The operation timed out before it could finish completely."
@@ -28142,19 +41957,19 @@ pub mod exports {
                             ErrorCode::ConcurrencyConflict => {
                                 "This operation is incompatible with another asynchronous operation that is already in progress.
 
-          POSIX equivalent: EALREADY"
+                                                                        POSIX equivalent: EALREADY"
                             }
                             ErrorCode::NotInProgress => {
                                 "Trying to finish an asynchronous operation that:
-          - has not been started yet, or:
-          - was already finished by a previous `finish-*` call.
+                                                                        - has not been started yet, or:
+                                                                        - was already finished by a previous `finish-*` call.
 
-          Note: this is scheduled to be removed when `future`s are natively supported."
+                                                                        Note: this is scheduled to be removed when `future`s are natively supported."
                             }
                             ErrorCode::WouldBlock => {
                                 "The operation has been aborted because it could not be completed immediately.
 
-          Note: this is scheduled to be removed when `future`s are natively supported."
+                                                                        Note: this is scheduled to be removed when `future`s are natively supported."
                             }
                             ErrorCode::InvalidState => {
                                 "The operation is not valid in the socket's current state."
@@ -28180,7 +41995,7 @@ pub mod exports {
                             }
                             ErrorCode::DatagramTooLarge => {
                                 "The size of a datagram sent to a UDP socket exceeded the maximum
-          supported size."
+                                                                        supported size."
                             }
                             ErrorCode::NameUnresolvable => {
                                 "Name does not exist or has no suitable associated IP addresses."
@@ -32460,6 +46275,12 @@ macro_rules! __export_durable_wasi_impl {
         exports::wasi::filesystem::preopens::__export_wasi_filesystem_preopens_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::filesystem::preopens);
         $($path_to_types_root)*::
+        exports::wasi::http::types::__export_wasi_http_types_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::http::types);
+        $($path_to_types_root)*::
+        exports::wasi::http::outgoing_handler::__export_wasi_http_outgoing_handler_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::http::outgoing_handler);
+        $($path_to_types_root)*::
         exports::wasi::logging::logging::__export_wasi_logging_logging_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::logging::logging);
         $($path_to_types_root)*::
@@ -32500,9 +46321,9 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 28922] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf6\xe0\x01\x01A\x02\
-\x01A\x95\x01\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 38597] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc1\xac\x02\x01A\x02\
+\x01A\xa1\x01\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\
 \x02\x01ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0b\
 initial-cwd\x01\x06\x03\0\x1awasi:cli/environment@0.2.0\x05\0\x01B\x03\x01j\0\0\x01\
 @\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x03\0\x13wasi:cli/exit@0.2.0\x05\x01\
@@ -32613,82 +46434,629 @@ j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry
 \x04\0\x15filesystem-error-code\x01T\x03\0\x1bwasi:filesystem/types@0.2.0\x05\x17\
 \x02\x03\0\x0f\x0adescriptor\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\
 \0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\
-\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05\x19\x01B\x04\x01m\x06\x05trace\x05d\
-ebug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05lev\
-el\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/\
-logging\x05\x1a\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random\
--bytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x03\0\x1awasi:\
-random/insecure@0.2.0\x05\x1b\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-s\
-eed\x01\x01\x03\0\x1fwasi:random/insecure-seed@0.2.0\x05\x1c\x01B\x05\x01p}\x01@\
-\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random\
--u64\x01\x02\x03\0\x18wasi:random/random@0.2.0\x05\x1d\x01B\x11\x04\0\x07network\
-\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argume\
-nt\x0dout-of-memory\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwou\
-ld-block\x0dinvalid-state\x10new-socket-limit\x14address-not-bindable\x0eaddress\
--in-use\x12remote-unreachable\x12connection-refused\x10connection-reset\x12conne\
-ction-aborted\x12datagram-too-large\x11name-unresolvable\x1atemporary-resolver-f\
-ailure\x1apermanent-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04i\
-pv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-addr\
-ess\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\
-\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07addr\
-ess\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07\
-address\x08\x08scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\
-\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\0\x1awasi:\
-sockets/network@0.2.0\x05\x1e\x02\x03\0\x15\x07network\x01B\x05\x02\x03\x02\x01\x1f\
-\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\
-\x03\0#wasi:sockets/instance-network@0.2.0\x05\x20\x02\x03\0\x15\x0aerror-code\x02\
-\x03\0\x15\x0aip-address\x01B\x16\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\
-\x03\x02\x01\x1f\x04\0\x07network\x03\0\x02\x02\x03\x02\x01!\x04\0\x0aerror-code\
-\x03\0\x04\x02\x03\x02\x01\"\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-addr\
-ess-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\
-\x0b\x04\03[method]resolve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01\
-@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01\
-h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\
-\x11resolve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lookup@0.2.0\x05#\x02\x03\
-\0\x0d\x08duration\x02\x03\0\x15\x11ip-socket-address\x02\x03\0\x15\x11ip-addres\
-s-family\x01BT\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\
-\x07\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\
-\x04\x02\x03\x02\x01$\x04\0\x08duration\x03\0\x06\x02\x03\x02\x01\x1f\x04\0\x07n\
-etwork\x03\0\x08\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x01%\
-\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\x02\x01&\x04\0\x11ip-address-famil\
-y\x03\0\x0e\x01m\x03\x07receive\x04send\x04both\x04\0\x0dshutdown-type\x03\0\x10\
-\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\x04self\x13\
-\x07network\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d[method]tcp-socket.start-bin\
-d\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]tcp-socket.finish-bind\x01\
-\x17\x01@\x03\x04self\x13\x07network\x14\x0eremote-address\x0d\0\x15\x04\0\x20[m\
-ethod]tcp-socket.start-connect\x01\x18\x01i\x01\x01i\x03\x01o\x02\x19\x1a\x01j\x01\
-\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![method]tcp-socket.finish-connect\x01\
-\x1d\x04\0\x1f[method]tcp-socket.start-listen\x01\x17\x04\0\x20[method]tcp-socke\
-t.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\
-\x04self\x13\0\x20\x04\0\x19[method]tcp-socket.accept\x01!\x01j\x01\x0d\x01\x0b\x01\
-@\x01\x04self\x13\0\"\x04\0\x20[method]tcp-socket.local-address\x01#\x04\0![meth\
-od]tcp-socket.remote-address\x01#\x01@\x01\x04self\x13\0\x7f\x04\0\x1f[method]tc\
-p-socket.is-listening\x01$\x01@\x01\x04self\x13\0\x0f\x04\0![method]tcp-socket.a\
-ddress-family\x01%\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]tcp-socket\
-.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\x01@\x01\x04self\x13\0'\x04\0\
-%[method]tcp-socket.keep-alive-enabled\x01(\x01@\x02\x04self\x13\x05value\x7f\0\x15\
-\x04\0)[method]tcp-socket.set-keep-alive-enabled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\
-\x04self\x13\0*\x04\0'[method]tcp-socket.keep-alive-idle-time\x01+\x01@\x02\x04s\
-elf\x13\x05value\x07\0\x15\x04\0+[method]tcp-socket.set-keep-alive-idle-time\x01\
-,\x04\0&[method]tcp-socket.keep-alive-interval\x01+\x04\0*[method]tcp-socket.set\
--keep-alive-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\x04self\x13\0-\x04\0#[metho\
-d]tcp-socket.keep-alive-count\x01.\x01@\x02\x04self\x13\x05valuey\0\x15\x04\0'[m\
-ethod]tcp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\x0b\x01@\x01\x04self\x13\
-\00\x04\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\x04self\x13\x05value}\0\x15\
-\x04\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\x01w\x01\x0b\x01@\x01\x04se\
-lf\x13\03\x04\0&[method]tcp-socket.receive-buffer-size\x014\x04\0*[method]tcp-so\
-cket.set-receive-buffer-size\x01&\x04\0#[method]tcp-socket.send-buffer-size\x014\
-\x04\0'[method]tcp-socket.set-send-buffer-size\x01&\x01i\x05\x01@\x01\x04self\x13\
-\05\x04\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\x04self\x13\x0dshutdown-\
-type\x11\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x017\x03\0\x16wasi:sockets/t\
-cp@0.2.0\x05'\x02\x03\0\x18\x0atcp-socket\x01B\x0c\x02\x03\x02\x01\x1f\x04\0\x07\
-network\x03\0\0\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01&\x04\
-\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01(\x04\0\x0atcp-socket\x03\0\x06\
-\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11cre\
-ate-tcp-socket\x01\x0a\x03\0$wasi:sockets/tcp-create-socket@0.2.0\x05)\x01BD\x02\
-\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01\x1f\x04\0\x07network\x03\
-\0\x02\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01%\x04\0\x11\
-ip-socket-address\x03\0\x06\x02\x03\x02\x01&\x04\0\x11ip-address-family\x03\0\x08\
+\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05\x19\x02\x03\0\x0d\x08duration\x01B\xc0\
+\x01\x02\x03\x02\x01\x1a\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x09\x04\0\x0c\
+input-stream\x03\0\x02\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x04\x02\x03\
+\x02\x01\x04\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\
+\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07c\
+onnect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06met\
+hod\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\
+\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-pay\
+load\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-\
+alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\
+\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09\
+DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19\
+destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-ref\
+used\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\x17connection-re\
+ad-timeout\0\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12\
+TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\
+\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-reques\
+t-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-inv\
+alid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\
+\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\
+\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HT\
+TP-response-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\
+\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\
+\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\
+\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTT\
+P-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configur\
+ation-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\
+\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\
+\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\
+\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10\
+incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-opti\
+ons\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\
+\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-t\
+railers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\
+\x04\0\x18future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructo\
+r]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\
+\x18[static]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\
+\0\x12[method]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[meth\
+od]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\
+\0\x12[method]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]\
+fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]f\
+ields.append\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\
+\x01\x04self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\
+\0\x0b\x04\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\
+\x04\0([method]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\
+\0\0\xc4\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming\
+-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]in\
+coming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\
+\x04\0\x20[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\
+\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01\
+@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\
+\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\
+\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-meth\
+od\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-qu\
+ery\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]out\
+going-request.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[\
+method]outgoing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\
+\0\x04\0#[method]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-reques\
+t.authority\x01T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]o\
+utgoing-request.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[meth\
+od]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]requ\
+est-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]req\
+uest-options.connect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\
+\0\x04\0+[method]request-options.set-connect-timeout\x01_\x04\0*[method]request-\
+options.first-byte-timeout\x01^\x04\0.[method]request-options.set-first-byte-tim\
+eout\x01_\x04\0-[method]request-options.between-bytes-timeout\x01^\x04\01[method\
+]request-options.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\
+\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outpa\
+ram.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.\
+status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.heade\
+rs\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01\
+g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[metho\
+d]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[stati\
+c]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0!\
+[method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01\
+j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-\
+trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoi\
+ng-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response\
+.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]o\
+utgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![meth\
+od]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[metho\
+d]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\
+\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\
+\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\
+\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incomin\
+g-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\
+\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming\
+-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\
+\0\x0fhttp-error-code\x01\x8c\x01\x03\0\x15wasi:http/types@0.2.0\x05\x1b\x02\x03\
+\0\x11\x10outgoing-request\x02\x03\0\x11\x0frequest-options\x02\x03\0\x11\x18fut\
+ure-incoming-response\x02\x03\0\x11\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x1c\x04\
+\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x1d\x04\0\x0frequest-options\x03\0\
+\x02\x02\x03\x02\x01\x1e\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\
+\x01\x1f\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\
+\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\
+\x03\0\x20wasi:http/outgoing-handler@0.2.0\x05\x20\x01B\x04\x01m\x06\x05trace\x05\
+debug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05le\
+vel\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging\
+/logging\x05!\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-b\
+ytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x03\0\x1awasi:ra\
+ndom/insecure@0.2.0\x05\"\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\
+\x01\x03\0\x1fwasi:random/insecure-seed@0.2.0\x05#\x01B\x05\x01p}\x01@\x01\x03le\
+nw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\
+\x03\0\x18wasi:random/random@0.2.0\x05$\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\
+\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memo\
+ry\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinval\
+id-state\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote\
+-unreachable\x12connection-refused\x10connection-reset\x12connection-aborted\x12\
+datagram-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermane\
+nt-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\
+\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01\
+o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\
+\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13\
+ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08\
+scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04i\
+pv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\0\x1awasi:sockets/network\
+@0.2.0\x05%\x02\x03\0\x17\x07network\x01B\x05\x02\x03\x02\x01&\x04\0\x07network\x03\
+\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/\
+instance-network@0.2.0\x05'\x02\x03\0\x17\x0aerror-code\x02\x03\0\x17\x0aip-addr\
+ess\x01B\x16\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\0\
+\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
+\x01)\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\
+\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]reso\
+lve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\
+\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\
+\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\
+\x12\x03\0!wasi:sockets/ip-name-lookup@0.2.0\x05*\x02\x03\0\x17\x11ip-socket-add\
+ress\x02\x03\0\x17\x11ip-address-family\x01BT\x02\x03\x02\x01\x09\x04\0\x0cinput\
+-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\
+\x01\x05\x04\0\x08pollable\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x08duration\x03\0\
+\x06\x02\x03\x02\x01&\x04\0\x07network\x03\0\x08\x02\x03\x02\x01(\x04\0\x0aerror\
+-code\x03\0\x0a\x02\x03\x02\x01+\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\x02\
+\x01,\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04both\x04\
+\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\x01j\
+\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d\
+[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[metho\
+d]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0eremote-a\
+ddress\x0d\0\x15\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\x01i\
+\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![met\
+hod]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-listen\x01\
+\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\
+\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-socket\
+.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]tcp-\
+socket.local-address\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\x04\
+self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04self\x13\
+\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05valu\
+ew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\
+\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01@\x02\
+\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-enabled\x01\
+)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.keep-ali\
+ve-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]tcp-sock\
+et.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-interval\x01\
++\x04\0*[method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\
+\x04self\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\x04self\x13\
+\x05valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\
+\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\
+\x04self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\
+\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive-buffer-si\
+ze\x014\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[method]tcp-\
+socket.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-size\x01&\x01\
+i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\
+\x04self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x01\
+7\x03\0\x16wasi:sockets/tcp@0.2.0\x05-\x02\x03\0\x1a\x0atcp-socket\x01B\x0c\x02\x03\
+\x02\x01&\x04\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\
+\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01.\x04\0\x0a\
+tcp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\
+\0\x09\x04\0\x11create-tcp-socket\x01\x0a\x03\0$wasi:sockets/tcp-create-socket@0\
+.2.0\x05/\x01BD\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\
+\0\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
+\x01+\x04\0\x11ip-socket-address\x03\0\x06\x02\x03\x02\x01,\x04\0\x11ip-address-\
+family\x03\0\x08\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incom\
+ing-datagram\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\
+\x11outgoing-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-da\
+tagram-stream\x03\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\
+\x01j\0\x01\x05\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\
+\0\x1d[method]udp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e\
+[method]udp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\
+\x1a\x01\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]u\
+dp-socket.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20\
+[method]udp-socket.local-address\x01\x1e\x04\0![method]udp-socket.remote-address\
+\x01\x1e\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\
+\x01j\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-h\
+op-limit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\0([method]udp-socket.set-\
+unicast-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]\
+udp-socket.receive-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[\
+method]udp-socket.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.send-buf\
+fer-size\x01$\x04\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\
+\x04self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01\
+j\x01)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incoming-datag\
+ram-stream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-datagram-str\
+eam.subscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram\
+-stream.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[metho\
+d]outgoing-datagram-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing\
+-datagram-stream.subscribe\x011\x03\0\x16wasi:sockets/udp@0.2.0\x050\x02\x03\0\x1c\
+\x0audp-socket\x01B\x0c\x02\x03\x02\x01&\x04\0\x07network\x03\0\0\x02\x03\x02\x01\
+(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\
+\x04\x02\x03\x02\x011\x04\0\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\
+\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x03\0$w\
+asi:sockets/udp-create-socket@0.2.0\x052\x01B@\x02\x03\x02\x01\x05\x04\0\x08poll\
+able\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\
+\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01\
+p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\
+\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\
+\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0b\
+option-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-t\
+ype\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s1\
+6-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dpri\
+m-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\
+\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05\
+nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01\
+o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\
+\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0b\
+tuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresul\
+t-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08pri\
+m-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\
+\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09pri\
+m-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\
+\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05v\
+alue\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01\
+s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
+rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
+\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01\
+p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0\
++\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0d\
+function-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i\
+&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]wasm-\
+rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[metho\
+d]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[metho\
+d]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x01\
+6\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.\
+1.1\x053\x02\x03\0\x1e\x03uri\x01Bg\x02\x03\x02\x014\x04\0\x03uri\x03\0\0\x02\x03\
+\x02\x01\x1a\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01\
+w\x04\0\x11component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\
+\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\
+\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09wo\
+rker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\
+\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09m\
+ax-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\
+\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\
+\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-base\
+d\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\
+\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05\
+equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1b\
+\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06\
+exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\
+\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\
+\x14worker-status-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15wo\
+rker-version-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-\
+created-at-filter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\0\x11\
+worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07version\
+\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\x03\0\
+)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07\
+filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09wo\
+rker-id\x0d\x04args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-countw\
+\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\
+\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-work\
+ers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get\
+-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-i\
+d\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\
+\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-pro\
+mise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\
+\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-comm\
+it\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12\
+mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\x10\
+new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1b\
+get-oplog-persistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\x04\
+\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence-mod\
+e\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\
+\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0etarge\
+t-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11g\
+et-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-worke\
+r-metadata\x01Q\x03\0\x14golem:api/host@1.1.0\x055\x02\x03\0\x1e\x09wit-value\x02\
+\x03\0\x1f\x0aaccount-id\x02\x03\0\x1f\x11component-version\x02\x03\0\x1f\x0bopl\
+og-index\x02\x03\0\x1f\x0cretry-policy\x02\x03\0\x1f\x04uuid\x02\x03\0\x1f\x09wo\
+rker-id\x01Be\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\0\x02\x03\x02\x016\x04\
+\0\x09wit-value\x03\0\x02\x02\x03\x02\x017\x04\0\x0aaccount-id\x03\0\x04\x02\x03\
+\x02\x018\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x019\x04\0\x0boplog-i\
+ndex\x03\0\x08\x02\x03\x02\x01:\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01;\
+\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01<\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01\
+q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\
+\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\
+\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0aparamete\
+rs\x14\x04\0\x1fplugin-installation-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\
+\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-version\x07\x04args\x17\
+\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent-sizew\x20initial-total-\
+linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11create-parameters\x03\
+\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\x08response\x03\
+\x15wrapped-function-type\x12\x04\0$imported-function-invoked-parameters\x03\0\x1c\
+\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07request\x1e\x0fidempote\
+ncy-keys\x04\0$exported-function-invoked-parameters\x03\0\x1f\x01r\x03\x09timest\
+amp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-completed-para\
+meters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameters\x03\0\
+#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\
+\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-p\
+arameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomi\
+c-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1b\
+end-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunc\
+tion-names\x05input-\x04\0'exported-function-invocation-parameters\x03\0.\x01q\x02\
+\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-invocati\
+on\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pending-worker-invocati\
+on-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\
+\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x12\
+update-description6\x04\0\x19pending-update-parameters\x03\07\x01r\x04\x09timest\
+amp\x01\x0etarget-version\x07\x12new-component-sizew\x12new-active-plugins\x19\x04\
+\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etar\
+get-version\x07\x07details;\x04\0\x18failed-update-parameters\x03\0<\x01r\x02\x09\
+timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0>\x01w\x04\0\x12wor\
+ker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x1ac\
+reate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\
+\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\
+\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1cdescribe-resource-parameter\
+s\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\
+\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07\
+contexts\x07messages\x04\0\x0elog-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06\
+plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06\
+plugin\x16\x04\0\x1cdeactivate-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\
+\0\x19imported-function-invoked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\
+\x1bexported-function-completed\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05\
+no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13c\
+hange-retry-policy\x01(\0\x13begin-atomic-region\x01\x01\0\x11end-atomic-region\x01\
+*\0\x12begin-remote-write\x01\x01\0\x10end-remote-write\x01,\0\x19pending-worker\
+-invocation\x013\0\x0epending-update\x018\0\x11successful-update\x01:\0\x0dfaile\
+d-update\x01=\0\x0bgrow-memory\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-res\
+ource\x01\xc5\0\0\x11describe-resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\
+\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\
+\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01\
+iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\0\x04\0\x16[constructor]get-oplo\
+g\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[meth\
+od]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\
+\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\
+\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.get-next\x01`\x03\0\
+\x15golem:api/oplog@1.1.0\x05=\x02\x03\0\x1f\x11persistence-level\x02\x03\0\x20\x0b\
+oplog-index\x02\x03\0\x20\x15wrapped-function-type\x02\x03\0\x1e\x0evalue-and-ty\
+pe\x01B\x20\x02\x03\x02\x01>\x04\0\x11persistence-level\x03\0\0\x02\x03\x02\x01?\
+\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01@\x04\0\x15wrapped-function-type\x03\
+\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\x06\x02\x03\x02\x01A\x04\0\x0e\
+value-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\0\x05\x01r\x02\x07is\
+-live\x7f\x11persistence-level\x01\x04\0\x17durable-execution-state\x03\0\x0b\x01\
+m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01p}\x01r\x05\x09times\
+tamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\x0dentry-version\
+\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\x02\x05ifaces\x08\
+functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\x0dfunction-type\
+\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0dfunction-type\x0a\
+\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\x01@\0\0\x0c\x04\
+\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunction-names\x07requ\
+est\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persist-durable-functio\
+n-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08response\x09\x0d\
+function-type\x0a\x01\0\x04\0)persist-typed-durable-function-invocation\x01\x17\x01\
+@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\x18\x03\0!golem:d\
+urability/durability@1.2.0\x05B\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0f\
+get-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01\
+@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05C\x01\
+B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cl\
+i/exit@0.2.0\x05D\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\
+\x04\0\x1d[method]error.to-debug-string\x01\x02\x04\0\x13wasi:io/error@0.2.0\x05\
+E\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16\
+[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]polla\
+ble.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x04\
+\0\x12wasi:io/poll@0.2.0\x05F\x01B(\x02\x03\x02\x01\x04\x04\0\x05error\x03\0\0\x02\
+\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation\
+-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-s\
+tream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\
+\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\
+\0\"[method]input-stream.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04sel\
+f\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]in\
+put-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[m\
+ethod]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![\
+method]output-stream.check-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08\
+contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\x01\x14\x04\0.[method]ou\
+tput-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b\
+[method]output-stream.flush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\
+\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\
+\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\
+\x17\x04\05[method]output-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\
+\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\
+\x04\0%[method]output-stream.blocking-splice\x01\x18\x04\0\x15wasi:io/streams@0.\
+2.0\x05G\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01\
+@\0\0\x02\x04\0\x0aget-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x05H\x01B\x05\
+\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09\
+get-stdin\x01\x03\x04\0\x14wasi:cli/stdin@0.2.0\x05I\x01B\x05\x02\x03\x02\x01\x07\
+\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\
+\x04\0\x15wasi:cli/stdout@0.2.0\x05J\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\
+\0\x1dwasi:cli/terminal-input@0.2.0\x05K\x01B\x01\x04\0\x0fterminal-output\x03\x01\
+\x04\0\x1ewasi:cli/terminal-output@0.2.0\x05L\x01B\x06\x02\x03\x02\x01\x0e\x04\0\
+\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal\
+-stderr\x01\x04\x04\0\x1ewasi:cli/terminal-stderr@0.2.0\x05M\x01B\x06\x02\x03\x02\
+\x01\x10\x04\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12\
+get-terminal-stdin\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x05N\x01B\x06\x02\
+\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\
+\x04\0\x13get-terminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x05\
+O\x01B\x0f\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\
+\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\
+\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11\
+subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\
+\x01\x0a\x04\0!wasi:clocks/monotonic-clock@0.2.0\x05P\x01B\x05\x01r\x02\x07secon\
+dsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\
+\0\x0aresolution\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x05Q\x01Br\x02\x03\
+\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-s\
+tream\x03\0\x02\x02\x03\x02\x01\x15\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x16\
+\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknow\
+n\x0cblock-device\x10character-device\x09directory\x04fifo\x0dsymbolic-link\x0cr\
+egular-file\x06socket\x04\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05wri\
+te\x13file-integrity-sync\x13data-integrity-sync\x14requested-write-sync\x10muta\
+te-directory\x04\0\x10descriptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\
+\x0apath-flags\x03\0\x0e\x01n\x04\x06create\x09directory\x09exclusive\x08truncat\
+e\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\
+\x06\x04type\x0b\x0alink-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bd\
+ata-modification-timestamp\x14\x17status-change-timestamp\x14\x04\0\x0fdescripto\
+r-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\
+\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-e\
+ntry\x03\0\x19\x01m%\x06access\x0bwould-block\x07already\x0ebad-descriptor\x04bu\
+sy\x08deadlock\x05quota\x05exist\x0efile-too-large\x15illegal-byte-sequence\x0bi\
+n-progress\x0binterrupted\x07invalid\x02io\x0cis-directory\x04loop\x0etoo-many-l\
+inks\x0cmessage-size\x0dname-too-long\x09no-device\x08no-entry\x07no-lock\x13ins\
+ufficient-memory\x12insufficient-space\x0dnot-directory\x09not-empty\x0fnot-reco\
+verable\x0bunsupported\x06no-tty\x0eno-such-device\x08overflow\x0dnot-permitted\x04\
+pipe\x09read-only\x0cinvalid-seek\x0etext-file-busy\x0ccross-device\x04\0\x0aerr\
+or-code\x03\0\x1b\x01m\x06\x06normal\x0asequential\x06random\x09will-need\x09don\
+t-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13\
+metadata-hash-value\x03\0\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16directory-ent\
+ry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self#\x06offset\x09\
+\0%\x04\0\"[method]descriptor.read-via-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01\
+@\x02\x04self#\x06offset\x09\0(\x04\0#[method]descriptor.write-via-stream\x01)\x01\
+@\x01\x04self#\0(\x04\0$[method]descriptor.append-via-stream\x01*\x01j\0\x01\x1c\
+\x01@\x04\x04self#\x06offset\x09\x06length\x09\x06advice\x1e\0+\x04\0\x19[method\
+]descriptor.advise\x01,\x01@\x01\x04self#\0+\x04\0\x1c[method]descriptor.sync-da\
+ta\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]descriptor.ge\
+t-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[method]descript\
+or.get-type\x011\x01@\x02\x04self#\x04size\x09\0+\x04\0\x1b[method]descriptor.se\
+t-size\x012\x01@\x03\x04self#\x15data-access-timestamp\x18\x1bdata-modification-\
+timestamp\x18\0+\x04\0\x1c[method]descriptor.set-times\x013\x01p}\x01o\x024\x7f\x01\
+j\x015\x01\x1c\x01@\x03\x04self#\x06length\x09\x06offset\x09\06\x04\0\x17[method\
+]descriptor.read\x017\x01j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buffer4\x06offse\
+t\x09\08\x04\0\x18[method]descriptor.write\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\
+\x04self#\0;\x04\0![method]descriptor.read-directory\x01<\x04\0\x17[method]descr\
+iptor.sync\x01-\x01@\x02\x04self#\x04paths\0+\x04\0&[method]descriptor.create-di\
+rectory-at\x01=\x01j\x01\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17[method]descr\
+iptor.stat\x01?\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0>\x04\0\x1a[method\
+]descriptor.stat-at\x01@\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x15data-ac\
+cess-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1f[method]descri\
+ptor.set-times-at\x01A\x01@\x05\x04self#\x0eold-path-flags\x0f\x08old-paths\x0en\
+ew-descriptor#\x08new-paths\0+\x04\0\x1a[method]descriptor.link-at\x01B\x01i!\x01\
+j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x0aopen-flags\x11\
+\x05flags\x0d\0\xc4\0\x04\0\x1a[method]descriptor.open-at\x01E\x01j\x01s\x01\x1c\
+\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\x1e[method]descriptor.readlink-at\x01G\
+\x04\0&[method]descriptor.remove-directory-at\x01=\x01@\x04\x04self#\x08old-path\
+s\x0enew-descriptor#\x08new-paths\0+\x04\0\x1c[method]descriptor.rename-at\x01H\x01\
+@\x03\x04self#\x08old-paths\x08new-paths\0+\x04\0\x1d[method]descriptor.symlink-\
+at\x01I\x04\0![method]descriptor.unlink-file-at\x01=\x01@\x02\x04self#\x05other#\
+\0\x7f\x04\0![method]descriptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\
+\x04self#\0\xcb\0\x04\0\x20[method]descriptor.metadata-hash\x01L\x01@\x03\x04sel\
+f#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01\
+M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[m\
+ethod]directory-entry-stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\
+\x03err\xd2\0\0\xd3\0\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesyst\
+em/types@0.2.0\x05R\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\0\0\x01\
+i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\
+\x1ewasi:filesystem/preopens@0.2.0\x05S\x01B\xc0\x01\x02\x03\x02\x01\x1a\x04\0\x08\
+duration\x03\0\0\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\
+\x01\x07\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x04\x04\0\x08io-error\x03\
+\0\x06\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04he\
+ad\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05tra\
+ce\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\
+\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05\
+rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08\
+alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01\
+ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\
+\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destinati\
+on-not-found\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\
+\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-termin\
+ated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-\
+write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15T\
+LS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\
+\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHT\
+TP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-UR\
+I-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-hea\
+der-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-t\
+railer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-secti\
+on-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-s\
+ize\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-tra\
+iler-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-\
+content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\
+\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0ei\
+nternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\
+\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\
+\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\
+\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10incoming-reques\
+t\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\
+\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incomi\
+ng-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\
+\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18futu\
+re-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructor]fields\x012\x01\
+o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\x18[static]fiel\
+ds.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\0\x12[method\
+]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\
+\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\0\x12[method\
+]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]fields.delete\
+\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]fields.append\x01\
+>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\x01\x04self7\01\
+\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f\
+[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]\
+incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\
+\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming-request.autho\
+rity\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]incoming-request\
+.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[me\
+thod]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\
+\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04\
+self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\x04self\xcd\
+\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\x02\x04self\
+\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-method\x01S\x01@\
+\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01T\x01\
+@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]outgoing-reques\
+t.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgo\
+ing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[me\
+thod]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-request.authority\x01\
+T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]outgoing-request\
+.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-req\
+uest.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]request-options\x01\
+[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]request-options.co\
+nnect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\0\x04\0+[metho\
+d]request-options.set-connect-timeout\x01_\x04\0*[method]request-options.first-b\
+yte-timeout\x01^\x04\0.[method]request-options.set-first-byte-timeout\x01_\x04\0\
+-[method]request-options.between-bytes-timeout\x01^\x04\01[method]request-option\
+s.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05\
+param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outparam.set\x01c\x01\
+h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.status\x01e\x01@\
+\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.headers\x01f\x01@\x01\
+\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01g\x01h,\x01i\x03\
+\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[method]incoming-body.\
+stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[static]incoming-body.\
+finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0![method]future-t\
+railers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01\
+k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-trailers.get\x01v\
+\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoing-response\x01w\x01\
+h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response.status-code\x01y\x01\
+@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]outgoing-response.set-\
+status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![method]outgoing-response.\
+headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[method]outgoing-response.b\
+ody\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b\
+[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\x04this\xce\0\x08\
+trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\x01\x82\x01\x01h0\
+\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incoming-response.subscri\
+be\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\0\x01k\x87\x01\x01\
+@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming-response.get\x01\x89\
+\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\0\x0fhttp-error-cod\
+e\x01\x8c\x01\x04\0\x15wasi:http/types@0.2.0\x05T\x01B\x0f\x02\x03\x02\x01\x1c\x04\
+\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x1d\x04\0\x0frequest-options\x03\0\
+\x02\x02\x03\x02\x01\x1e\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\
+\x01\x1f\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\
+\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\
+\x04\0\x20wasi:http/outgoing-handler@0.2.0\x05U\x01B\x04\x01m\x06\x05trace\x05de\
+bug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05leve\
+l\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x04\0\x14wasi:logging/l\
+ogging\x05V\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-byt\
+es\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x04\0\x1awasi:rand\
+om/insecure@0.2.0\x05W\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\
+\x01\x04\0\x1fwasi:random/insecure-seed@0.2.0\x05X\x01B\x05\x01p}\x01@\x01\x03le\
+nw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\
+\x04\0\x18wasi:random/random@0.2.0\x05Y\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\
+\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memo\
+ry\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinval\
+id-state\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote\
+-unreachable\x12connection-refused\x10connection-reset\x12connection-aborted\x12\
+datagram-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermane\
+nt-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\
+\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01\
+o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\
+\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13\
+ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08\
+scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04i\
+pv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x04\0\x1awasi:sockets/network\
+@0.2.0\x05Z\x01B\x05\x02\x03\x02\x01&\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\
+\x02\x04\0\x10instance-network\x01\x03\x04\0#wasi:sockets/instance-network@0.2.0\
+\x05[\x01B\x16\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\
+\0\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
+\x01)\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\
+\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]reso\
+lve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\
+\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\
+\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\
+\x12\x04\0!wasi:sockets/ip-name-lookup@0.2.0\x05\\\x01BT\x02\x03\x02\x01\x09\x04\
+\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\
+\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x08durati\
+on\x03\0\x06\x02\x03\x02\x01&\x04\0\x07network\x03\0\x08\x02\x03\x02\x01(\x04\0\x0a\
+error-code\x03\0\x0a\x02\x03\x02\x01+\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\
+\x02\x01,\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04bo\
+th\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\
+\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\
+\0\x1d[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e\
+[method]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0ere\
+mote-address\x0d\0\x15\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\
+\x01i\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0\
+![method]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-lis\
+ten\x01\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\
+\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-so\
+cket.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]\
+tcp-socket.local-address\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\
+\x04self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04sel\
+f\x13\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05\
+valuew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\
+\x0b\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01\
+@\x02\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-ena\
+bled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.\
+keep-alive-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]\
+tcp-socket.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-int\
+erval\x01+\x04\0*[method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\
+\x01@\x01\x04self\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\
+\x04self\x13\x05valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01\
+j\x01}\x01\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x01\
+1\x01@\x02\x04self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\
+\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive\
+-buffer-size\x014\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[m\
+ethod]tcp-socket.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-\
+size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\
+\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socke\
+t.shutdown\x017\x04\0\x16wasi:sockets/tcp@0.2.0\x05]\x01B\x0c\x02\x03\x02\x01&\x04\
+\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\
+\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01.\x04\0\x0atcp-socket\x03\
+\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11\
+create-tcp-socket\x01\x0a\x04\0$wasi:sockets/tcp-create-socket@0.2.0\x05^\x01BD\x02\
+\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\0\x07network\x03\
+\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01+\x04\0\x11\
+ip-socket-address\x03\0\x06\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\x08\
 \x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagram\x03\
 \0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoing-dat\
 agram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-stream\x03\
@@ -32712,371 +47080,11 @@ e-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]udp-socket
 \x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stream.check-send\
 \x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]outgoing-datagra\
 m-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-datagram-stream.s\
-ubscribe\x011\x03\0\x16wasi:sockets/udp@0.2.0\x05*\x02\x03\0\x1a\x0audp-socket\x01\
-B\x0c\x02\x03\x02\x01\x1f\x04\0\x07network\x03\0\0\x02\x03\x02\x01!\x04\0\x0aerr\
-or-code\x03\0\x02\x02\x03\x02\x01&\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\
-\x01+\x04\0\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0ead\
-dress-family\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x03\0$wasi:sockets/udp\
--create-socket@0.2.0\x05,\x01B@\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01\
-z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05\
-owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\
-\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\
-\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0afl\
-ags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\
-\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0d\
-prim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0d\
-prim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\
-\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-t\
-ype\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\
-\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\
-\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0d\
-variant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-v\
-alue\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\
-\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01\
-w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0c\
-prim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\
-\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\
-\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\
-\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01\
-s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0\
-#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\
-\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\
-\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]w\
-asm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
-function-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self\
-)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-a\
-nd-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-re\
-sult.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-re\
-sult.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vn\
-t\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05-\x02\x03\
-\0\x1c\x03uri\x01Bg\x02\x03\x02\x01.\x04\0\x03uri\x03\0\0\x02\x03\x02\x01$\x04\0\
-\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11compone\
-nt-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\
-\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\
-\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog\
--idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\
-\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09max-delay\x03\x0amult\
-iplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fper\
-sist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persis\
-tence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mo\
-de\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-\
-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05equal\x09not-equa\
-l\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1b\x01m\x07\x07ru\
-nning\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0d\
-worker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\0\x12worker-nam\
-e-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\x14worker-statu\
-s-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15worker-version-fil\
-ter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-created-at-filte\
-r\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\0\x11worker-env-filte\
-r\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07version\x01$\0\x0acreat\
-ed-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\x03\0)\x01p*\x01r\x01\
-\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11\
-worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04arg\
-s1\x03env3\x06status\x1e\x11component-versionw\x0bretry-countw\x04\0\x0fworker-m\
-etadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\
-\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h6\x01\
-p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\
-\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0da\
-wait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\0\x10complete-pr\
-omise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\
-\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-\
-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14\
-mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operatio\
-n\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\x10new-retry-policy\x14\
-\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1bget-oplog-persistenc\
-e-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\x04\0\x1bset-oplog-pers\
-istence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\x0ai\
-dempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18gen\
-erate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mo\
-de\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01\
-O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\0\
-\x14golem:api/host@1.1.0\x05/\x02\x03\0\x1c\x09wit-value\x02\x03\0\x1d\x0aaccoun\
-t-id\x02\x03\0\x1d\x11component-version\x02\x03\0\x1d\x0boplog-index\x02\x03\0\x1d\
-\x0cretry-policy\x02\x03\0\x1d\x04uuid\x02\x03\0\x1d\x09worker-id\x01Be\x02\x03\x02\
-\x01\x16\x04\0\x08datetime\x03\0\0\x02\x03\x02\x010\x04\0\x09wit-value\x03\0\x02\
-\x02\x03\x02\x011\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x012\x04\0\x11compon\
-ent-version\x03\0\x06\x02\x03\x02\x013\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\
-\x014\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x015\x04\0\x04uuid\x03\0\x0c\x02\
-\x03\x02\x016\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0b\
-write-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\
-\x10\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0f\
-installation-id\x0d\x04names\x07versions\x0aparameters\x14\x04\0\x1fplugin-insta\
-llation-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09\
-worker-id\x0f\x11component-version\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06\
-parent\x18\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-ac\
-tive-plugins\x19\x04\0\x11create-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0d\
-function-names\x07request\x03\x08response\x03\x15wrapped-function-type\x12\x04\0\
-$imported-function-invoked-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\
-\x0dfunction-names\x07request\x1e\x0fidempotency-keys\x04\0$exported-function-in\
-voked-parameters\x03\0\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed\
--fuelx\x04\0&exported-function-completed-parameters\x03\0!\x01r\x02\x09timestamp\
-\x01\x05errors\x04\0\x10error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05sta\
-rt\x09\x03end\x09\x04\0\x0fjump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cr\
-etry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0'\x01r\x02\x09times\
-tamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\
-\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\
-\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05input-\x04\0'exporte\
-d-function-invocation-parameters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0d\
-manual-update\x01\x07\0\x04\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\
-\x0ainvocation1\x04\0$pending-worker-invocation-parameters\x03\02\x01p}\x01q\x02\
-\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\0\x12update-description\x03\05\x01\
-r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-description6\x04\0\x19pen\
-ding-update-parameters\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12\
-new-component-sizew\x12new-active-plugins\x19\x04\0\x1csuccessful-update-paramet\
-ers\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\
-\0\x18failed-update-parameters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16\
-grow-memory-parameters\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09\
-timestamp\x01\x0bresource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01\
-r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\
-\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource\
--params\x1e\x04\0\x1cdescribe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06s\
-tderr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\
-\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elo\
-g-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-pl\
-ugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactiva\
-te-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-in\
-voked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\x1bexported-function-comp\
-leted\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01\
-&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13\
-begin-atomic-region\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\
-\x01\0\x10end-remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending\
--update\x018\0\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memor\
-y\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe\
--resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\
-\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09\
-get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05\
-start\x09\0\xd4\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\
-\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\
-\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01\
-[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\
-\0\x1d[method]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x057\x02\
-\x03\0\x1d\x11persistence-level\x02\x03\0\x1e\x0boplog-index\x02\x03\0\x1e\x15wr\
-apped-function-type\x02\x03\0\x1c\x0evalue-and-type\x01B\x20\x02\x03\x02\x018\x04\
-\0\x11persistence-level\x03\0\0\x02\x03\x02\x019\x04\0\x0boplog-index\x03\0\x02\x02\
-\x03\x02\x01:\x04\0\x15wrapped-function-type\x03\0\x04\x02\x03\x02\x01\x16\x04\0\
-\x08datetime\x03\0\x06\x02\x03\x02\x01;\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15\
-durable-function-type\x03\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\
-\x04\0\x17durable-execution-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-\
-entry-version\x03\0\x0d\x01p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08res\
-ponse\x0f\x0dfunction-type\x0a\x0dentry-version\x0e\x04\0%persisted-durable-func\
-tion-invocation\x03\0\x10\x01@\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe\
--function-call\x01\x12\x01@\x01\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durabl\
-e-function\x01\x13\x01@\x02\x0dfunction-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14\
-end-durable-function\x01\x14\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-sta\
-te\x01\x15\x01@\x04\x0dfunction-names\x07request\x0f\x08response\x0f\x0dfunction\
--type\x0a\x01\0\x04\0#persist-durable-function-invocation\x01\x16\x01@\x04\x0dfu\
-nction-names\x07request\x09\x08response\x09\x0dfunction-type\x0a\x01\0\x04\0)per\
-sist-typed-durable-function-invocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted\
--durable-function-invocation\x01\x18\x03\0!golem:durability/durability@1.2.0\x05\
-<\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\
-\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial\
--cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05=\x01B\x03\x01j\0\0\x01@\x01\
-\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05>\x01B\x04\
-\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to\
--debug-string\x01\x02\x04\0\x13wasi:io/error@0.2.0\x05?\x01B\x0a\x04\0\x08pollab\
-le\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\
-\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\
-\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.\
-0\x05@\x01B(\x02\x03\x02\x01\x04\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x05\x04\0\
-\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06c\
-losed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0d\
-output-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03\
-lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-strea\
-m.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\
-\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-ski\
-p\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subs\
-cribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.ch\
-eck-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\
-\x1b[method]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-wri\
-te-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.f\
-lush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\
-\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\
-\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]o\
-utput-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\
-\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]o\
-utput-stream.blocking-splice\x01\x18\x04\0\x15wasi:io/streams@0.2.0\x05A\x01B\x05\
-\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0a\
-get-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x05B\x01B\x05\x02\x03\x02\x01\x09\
-\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x04\
-\0\x14wasi:cli/stdin@0.2.0\x05C\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-str\
-eam\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15wasi:cli/\
-stdout@0.2.0\x05D\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi:cli/ter\
-minal-input@0.2.0\x05E\x01B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1ewasi:c\
-li/terminal-output@0.2.0\x05F\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-out\
-put\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x04\
-\0\x1ewasi:cli/terminal-stderr@0.2.0\x05G\x01B\x06\x02\x03\x02\x01\x10\x04\0\x0e\
-terminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdi\
-n\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x05H\x01B\x06\x02\x03\x02\x01\x0e\
-\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-te\
-rminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x05I\x01B\x0f\x02\x03\
-\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\
-\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0ar\
-esolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\
-\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wa\
-si:clocks/monotonic-clock@0.2.0\x05J\x01B\x05\x01r\x02\x07secondsw\x0bnanosecond\
-sy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresoluti\
-on\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x05K\x01Br\x02\x03\x02\x01\x09\x04\
-\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\
-\x03\x02\x01\x15\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\
-\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10c\
-haracter-device\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\
-\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\
-\x13data-integrity-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10des\
-criptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\
-\x01n\x04\x06create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\
-\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-\
-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bdata-modification-timestam\
-p\x14\x17status-change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\
-\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\
-\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06a\
-ccess\x0bwould-block\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05\
-exist\x0efile-too-large\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07\
-invalid\x02io\x0cis-directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-\
-too-long\x09no-device\x08no-entry\x07no-lock\x13insufficient-memory\x12insuffici\
-ent-space\x0dnot-directory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-\
-tty\x0eno-such-device\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinval\
-id-seek\x0etext-file-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\
-\x06normal\x0asequential\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06\
-advice\x03\0\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\
-\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01\
-i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descri\
-ptor.read-via-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\
-\x09\0(\x04\0#[method]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0\
-$[method]descriptor.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06o\
-ffset\x09\x06length\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\
-\x01@\x01\x04self#\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\
-\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\
-\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\
-\x04self#\x04size\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04s\
-elf#\x15data-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c\
-[method]descriptor.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\
-\x04self#\x06length\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01\
-j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method\
-]descriptor.write\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![meth\
-od]descriptor.read-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\
-\x04self#\x04paths\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\
-\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\
-\x04self#\x0apath-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\
-\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bda\
-ta-modification-timestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01\
-@\x05\x04self#\x0eold-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-path\
-s\0+\x04\0\x1a[method]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\
-\x04self#\x0apath-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\
-\x1a[method]descriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\
-\0\xc6\0\x04\0\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.r\
-emove-directory-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new\
--paths\0+\x04\0\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-pa\
-ths\x08new-paths\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]de\
-scriptor.unlink-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]des\
-criptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\
-\x20[method]descriptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04\
-paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01\
-j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry\
--stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\
-\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesystem/types@0.2.0\x05L\x01\
-B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01\
-p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\x1ewasi:filesystem/pre\
-opens@0.2.0\x05M\x01B\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05error\x08\
-critical\x04\0\x05level\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messages\x01\
-\0\x04\0\x03log\x01\x02\x04\0\x14wasi:logging/logging\x05N\x01B\x05\x01p}\x01@\x01\
-\x03lenw\0\0\x04\0\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\x17get-i\
-nsecure-random-u64\x01\x02\x04\0\x1awasi:random/insecure@0.2.0\x05O\x01B\x03\x01\
-o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\x01\x04\0\x1fwasi:random/insecure-\
-seed@0.2.0\x05P\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\
-\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\x04\0\x18wasi:random/random@0.2.0\
-\x05Q\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0d\
-not-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concurrency-con\
-flict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14\
-address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connection-refus\
-ed\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11name-unres\
-olvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerr\
-or-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01\
-o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\
-\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\
-\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01\
-r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-ad\
-dress\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-\
-address\x03\0\x0f\x04\0\x1awasi:sockets/network@0.2.0\x05R\x01B\x05\x02\x03\x02\x01\
-\x1f\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\
-\x03\x04\0#wasi:sockets/instance-network@0.2.0\x05S\x01B\x16\x02\x03\x02\x01\x05\
-\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01\x1f\x04\0\x07network\x03\0\x02\x02\x03\
-\x02\x01!\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01\"\x04\0\x0aip-address\x03\
-\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\
-\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve-nex\
-t-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-addr\
-ess-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07\
-network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x04\0!wasi:sockets\
-/ip-name-lookup@0.2.0\x05T\x01BT\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\
-\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x05\x04\0\
-\x08pollable\x03\0\x04\x02\x03\x02\x01$\x04\0\x08duration\x03\0\x06\x02\x03\x02\x01\
-\x1f\x04\0\x07network\x03\0\x08\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x0a\x02\
-\x03\x02\x01%\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\x02\x01&\x04\0\x11ip-\
-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04both\x04\0\x0dshutdown-t\
-ype\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\
-\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d[method]tcp-sock\
-et.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]tcp-socket.fin\
-ish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0eremote-address\x0d\0\x15\
-\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\x01i\x03\x01o\x02\x19\
-\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![method]tcp-socket.fi\
-nish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-listen\x01\x17\x04\0\x20[\
-method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\x1a\x01j\x01\x1f\
-\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-socket.accept\x01!\x01j\
-\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]tcp-socket.local-addr\
-ess\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\x04self\x13\0\x7f\
-\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04self\x13\0\x0f\x04\0!\
-[method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0\
-*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\x01@\x01\x04\
-self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01@\x02\x04self\x13\
-\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-enabled\x01)\x01j\x01\
-\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.keep-alive-idle-ti\
-me\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]tcp-socket.set-kee\
-p-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-interval\x01+\x04\0*[\
-method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\x04sel\
-f\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\x04self\x13\x05\
-valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\x0b\
-\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\x04\
-self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\x01\
-w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive-buffer-size\x01\
-4\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[method]tcp-socket\
-.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-size\x01&\x01i\x05\
-\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\x04\
-self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x017\x04\
-\0\x16wasi:sockets/tcp@0.2.0\x05U\x01B\x0c\x02\x03\x02\x01\x1f\x04\0\x07network\x03\
-\0\0\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01&\x04\0\x11ip\
--address-family\x03\0\x04\x02\x03\x02\x01(\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\
-\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-tcp-s\
-ocket\x01\x0a\x04\0$wasi:sockets/tcp-create-socket@0.2.0\x05V\x01BD\x02\x03\x02\x01\
-\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01\x1f\x04\0\x07network\x03\0\x02\x02\
-\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01%\x04\0\x11ip-socket-\
-address\x03\0\x06\x02\x03\x02\x01&\x04\0\x11ip-address-family\x03\0\x08\x01p}\x01\
-r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagram\x03\0\x0b\x01\
-k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoing-datagram\x03\0\
-\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-stream\x03\x01\x04\0\
-\x18outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\x05\x01@\x03\x04\
-self\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\0\x1d[method]udp-socket.s\
-tart-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]udp-socket.finish-\
-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\x1a\x01\x05\x01@\x02\x04\
-self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]udp-socket.stream\x01\x1c\x01\
-j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20[method]udp-socket.local-a\
-ddress\x01\x1e\x04\0![method]udp-socket.remote-address\x01\x1e\x01@\x01\x04self\x13\
-\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\x01j\x01}\x01\x05\x01@\x01\
-\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-hop-limit\x01!\x01@\x02\x04s\
-elf\x13\x05value}\0\x15\x04\0([method]udp-socket.set-unicast-hop-limit\x01\"\x01\
-j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]udp-socket.receive-buffer-s\
-ize\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]udp-socket.set-recei\
-ve-buffer-size\x01%\x04\0#[method]udp-socket.send-buffer-size\x01$\x04\0'[method\
-]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\x04self\x13\0&\x04\0\x1c\
-[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01j\x01)\x01\x05\x01@\x02\x04\
-self(\x0bmax-resultsw\0*\x04\0([method]incoming-datagram-stream.receive\x01+\x01\
-@\x01\x04self(\0&\x04\0*[method]incoming-datagram-stream.subscribe\x01,\x01h\x12\
-\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stream.check-send\x01.\x01\
-p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]outgoing-datagram-stream.\
-send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-datagram-stream.subscribe\x01\
-1\x04\0\x16wasi:sockets/udp@0.2.0\x05W\x01B\x0c\x02\x03\x02\x01\x1f\x04\0\x07net\
-work\x03\0\0\x02\x03\x02\x01!\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01&\x04\
-\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01+\x04\0\x0audp-socket\x03\0\x06\
-\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11cre\
-ate-udp-socket\x01\x0a\x04\0$wasi:sockets/udp-create-socket@0.2.0\x05X\x04\0\x17\
+ubscribe\x011\x04\0\x16wasi:sockets/udp@0.2.0\x05_\x01B\x0c\x02\x03\x02\x01&\x04\
+\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\
+\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x011\x04\0\x0audp-socket\x03\
+\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11\
+create-udp-socket\x01\x0a\x04\0$wasi:sockets/udp-create-socket@0.2.0\x05`\x04\0\x17\
 golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cdurable-wasi\x03\0\0\0G\x09produc\
 ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060\
 .36.0";

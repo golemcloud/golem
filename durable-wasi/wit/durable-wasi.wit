@@ -46,6 +46,13 @@ world durable-wasi {
     import wasi:filesystem/types@0.2.0;
     export wasi:filesystem/types@0.2.0;
 
+    // HTTP
+    import wasi:http/types@0.2.0;
+    export wasi:http/types@0.2.0;
+
+    import wasi:http/outgoing-handler@0.2.0;
+    export wasi:http/outgoing-handler@0.2.0;
+
     // IO
     import wasi:io/error@0.2.0;
     export wasi:io/error@0.2.0;
