@@ -1431,8 +1431,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             let retry_decision_result = result.map(|(decision, _)| decision);
 
+
             record_resume_worker(start.elapsed());
-            record_number_of_replayed_functions(count);
+            if let Ok((_, count)) = result {
+                record_number_of_replayed_functions(count)
+            }
 
             let final_decision =
                 Self::finalize_pending_update(&retry_decision_result, instance, store).await;
