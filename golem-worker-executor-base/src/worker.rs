@@ -1485,6 +1485,9 @@ impl RunningWorker {
                 while let Some(cmd) = receiver.recv().await {
                     waiting_for_command.store(false, Ordering::Release);
                     match cmd {
+                        WorkerCommand::ResumeReplay => {
+
+                        }
                         WorkerCommand::Invocation => {
                             let message = active
                                 .write()
@@ -1989,6 +1992,7 @@ pub enum RetryDecision {
 #[derive(Debug)]
 enum WorkerCommand {
     Invocation,
+    ResumeReplay,
     Interrupt(InterruptKind),
 }
 
