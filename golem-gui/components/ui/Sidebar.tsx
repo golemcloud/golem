@@ -13,10 +13,7 @@ import {
 import { Add } from "@mui/icons-material";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import { ApiRoute } from "@/types/api";
-import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { Button2 } from "./button";
+import RouteSideBar from "../route-side-bar";
 
 type SidebarProps = {
   id: string;
@@ -36,15 +33,8 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
   const pathname = usePathname();
   const router = useRouter();
   const params = useSearchParams();
-  const { apiId } = useCustomParam();
   const version = params.get("version");
-  const {
-    isLoading,
-    getApiDefintion,
-    error: requestError,
-  } = useApiDefinitions(apiId, version);
-  const { data: apiDefintion, error } = (!isLoading && getApiDefintion()) || {};
-
+  
 
   return (
     <Box
@@ -116,43 +106,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
           >
             Routes
           </Typography>
-          {apiDefintion?.routes.map((route: ApiRoute, index: number) => {
-          const routeId = encodeURIComponent(`${route.path}|${route.method}`);
-            return (
-              <Link
-                key={index}
-                href={`/apis/${id}/${routeId}${
-                  version ? `?version=${version}` : ""
-                }`}
-                style={{ textDecoration: "none", color: "inherit" }}
-              >
-                <ListItem
-                  sx={{
-                    marginBottom: "0.8rem",
-                    cursor: "pointer",
-                    backgroundColor:
-                      pathname === `/apis/${id}/${routeId}`
-                        ? "#373737"
-                        : "transparent",
-                    "&:hover": {
-                      backgroundColor: "#373737",
-                    },
-                  }}
-                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0] ${
-                    pathname === `/apis/${id}/${routeId}`
-                      ? "dark:bg-[#373737] bg-[#C0C0C0]"
-                      : "transparent"
-                  }`}
-                >
-                  <ListItemText primary={route.path} />
-                  <ListItemIcon sx={{ minWidth: 32, color: "inherit" }}>
-                    <Button2 variant="success" size="xs">{route.method}</Button2>
-                  </ListItemIcon>
-                 
-                </ListItem>
-              </Link>
-            );
-          })}
+          <RouteSideBar/>
         </>
       )}
 

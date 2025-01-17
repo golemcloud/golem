@@ -426,7 +426,7 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
 
 export default function useWorkers(
   componentId?: string,
-  version?: string | number
+  version?: string | number | null
 ) {
   const { compId } = useCustomParam();
   const path = `${ROUTE_PATH}/${componentId || compId}/workers${

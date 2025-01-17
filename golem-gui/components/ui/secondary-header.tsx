@@ -15,10 +15,7 @@ import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
 import Link from "next/link";
-import {
-  usePathname,
-  useSearchParams,
-} from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button2 } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-button";
@@ -31,8 +28,9 @@ import DeploymentCreationPage from "../deployment-creation";
 import NewRouteForm from "../new-route";
 import DeleteApiVersion from "../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
-import CreateComponentForm from '@/components/new-component';
+import CreateComponentForm from "@/components/new-component";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { ComponentVersionFilter } from "../component-version-filter";
 const actionsMap = {
   new_version: "Create New Version",
   new_route: "Create New Route",
@@ -58,7 +56,7 @@ export default function SecondaryHeader({
   const params = useSearchParams();
   const version = params.get("version");
 
-  console.log(apiId)
+  console.log(apiId);
 
   const [open, setOpen] = useState<string | null>(null);
 
@@ -67,17 +65,21 @@ export default function SecondaryHeader({
   //   return parts[parts.length - 1] || "overview";
   // }, [pathname]);
 
-  const navigationLinks = useMemo(()=>{
+  const navigationLinks = useMemo(() => {
     if (variant === "apis") {
       return [
         {
           name: "Overview",
-          href: `/apis/${apiId}/overview${version ? `?version=${version}` : ""}`,
+          href: `/apis/${apiId}/overview${
+            version ? `?version=${version}` : ""
+          }`,
           icon: <Home fontSize="small" />,
         },
         {
           name: "Settings",
-          href: `/apis/${apiId}/settings${version ? `?version=${version}` : ""}`,
+          href: `/apis/${apiId}/settings${
+            version ? `?version=${version}` : ""
+          }`,
           icon: <Settings fontSize="small" />,
         },
         {
@@ -124,8 +126,7 @@ export default function SecondaryHeader({
         },
       ];
     }
-  }, [variant, compId, apiId, version])
-
+  }, [variant, compId, apiId, version]);
 
   const dropdowns = [
     {
@@ -192,11 +193,11 @@ export default function SecondaryHeader({
 
   const handleClose = () => setOpen(null);
 
-  useEffect(()=>{
-    if(drawerOpen){
-      setDrawerOpen(false)
+  useEffect(() => {
+    if (drawerOpen) {
+      setDrawerOpen(false);
     }
-  },[apiTab])
+  }, [apiTab]);
 
   return (
     <Box className="dark:bg-[#0a0a0a] border-b p-2 pr-5 sm:pr-20">
@@ -215,7 +216,7 @@ export default function SecondaryHeader({
         </Box>
 
         {variant === "apis" && (
-          <VersionFilter showFilter={apiTab != "playground" }/>
+          <VersionFilter showFilter={apiTab != "playground"} />
         )}
         {variant === "apis" && apiTab != "playground" && (
           <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
@@ -224,18 +225,24 @@ export default function SecondaryHeader({
         )}
 
         {pathname === `/components/${compId}/overview` && (
-          <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
-            <Button2
-              variant="primary"
-              startIcon={<AddIcon />}
-              size="md"
-              onClick={(e)=>{e.preventDefault(); setOpen("new_component")}}
-            >
-              New
-            </Button2>
+          <Box className="flex items-center justify-between w-full">
+            <ComponentVersionFilter showFilter={true} />
+            <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
+              <Button2
+                variant="primary"
+                startIcon={<AddIcon />}
+                size="md"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setOpen("new_component");
+                }}
+              >
+                New
+              </Button2>
 
-            <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
-              {Dropdown(workloads)}
+              <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
+                {Dropdown(workloads)}
+              </Box>
             </Box>
           </Box>
         )}
@@ -369,10 +376,7 @@ export default function SecondaryHeader({
           />
         )}
         {open == "new_component" && (
-          <CreateComponentForm
-            mode="create"
-            onSubmitSuccess={handleClose}
-          />
+          <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
         )}
       </CustomModal>
     </Box>
