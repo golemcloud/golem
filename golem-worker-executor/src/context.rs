@@ -119,7 +119,7 @@ impl ExternalOperations<Context> for Context {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Context> + Send),
         instance: &Instance,
-    ) -> Result<(RetryDecision, usize), GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<Context>::resume_replay(store, instance).await
     }
 

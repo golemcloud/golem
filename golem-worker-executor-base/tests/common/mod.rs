@@ -464,7 +464,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
         instance: &Instance,
-    ) -> Result<(RetryDecision, usize), GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance).await
     }
 

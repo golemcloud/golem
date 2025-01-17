@@ -369,7 +369,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
-    ) -> Result<(RetryDecision, usize), GolemError>;
+    ) -> Result<RetryDecision, GolemError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.

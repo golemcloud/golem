@@ -1209,10 +1209,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
-    ) -> Result<(RetryDecision, usize), GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         let mut number_of_replayed_functions = 0;
 
-        loop {
+        let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
 
             if cont {
@@ -1226,7 +1226,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .await;
                 match oplog_entry {
                     Err(error) => break Err(error),
-                    Ok(None) => break Ok((RetryDecision::None, number_of_replayed_functions)),
+                    Ok(None) => break Ok(RetryDecision::None),
                     Ok(Some((function_name, function_input, idempotency_key))) => {
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
@@ -1367,15 +1367,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     None => RetryDecision::None,
                                 };
 
-                                break Ok((decision, number_of_replayed_functions));
+                                break Ok(decision);
                             }
                         }
                     }
                 }
             } else {
-                break Ok((RetryDecision::None, number_of_replayed_functions));
+                break Ok(RetryDecision::None);
             }
-        }
+        };
+
+        record_number_of_replayed_functions(number_of_replayed_functions);
+
+        resume_result
     }
 
     async fn prepare_instance(
@@ -1429,16 +1433,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             let result = Self::resume_replay(store, instance).await;
 
-            let retry_decision_result = result.map(|(decision, _)| decision);
-
-
             record_resume_worker(start.elapsed());
-            if let Ok((_, count)) = result {
-                record_number_of_replayed_functions(count)
-            }
 
-            let final_decision =
-                Self::finalize_pending_update(&retry_decision_result, instance, store).await;
+            let final_decision = Self::finalize_pending_update(&result, instance, store).await;
 
             // The update finalization has the right to override the Err result with an explicit retry request
             if final_decision != RetryDecision::None {
@@ -1447,8 +1444,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             } else {
                 store.as_context_mut().data_mut().set_suspended().await?;
                 debug!("Finished prepare_instance");
-                retry_decision_result
-                    .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+                result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
             }
         }
     }
