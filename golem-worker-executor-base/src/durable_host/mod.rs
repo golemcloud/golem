@@ -1205,7 +1205,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<WorkerStatusRecord, GolemError> {
         calculate_last_known_status(this, owned_worker_id, metadata).await
     }
-    
+
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
@@ -1243,14 +1243,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             store,
                             instance,
                         )
-                            .instrument(span)
-                            .await;
+                        .instrument(span)
+                        .await;
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                   output,
-                                   consumed_fuel,
-                               }) => {
+                                output,
+                                consumed_fuel,
+                            }) => {
                                 let component_metadata =
                                     store.as_context().data().component_metadata();
 
@@ -1260,11 +1260,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 ) {
                                     Ok(value) => {
                                         if let Some(value) = value {
-                                            let result = interpret_function_results(
-                                                output,
-                                                value.results,
-                                            )
-                                                .map_err(|e| GolemError::ValueMismatch {
+                                            let result =
+                                                interpret_function_results(output, value.results)
+                                                    .map_err(|e| GolemError::ValueMismatch {
                                                     details: e.join(", "),
                                                 })?;
                                             if let Err(err) = store
@@ -1299,11 +1297,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         }
                                     }
                                     Err(err) => {
-                                        let trap_type = TrapType::Error(
-                                            WorkerError::InvalidRequest(format!(
+                                        let trap_type =
+                                            TrapType::Error(WorkerError::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
-                                            )),
-                                        );
+                                            )));
 
                                         let _ = store
                                             .as_context_mut()
@@ -1338,9 +1335,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(interrupt_kind) => {
-                                                    if interrupt_kind
-                                                        == InterruptKind::Interrupt
-                                                    {
+                                                    if interrupt_kind == InterruptKind::Interrupt {
                                                         break Err(GolemError::runtime(
                                                             "Interrupted via the Golem API",
                                                         ));
@@ -1434,17 +1429,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .get_out_of_deleted_region()
                 .await;
 
-            let result =
-                Self::resume_replay(store, instance).await;
+            let result = Self::resume_replay(store, instance).await;
 
-            let retry_decision_result = result.map(|(decision, _)| {
-                decision
-            });
+            let retry_decision_result = result.map(|(decision, _)| decision);
 
             record_resume_worker(start.elapsed());
             record_number_of_replayed_functions(count);
 
-            let final_decision = Self::finalize_pending_update(&retry_decision_result, instance, store).await;
+            let final_decision =
+                Self::finalize_pending_update(&retry_decision_result, instance, store).await;
 
             // The update finalization has the right to override the Err result with an explicit retry request
             if final_decision != RetryDecision::None {
@@ -1453,7 +1446,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             } else {
                 store.as_context_mut().data_mut().set_suspended().await?;
                 debug!("Finished prepare_instance");
-                retry_decision_result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+                retry_decision_result
+                    .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
             }
         }
     }

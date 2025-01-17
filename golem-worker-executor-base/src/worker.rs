@@ -452,6 +452,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub async fn resume_replay(&self) -> Result<(), GolemError> {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                running
+                    .sender
+                    .send(WorkerCommand::ResumeReplay)
+                    .map_err(|_| GolemError::unknown("Failed to resume command"))
+                //Probably just `expect(..)` would be better
+            }
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
+                debug!("Worker is initializing, persisting pending invocation");
+                Err(GolemError::invalid_request(
+                    "Explicit resume is not supported for uninitialized workers",
+                ))
+            }
+        }
+    }
+
     pub async fn invoke(
         &self,
         idempotency_key: IdempotencyKey,
@@ -1486,7 +1504,9 @@ impl RunningWorker {
                     waiting_for_command.store(false, Ordering::Release);
                     match cmd {
                         WorkerCommand::ResumeReplay => {
-
+                            Ctx::resume_replay(&mut *store, &instance)
+                                .await
+                                .expect("resume_replay failed");
                         }
                         WorkerCommand::Invocation => {
                             let message = active
