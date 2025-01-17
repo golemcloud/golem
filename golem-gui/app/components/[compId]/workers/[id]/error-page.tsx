@@ -7,7 +7,7 @@ export default function ErrorPage({ worker }: { worker: Worker }) {
   return (
     <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
       <div className="mx-auto max-w-2xl lg:max-w-none py-4">
-        <Box>
+        <Box className={"space-y-4"}>
           <div className="bg-white dark:bg-[#281619] p-6 rounded-lg shadow-lg border dark:border-[#6a1d25] border-[#f04444]">
             <h2 className="text-lg font-bold text-foreground mb-2">
               Worker Failure
