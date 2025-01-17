@@ -14,6 +14,8 @@ import SecondaryHeader from "@/components/ui/secondary-header";
 import ErrorBoundary from "@/components/erro-boundary";
 import EnvironmentTab from "./environment-tab";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { Loader } from "lucide-react";
+import ErrorPage from "./error-page";
 
 // interface CustomMessage extends WebSocketMessage {
 //   type: 'custom';
@@ -43,11 +45,17 @@ const WorkerListWithDropdowns = () => {
       return <ErrorBoundary message={error|| websocketError}/>
   }
 
+  const isFailed = worker && worker.status === "Failed" 
+
+  if(isLoading){
+    return <Loader/>
+  }
+
   return (
     <Box className="text-black dark:text-white">
       <SecondaryHeader variant="component" onClick={() => {}} />
       {/* {error || websocketError && } */}
-      <Tabs
+      {!isFailed && <Tabs
         value={activeTab}
         variant="scrollable"
         onChange={handleTabChange}
@@ -85,13 +93,14 @@ const WorkerListWithDropdowns = () => {
         <Tab label="Files" />
         <Tab label="Manage" />
         <Tab label="Invoke" />
-      </Tabs>
-      {activeTab === 0 && <Overview worker={worker} isLoading={isLoading} messages={messages}/>}
-      {activeTab === 1 && <TerminalPage messages={messages} />}
-      {activeTab === 2 && <EnvironmentTab worker={worker} />}
-      {activeTab === 3 && <FileComponent />}
-      {activeTab === 4 && <Manage />}
-      {activeTab === 5 && <InvokePage worker={worker} />}
+      </Tabs>}
+      {isFailed && <ErrorPage worker={worker}/>}
+      {!isFailed && activeTab === 0 && <Overview worker={worker} isLoading={isLoading} messages={messages}/>}
+      {!isFailed && activeTab === 2 && <EnvironmentTab worker={worker} />}
+      {!isFailed && activeTab === 1 && <TerminalPage messages={messages} />}
+      {!isFailed && activeTab === 3 && <FileComponent />}
+      {!isFailed && activeTab === 4 && <Manage />}
+      {!isFailed && activeTab === 5 && <InvokePage worker={worker} />}
     </Box>
   );
 };
