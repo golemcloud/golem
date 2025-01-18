@@ -716,7 +716,7 @@ impl DetectedTool {
 
 pub fn diagnose(command: cli::Command) {
     let selected_language = match &command.language {
-        Some(language) => SelectedLanguage::from_flag(language.clone()),
+        Some(language) => SelectedLanguage::from_flag(*language),
         None => SelectedLanguage::from_env(),
     };
 

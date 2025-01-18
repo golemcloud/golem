@@ -596,7 +596,7 @@ impl ExampleDescription {
     pub fn from_example(example: &Example) -> Self {
         Self {
             name: example.name.clone(),
-            language: example.language.clone(),
+            language: example.language,
             description: example.description.clone(),
             tier: example.language.tier(),
         }
