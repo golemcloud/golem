@@ -3963,7 +3963,6 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "hex",
