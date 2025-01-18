@@ -308,7 +308,7 @@ impl Tool {
             Tool::Cargo => ToolMetadata {
                 short_name: "cargo",
                 description: "Rust package manager",
-                version_requirement: MinimumVersion("1.80.1"),
+                version_requirement: MinimumVersion("1.84.0"),
                 instructions:
                     "See the rustup step above (https://www.rust-lang.org/learn/get-started)",
             },
@@ -343,10 +343,10 @@ impl Tool {
             Tool::ComponentizePy => ToolMetadata {
                 short_name: "componentize-py",
                 description: "Tool for converting Python applications to WebAssembly components",
-                version_requirement: ExactVersion("0.13.5"),
+                version_requirement: ExactVersion("0.16.0"),
                 instructions: indoc! {"
                     Install the following specific version:
-                        pip install componentize-py==0.13.5
+                        pip install componentize-py==0.16.0
 
                     For more information see:
                         https://github.com/bytecodealliance/componentize-py
@@ -363,7 +363,7 @@ impl Tool {
             Tool::GolemSdkGo => ToolMetadata {
                 short_name: "golem-go",
                 description: "Golem SDK for Go",
-                version_requirement: MinimumVersion("0.7.0"),
+                version_requirement: MinimumVersion("1.1.0"),
                 instructions: indoc! {"
                     Add latest golem-go as dependency:
                         go get github.com/golemcloud/golem-go
@@ -375,7 +375,7 @@ impl Tool {
             Tool::GolemSdkRust => ToolMetadata {
                 short_name: "golem-rust",
                 description: "Golem SDK for Rust",
-                version_requirement: MinimumVersion("1.0.0"),
+                version_requirement: MinimumVersion("1.1.0"),
                 instructions: indoc! {"
                     Add latest golem-rust as dependency:
                         cargo add golem-rust
@@ -384,7 +384,7 @@ impl Tool {
             Tool::GolemSdkTypeScript => ToolMetadata {
                 short_name: "golem-ts",
                 description: "Golem SDK for JavaScript and TypeScript",
-                version_requirement: MinimumVersion("0.2.0"),
+                version_requirement: MinimumVersion("1.1.0"),
                 instructions: indoc! {"
                     Add latest golem-ts as dependency:
                         npm install --save-dev @golemcloud/golem-ts
@@ -443,7 +443,7 @@ impl Tool {
             Tool::Rustc => ToolMetadata {
                 short_name: "rustc",
                 description: "Rust compiler",
-                version_requirement: MinimumVersion("1.80.1"),
+                version_requirement: MinimumVersion("1.84.0"),
                 instructions: indoc! {"
                     See the rustup step above (https://www.rust-lang.org/learn/get-started),
                     then install latest stable rust:
@@ -476,7 +476,7 @@ impl Tool {
             Tool::TinyGo => ToolMetadata {
                 short_name: "tinygo",
                 description: "Go compiler for WebAssembly (and embedded systems)",
-                version_requirement: MinimumVersion("0.33"),
+                version_requirement: MinimumVersion("0.35"),
                 instructions: indoc! {"
                     Install latest TinyGo:
                         https://tinygo.org/getting-started/install/
@@ -489,8 +489,7 @@ impl Tool {
             Tool::WasiSdk => ToolMetadata {
                 short_name: "wasi-sdk",
                 description: "WebAssembly toolchain for C and C++",
-                // NOTE: Version is not detectable currently, from 24.0 it will be stored in a version file
-                version_requirement: ExactByNameVersion("WASI_SDK set"),
+                version_requirement: MinimumVersion("25.0"),
                 instructions: indoc! {"
                     Install WASI SDK 23.0:
                         https://github.com/WebAssembly/wasi-sdk
@@ -501,25 +500,25 @@ impl Tool {
             Tool::WasmTools => ToolMetadata {
                 short_name: "wasm-tools",
                 description: "Tools for manipulation of WebAssembly modules",
-                version_requirement: ExactVersion("1.210.0"),
+                version_requirement: ExactVersion("1.223.0"),
                 instructions: indoc! {"
                     Install the following specific version of wasm-tools:
-                        cargo install --force --locked  wasm-tools@1.210.0
+                        cargo install --force --locked  wasm-tools@1.223.0
                 "},
             },
             Tool::WitBindgen => ToolMetadata {
                 short_name: "wit-bindgen",
                 description: "Guest language bindings generator for WIT",
-                version_requirement: ExactVersion("0.26.0"),
+                version_requirement: ExactVersion("0.37.0"),
                 instructions: indoc! {"
                     Install the following specific version of wit-bindgen:
-                        cargo install --force --locked wit-bindgen-cli@0.26.0
+                        cargo install --force --locked wit-bindgen-cli@0.37.0
                 "},
             },
             Tool::Zig => ToolMetadata {
                 short_name: "zig",
                 description: "Zig language tooling",
-                version_requirement: MinimumVersion("0.13.0"),
+                version_requirement: MinimumVersion("0.14.0"),
                 instructions: indoc! {"
                     Install latest version of Zig:
                         https://ziglang.org/learn/getting-started/#installing-zig
@@ -604,9 +603,28 @@ impl Tool {
             Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &version_regex),
             Tool::RustTargetWasm32WasiP1 => rust_target(dir, "wasm32-wasip1"),
             Tool::TinyGo => cmd_version(dir, "tinygo", vec!["version"], &version_regex),
-            Tool::WasiSdk => std::env::var("WASI_SDK")
-                .map(|_| "WASI_SDK set".to_string())
-                .map_err(|_| "WASI_SDK no set".to_string()),
+            Tool::WasiSdk => {
+                let wasi_sdk_path = std::env::var("WASI_SDK_PATH")
+                    .map_err(|_| "WASI_SDK_PATH not set".to_string())?;
+                let wasi_sdk_version_file = Path::new(&wasi_sdk_path).join("VERSION");
+                let versions = std::fs::read_to_string(&wasi_sdk_version_file).map_err(|err| {
+                    format!(
+                        "Failed to open {}: {}",
+                        wasi_sdk_version_file.to_string_lossy(),
+                        err
+                    )
+                })?;
+                versions
+                    .lines()
+                    .next()
+                    .ok_or_else(|| {
+                        format!(
+                            "Version not found in {}",
+                            wasi_sdk_version_file.to_string_lossy()
+                        )
+                    })
+                    .map(|version| version.to_string())
+            }
             Tool::WasmTools => cmd_version(dir, "wasm-tools", vec!["--version"], &version_regex),
             Tool::WitBindgen => cmd_version(dir, "wit-bindgen", vec!["--version"], &version_regex),
             Tool::Zig => cmd_version(dir, "zig", vec!["version"], &version_regex),
@@ -698,7 +716,7 @@ impl DetectedTool {
 
 pub fn diagnose(command: cli::Command) {
     let selected_language = match &command.language {
-        Some(language) => SelectedLanguage::from_flag(language.clone()),
+        Some(language) => SelectedLanguage::from_flag(*language),
         None => SelectedLanguage::from_env(),
     };
 

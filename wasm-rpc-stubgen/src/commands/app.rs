@@ -20,6 +20,7 @@ use crate::wit_generate::{
 use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use crate::{commands, naming, WasmRpcOverride};
 use anyhow::{anyhow, bail, Context, Error};
+use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use glob::{glob_with, MatchOptions};
 use golem_wasm_rpc::WASM_RPC_VERSION;
@@ -544,9 +545,8 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
         log_action("Cleaning", "common clean targets");
         let _indent = LogIndent::new();
 
-        let common_clean = app.common_clean();
-        for path in &common_clean.value {
-            delete_path("common clean target", &common_clean.source.join(path))?;
+        for clean in app.common_clean() {
+            delete_path("common clean target", &clean.source.join(&clean.value))?;
         }
     }
 
@@ -560,36 +560,128 @@ pub fn clean<CPE: ComponentPropertiesExtensions>(config: Config<CPE>) -> anyhow:
     Ok(())
 }
 
-// TODO: collect_custom_commands is not selected_component_names aware yet
-pub fn collect_custom_commands<CPE: ComponentPropertiesExtensions>(
+pub fn print_dynamic_help<CPE: ComponentPropertiesExtensions>(
     config: Config<CPE>,
-) -> anyhow::Result<BTreeMap<String, BTreeSet<ProfileName>>> {
-    set_log_output(config.log_output);
+) -> anyhow::Result<()> {
+    static LABEL_SOURCE: &str = "Source";
+    static LABEL_SELECTED: &str = "Selected";
+    static LABEL_TEMPLATE: &str = "Template";
+    static LABEL_PROFILES: &str = "Profiles";
+    static LABEL_DEPENDENCIES: &str = "Dependencies";
 
-    let (app, _selected_component_names) = to_anyhow(
-        config.log_output,
-        "Failed to load application manifest(s), see problems above",
-        load_app(&config),
-    )?;
+    let label_padding = {
+        [
+            &LABEL_SOURCE,
+            &LABEL_SELECTED,
+            &LABEL_TEMPLATE,
+            &LABEL_PROFILES,
+            &LABEL_DEPENDENCIES,
+        ]
+        .map(|label| label.len())
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+            + 1
+    };
 
-    let all_profiles = app.all_option_profiles();
+    let print_field = |label: &'static str, value: String| {
+        println!("    {:<label_padding$} {}", format!("{}:", label), value)
+    };
 
-    let mut commands = BTreeMap::<String, BTreeSet<ProfileName>>::new();
-    for profile in &all_profiles {
-        for command in app.all_custom_commands(profile.as_ref()) {
-            if !commands.contains_key(command.as_str()) {
-                commands.insert(command.clone(), BTreeSet::new());
+    let ctx = ApplicationContext::new(config)?;
+    let should_colorize = SHOULD_COLORIZE.should_colorize();
+
+    if ctx.application.has_any_component() {
+        println!("{}", "Components:".log_color_help_group());
+        for component_name in ctx.application.component_names() {
+            let selected = ctx.selected_component_names.contains(component_name);
+            let effective_property_source = ctx
+                .application
+                .component_effective_property_source(component_name, ctx.profile());
+            println!("  {}", component_name.as_str().bold());
+            print_field(
+                LABEL_SELECTED,
+                if selected {
+                    "yes".green().bold().to_string()
+                } else {
+                    "no".red().bold().to_string()
+                },
+            );
+            print_field(
+                LABEL_SOURCE,
+                ctx.application
+                    .component_source(component_name)
+                    .to_string_lossy()
+                    .underline()
+                    .to_string(),
+            );
+            if let Some(template_name) = effective_property_source.template_name {
+                print_field(LABEL_TEMPLATE, template_name.as_str().bold().to_string());
             }
-            profile.iter().for_each(|profile| {
-                commands
-                    .get_mut(command.as_str())
-                    .unwrap()
-                    .insert(profile.clone());
-            });
+            if let Some(selected_profile) = effective_property_source.profile {
+                print_field(
+                    LABEL_PROFILES,
+                    ctx.application
+                        .component_profiles(component_name)
+                        .iter()
+                        .map(|profile| {
+                            if selected_profile == profile {
+                                if should_colorize {
+                                    profile.as_str().bold().underline().to_string()
+                                } else {
+                                    format!("*{}", profile.as_str())
+                                }
+                            } else {
+                                profile.to_string()
+                            }
+                        })
+                        .join(", "),
+                );
+            }
+            let dependencies = ctx
+                .application
+                .component_wasm_rpc_dependencies(component_name);
+            if !dependencies.is_empty() {
+                println!("    {}:", LABEL_DEPENDENCIES);
+                for dependency in dependencies {
+                    println!(
+                        "      - {} ({})",
+                        dependency.name.as_str().bold(),
+                        dependency.dep_type.as_str()
+                    )
+                }
+            }
         }
+        println!()
+    } else {
+        println!("No components found\n");
     }
 
-    Ok(commands)
+    for (profile, commands) in ctx.application.all_custom_commands_for_all_profiles() {
+        if commands.is_empty() {
+            continue;
+        }
+
+        match profile {
+            None => {
+                println!("{}", "Custom commands:".log_color_help_group())
+            }
+            Some(profile) => {
+                println!(
+                    "{}{}{}",
+                    "Custom commands for ".log_color_help_group(),
+                    profile.as_str().log_color_help_group(),
+                    " profile:".log_color_help_group()
+                )
+            }
+        }
+        for command in commands {
+            println!("  {}", command.bold())
+        }
+        println!()
+    }
+
+    Ok(())
 }
 
 pub fn custom_command<CPE: ComponentPropertiesExtensions>(
@@ -599,21 +691,21 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
     if args.len() != 1 {
         bail!("Invalid number of arguments for custom command, expected exactly one argument");
     }
-    let command = &args[0];
+    let command_name = &args[0];
 
     let ctx = ApplicationContext::new(config)?;
 
     let all_custom_commands = ctx.application.all_custom_commands(ctx.profile());
-    if !all_custom_commands.contains(command) {
+    if !all_custom_commands.contains(command_name) {
         if all_custom_commands.is_empty() {
             bail!(
                 "Custom command {} not found, no custom command is available",
-                command.log_color_error_highlight(),
+                command_name.log_color_error_highlight(),
             );
         } else {
             bail!(
                 "Custom command {} not found, available custom commands: {}",
-                command.log_color_error_highlight(),
+                command_name.log_color_error_highlight(),
                 all_custom_commands
                     .iter()
                     .map(|s| s.log_color_highlight())
@@ -624,20 +716,23 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
 
     log_action(
         "Executing",
-        format!("custom command {}", command.log_color_highlight()),
+        format!("custom command {}", command_name.log_color_highlight()),
     );
     let _indent = LogIndent::new();
 
     let common_custom_commands = ctx.application.common_custom_commands();
-    if let Some(custom_command) = common_custom_commands.value.get(command) {
+    if let Some(command) = common_custom_commands.get(command_name) {
         log_action(
             "Executing",
-            format!("common custom command {}", command.log_color_highlight(),),
+            format!(
+                "common custom command {}",
+                command_name.log_color_highlight(),
+            ),
         );
         let _indent = LogIndent::new();
 
-        for step in custom_command {
-            execute_external_command(&ctx, &common_custom_commands.source, step)?;
+        for step in &command.value {
+            execute_external_command(&ctx, &command.source, step)?;
         }
     }
 
@@ -645,12 +740,12 @@ pub fn custom_command<CPE: ComponentPropertiesExtensions>(
         let properties = &ctx
             .application
             .component_properties(component_name, ctx.profile());
-        if let Some(custom_command) = properties.custom_commands.get(command) {
+        if let Some(custom_command) = properties.custom_commands.get(command_name) {
             log_action(
                 "Executing",
                 format!(
                     "custom command {} for component {}",
-                    command.log_color_highlight(),
+                    command_name.log_color_highlight(),
                     component_name.as_str().log_color_highlight()
                 ),
             );

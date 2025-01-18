@@ -15,7 +15,7 @@ interface api {
     auction-id: auction-id,
     name: string,
     description: string,
-    limit-price: float32,
+    limit-price: f32,
     expiration: deadline,
   }
 

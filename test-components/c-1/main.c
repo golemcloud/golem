@@ -9,12 +9,12 @@ int32_t main(void) {
     return 0;
 }
 
-int32_t c_api1_run(void) {
+int32_t exports_c_api1_run(void) {
     printf("Hello World!\n");
     return 100;
 }
 
-void c_api1_print(c_api1_string_t *s) {
+void exports_c_api1_print(c_api1_string_t *s) {
     char* buf = malloc(s->len + 1);
     memset(buf, 0, s->len + 1);
     strncpy(buf, s->ptr, s->len);

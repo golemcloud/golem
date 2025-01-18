@@ -14,24 +14,25 @@
 
 use std::env;
 
+use crate::model::{ExampleDescription, GolemError, GolemResult};
 use golem_examples::model::{
-    ComponentName, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
+    ComponentName, ComposableAppGroupName, ExampleName, ExampleParameters, GuestLanguage,
+    GuestLanguageTier, PackageName, TargetExistsResolveMode,
 };
 use golem_examples::*;
+use itertools::Itertools;
 
-use crate::model::{ExampleDescription, GolemError, GolemResult};
-
-pub fn process_new(
+pub fn new(
     example_name: ExampleName,
     component_name: ComponentName,
     package_name: Option<PackageName>,
 ) -> Result<GolemResult, GolemError> {
-    let examples = GolemExamples::list_all_examples();
+    let examples = all_standalone_examples();
     let example = examples.iter().find(|example| example.name == example_name);
     match example {
         Some(example) => {
             let cwd = env::current_dir().expect("Failed to get current working directory");
-            match GolemExamples::instantiate(
+            match instantiate_example(
                 example,
                 &ExampleParameters {
                     component_name,
@@ -39,6 +40,7 @@ pub fn process_new(
                         .unwrap_or(PackageName::from_string("golem:component").unwrap()),
                     target_path: cwd,
                 },
+                TargetExistsResolveMode::Fail,
             ) {
                 Ok(instructions) => Ok(GolemResult::Str(instructions.to_string())),
                 Err(err) => GolemResult::err(format!("Failed to instantiate component: {err}")),
@@ -50,11 +52,11 @@ pub fn process_new(
     }
 }
 
-pub fn process_list_examples(
+pub fn list_standalone_examples(
     min_tier: Option<GuestLanguageTier>,
     language: Option<GuestLanguage>,
 ) -> Result<GolemResult, GolemError> {
-    let examples = GolemExamples::list_all_examples()
+    let examples = all_standalone_examples()
         .iter()
         .filter(|example| match &language {
             Some(language) => example.language == *language,
@@ -68,4 +70,44 @@ pub fn process_list_examples(
         .collect::<Vec<ExampleDescription>>();
 
     Ok(GolemResult::Ok(Box::new(examples)))
+}
+
+pub fn new_app_component(
+    component_name: PackageName,
+    language: GuestLanguage,
+) -> Result<GolemResult, GolemError> {
+    let all_examples = all_composable_app_examples();
+
+    let Some(language_examples) = all_examples.get(&language) else {
+        return Err(GolemError(format!(
+            "No template found for {}, currently supported languages: {}",
+            language,
+            all_examples.keys().join(", ")
+        )));
+    };
+
+    let default_examples = language_examples
+        .get(&ComposableAppGroupName::default())
+        .expect("No default template found for the selected language");
+
+    assert_eq!(
+        default_examples.components.len(),
+        1,
+        "Expected exactly one default component template"
+    );
+
+    let default_component_example = &default_examples.components[0];
+
+    match add_component_by_example(
+        default_examples.common.as_ref(),
+        default_component_example,
+        &env::current_dir().expect("Failed to get current working directory"),
+        &component_name,
+    ) {
+        Ok(_) => Ok(GolemResult::Str(format!(
+            "Added new app component {}",
+            component_name.to_string_with_colon()
+        ))),
+        Err(err) => Err(GolemError(format!("Failed to add component: {err}"))),
+    }
 }

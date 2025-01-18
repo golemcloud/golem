@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 harness = false
 
 [dependencies]
-wit-bindgen-rt = { version = "=0.26.0", features = ["bitflags"] }
+wit-bindgen-rt = { version = "=0.36.0", features = ["bitflags"] }
 
 arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
 async-recursion = { workspace = true, optional = true }

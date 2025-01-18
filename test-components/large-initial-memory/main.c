@@ -13,7 +13,7 @@ int32_t main(void) {
 #define DATA_SIZE 536870912
 static char DATA[DATA_SIZE] = {};
 
-uint64_t c_api1_run(void) {
+uint64_t exports_c_api1_run(void) {
     printf("DATA:  %lu\n", sizeof(DATA));
     printf("first: %d\n", DATA[0]);
     printf("last:  %d\n", DATA[DATA_SIZE-1]);

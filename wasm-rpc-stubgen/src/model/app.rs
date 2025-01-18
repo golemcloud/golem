@@ -6,7 +6,7 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
@@ -219,8 +219,8 @@ pub struct Application<CPE: ComponentPropertiesExtensions> {
     components: BTreeMap<ComponentName, Component<CPE>>,
     dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
     no_dependencies: BTreeSet<DependentComponent>,
-    custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
-    clean: WithSource<Vec<String>>,
+    custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
+    clean: Vec<WithSource<String>>,
 }
 
 impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
@@ -232,17 +232,21 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.components.keys()
     }
 
+    pub fn has_any_component(&self) -> bool {
+        !self.components.is_empty()
+    }
+
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
         self.components.contains_key(component_name)
     }
 
     pub fn common_custom_commands(
         &self,
-    ) -> &WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>> {
+    ) -> &HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>> {
         &self.custom_commands
     }
 
-    pub fn common_clean(&self) -> &WithSource<Vec<String>> {
+    pub fn common_clean(&self) -> &Vec<WithSource<String>> {
         &self.clean
     }
 
@@ -278,7 +282,37 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
                 .keys()
                 .cloned()
         }));
-        custom_commands.extend(self.custom_commands.value.keys().cloned());
+        custom_commands.extend(self.custom_commands.keys().cloned());
+        custom_commands
+    }
+
+    pub fn all_custom_commands_for_all_profiles(
+        &self,
+    ) -> BTreeMap<Option<ProfileName>, BTreeSet<String>> {
+        let mut custom_commands = BTreeMap::<Option<ProfileName>, BTreeSet<String>>::new();
+
+        custom_commands
+            .entry(None)
+            .or_default()
+            .extend(self.custom_commands.keys().cloned());
+
+        for profile in self.all_option_profiles() {
+            let profile_commands: &mut BTreeSet<String> = {
+                if custom_commands.contains_key(&profile) {
+                    custom_commands.get_mut(&profile).unwrap()
+                } else {
+                    custom_commands.entry(profile.clone()).or_default()
+                }
+            };
+
+            profile_commands.extend(self.component_names().flat_map(|component_name| {
+                self.component_properties(component_name, profile.as_ref())
+                    .custom_commands
+                    .keys()
+                    .cloned()
+            }));
+        }
+
         custom_commands
     }
 
@@ -316,9 +350,9 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             .unwrap_or(&self.no_dependencies)
     }
 
-    fn component_profiles(&self, component_name: &ComponentName) -> HashSet<ProfileName> {
+    pub fn component_profiles(&self, component_name: &ComponentName) -> BTreeSet<ProfileName> {
         match &self.component(component_name).properties {
-            ResolvedComponentProperties::Properties { .. } => HashSet::new(),
+            ResolvedComponentProperties::Properties { .. } => BTreeSet::new(),
             ResolvedComponentProperties::Profiles { profiles, .. } => {
                 profiles.keys().cloned().collect()
             }
@@ -757,8 +791,7 @@ mod app_builder {
         Include,
         TempDir,
         WitDeps,
-        CustomCommands,
-        Clean,
+        CustomCommand(String),
         Template(TemplateName),
         WasmRpcDependency((ComponentName, DependentComponent)),
         Component(ComponentName),
@@ -771,8 +804,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::WitDeps => property,
-                UniqueSourceCheckedEntityKey::CustomCommands => property,
-                UniqueSourceCheckedEntityKey::Clean => property,
+                UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::WasmRpcDependency(_) => "WASM RPC dependency",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -790,10 +822,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::WitDeps => {
                     "witDeps".log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::CustomCommands => {
-                    "customCommands".log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
+                    command_name.log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::Clean => "clean".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Template(template_name) => {
                     template_name.as_str().log_color_highlight().to_string()
                 }
@@ -822,8 +853,8 @@ mod app_builder {
         wit_deps: WithSource<Vec<String>>,
         templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
         dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
-        custom_commands: WithSource<HashMap<String, Vec<app_raw::ExternalCommand>>>,
-        clean: WithSource<Vec<String>>,
+        custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
+        clean: Vec<WithSource<String>>,
         raw_components: HashMap<ComponentName, (PathBuf, app_raw::Component)>,
         resolved_components: BTreeMap<ComponentName, Component<CPE>>,
 
@@ -926,24 +957,24 @@ mod app_builder {
                         );
                     }
 
-                    if !app.application.custom_commands.is_empty()
-                        && self.add_entity_source(
-                            UniqueSourceCheckedEntityKey::CustomCommands,
+                    for (command_name, command) in app.application.custom_commands {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::CustomCommand(command_name.clone()),
                             &app.source,
-                        )
-                    {
-                        self.custom_commands = WithSource::new(
-                            app_source_dir.to_path_buf(),
-                            app.application.custom_commands,
-                        )
+                        ) {
+                            self.custom_commands.insert(
+                                command_name,
+                                WithSource::new(app_source_dir.to_path_buf(), command),
+                            );
+                        }
                     }
 
-                    if !app.application.clean.is_empty()
-                        && self.add_entity_source(UniqueSourceCheckedEntityKey::Clean, &app.source)
-                    {
-                        self.clean =
-                            WithSource::new(app_source_dir.to_path_buf(), app.application.clean);
-                    }
+                    self.clean.extend(
+                        app.application
+                            .clean
+                            .into_iter()
+                            .map(|path| WithSource::new(app.source.to_path_buf(), path)),
+                    );
                 },
             );
         }

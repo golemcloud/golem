@@ -13,7 +13,7 @@ int32_t main(void) {
 #define PAGE_SIZE 1024*1024
 #define COUNT 512
 
-uint64_t c_api1_run(void) {
+uint64_t exports_c_api1_run(void) {
     for (int i = 0; i < COUNT; i++) {
         char* DATA = malloc(PAGE_SIZE);
         printf("page %d first: %d\n", i, DATA[0]);
