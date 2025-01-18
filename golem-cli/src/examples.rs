@@ -14,24 +14,24 @@
 
 use std::env;
 
+use crate::model::{ExampleDescription, GolemError, GolemResult};
 use golem_examples::model::{
     ComponentName, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
+    TargetExistsResolveMode,
 };
 use golem_examples::*;
-
-use crate::model::{ExampleDescription, GolemError, GolemResult};
 
 pub fn process_new(
     example_name: ExampleName,
     component_name: ComponentName,
     package_name: Option<PackageName>,
 ) -> Result<GolemResult, GolemError> {
-    let examples = GolemExamples::list_all_examples();
+    let examples = all_standalone_examples();
     let example = examples.iter().find(|example| example.name == example_name);
     match example {
         Some(example) => {
             let cwd = env::current_dir().expect("Failed to get current working directory");
-            match GolemExamples::instantiate(
+            match instantiate_example(
                 example,
                 &ExampleParameters {
                     component_name,
@@ -39,6 +39,7 @@ pub fn process_new(
                         .unwrap_or(PackageName::from_string("golem:component").unwrap()),
                     target_path: cwd,
                 },
+                TargetExistsResolveMode::Fail
             ) {
                 Ok(instructions) => Ok(GolemResult::Str(instructions.to_string())),
                 Err(err) => GolemResult::err(format!("Failed to instantiate component: {err}")),
@@ -54,7 +55,7 @@ pub fn process_list_examples(
     min_tier: Option<GuestLanguageTier>,
     language: Option<GuestLanguage>,
 ) -> Result<GolemResult, GolemError> {
-    let examples = GolemExamples::list_all_examples()
+    let examples = all_standalone_examples()
         .iter()
         .filter(|example| match &language {
             Some(language) => example.language == *language,
