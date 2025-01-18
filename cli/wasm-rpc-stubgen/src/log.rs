@@ -253,6 +253,10 @@ pub trait LogColorize {
         self.as_str().bold()
     }
 
+    fn log_color_help_group(&self) -> ColoredString {
+        self.as_str().bold().underline()
+    }
+
     fn log_color_error_highlight(&self) -> ColoredString {
         self.as_str().bold().red().underline()
     }
