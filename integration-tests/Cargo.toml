@@ -21,7 +21,6 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 console-subscriber = { workspace = true }
-plotters = "0.3.7"
 poem = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
