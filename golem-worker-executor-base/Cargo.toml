@@ -116,7 +116,6 @@ tracing-subscriber = { workspace = true }
 [build-dependencies]
 cargo_metadata = "0.19.1"
 golem-wit = { workspace = true }
-#golem-wit = { git = "https://github.com/justcoon/golem-wit.git", branch = "rdbms" }
 
 [[test]]
 name = "integration"

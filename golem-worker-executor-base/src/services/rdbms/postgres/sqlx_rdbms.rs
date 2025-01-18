@@ -155,8 +155,8 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
                         get_array_plain_values(value, |v| try_match!(v, DbValue::Domain(r)).ok())?;
                     setter.try_set_value(PgDomains(values))
                 }
-                DbColumnType::Range(v) => {
-                    set_value_helper(setter, &v.base_type, value, DbValueCategory::RangeArray)
+                DbColumnType::Range(t) => {
+                    set_value_helper(setter, &t.base_type, value, DbValueCategory::RangeArray)
                 }
                 _ => set_value_helper(setter, &base_type, value, DbValueCategory::Array),
             }
@@ -388,14 +388,10 @@ fn get_pg_range<T: Clone>(
     f: impl Fn(DbValue) -> Option<T> + Clone,
 ) -> Result<PgCustomRange<T>, String> {
     fn to_value<T: Clone>(v: DbValue, f: impl Fn(DbValue) -> Option<T>) -> Result<T, String> {
-        if let Some(v) = f(v.clone()) {
-            Ok(v)
-        } else {
-            Err(format!(
-                "Bound element '{}' has different type than expected",
-                v
-            ))
-        }
+        f(v.clone()).ok_or(format!(
+            "Bound element '{}' has different type than expected",
+            v
+        ))
     }
 
     fn to_bound<T: Clone>(
@@ -416,27 +412,6 @@ fn get_pg_range<T: Clone>(
     let end = to_bound(value.end, f.clone())?;
 
     Ok(PgCustomRange::new(name, PgRange { start, end }))
-}
-
-fn get_pg_ranges<T: Clone>(
-    values: Vec<Range>,
-    f: impl Fn(DbValue) -> Option<T> + Clone,
-) -> Result<Vec<PgCustomRange<T>>, String> {
-    let mut result: Vec<PgCustomRange<T>> = Vec::with_capacity(values.len());
-    for (index, value) in values.iter().enumerate() {
-        let r = get_pg_range(value.clone(), f.clone());
-
-        if let Ok(v) = r {
-            result.push(v);
-        } else {
-            Err(format!(
-                "Array element '{}' with index {} has different type than expected",
-                value.clone(),
-                index
-            ))?
-        }
-    }
-    Ok(result)
 }
 
 fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> DbValue {
@@ -897,12 +872,16 @@ trait PgValueSetter<'a> {
                 )),
             },
             DbValueCategory::RangeArray => {
-                let ranges: Vec<_> =
-                    get_array_plain_values(value, |v| try_match!(v, DbValue::Range(r)).ok())?;
-                if ranges.is_empty() {
+                let vs: Vec<PgCustomRange<T>> = get_array_plain_values(value, |v| {
+                    if let DbValue::Range(r) = v {
+                        get_pg_range(r, f.clone()).ok()
+                    } else {
+                        None
+                    }
+                })?;
+                if vs.is_empty() {
                     self.try_set_value(PgNull {})
                 } else {
-                    let vs: Vec<PgCustomRange<T>> = get_pg_ranges(ranges, f.clone())?;
                     self.try_set_value(PgCustomRanges(vs))
                 }
             }
