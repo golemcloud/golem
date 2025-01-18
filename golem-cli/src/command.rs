@@ -106,6 +106,8 @@ pub enum StaticSharedCommand {
         #[command(flatten)]
         command: diagnose::cli::Command,
     },
+
+    /// Create a new Golem standalone component example project from built-in examples
     #[command()]
     New {
         #[command(flatten)]
@@ -117,6 +119,17 @@ pub enum StaticSharedCommand {
 
         /// The new component's name
         component_name: ComponentName,
+    },
+
+    /// Add a new Golem component to a project using Golem Application Manifest
+    #[command()]
+    NewAppComponent {
+        /// The component name (and package name) of the generated component (in namespace:name format)
+        component_name: PackageName,
+
+        /// Component language
+        #[arg(short, long, alias = "lang")]
+        language: GuestLanguage,
     },
 
     /// Lists the built-in examples available for creating new components
@@ -140,22 +153,24 @@ impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
                 Ok(GolemResult::Empty)
             }
             StaticSharedCommand::ListExamples { min_tier, language } => {
-                examples::process_list_examples(min_tier, language)
+                examples::list_standalone_examples(min_tier, language)
             }
             StaticSharedCommand::New {
                 name_or_language,
                 package_name,
                 component_name,
-            } => examples::process_new(
+            } => examples::new(
                 name_or_language.example_name(),
                 component_name,
                 package_name,
             ),
+            StaticSharedCommand::NewAppComponent {
+                component_name,
+                language,
+            } => examples::new_app_component(component_name, language),
         }
     }
 }
-
-
 
 /// Commands that are supported by both the OSS and Cloud version
 #[derive(Subcommand, Debug)]
