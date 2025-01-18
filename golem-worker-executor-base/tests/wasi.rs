@@ -1849,3 +1849,47 @@ async fn ip_address_resolve(
     check!(result1.len() > 0);
     check!(result2.len() > 0);
 }
+
+#[test]
+#[tracing::instrument]
+async fn wasi_incoming_request_handler_compat(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .store_component("wasi-http-incoming-request-handler")
+        .await;
+    let worker_id = executor
+        .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
+        .await;
+
+    let args: Value = Value::Record(vec![
+        Value::String("http://localhost:8000".to_string()),
+        Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        Value::List(vec![]),
+        Value::Option(None),
+    ]);
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:http/incoming-handler.{handle}",
+            vec![args],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    println!("foobar");
+
+    check!(result.len() == 1);
+    // check!(result[0] == Value::Record(vec![Value::U16(200), Value::Option(None)]));
+}
