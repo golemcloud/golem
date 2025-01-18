@@ -50,6 +50,9 @@ const generateDefaultValues = (fields: Parameter[]): FormData => {
       case "List":
         defaults[field.name] = [];
         break;
+      case "Bool":
+          defaults[field.name] = false;
+          break;  
       case "Option":
         if (["List", "Tuple"].includes(field.typ?.inner?.type)) {
           defaults[field.name] = [];
@@ -178,9 +181,9 @@ const generateField = (
                 control={
                   <Checkbox
                     {..._field}
-                    // onChange={(e) => {
-                    //   handleChange(finalRootKey, e.target.checked);
-                    // }}
+                    onChange={(e) => {
+                      handleChange(finalRootKey, e.target.checked);
+                    }}
                   />
                 }
                 label={""}
