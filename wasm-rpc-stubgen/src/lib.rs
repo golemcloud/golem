@@ -33,8 +33,6 @@ use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::Subcommand;
-use colored::Colorize;
-use itertools::Itertools;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -194,7 +192,7 @@ pub struct App {
 
 #[derive(Subcommand, Debug)]
 pub enum AppSubCommand {
-    /// Runs component build steps
+    /// Run component build steps
     Build(AppBuildArgs),
     /// Clean outputs
     Clean,
@@ -290,7 +288,7 @@ pub async fn run_app_command<CPE: ComponentPropertiesExtensions>(
         None => {
             clap_command.print_help()?;
             println!();
-            print_app_custom_commands_help(config);
+            print_dynamic_help(config);
             exit(2);
         }
     }
@@ -336,34 +334,10 @@ fn app_manifest_sources_to_resolve_mode(
     }
 }
 
-fn print_app_custom_commands_help<CPE: ComponentPropertiesExtensions>(
-    mut config: commands::app::Config<CPE>,
-) {
+fn print_dynamic_help<CPE: ComponentPropertiesExtensions>(mut config: commands::app::Config<CPE>) {
     config.log_output = Output::None;
-    match commands::app::collect_custom_commands(config) {
-        Ok(commands) => {
-            if !commands.is_empty() {
-                println!("{}", "Custom commands:".bold().underline());
-                for (command, profiles) in commands {
-                    if profiles.is_empty() {
-                        println!("  {}", command);
-                    } else {
-                        println!(
-                            "  {} ({})",
-                            command,
-                            profiles.iter().map(|s| s.to_string()).join(", ")
-                        );
-                    }
-                }
-                println!();
-            }
-        }
-        Err(err) => {
-            println!(
-                "{}\n{:?}",
-                "Cannot show custom commands:".log_color_warn(),
-                err
-            );
-        }
+
+    if let Some(err) = commands::app::print_dynamic_help(config).err() {
+        println!("{}\n{}", "Cannot show dynamic help:".log_color_warn(), err);
     }
 }

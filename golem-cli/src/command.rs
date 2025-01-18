@@ -32,6 +32,8 @@ use api_deployment::ApiDeploymentSubcommand;
 use clap::{self, Command, Subcommand};
 use component::ComponentSubCommand;
 use golem_common::uri::oss::uri::ComponentUri;
+use golem_examples::cli::NameOrLanguage;
+use golem_examples::model::{ComponentName, GuestLanguage, GuestLanguageTier, PackageName};
 use golem_wasm_rpc_stubgen::App;
 use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
@@ -104,9 +106,43 @@ pub enum StaticSharedCommand {
         #[command(flatten)]
         command: diagnose::cli::Command,
     },
-    /// Create a new Golem component from built-in examples
-    #[command(flatten)]
-    Examples(golem_examples::cli::Command),
+
+    /// Create a new Golem standalone component example project from built-in examples
+    #[command()]
+    New {
+        #[command(flatten)]
+        name_or_language: NameOrLanguage,
+
+        /// The package name of the generated component (in namespace:name format)
+        #[arg(short, long)]
+        package_name: Option<PackageName>,
+
+        /// The new component's name
+        component_name: ComponentName,
+    },
+
+    /// Add a new Golem component to a project using Golem Application Manifest
+    #[command()]
+    NewAppComponent {
+        /// The component name (and package name) of the generated component (in namespace:name format)
+        component_name: PackageName,
+
+        /// Component language
+        #[arg(short, long, alias = "lang")]
+        language: GuestLanguage,
+    },
+
+    /// Lists the built-in examples available for creating new components
+    #[command()]
+    ListExamples {
+        /// The minimum language tier to include in the list
+        #[arg(short, long)]
+        min_tier: Option<GuestLanguageTier>,
+
+        /// Filter examples by a given guest language
+        #[arg(short, long, alias = "lang")]
+        language: Option<GuestLanguage>,
+    },
 }
 
 impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
@@ -116,19 +152,22 @@ impl<Ctx> CliCommand<Ctx> for StaticSharedCommand {
                 diagnose(command);
                 Ok(GolemResult::Empty)
             }
-            StaticSharedCommand::Examples(golem_examples::cli::Command::ListExamples {
-                min_tier,
-                language,
-            }) => examples::process_list_examples(min_tier, language),
-            StaticSharedCommand::Examples(golem_examples::cli::Command::New {
+            StaticSharedCommand::ListExamples { min_tier, language } => {
+                examples::list_standalone_examples(min_tier, language)
+            }
+            StaticSharedCommand::New {
                 name_or_language,
                 package_name,
                 component_name,
-            }) => examples::process_new(
+            } => examples::new(
                 name_or_language.example_name(),
                 component_name,
                 package_name,
             ),
+            StaticSharedCommand::NewAppComponent {
+                component_name,
+                language,
+            } => examples::new_app_component(component_name, language),
         }
     }
 }
