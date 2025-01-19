@@ -41,11 +41,14 @@ const WorkerListWithDropdowns = () => {
     setActiveTab(newValue);
   };
 
-  if (error || websocketError) {
+  const isFailed = worker && worker.status === "Failed" 
+
+
+  //if worker status is failed. then we don't need to show the webscoket error.
+  if (error || (websocketError && (!isLoading && !isFailed))) {
       return <ErrorBoundary message={error|| websocketError}/>
   }
 
-  const isFailed = worker && worker.status === "Failed" 
 
   if(isLoading){
     return <Loader/>
@@ -54,7 +57,6 @@ const WorkerListWithDropdowns = () => {
   return (
     <Box className="text-black dark:text-white">
       <SecondaryHeader variant="component" onClick={() => {}} />
-      {/* {error || websocketError && } */}
       {!isFailed && <Tabs
         value={activeTab}
         variant="scrollable"
