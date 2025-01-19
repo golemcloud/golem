@@ -30,6 +30,7 @@ use golem_worker_executor_base::services::worker_activator::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{plugins, All};
 use golem_worker_executor_base::wasi_host::create_linker;
@@ -115,7 +116,37 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     ) -> anyhow::Result<All<DebugContext>> {
         let debug_service = debug_service::configured();
 
-        let extra_deps = AdditionalDeps::new(debug_service);
+        let additional_deps = AdditionalDeps::new(debug_service);
+
+        let worker_fork = Arc::new(DefaultWorkerFork::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            shard_manager_service.clone(),
+            worker_service.clone(),
+            worker_proxy.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            plugins.clone(),
+            oplog_processor_plugin.clone(),
+            additional_deps.clone(),
+        ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -127,6 +158,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            worker_fork.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -143,7 +175,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
-            extra_deps.clone(),
+            additional_deps.clone(),
         ));
 
         Ok(All::new(
@@ -153,6 +185,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             runtime.clone(),
             component_service,
             shard_manager_service,
+            worker_fork,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -170,7 +203,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
-            extra_deps,
+            additional_deps,
         ))
     }
 

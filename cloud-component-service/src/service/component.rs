@@ -7,6 +7,7 @@ use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{CloudPluginOwner, ProjectAction};
 use futures_util::Stream;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
@@ -18,6 +19,7 @@ use golem_component_service_base::model::{
 use golem_component_service_base::service::component::{ComponentError, ComponentService};
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::model::*;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -71,6 +73,7 @@ impl CloudComponentService {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, CloudComponentError> {
         let component_id = ComponentId::new_v4();
@@ -101,6 +104,7 @@ impl CloudComponentService {
                 data.clone(),
                 files,
                 vec![],
+                dynamic_linking,
                 &owner,
             )
             .await?;
@@ -115,6 +119,7 @@ impl CloudComponentService {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, CloudComponentError> {
         let component_id = ComponentId::new_v4();
@@ -145,6 +150,7 @@ impl CloudComponentService {
                 data.clone(),
                 files,
                 vec![],
+                dynamic_linking,
                 &owner,
             )
             .await?;
@@ -158,6 +164,7 @@ impl CloudComponentService {
         component_type: Option<ComponentType>,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, CloudComponentError> {
         let owner = self
@@ -172,7 +179,14 @@ impl CloudComponentService {
 
         let component = self
             .base_component_service
-            .update(component_id, data.clone(), component_type, files, &owner)
+            .update(
+                component_id,
+                data.clone(),
+                component_type,
+                files,
+                dynamic_linking,
+                &owner,
+            )
             .await?;
 
         Ok(component.into())
@@ -184,6 +198,7 @@ impl CloudComponentService {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, CloudComponentError> {
         let owner = self
@@ -198,7 +213,14 @@ impl CloudComponentService {
 
         let component = self
             .base_component_service
-            .update_internal(component_id, data.clone(), component_type, files, &owner)
+            .update_internal(
+                component_id,
+                data.clone(),
+                component_type,
+                files,
+                dynamic_linking,
+                &owner,
+            )
             .await?;
 
         Ok(component.into())

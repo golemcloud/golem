@@ -12,7 +12,7 @@ use golem_common::model::{
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_service_base::model::{ComponentName, ErrorBody, ErrorsBody, VersionedComponentId};
 use golem_service_base::poem::TempFileUpload;
@@ -21,6 +21,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -32,6 +33,7 @@ pub struct UploadPayload {
     component_type: Option<ComponentType>,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
     files: Option<TempFileUpload>,
+    dynamic_linking: Option<JsonField<DynamicLinking>>,
 }
 
 pub struct ComponentApi {
@@ -87,13 +89,20 @@ impl ComponentApi {
     ) -> Result<Json<Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
-            "update_component",
+            "upload_component",
             component_id = component_id.0.to_string()
         );
         let response = {
             let data = wasm.0.into_vec().await?;
             self.component_service
-                .update(&component_id.0, component_type.0, data, None, &auth)
+                .update(
+                    &component_id.0,
+                    component_type.0,
+                    data,
+                    None,
+                    HashMap::new(),
+                    &auth,
+                )
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -133,7 +142,18 @@ impl ComponentApi {
                 );
 
             self.component_service
-                .update(&component_id.0, payload.component_type, data, files, &auth)
+                .update(
+                    &component_id.0,
+                    payload.component_type,
+                    data,
+                    files,
+                    payload
+                        .dynamic_linking
+                        .unwrap_or_default()
+                        .0
+                        .dynamic_linking,
+                    &auth,
+                )
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -181,6 +201,11 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     files,
+                    payload
+                        .dynamic_linking
+                        .unwrap_or_default()
+                        .0
+                        .dynamic_linking,
                     &auth,
                 )
                 .instrument(record.span.clone())

@@ -60,9 +60,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { version = "=21.0.1", features = ["component-model"] }
-wasmtime-wasi = { version = "=21.0.1" }
-wasmtime-wasi-http = { version = "=21.0.1" }
+wasmtime = { version = "=27.0.0", features = ["component-model"] }
+wasmtime-wasi = { version = "=27.0.0" }
+wasmtime-wasi-http = { version = "=27.0.0" }
 webpki-roots = { workspace = true }
 windows-sys = "0.52.0"
 

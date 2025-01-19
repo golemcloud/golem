@@ -223,6 +223,7 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         namespace: CloudNamespace,
+        force: bool,
     ) -> Result<(), WorkerError>;
 
     async fn update(
@@ -276,6 +277,14 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError>;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
         namespace: CloudNamespace,
     ) -> Result<(), WorkerError>;
 }
@@ -562,11 +571,16 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         namespace: CloudNamespace,
+        force: bool,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
         let _ = self
             .base_worker_service
-            .resume(worker_id, worker_namespace.as_worker_request_metadata())
+            .resume(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                force,
+            )
             .await?;
 
         Ok(())
@@ -714,6 +728,27 @@ impl WorkerService for WorkerServiceDefault {
             .deactivate_plugin(
                 worker_id,
                 plugin_installation_id,
+                worker_namespace.as_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        self.base_worker_service
+            .fork_worker(
+                source_worker_id,
+                target_worker_id,
+                oplog_index_cut_off,
                 worker_namespace.as_worker_request_metadata(),
             )
             .await?;

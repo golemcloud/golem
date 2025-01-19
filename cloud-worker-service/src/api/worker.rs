@@ -859,7 +859,7 @@ impl WorkerApi {
             .await?;
         let response = self
             .worker_service
-            .resume(&worker_id, namespace)
+            .resume(&worker_id, namespace, false)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
