@@ -468,6 +468,11 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
             .new_response_outparam(sender)
             .unwrap();
 
+        // unsafety comes from scope_and_collect:
+        //
+        // This function is not completely safe:
+        // please see cancellation_soundness in [tests.rs](https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs) for a test-case that suggests how this can lead to invalid memory access if not dealt with care.
+        // The caller must ensure that the lifetime ’a is valid until the returned future is fully driven. Dropping the future is okay, but blocks the current thread until all spawned futures complete.
         unsafe {
             async_scoped::TokioScope::scope_and_collect(|s| {
                 s.spawn(proxy.wasi_http_incoming_handler().call_handle(
