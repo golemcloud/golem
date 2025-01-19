@@ -5,7 +5,7 @@ use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, FixedOffset};
 use golem_cloud_cli::cloud::model::text::token::{TokenListView, UnsafeTokenView};
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(CloudEnvBasedTestDependencies);
@@ -26,7 +26,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("token_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             token_add((deps, name.to_string(), cli.with_args(short)))
         }
@@ -34,7 +37,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("token_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             token_list((deps, name.to_string(), cli.with_args(short)))
         }
@@ -42,7 +48,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("token_delete{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             token_delete((deps, name.to_string(), cli.with_args(short)))
         }

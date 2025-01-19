@@ -4,7 +4,7 @@ use golem_cli::config::{get_config_dir, Config, Profile};
 use golem_cli::init::CliKind;
 use golem_cli::init_tracing;
 use golem_cli::model::text::fmt::format_error;
-use golem_cli::model::{Format, GolemError, GolemResult};
+use golem_cli::model::{Format, GolemError, GolemResult, PrintRes};
 use golem_cli::oss::cli::GolemOssCli;
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::cli::GolemCloudCli;
@@ -85,7 +85,7 @@ async fn async_main() -> ExitCode {
 fn result_to_exit_code(result: Result<GolemResult, GolemError>, format: Format) -> ExitCode {
     match result {
         Ok(result) => {
-            result.print(format);
+            result.println(format);
             ExitCode::SUCCESS
         }
         Err(error) => {

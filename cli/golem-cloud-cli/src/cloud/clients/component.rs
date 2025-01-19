@@ -84,6 +84,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         component_type: ComponentType,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<golem_client::model::DynamicLinking>,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {file:?}");
 
@@ -91,6 +92,8 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
             project_id: project.map(|ProjectId(id)| id),
             component_name: name.0,
         };
+
+        let dynamic_linking_cloud = dynamic_linking.map(|x| x.to_cloud());
 
         let files_archive_file = match files_archive {
             Some(fa) => {
@@ -115,6 +118,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                         Some(&component_type),
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking_cloud.as_ref(),
                     )
                     .await
                     .map_err(CloudGolemError::from)?
@@ -133,6 +137,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                         Some(&component_type),
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking_cloud.as_ref(),
                     )
                     .await
                     .map_err(CloudGolemError::from)?
@@ -149,8 +154,11 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         component_type: Option<ComponentType>,
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
+        dynamic_linking: Option<golem_client::model::DynamicLinking>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {file:?}");
+
+        let dynamic_linking_cloud = dynamic_linking.map(|x| x.to_cloud());
 
         let files_archive_file = match files_archive {
             Some(fa) => {
@@ -175,6 +183,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                         file,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking_cloud.as_ref(),
                     )
                     .await
                     .map_err(CloudGolemError::from)?
@@ -193,6 +202,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                         bytes,
                         files_permissions,
                         files_archive_file,
+                        dynamic_linking_cloud.as_ref(),
                     )
                     .await
                     .map_err(CloudGolemError::from)?

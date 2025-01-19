@@ -13,7 +13,7 @@ use indoc::formatdoc;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(CloudEnvBasedTestDependencies);
@@ -44,7 +44,10 @@ fn make(
     add_test!(
         r,
         format!("worker_new_instance{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_new_instance((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -52,7 +55,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_and_await{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_and_await((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -60,7 +66,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_and_await_wave_params{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_and_await_wave_params((
                 deps,
@@ -73,7 +82,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_no_params{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_no_params((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -81,7 +93,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_drop{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_drop((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -89,7 +104,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_json_params{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_json_params((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -97,7 +115,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_wave_params{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_wave_params((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -105,7 +126,10 @@ fn make(
     add_test!(
         r,
         format!("worker_connect{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_connect((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -113,7 +137,10 @@ fn make(
     add_test!(
         r,
         format!("worker_connect_failed{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_connect_failed((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -121,7 +148,10 @@ fn make(
     add_test!(
         r,
         format!("worker_interrupt{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_interrupt((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -129,7 +159,10 @@ fn make(
     add_test!(
         r,
         format!("worker_simulated_crash{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_simulated_crash((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -137,7 +170,10 @@ fn make(
     add_test!(
         r,
         format!("worker_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_list((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -145,7 +181,10 @@ fn make(
     add_test!(
         r,
         format!("worker_update{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_update((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
@@ -153,7 +192,10 @@ fn make(
     add_test!(
         r,
         format!("worker_invoke_indexed_resource{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             worker_invoke_indexed_resource((deps, name.to_string(), cli.with_args(short), ref_kind))
         }

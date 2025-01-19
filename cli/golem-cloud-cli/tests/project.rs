@@ -6,7 +6,7 @@ use assert2::assert;
 use golem_cloud_cli::cloud::model::text::project::{
     ProjectAddView, ProjectGetView, ProjectListView,
 };
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(CloudEnvBasedTestDependencies);
@@ -27,7 +27,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("project_get_default{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             project_get_default((deps, name.to_string(), cli.with_args(short)))
         }
@@ -35,7 +38,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("project_list{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             project_list((deps, name.to_string(), cli.with_args(short)))
         }

@@ -6,7 +6,7 @@ pub mod to_oss;
 use async_trait::async_trait;
 use clap::{ArgMatches, Error, FromArgMatches};
 use derive_more::{Display, FromStr, Into};
-use golem_cli::command::ComponentRefSplit;
+use golem_cli::command::{ComponentRefSplit, ComponentRefsSplit};
 use golem_cli::model::plugin_manifest::{FromPluginManifest, PluginManifest};
 use golem_cli::model::{ComponentIdResolver, ComponentName, GolemError, PluginScopeArgs};
 use golem_client::model::PluginTypeSpecificDefinition;
@@ -205,6 +205,38 @@ impl clap::Args for CloudComponentUriOrName {
 }
 
 #[derive(clap::Args, Debug, Clone)]
+struct CloudComponentUriOrNamesArgs {
+    /// Component URI. Either URN or URL.
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "URI",
+        conflicts_with_all = vec!["component_name"],
+    )]
+    component: Option<ComponentUri>,
+
+    /// Name of the component(s). When used with application manifest then multiple ones can be defined.
+    #[arg(short, long)]
+    component_name: Vec<String>,
+
+    #[arg(
+        short = 'P',
+        long,
+        conflicts_with = "project_name",
+        conflicts_with = "component"
+    )]
+    project: Option<ProjectUri>,
+
+    #[arg(
+        short = 'p',
+        long,
+        conflicts_with = "project",
+        conflicts_with = "component"
+    )]
+    project_name: Option<String>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
 struct CloudComponentUriOrNameArgs {
     #[arg(short = 'C', long, conflicts_with = "component_name", required = true)]
     component: Option<ComponentUri>,
@@ -262,6 +294,43 @@ impl From<&CloudComponentUriOrNameArgs> for CloudComponentUriOrName {
     }
 }
 
+impl From<&CloudComponentUriOrNamesArgs> for CloudComponentUriOrNames {
+    fn from(value: &CloudComponentUriOrNamesArgs) -> CloudComponentUriOrNames {
+        let pr = if let Some(uri) = value.project.clone() {
+            ProjectRef {
+                uri: Some(uri),
+                explicit_name: false,
+            }
+        } else if let Some(name) = value.project_name.clone() {
+            ProjectRef {
+                uri: Some(ProjectUri::URL(ProjectUrl {
+                    name,
+                    account: None,
+                })),
+                explicit_name: true,
+            }
+        } else {
+            ProjectRef {
+                uri: None,
+                explicit_name: false,
+            }
+        };
+
+        if let Some(uri) = value.component.clone() {
+            CloudComponentUriOrNames::Uri(uri)
+        } else {
+            CloudComponentUriOrNames::Names(
+                value
+                    .component_name
+                    .iter()
+                    .map(|n| ComponentName(n.clone()))
+                    .collect(),
+                pr,
+            )
+        }
+    }
+}
+
 impl From<&CloudComponentUriOrName> for CloudComponentUriOrNameArgs {
     fn from(value: &CloudComponentUriOrName) -> CloudComponentUriOrNameArgs {
         match value {
@@ -280,6 +349,32 @@ impl From<&CloudComponentUriOrName> for CloudComponentUriOrNameArgs {
                 CloudComponentUriOrNameArgs {
                     component: None,
                     component_name: Some(name.clone()),
+                    project,
+                    project_name,
+                }
+            }
+        }
+    }
+}
+
+impl From<&CloudComponentUriOrNames> for CloudComponentUriOrNamesArgs {
+    fn from(value: &CloudComponentUriOrNames) -> CloudComponentUriOrNamesArgs {
+        match value {
+            CloudComponentUriOrNames::Uri(uri) => CloudComponentUriOrNamesArgs {
+                component: Some(uri.clone()),
+                component_name: vec![],
+                project: None,
+                project_name: None,
+            },
+            CloudComponentUriOrNames::Names(names, pr) => {
+                let ProjectRefArgs {
+                    project,
+                    project_name,
+                } = ProjectRefArgs::from(pr);
+
+                CloudComponentUriOrNamesArgs {
+                    component: None,
+                    component_name: names.iter().map(|n| n.0.clone()).collect(),
                     project,
                     project_name,
                 }
@@ -320,6 +415,72 @@ impl ComponentRefSplit<ProjectRef> for CloudComponentUriOrName {
                 (uri, Some(p))
             }
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CloudComponentUriOrNames {
+    Uri(ComponentUri),
+    Names(Vec<ComponentName>, ProjectRef),
+}
+
+impl ComponentRefsSplit<ProjectRef> for CloudComponentUriOrNames {
+    fn split(
+        self,
+    ) -> Option<(
+        Vec<golem_common::uri::oss::uri::ComponentUri>,
+        Option<ProjectRef>,
+    )> {
+        match self {
+            CloudComponentUriOrNames::Uri(uri) => {
+                let (uri, p) = uri.to_oss_uri();
+
+                let p = ProjectRef {
+                    uri: p.map(ProjectUri::URL),
+                    explicit_name: false,
+                };
+
+                Some((vec![uri], Some(p)))
+            }
+            CloudComponentUriOrNames::Names(names, p) => {
+                let p = Some(p);
+                Some((
+                    names
+                        .into_iter()
+                        .map(|n| {
+                            golem_common::uri::oss::uri::ComponentUri::URL(
+                                golem_common::uri::oss::url::ComponentUrl { name: n.0 },
+                            )
+                        })
+                        .collect(),
+                    p,
+                ))
+            }
+        }
+    }
+}
+
+impl FromArgMatches for CloudComponentUriOrNames {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        CloudComponentUriOrNamesArgs::from_arg_matches(matches).map(|c| (&c).into())
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        let prc0: CloudComponentUriOrNamesArgs = (&self.clone()).into();
+        let mut prc = prc0.clone();
+        let res = CloudComponentUriOrNamesArgs::update_from_arg_matches(&mut prc, matches);
+        *self = (&prc).into();
+        res
+    }
+}
+
+impl clap::Args for CloudComponentUriOrNames {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        CloudComponentUriOrNamesArgs::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        CloudComponentUriOrNamesArgs::augment_args_for_update(cmd)
     }
 }
 

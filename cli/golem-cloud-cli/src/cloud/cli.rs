@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use super::factory::{CloudProfileAuth, CloudServiceFactory};
 use super::model::{
-    CloudPluginScopeArgs, PluginDefinition, PluginDefinitionWithoutOwner, ProjectAction,
+    CloudComponentUriOrNames, CloudPluginScopeArgs, PluginDefinition, PluginDefinitionWithoutOwner,
+    ProjectAction,
 };
 use crate::cloud::command::account::AccountSubcommand;
 use crate::cloud::command::certificate::CertificateSubcommand;
@@ -354,6 +355,7 @@ pub struct ProjectActionsOrPolicyId {
 type SpecializedSharedCommand<ProfileAdd> = SharedCommand<
     ProjectRef,
     CloudComponentUriOrName,
+    CloudComponentUriOrNames,
     CloudWorkerUriArg,
     CloudPluginScopeArgs,
     ProfileAdd,

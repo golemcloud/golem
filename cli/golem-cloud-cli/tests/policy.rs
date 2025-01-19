@@ -5,7 +5,7 @@ use crate::Tracing;
 use assert2::assert;
 use golem_cloud_cli::cloud::model::text::project::{ProjectPolicyAddView, ProjectPolicyGetView};
 use golem_cloud_client::model::ProjectAction;
-use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::core::{DynamicTestRegistration, TestProperties, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 inherit_test_dep!(CloudEnvBasedTestDependencies);
@@ -26,7 +26,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("policy_add{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             policy_add((deps, name.to_string(), cli.with_args(short)))
         }
@@ -34,7 +37,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     add_test!(
         r,
         format!("policy_get{suffix}"),
-        TestType::IntegrationTest,
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
         move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             policy_get((deps, name.to_string(), cli.with_args(short)))
         }

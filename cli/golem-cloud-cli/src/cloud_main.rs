@@ -3,6 +3,7 @@ use golem_cli::config::{get_config_dir, CloudProfile, Config, NamedProfile, Prof
 use golem_cli::init::CliKind;
 use golem_cli::init_tracing;
 use golem_cli::model::text::fmt::format_error;
+use golem_cli::model::PrintRes;
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::cli::GolemCloudCli;
 use std::path::Path;
@@ -29,7 +30,7 @@ fn main() -> ExitCode {
 
     let format = parsed.format.unwrap_or(profile.config.default_format);
 
-    init_tracing(parsed.verbosity.clone());
+    init_tracing(parsed.verbosity);
 
     info!(
         profile = format!("{:?}", profile_name),
@@ -53,7 +54,7 @@ fn main() -> ExitCode {
 
     match result {
         Ok(result) => {
-            result.print(format);
+            result.println(format);
             ExitCode::SUCCESS
         }
         Err(error) => {
