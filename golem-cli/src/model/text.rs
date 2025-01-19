@@ -695,7 +695,7 @@ pub mod example {
         fn from(value: &ExampleDescription) -> Self {
             Self {
                 name: value.name.clone(),
-                language: value.language.clone(),
+                language: value.language,
                 tier: value.tier.clone(),
                 description: textwrap::wrap(&value.description, 30).join("\n"),
             }

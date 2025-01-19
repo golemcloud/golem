@@ -6,7 +6,7 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
@@ -232,6 +232,10 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         self.components.keys()
     }
 
+    pub fn has_any_component(&self) -> bool {
+        !self.components.is_empty()
+    }
+
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
         self.components.contains_key(component_name)
     }
@@ -282,6 +286,36 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
         custom_commands
     }
 
+    pub fn all_custom_commands_for_all_profiles(
+        &self,
+    ) -> BTreeMap<Option<ProfileName>, BTreeSet<String>> {
+        let mut custom_commands = BTreeMap::<Option<ProfileName>, BTreeSet<String>>::new();
+
+        custom_commands
+            .entry(None)
+            .or_default()
+            .extend(self.custom_commands.keys().cloned());
+
+        for profile in self.all_option_profiles() {
+            let profile_commands: &mut BTreeSet<String> = {
+                if custom_commands.contains_key(&profile) {
+                    custom_commands.get_mut(&profile).unwrap()
+                } else {
+                    custom_commands.entry(profile.clone()).or_default()
+                }
+            };
+
+            profile_commands.extend(self.component_names().flat_map(|component_name| {
+                self.component_properties(component_name, profile.as_ref())
+                    .custom_commands
+                    .keys()
+                    .cloned()
+            }));
+        }
+
+        custom_commands
+    }
+
     pub fn temp_dir(&self) -> PathBuf {
         match self.temp_dir.as_ref() {
             Some(temp_dir) => temp_dir.source.as_path().join(&temp_dir.value),
@@ -316,9 +350,9 @@ impl<CPE: ComponentPropertiesExtensions> Application<CPE> {
             .unwrap_or(&self.no_dependencies)
     }
 
-    fn component_profiles(&self, component_name: &ComponentName) -> HashSet<ProfileName> {
+    pub fn component_profiles(&self, component_name: &ComponentName) -> BTreeSet<ProfileName> {
         match &self.component(component_name).properties {
-            ResolvedComponentProperties::Properties { .. } => HashSet::new(),
+            ResolvedComponentProperties::Properties { .. } => BTreeSet::new(),
             ResolvedComponentProperties::Profiles { profiles, .. } => {
                 profiles.keys().cloned().collect()
             }

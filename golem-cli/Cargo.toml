@@ -45,7 +45,7 @@ derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }
 glob = "0.3.1"
-golem-examples = { git = "https://github.com/golemcloud/golem-examples.git", branch = "update_to_golem_main" }
+golem-examples = "1.1.1"
 h2 = "0.4.7"
 http = { workspace = true }
 humansize = { workspace = true }
