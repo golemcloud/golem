@@ -72,6 +72,7 @@ export default function Editors() {
                  onSuccess={handleClose}
                  version={trigger?.meta?.version}
                  isModal={true}
+                 noRedirect={true}
                />
               )}
               {trigger?.operation === "new_api" && (
