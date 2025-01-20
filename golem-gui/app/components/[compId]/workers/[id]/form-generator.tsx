@@ -35,7 +35,7 @@ type FormData = {
   [key: string]: unknown;
 };
 
-const generateDefaultValues = (fields: Parameter[]): FormData => {
+export const generateDefaultValues = (fields: Parameter[]): FormData => {
   const defaults: FormData = {};
 
   fields?.forEach((field) => {
