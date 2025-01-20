@@ -26,7 +26,7 @@ use semver::Version;
 //
 // record body-and-trailers {
 //   body: body,
-//   trailers: option<simple-fields>
+//   trailers: option<fields>
 // }
 //
 // record request {
