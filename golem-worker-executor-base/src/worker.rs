@@ -458,11 +458,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 running
                     .sender
                     .send(WorkerCommand::ResumeReplay)
-                    .map_err(|_| GolemError::unknown("Failed to resume command"))
-                //Probably just `expect(..)` would be better
+                    .expect("Failed to send resume command");
+
+                Ok(())
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
-                debug!("Worker is initializing, persisting pending invocation");
                 Err(GolemError::invalid_request(
                     "Explicit resume is not supported for uninitialized workers",
                 ))
