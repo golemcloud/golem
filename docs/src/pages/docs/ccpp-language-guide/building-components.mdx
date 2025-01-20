@@ -28,7 +28,7 @@ Generating "example_component_type.o"
 Include all your source files and additionally the generated `.c` and `.o` files and use the `clang` provided as part of the WASM SDK:
 
 ```shell
-$ ~/wasi-sdk-23.0/bin/clang --sysroot ~/wasi-sdk-23.0/share/wasi-sysroot  main.c example.c example_component_type.o -o example.module.wasm
+$ $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot  main.c example.c example_component_type.o -o example.module.wasm
 ```
 
 ### Package it into a WASM component

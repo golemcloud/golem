@@ -9,11 +9,11 @@ Component with URN urn:component:c57de1ee-fbe5-4068-a67d-908addc8aa44. Version: 
 Component name: cart.
 Exports:
 	golem:component/api.{initialize-cart}(user-id: string)
-	golem:component/api.{add-item}(item: record { product-id: string, name: string, price: float32, quantity: u32 })
+	golem:component/api.{add-item}(item: record { product-id: string, name: string, price: f32, quantity: u32 })
 	golem:component/api.{remove-item}(product-id: string)
 	golem:component/api.{update-item-quantity}(product-id: string, quantity: u32)
 	golem:component/api.{checkout}() -> variant { error(string), success(record { order-id: string }) }
-	golem:component/api.{get-cart-contents}() -> list<record { product-id: string, name: string, price: float32, quantity: u32 }>
+	golem:component/api.{get-cart-contents}() -> list<record { product-id: string, name: string, price: f32, quantity: u32 }>
 ```
 
 Here is an example of an API definition, which we will use to expose an HTTP API over the function `golem:component/api.{get-cart-contents}`.
