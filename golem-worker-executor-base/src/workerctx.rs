@@ -15,7 +15,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 
-use crate::durable_host::DurableWorkerCtxView;
 use crate::error::GolemError;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -74,7 +73,6 @@ pub trait WorkerCtx:
     + Send
     + Sync
     + Sized
-    + DurableWorkerCtxView<Self>
     + 'static
 {
     /// PublicState is a subset of the worker context which is accessible outside the worker

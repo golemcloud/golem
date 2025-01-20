@@ -19,7 +19,7 @@ use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
-use golem_common::model::WorkerStatus;
+use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
@@ -457,13 +457,11 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         let scheme = wasi_http_scheme_from_request(&hyper_request)?;
         let incoming = store_context
             .data_mut()
-            .durable_ctx_mut()
             .as_wasi_http_view()
             .new_incoming_request(scheme, hyper_request)
             .unwrap();
         let outgoing = store_context
             .data_mut()
-            .durable_ctx_mut()
             .as_wasi_http_view()
             .new_response_outparam(sender)
             .unwrap();
@@ -507,34 +505,12 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         }
     };
 
-    let mut store_context = store.as_context_mut();
-
-    let current_fuel_level = store_context.get_fuel().unwrap_or(0);
-    let consumed_fuel = store_context
-        .data_mut()
-        .return_fuel(current_fuel_level as i64)
-        .await?;
-
-    if consumed_fuel > 0 {
-        debug!(
-            "Fuel consumed for call {raw_function_name}: {}",
-            consumed_fuel
-        );
-    }
-
-    if let Some(idempotency_key) = idempotency_key {
-        store_context
-            .data()
-            .get_public_state()
-            .event_service()
-            .emit_invocation_finished(
-                raw_function_name,
-                &idempotency_key,
-                store_context.data().is_live(),
-            );
-    }
-
-    record_invocation_consumption(consumed_fuel);
+    let consumed_fuel = finish_invocation_and_get_fuel_consumption(
+        &mut store.as_context_mut(),
+        raw_function_name,
+        idempotency_key,
+    )
+    .await?;
 
     match res_or_error {
         Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, vec![resp])),
@@ -643,6 +619,18 @@ async fn call_exported_function<Ctx: WorkerCtx>(
         result
     };
 
+    let consumed_fuel_for_call =
+        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name, idempotency_key)
+            .await?;
+
+    Ok((result.map(|_| results), consumed_fuel_for_call))
+}
+
+async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    raw_function_name: &str,
+    idempotency_key: Option<IdempotencyKey>,
+) -> Result<i64, GolemError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store
         .data_mut()
@@ -665,7 +653,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     }
 
     record_invocation_consumption(consumed_fuel_for_call);
-    Ok((result.map(|_| results), consumed_fuel_for_call))
+
+    Ok(consumed_fuel_for_call)
 }
 
 #[derive(Clone, Debug)]
