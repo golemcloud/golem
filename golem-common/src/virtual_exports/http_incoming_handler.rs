@@ -30,16 +30,15 @@ use semver::Version;
 // }
 //
 // record request {
+//   uri: string
 //   method: method,
-//   path-with-query: string,
-//   scheme: scheme,
-//   authority: string,
-//   headers: simple-fields,
+//   headers: fields,
 //   body-and-trailers: option<body-and-trailers>
 // }
 //
 // record response {
 //   status: status-code,
+//   headers: fields,
 //   body: option<body-and-trailers>
 // }
 //
@@ -360,12 +359,12 @@ impl HttpBodyContent {
     }
 }
 
-pub struct HttpBody {
+pub struct HttpBodyAndTrailers {
     pub content: HttpBodyContent,
     pub trailers: Option<HttpFields>,
 }
 
-impl HttpBody {
+impl HttpBodyAndTrailers {
     pub fn analysed_type() -> AnalysedType {
         use golem_wasm_ast::analysis::*;
 
@@ -403,7 +402,7 @@ impl HttpBody {
             "not an option"
         )?;
 
-        Ok(HttpBody { content, trailers })
+        Ok(HttpBodyAndTrailers { content, trailers })
     }
     pub fn to_value(self) -> Value {
         let converted_content = self.content.to_value();
@@ -417,7 +416,7 @@ pub struct IncomingHttpRequest {
     pub uri: String,
     pub method: HttpMethod,
     pub headers: HttpFields,
-    pub body: Option<HttpBody>,
+    pub body: Option<HttpBodyAndTrailers>,
 }
 
 impl IncomingHttpRequest {
@@ -439,9 +438,9 @@ impl IncomingHttpRequest {
                     typ: HttpFields::analyzed_type(),
                 },
                 NameTypePair {
-                    name: "body".to_string(),
+                    name: "body-and-trailers".to_string(),
                     typ: AnalysedType::Option(TypeOption {
-                        inner: Box::new(HttpBody::analysed_type()),
+                        inner: Box::new(HttpBodyAndTrailers::analysed_type()),
                     }),
                 },
             ],
@@ -453,7 +452,7 @@ impl IncomingHttpRequest {
             Err("invalid number of inputs")?;
         };
         Self::from_value(&inputs[0])
-            .map_err(|e| format!("Failed parsing input as http request: ${e}"))
+            .map_err(|e| format!("Failed parsing input as http request: {e}"))
     }
 
     fn from_value(value: &Value) -> Result<Self, String> {
@@ -475,7 +474,7 @@ impl IncomingHttpRequest {
             &record_values[3],
             Value::Option(inner),
             match inner {
-                Some(v) => Some(HttpBody::from_value(v)?),
+                Some(v) => Some(HttpBodyAndTrailers::from_value(v)?),
                 None => None,
             },
             "not an option"
@@ -492,7 +491,8 @@ impl IncomingHttpRequest {
 
 pub struct HttpResponse {
     pub status: u16,
-    pub body: Option<HttpBody>,
+    pub headers: HttpFields,
+    pub body: Option<HttpBodyAndTrailers>,
 }
 
 impl HttpResponse {
@@ -506,9 +506,13 @@ impl HttpResponse {
                     typ: AnalysedType::U16(TypeU16),
                 },
                 NameTypePair {
-                    name: "body".to_string(),
+                    name: "headers".to_string(),
+                    typ: HttpFields::analyzed_type(),
+                },
+                NameTypePair {
+                    name: "body-and-trailers".to_string(),
                     typ: AnalysedType::Option(TypeOption {
-                        inner: Box::new(HttpBody::analysed_type()),
+                        inner: Box::new(HttpBodyAndTrailers::analysed_type()),
                     }),
                 },
             ],
@@ -517,8 +521,9 @@ impl HttpResponse {
 
     pub fn to_value(self) -> Value {
         let converted_status: Value = Value::U16(self.status);
-        let converted_body = Value::Option(self.body.map(|b| Box::new(b.to_value())));
+        let converted_headers: Value = self.headers.to_value();
+        let converted_body: Value = Value::Option(self.body.map(|b| Box::new(b.to_value())));
 
-        Value::Record(vec![converted_status, converted_body])
+        Value::Record(vec![converted_status, converted_headers, converted_body])
     }
 }

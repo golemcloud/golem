@@ -1852,7 +1852,7 @@ async fn ip_address_resolve(
 
 #[test]
 #[tracing::instrument]
-async fn wasi_incoming_request_handler_compat(
+async fn wasi_incoming_request_handler(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1888,8 +1888,147 @@ async fn wasi_incoming_request_handler_compat(
 
     drop(executor);
 
-    println!("foobar");
+    check!(result.len() == 1);
+    check!(
+        result[0]
+            == Value::Record(vec![
+                Value::U16(200),
+                Value::List(vec![]),
+                Value::Option(None)
+            ])
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn wasi_incoming_request_handler_echo(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .store_component("wasi-http-incoming-request-handler-echo")
+        .await;
+
+    let worker_id = executor
+        .start_worker(&component_id, "wasi-http-incoming-request-handler-echo-1")
+        .await;
+
+    let args: Value = Value::Record(vec![
+        Value::String("http://localhost:8000/foo?bar=baz".to_string()),
+        Value::Variant {
+            case_idx: 2,
+            case_value: None,
+        },
+        Value::List(vec![Value::Tuple(vec![
+            Value::String("test-header".to_string()),
+            Value::List(
+                "foobar"
+                    .to_string()
+                    .into_bytes()
+                    .into_iter()
+                    .map(Value::U8)
+                    .collect(),
+            ),
+        ])]),
+        Value::Option(Some(Box::new(Value::Record(vec![
+            Value::List(
+                "test-body"
+                    .to_string()
+                    .into_bytes()
+                    .into_iter()
+                    .map(Value::U8)
+                    .collect(),
+            ),
+            Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
+                Value::String("test-trailer".to_string()),
+                Value::List(
+                    "barfoo"
+                        .to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .map(Value::U8)
+                        .collect(),
+                ),
+            ])])))),
+        ])))),
+    ]);
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:http/incoming-handler.{handle}",
+            vec![args],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
 
     check!(result.len() == 1);
-    // check!(result[0] == Value::Record(vec![Value::U16(200), Value::Option(None)]));
+    check!(
+        result[0]
+            == Value::Record(vec![
+                Value::U16(200),
+                Value::List(vec![
+                    Value::Tuple(vec![
+                        Value::String("echo-test-header".to_string()),
+                        Value::List(
+                            "foobar"
+                                .to_string()
+                                .into_bytes()
+                                .into_iter()
+                                .map(Value::U8)
+                                .collect()
+                        )
+                    ]),
+                    Value::Tuple(vec![
+                        Value::String("x-location".to_string()),
+                        Value::List(
+                            "http://localhost:8000/foo?bar=baz"
+                                .to_string()
+                                .into_bytes()
+                                .into_iter()
+                                .map(Value::U8)
+                                .collect()
+                        )
+                    ]),
+                    Value::Tuple(vec![
+                        Value::String("x-method".to_string()),
+                        Value::List(
+                            "POST"
+                                .to_string()
+                                .into_bytes()
+                                .into_iter()
+                                .map(Value::U8)
+                                .collect()
+                        )
+                    ])
+                ]),
+                Value::Option(Some(Box::new(Value::Record(vec![
+                    Value::List(
+                        "test-body"
+                            .to_string()
+                            .into_bytes()
+                            .into_iter()
+                            .map(Value::U8)
+                            .collect()
+                    ),
+                    Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
+                        Value::String("echo-test-trailer".to_string()),
+                        Value::List(
+                            "barfoo"
+                                .to_string()
+                                .into_bytes()
+                                .into_iter()
+                                .map(Value::U8)
+                                .collect()
+                        )
+                    ])]),)))
+                ]))))
+            ])
+    );
 }

@@ -451,6 +451,8 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
             );
     }
 
+    tracing::debug!("Invoking wasi:http/incoming-http-handler handle");
+
     let (_, mut task_exits) = {
         let hyper_request =
             virtual_export_compat::http_incoming_handler::input_to_hyper_request(function_input)?;
@@ -483,9 +485,18 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         }
     };
 
-    let res_or_error = match receiver.await {
+    let out = receiver.await;
+
+    tracing::warn!("received response {:?}", out);
+
+    let res_or_error = match out {
         Ok(Ok(resp)) => {
-            Ok(virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await?)
+            let out =
+                virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await;
+
+            tracing::warn!("out: ${:?}", out);
+
+            Ok(out?)
         }
         Ok(Err(e)) => Err(anyhow::Error::from(e)),
         Err(_) => {
