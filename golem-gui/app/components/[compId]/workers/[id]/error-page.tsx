@@ -21,13 +21,17 @@ export default function ErrorPage({ worker }: { worker: Worker }) {
             <Typography variant="body1" mb={2}>
               Worker Details
             </Typography>
-            <Grid container spacing={2}  sx={{
-        gridTemplateColumns: {
-          xs: "1fr", // Single column for small screens
-          md: "repeat(2, 1fr)", // Two columns for medium screens and larger
-        },
-        display: "grid",
-      }}>
+            <Grid
+              container
+              spacing={2}
+              sx={{
+                gridTemplateColumns: {
+                  xs: "1fr", // Single column for small screens
+                  md: "repeat(2, 1fr)", // Two columns for medium screens and larger
+                },
+                display: "grid",
+              }}
+            >
               <Grid>
                 <Stack>
                   <Typography>Component ID</Typography>
@@ -71,11 +75,17 @@ export default function ErrorPage({ worker }: { worker: Worker }) {
               </Grid>
             </Grid>
           </Card>
-          <Card className="px-4 py-6 container">
-            <Typography variant="body1" mb={2}>
+          <Card className="px-4 py-6 container break-all">
+            <Typography
+              variant="body1"
+              mb={2}
+              className="text-wrap break-all"
+            >
               Last Error
             </Typography>
-            <Typography variant="body2" className="text-wrap">{worker.lastError}</Typography>
+            <Typography variant="body2" className="text-wrap">
+              {worker.lastError}
+            </Typography>
           </Card>
         </Box>
       </div>

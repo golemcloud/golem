@@ -53,7 +53,9 @@ export default function WorkerInfoCard({ worker, onClick }: { worker: Worker; on
             >
               Status
             </Typography>
-            <Typography variant="body2">{worker.status} </Typography>
+            <Typography variant="body2"
+            className={worker.status==="Failed"?"text-red-500":""}
+            >{worker.status} </Typography>
           </Box>
 
           <Box className="w-fit">
