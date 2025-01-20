@@ -56,7 +56,8 @@ export const fetcher = async (url: string, options?: RequestInit) => {
       const result = isJson ? await res.json() : await res.text();
 
     if (res.status === 500) {
-      throw getErrorMessage(result);
+      // throw getErrorMessage(result);
+      throw new Error(getErrorMessage(result))
     }
 
 
