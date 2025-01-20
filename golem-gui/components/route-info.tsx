@@ -1,7 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { Box, Typography, Grid2 as Grid, Paper, Divider } from "@mui/material";
+import {
+  Box,
+  Typography,
+  Grid2 as Grid,
+  Paper,
+  Divider,
+  Stack,
+} from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
 import { Pencil, Trash } from "lucide-react";
 import { ApiRoute } from "@/types/api";
@@ -13,6 +20,7 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { TryOutlined } from "@mui/icons-material";
 
 const ApiDetails = ({
   route,
@@ -41,7 +49,8 @@ const ApiDetails = ({
       throw error;
     }
   };
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+
   return (
     <>
       <Box>
@@ -52,12 +61,20 @@ const ApiDetails = ({
               {route?.method}
             </Button>
           </Box>
-          <Box>
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <Button
+              variant="primary"
+              size="sm"
+              endIcon={<TryOutlined />}
+              onClick={() => setOpen("try_it_out")}
+            >
+              Try it out
+            </Button>
             <Button
               variant="primary"
               size="sm"
               endIcon={<Pencil size={64} />}
-              onClick={() => setOpen((prev) => !prev)}
+              onClick={() => setOpen("update")}
             >
               Edit
             </Button>
@@ -69,12 +86,7 @@ const ApiDetails = ({
                 "This action cannot be undone. This will permanently delete this route."
               }
               child={
-                <Button
-                  variant="error"
-                  size="sm"
-                  endIcon={<Trash />}
-                  className="ml-2"
-                >
+                <Button variant="error" size="sm" endIcon={<Trash />}>
                   {" "}
                   Delete{" "}
                 </Button>
@@ -109,9 +121,50 @@ const ApiDetails = ({
           <Grid size={12}>
             <Divider className="bg-border my-2" />
           </Grid>
-          <Grid size={12}>
-            <TryItOut route={route} version={version} />
+
+          {/*TODO: Path Parameters */}
+          <>
+            <Grid size={{ xs: 12, sm: 3 }}>
+              <Typography variant="body2" className="text-muted-foreground">
+                Path Parameters
+              </Typography>
+            </Grid>
+
+            <Grid size={{ xs: 12, sm: 9 }}>
+              <Stack direction="row" gap={5} alignItems="center">
+                <Typography className="text-muted-foreground">test </Typography>
+                <Paper
+                  elevation={0}
+                  className="w-full"
+                  sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
+                >
+                  str
+                </Paper>
+              </Stack>
+            </Grid>
+            <Grid size={12}>
+              <Divider className="bg-border my-2" />
+            </Grid>
+          </>
+          {/*TODO: Request Body */}
+          <Grid size={{ xs: 12, sm: 3 }}>
+            <Typography variant="body2" className="text-muted-foreground">
+              Request Body
+            </Typography>
           </Grid>
+          <Grid size={{ xs: 12, sm: 9 }}>
+            <Paper
+              elevation={0}
+              sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
+            >
+              Value will come from the request body
+            </Paper>
+          </Grid>
+
+          <Grid size={12}>
+            <Divider className="bg-border my-2" />
+          </Grid>
+
           <Grid size={{ xs: 12, sm: 3 }}>
             <Typography variant="body2">
               <Box display="flex" flexDirection="column" gap={1}>
@@ -167,18 +220,21 @@ const ApiDetails = ({
         </Grid>
       </Box>
       <CustomModal
-        open={open}
-        onClose={() => setOpen(false)}
+        open={!!open}
+        onClose={() => setOpen(null)}
         heading="Editing Current Route"
       >
-        {route && (
+        {route && open == "update" && (
           <NewRouteForm
             apiId={apiId}
             version={version}
             defaultRoute={route}
-            onSuccess={() => setOpen(false)}
+            onSuccess={() => setOpen(null)}
             noRedirect={noRedirect}
           />
+        )}
+        {route && open == "try_it_out" && (
+          <TryItOut route={route} version={version} />
         )}
       </CustomModal>
     </>

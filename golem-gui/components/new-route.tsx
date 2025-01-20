@@ -33,6 +33,9 @@ type FormData = {
   version: string;
 };
 
+const requestPathRegex = /request\.path\.([a-zA-Z0-9_-]+)/g;  // Matches request.path.<key> with optional trailing ;, , space or $
+const pathPlaceholdersRegex = /\{([a-zA-Z0-9\-]+)\}/g; 
+
 const NewRouteForm = ({
   apiId,
   version,
@@ -68,6 +71,7 @@ const NewRouteForm = ({
   });
 
   const component = watch("component");
+  const path = watch("path");
   const router=useRouter();
   const [error, setError] = useState<string | null>(null);
   const { data, isLoading } = useSWR("v1/components", fetcher);
@@ -137,6 +141,26 @@ const NewRouteForm = ({
   //   console.log("response======>", response, defaultRoute);
   //   onSuccess?.();
   // };
+
+
+  const validatePath = (value:string) => {
+    if(!path || !value) {
+      return true;
+    }
+
+    const requestKeys = (value?.match(requestPathRegex) || []).map((match=>match.split('.')[2]));
+    const placeholders = (path?.match(pathPlaceholdersRegex) || []).map(match => match.slice(1, -1));
+
+    if(requestKeys?.length === 0 && placeholders?.length === 0){
+      return true;
+    }  
+    const missingKeys = requestKeys.filter((key) => !placeholders.includes(key));
+
+    if (missingKeys.length > 0) {
+      return ` Missing request path key(s): ${missingKeys.join(", ")}.`;
+    }
+    return true;
+  };
 
   return (
     <Box
@@ -320,7 +344,9 @@ const NewRouteForm = ({
             name="workerName"
             control={control}
             // TODO: need to add the rib expression sysntax regex.
-            rules={{ required: "workername is mandatory!" }}
+            rules={{ required: "workername is mandatory!" ,
+              validate: validatePath
+            }}
             render={({ field }) => (
               <TextField
                 {...field}
@@ -357,7 +383,9 @@ const NewRouteForm = ({
         <Controller
           name="response"
           // TODO: need to add the rib expression sysntax regex.
-          rules={{ required: "response is mandatory!" }}
+          rules={{ required: "response is mandatory!",
+            validate: validatePath
+           }}
           control={control}
           render={({ field }) => (
             <TextField
