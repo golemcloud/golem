@@ -1506,9 +1506,24 @@ impl RunningWorker {
                         WorkerCommand::ResumeReplay => {
                             let mut store = store.lock().await;
 
-                            Ctx::resume_replay(&mut *store, &instance)
-                                .await
-                                .expect("resume_replay failed");
+                            let resume_replay_result =
+                                Ctx::resume_replay(&mut *store, &instance).await;
+
+                            match resume_replay_result {
+                                Ok(decision) => {
+                                    final_decision = decision;
+                                }
+
+                                Err(err) => {
+                                    warn!("Failed to resume replay: {err}");
+                                    if let Err(err2) = store.data_mut().set_suspended().await {
+                                        warn!("Additional error during resume of replay of worker: {err2}");
+                                    }
+
+                                    parent.stop_internal(true, Some(err)).await;
+                                    break;
+                                }
+                            }
                         }
                         WorkerCommand::Invocation => {
                             let message = active
