@@ -366,6 +366,9 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError>;
 
+    /// Resume the replay of a worker instance. Note that if the previous replay
+    /// hasn't reached the end of the replay (which is usually last index in oplog)
+    /// resume_replay will ensure to start replay from the last replayed index.
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
