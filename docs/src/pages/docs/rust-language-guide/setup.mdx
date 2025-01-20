@@ -22,14 +22,14 @@ $ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 With `rust` and `rustup` installed, the next step is to **enable the WebAssembly** support by running:
 
 ```shell
-$ rustup target add wasm32-wasi
+$ rustup target add wasm32-wasip1
 ```
 
 To verify if this step was successful, run:
 
 ```shell
-$ rustup target list --installed | grep wasm32-wasi
-wasm32-wasi
+$ rustup target list --installed | grep wasm32-wasip1
+wasm32-wasip1
 ```
 
 ### Installing `cargo-component`

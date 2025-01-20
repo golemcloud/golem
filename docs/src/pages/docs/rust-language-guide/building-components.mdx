@@ -9,10 +9,10 @@ $ cargo component build
 Generating bindings for example (src/bindings.rs)
  Compiling example v0.1.0 (/Users/vigoo/tmp/doc-temp/example)
  Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.33s
- Creating component target/wasm32-wasi/debug/example.wasm
+ Creating component target/wasm32-wasip1/debug/example.wasm
 ```
 
-The `target/wasm32-wasi/debug/example.wasm` file is a WebAssembly component ready to be uploaded to Golem.
+The `target/wasm32-wasip1/debug/example.wasm` file is a WebAssembly component ready to be uploaded to Golem.
 
 It is recommended to compile a **release build** of the component before deploying it to Golem as it is more optimized and smaller in size:
 
@@ -21,7 +21,7 @@ $ cargo component build --release
 Generating bindings for example (src/bindings.rs)
  Compiling example v0.1.0 (/Users/vigoo/tmp/doc-temp/example)
  Finished `release` profile [optimized] target(s) in 0.33s
- Creating component target/wasm32-wasi/release/example.wasm
+ Creating component target/wasm32-wasip1/release/example.wasm
 ```
 
 <Callout type="warning">
@@ -30,7 +30,7 @@ Make sure the **Creating component ...** line is printed. Some previous versions
 It is possible to verify that the result `.wasm` is a valid WebAssembly component by using the `wasm-tools` CLI tool and running:
 
 ```shell
-$ wasm-tools print target/wasm32-wasi/release/example.wasm --skeleton
+$ wasm-tools print target/wasm32-wasip1/release/example.wasm --skeleton
 ```
 
 The top-level node must be `component` and not `module`.

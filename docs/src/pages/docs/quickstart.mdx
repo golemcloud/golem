@@ -131,7 +131,7 @@ Once you have that, navigate to the `shopping_cart`, and run:
 cargo component build --release
 ```
 
-This will write the resulting component to `shopping_cart/target/wasm32-wasi/release/shopping_cart.wasm`.
+This will write the resulting component to `shopping_cart/target/wasm32-wasip1/release/shopping_cart.wasm`.
 
 <Callout>
   The `golem-cli new` command prints out the necessary steps to build your component exactly as you
@@ -141,7 +141,7 @@ This will write the resulting component to `shopping_cart/target/wasm32-wasi/rel
 
 ### Uploading Your Component
 
-To upload your component to Golem, you can use the `component add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
+To upload your component to Golem, you can use the `component add` command. Navigate to `shopping_cart/target/wasm32-wasip1/release` and then do:
 
 ```bash filename="Terminal" copy
 golem-cli component add --component-name shopping-cart shopping_cart.wasm
