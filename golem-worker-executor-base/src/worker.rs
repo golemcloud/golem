@@ -452,6 +452,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub async fn resume_replay(&self) -> Result<(), GolemError> {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                running
+                    .sender
+                    .send(WorkerCommand::ResumeReplay)
+                    .expect("Failed to send resume command");
+
+                Ok(())
+            }
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
+                Err(GolemError::invalid_request(
+                    "Explicit resume is not supported for uninitialized workers",
+                ))
+            }
+        }
+    }
+
     pub async fn invoke(
         &self,
         idempotency_key: IdempotencyKey,
@@ -1485,6 +1503,28 @@ impl RunningWorker {
                 while let Some(cmd) = receiver.recv().await {
                     waiting_for_command.store(false, Ordering::Release);
                     match cmd {
+                        WorkerCommand::ResumeReplay => {
+                            let mut store = store.lock().await;
+
+                            let resume_replay_result =
+                                Ctx::resume_replay(&mut *store, &instance).await;
+
+                            match resume_replay_result {
+                                Ok(decision) => {
+                                    final_decision = decision;
+                                }
+
+                                Err(err) => {
+                                    warn!("Failed to resume replay: {err}");
+                                    if let Err(err2) = store.data_mut().set_suspended().await {
+                                        warn!("Additional error during resume of replay of worker: {err2}");
+                                    }
+
+                                    parent.stop_internal(true, Some(err)).await;
+                                    break;
+                                }
+                            }
+                        }
                         WorkerCommand::Invocation => {
                             let message = active
                                 .write()
@@ -1989,6 +2029,7 @@ pub enum RetryDecision {
 #[derive(Debug)]
 enum WorkerCommand {
     Invocation,
+    ResumeReplay,
     Interrupt(InterruptKind),
 }
 
