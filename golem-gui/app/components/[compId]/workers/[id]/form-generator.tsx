@@ -151,6 +151,7 @@ const generateField = (
                 variant="outlined"
                 fullWidth
                 placeholder={parameter.name}
+                defaultValue={""}
                 className="mt-2"
                 // onChange={(e) => {
                 //   handleChange(finalRootKey, e.target.value);
@@ -176,6 +177,7 @@ const generateField = (
             key={index}
             name={finalRootKey}
             control={control}
+            defaultValue={false}
             render={({ field: _field }) => (
               <FormControlLabel
                 control={
