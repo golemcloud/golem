@@ -88,11 +88,10 @@ const ApiDetails = ({
 
   const bodyStructure =
     route?.binding?.responseMappingInput?.types.request?.fields;
-  
-  const paramStructure=
+
+  const paramStructure =
     route?.binding?.workerNameInput?.types?.request?.fields;
   console.log("route ", route);
-
 
   return (
     <>
@@ -188,33 +187,36 @@ const ApiDetails = ({
           {/*TODO: Path Parameters */}
           {route && activeTab == 0 && (
             <>
-              <>
-                <Grid size={{ xs: 12, sm: 3 }}>
-                  <Typography variant="body2" className="text-muted-foreground">
-                    Path Parameters
-                  </Typography>
-                </Grid>
-
-                <Grid size={{ xs: 12, sm: 9 }}>
-                  <Stack direction="row" gap={5} alignItems="center">
-                   
-                    <Paper
-                      elevation={0}
-                      className="w-full"
-                      sx={{
-                        p: 2,
-                        fontFamily: "monospace",
-                        fontSize: "0.875rem",
-                      }}
+              {paramStructure && (
+                <>
+                  <Grid size={{ xs: 12, sm: 3 }}>
+                    <Typography
+                      variant="body2"
+                      className="text-muted-foreground"
                     >
-                      {parseStructure(paramStructure)}
-                    </Paper>
-                  </Stack>
-                </Grid>
-                <Grid size={12}>
-                  <Divider className="bg-border my-2" />
-                </Grid>
-              </>
+                      Path Parameters
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 9 }}>
+                    <Stack direction="row" gap={5} alignItems="center">
+                      <Paper
+                        elevation={0}
+                        className="w-full"
+                        sx={{
+                          p: 2,
+                          fontFamily: "monospace",
+                          fontSize: "0.875rem",
+                        }}
+                      >
+                        {parseStructure(paramStructure)}
+                      </Paper>
+                    </Stack>
+                  </Grid>
+                  <Grid size={12}>
+                    <Divider className="bg-border my-2" />
+                  </Grid>
+                </>
+              )}
               {/*TODO: Request Body */}
               {bodyStructure && (
                 <>
@@ -238,12 +240,12 @@ const ApiDetails = ({
                       {parseStructure(bodyStructure)}
                     </Paper>
                   </Grid>
+
+                  <Grid size={12}>
+                    <Divider className="bg-border my-2" />
+                  </Grid>
                 </>
               )}
-              <Grid size={12}>
-                <Divider className="bg-border my-2" />
-              </Grid>
-
               <Grid size={{ xs: 12, sm: 3 }}>
                 <Typography variant="body2">
                   <Box display="flex" flexDirection="column" gap={1}>
