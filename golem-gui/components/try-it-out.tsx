@@ -3,7 +3,7 @@ import DynamicForm from "@/app/components/[compId]/workers/[id]/form-generator";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
 import { AnalysedType_TypeRecord } from "@/types/golem-data-types";
-import { MenuItem, Select, Stack, Typography } from "@mui/material";
+import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 import React, { useMemo, useState } from "react";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
 import JsonEditor from "./json-editor";
@@ -127,7 +127,7 @@ export default function TryItOut({
     let curlCommand = `curl -X ${method.toUpperCase()} "${url}"`;
 
     // Add common headers
-    curlCommand += ` -H "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"`;
+    curlCommand += ` -H "accept: text/html,application/json,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"`;
     curlCommand += ` -H "accept-language: en-US,en;q=0.9"`;
     curlCommand += ` -H "cache-control: max-age=0"`;
 
@@ -156,7 +156,7 @@ export default function TryItOut({
   };
   const handleSubmit = async (data: FormData) => {
     if (!deployment) {
-      return;
+      return alert('Select deployment');
     }
 
     try{
@@ -184,9 +184,9 @@ export default function TryItOut({
   }
 
   return (
-    <div>
+    <Box className="w-full">
       {route && routeMeta ? (
-        <>
+        <Box>
           <Stack direction="row" justifyContent={"center"} my={2}>
             <Typography color="red">Experimental</Typography>
           </Stack>
@@ -218,10 +218,10 @@ export default function TryItOut({
             )}
           </Select>
           {curl && <JsonEditor json={curl} />}
-        </>
+        </Box>
       ) : (
         <Typography>No Route Found!</Typography>
       )}
-    </div>
+    </Box>
   );
 }
