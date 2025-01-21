@@ -8,9 +8,11 @@ import {
   Paper,
   Divider,
   Stack,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
-import { Pencil, Trash } from "lucide-react";
+import { Trash } from "lucide-react";
 import { ApiRoute } from "@/types/api";
 import TryItOut from "./try-it-out";
 import NewRouteForm from "./new-route";
@@ -19,7 +21,6 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { TryOutlined } from "@mui/icons-material";
 
 const ApiDetails = ({
   route,
@@ -48,15 +49,50 @@ const ApiDetails = ({
       throw error;
     }
   };
-  const [open, setOpen] = useState<string | null>("view");
-
-  const handleOpen = (
-    e: React.MouseEvent<HTMLButtonElement, MouseEvent>,
-    tab: string
-  ) => {
-    e.preventDefault();
-    setOpen(tab);
+  const [activeTab, setActiveTab] = useState(0);
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setActiveTab(newValue);
   };
+
+  // Recursive function to parse and render the structure
+  const parseStructure = (fields: any[], parentKey?: string): JSX.Element[] => {
+    return fields.map((field) => {
+      const fieldType = field.typ;
+
+      if (fieldType.fields) {
+        // If the field contains nested fields
+        return (
+          <Box key={field.name} sx={{ marginLeft: 2 }}>
+            <Typography variant="body1">{field.name}: &#123;</Typography>
+            {parseStructure(fieldType.fields)}
+            <Typography>&#125;</Typography>
+          </Box>
+        );
+      } else if (fieldType.type === "Option") {
+        // If the field is optional
+        return (
+          <Typography key={field.name} variant="body1" sx={{ marginLeft: 2 }}>
+            {field.name}: {fieldType.inner.type} | null
+          </Typography>
+        );
+      } else {
+        // Base case for non-nested fields
+        return (
+          <Typography key={field.name} variant="body1" sx={{ marginLeft: 2 }}>
+            {field.name}: {fieldType.type}
+          </Typography>
+        );
+      }
+    });
+  };
+
+  const bodyStructure =
+    route?.binding?.responseMappingInput?.types.request?.fields;
+  
+  const paramStructure=
+    route?.binding?.workerNameInput?.types?.request?.fields;
+  console.log("route ", route);
+
 
   return (
     <>
@@ -68,32 +104,7 @@ const ApiDetails = ({
               {route?.method}
             </Button>
           </Box>
-          {/* TODO: Use tab instead of buttons */}
           <Box sx={{ display: "flex", gap: 1 }}>
-            <Button
-              variant="primary"
-              size="sm"
-              endIcon={<TryOutlined />}
-              onClick={(e) => handleOpen(e, "try_it_out")}
-            >
-              Try it out
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              endIcon={<Pencil size={64} />}
-              onClick={(e) => handleOpen(e, "update")}
-            >
-              Edit
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              endIcon={<Pencil size={64} />}
-              onClick={(e) => handleOpen(e, "view")}
-            >
-              View
-            </Button>
             <AlertDialogDemo
               onSubmit={(e: React.MouseEvent<HTMLButtonElement>) =>
                 handleDelete(e)
@@ -110,6 +121,42 @@ const ApiDetails = ({
             />
           </Box>
         </Box>
+
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          variant="scrollable"
+          aria-label="Api Tabs"
+          textColor="inherit"
+          sx={{
+            paddingBottom: "5px",
+
+            "& .MuiTab-root": {
+              textTransform: "none",
+              minWidth: "80px",
+              padding: "2px 2px",
+            },
+            "& .MuiTabs-scroller": {
+              overflowX: "auto",
+            },
+            "@media (max-width: 600px)": {
+              "& .MuiTab-root": {
+                fontSize: "11px",
+                minWidth: "40px",
+              },
+              "& .MuiTabs-flexContainer": {
+                gap: "4px",
+              },
+            },
+            "& .MuiTabs-indicator": {
+              bgcolor: "#373737",
+            },
+          }}
+        >
+          <Tab label="View" />
+          <Tab label="Edit" />
+          <Tab label="Try-it-out" />
+        </Tabs>
 
         {/* Sections */}
         <Grid container spacing={2}>
@@ -139,19 +186,7 @@ const ApiDetails = ({
           </Grid>
 
           {/*TODO: Path Parameters */}
-          {route && open == "update" && (
-            <NewRouteForm
-              apiId={apiId}
-              version={version}
-              defaultRoute={route}
-              onSuccess={() => setOpen("view")}
-              noRedirect={noRedirect}
-            />
-          )}
-          {route && open == "try_it_out" && (
-            <TryItOut route={route} version={version} />
-          )}
-          {route && open == "view" && (
+          {route && activeTab == 0 && (
             <>
               <>
                 <Grid size={{ xs: 12, sm: 3 }}>
@@ -162,9 +197,7 @@ const ApiDetails = ({
 
                 <Grid size={{ xs: 12, sm: 9 }}>
                   <Stack direction="row" gap={5} alignItems="center">
-                    <Typography className="text-muted-foreground">
-                      test{" "}
-                    </Typography>
+                   
                     <Paper
                       elevation={0}
                       className="w-full"
@@ -174,7 +207,7 @@ const ApiDetails = ({
                         fontSize: "0.875rem",
                       }}
                     >
-                      str
+                      {parseStructure(paramStructure)}
                     </Paper>
                   </Stack>
                 </Grid>
@@ -183,20 +216,30 @@ const ApiDetails = ({
                 </Grid>
               </>
               {/*TODO: Request Body */}
-              <Grid size={{ xs: 12, sm: 3 }}>
-                <Typography variant="body2" className="text-muted-foreground">
-                  Request Body
-                </Typography>
-              </Grid>
-              <Grid size={{ xs: 12, sm: 9 }}>
-                <Paper
-                  elevation={0}
-                  sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-                >
-                  Value will come from the request body
-                </Paper>
-              </Grid>
-
+              {bodyStructure && (
+                <>
+                  <Grid size={{ xs: 12, sm: 3 }}>
+                    <Typography
+                      variant="body2"
+                      className="text-muted-foreground"
+                    >
+                      Request Body
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 9 }}>
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        p: 2,
+                        fontFamily: "monospace",
+                        fontSize: "0.875rem",
+                      }}
+                    >
+                      {parseStructure(bodyStructure)}
+                    </Paper>
+                  </Grid>
+                </>
+              )}
               <Grid size={12}>
                 <Divider className="bg-border my-2" />
               </Grid>
@@ -254,6 +297,19 @@ const ApiDetails = ({
                 </Paper>
               </Grid>
             </>
+          )}
+
+          {route && activeTab == 1 && (
+            <NewRouteForm
+              apiId={apiId}
+              version={version}
+              defaultRoute={route}
+              onSuccess={() => setActiveTab(0)}
+              noRedirect={noRedirect}
+            />
+          )}
+          {route && activeTab == 2 && (
+            <TryItOut route={route} version={version} />
           )}
         </Grid>
       </Box>
