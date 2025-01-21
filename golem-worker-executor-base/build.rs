@@ -66,6 +66,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
               import golem:api/host@0.2.0;
               import golem:api/host@1.1.0;
               import golem:api/oplog@1.1.0;
+              import golem:api/durability@1.2.0;
 
               import wasi:blobstore/blobstore;
               import wasi:blobstore/container;
@@ -97,7 +98,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
             "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
-            "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry
+            "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
         }},
     }});
         "#

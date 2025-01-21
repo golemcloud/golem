@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::GolemError;
+use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
+use crate::model::{InterruptKind, TrapType};
+use crate::virtual_export_compat;
+use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use anyhow::anyhow;
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
-use golem_common::model::WorkerStatus;
+use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::virtual_exports;
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
-
-use crate::error::GolemError;
-use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::{InterruptKind, TrapType};
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use wasmtime_wasi_http::bindings::Proxy;
+use wasmtime_wasi_http::WasiHttpView;
 
 /// Invokes a function on a worker.
 ///
@@ -108,10 +112,9 @@ pub fn find_first_available_function<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     for name in names {
         let parsed = ParsedFunctionName::parse(&name).ok()?;
-        if find_function(&mut store, instance, &parsed)
-            .ok()
-            .flatten()
-            .is_some()
+
+        if let Ok(FindFunctionResult::ExportedFunction(_)) =
+            find_function(&mut store, instance, &parsed)
         {
             return Some(name);
         }
@@ -123,7 +126,21 @@ fn find_function<'a, Ctx: WorkerCtx>(
     mut store: &mut StoreContextMut<'a, Ctx>,
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
-) -> Result<Option<Func>, GolemError> {
+) -> Result<FindFunctionResult, GolemError> {
+    if *parsed_function_name == *virtual_exports::http_incoming_handler::PARSED_FUNCTION_NAME {
+        return Ok(FindFunctionResult::IncomingHttpHandlerBridge);
+    };
+
+    let parsed_function_ref = parsed_function_name.function();
+
+    if matches!(
+        parsed_function_ref,
+        ParsedFunctionReference::RawResourceDrop { .. }
+            | ParsedFunctionReference::IndexedResourceDrop { .. }
+    ) {
+        return Ok(FindFunctionResult::ResourceDrop);
+    }
+
     match &parsed_function_name.site().interface_name() {
         Some(interface_name) => {
             let exported_instance_idx = instance
@@ -132,6 +149,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
                     "could not load exports for interface {}",
                     interface_name
                 )))?;
+
             let func = instance
                 .get_export(
                     &mut store,
@@ -141,38 +159,28 @@ fn find_function<'a, Ctx: WorkerCtx>(
                 .and_then(|idx| instance.get_func(&mut store, idx));
 
             match func {
-                Some(func) => Ok(Some(func)),
-                None => {
-                    if matches!(
-                        parsed_function_name.function(),
-                        ParsedFunctionReference::RawResourceDrop { .. }
-                            | ParsedFunctionReference::IndexedResourceDrop { .. }
-                    ) {
-                        Ok(None)
-                    } else {
-                        match parsed_function_name.method_as_static() {
-                            None => Err(GolemError::invalid_request(format!(
-                                "could not load function {} for interface {}",
-                                &parsed_function_name.function().function_name(),
-                                interface_name
-                            ))),
-                            Some(parsed_static) => instance
-                                .get_export(
-                                    &mut store,
-                                    Some(&exported_instance_idx),
-                                    &parsed_static.function().function_name(),
-                                )
-                                .and_then(|idx| instance.get_func(&mut store, idx))
-                                .ok_or(GolemError::invalid_request(format!(
-                                    "could not load function {} or {} for interface {}",
-                                    &parsed_function_name.function().function_name(),
-                                    &parsed_static.function().function_name(),
-                                    interface_name
-                                )))
-                                .map(Some),
-                        }
-                    }
-                }
+                Some(func) => Ok(FindFunctionResult::ExportedFunction(func)),
+                None => match parsed_function_name.method_as_static() {
+                    None => Err(GolemError::invalid_request(format!(
+                        "could not load function {} for interface {}",
+                        &parsed_function_name.function().function_name(),
+                        interface_name
+                    ))),
+                    Some(parsed_static) => instance
+                        .get_export(
+                            &mut store,
+                            Some(&exported_instance_idx),
+                            &parsed_static.function().function_name(),
+                        )
+                        .and_then(|idx| instance.get_func(&mut store, idx))
+                        .ok_or(GolemError::invalid_request(format!(
+                            "could not load function {} or {} for interface {}",
+                            &parsed_function_name.function().function_name(),
+                            &parsed_static.function().function_name(),
+                            interface_name
+                        )))
+                        .map(FindFunctionResult::ExportedFunction),
+                },
             }
         }
         None => instance
@@ -181,7 +189,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
                 "could not load function {}",
                 &parsed_function_name.function().function_name()
             )))
-            .map(Some),
+            .map(FindFunctionResult::ExportedFunction),
     }
 }
 
@@ -235,10 +243,15 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     }
 
     let mut call_result = match function {
-        Some(function) => invoke(&mut store, function, &function_input, &full_function_name).await,
-        None => {
+        FindFunctionResult::ExportedFunction(function) => {
+            invoke(&mut store, function, &function_input, &full_function_name).await
+        }
+        FindFunctionResult::ResourceDrop => {
             // Special function: drop
             drop_resource(&mut store, &parsed, &function_input, &full_function_name).await
+        }
+        FindFunctionResult::IncomingHttpHandlerBridge => {
+            invoke_http_handler(&mut store, instance, &function_input, &full_function_name).await
         }
     };
     if let Ok(r) = call_result.as_mut() {
@@ -270,12 +283,17 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             resource: resource_name.clone(),
         },
     );
-    let resource_constructor = find_function(store, instance, &resource_constructor_name)?.ok_or(
-        GolemError::invalid_request(format!(
+
+    let resource_constructor = if let FindFunctionResult::ExportedFunction(func) =
+        find_function(store, instance, &resource_constructor_name)?
+    {
+        func
+    } else {
+        Err(GolemError::invalid_request(format!(
             "could not find resource constructor for resource {}",
             resource_name
-        )),
-    )?;
+        )))?
+    };
 
     let constructor_param_types = resource_constructor.params(store as &StoreContextMut<'a, Ctx>).iter().map(type_to_analysed_type).collect::<Result<Vec<_>, _>>()
         .map_err(|err| GolemError::invalid_request(format!("Indexed resource invocation cannot be used with owned or borrowed resource handles in constructor parameter position! ({err})")))?;
@@ -407,6 +425,103 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 }
 
+async fn invoke_http_handler<Ctx: WorkerCtx>(
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    function_input: &[Value],
+    raw_function_name: &str,
+) -> Result<InvokeResult, GolemError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
+    let proxy = Proxy::new(&mut *store, instance).unwrap();
+    let mut store_context = store.as_context_mut();
+
+    store_context.data_mut().borrow_fuel().await?;
+
+    let idempotency_key = store_context.data().get_current_idempotency_key().await;
+    if let Some(idempotency_key) = &idempotency_key {
+        store_context
+            .data()
+            .get_public_state()
+            .event_service()
+            .emit_invocation_start(
+                raw_function_name,
+                idempotency_key,
+                store_context.data().is_live(),
+            );
+    }
+
+    tracing::debug!("Invoking wasi:http/incoming-http-handler handle");
+
+    let (_, mut task_exits) = {
+        let hyper_request =
+            virtual_export_compat::http_incoming_handler::input_to_hyper_request(function_input)?;
+        let scheme = wasi_http_scheme_from_request(&hyper_request)?;
+        let incoming = store_context
+            .data_mut()
+            .as_wasi_http_view()
+            .new_incoming_request(scheme, hyper_request)
+            .unwrap();
+        let outgoing = store_context
+            .data_mut()
+            .as_wasi_http_view()
+            .new_response_outparam(sender)
+            .unwrap();
+
+        // unsafety comes from scope_and_collect:
+        //
+        // This function is not completely safe:
+        // please see cancellation_soundness in [tests.rs](https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs) for a test-case that suggests how this can lead to invalid memory access if not dealt with care.
+        // The caller must ensure that the lifetime ’a is valid until the returned future is fully driven. Dropping the future is okay, but blocks the current thread until all spawned futures complete.
+        unsafe {
+            async_scoped::TokioScope::scope_and_collect(|s| {
+                s.spawn(proxy.wasi_http_incoming_handler().call_handle(
+                    store_context,
+                    incoming,
+                    outgoing,
+                ));
+            })
+            .await
+        }
+    };
+
+    let out = receiver.await;
+
+    let res_or_error = match out {
+        Ok(Ok(resp)) => {
+            Ok(virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await?)
+        }
+        Ok(Err(e)) => Err(anyhow::Error::from(e)),
+        Err(_) => {
+            // An error in the receiver (`RecvError`) only indicates that the
+            // task exited before a response was sent (i.e., the sender was
+            // dropped); it does not describe the underlying cause of failure.
+            // Instead we retrieve and propagate the error from inside the task
+            // which should more clearly tell the user what went wrong. Note
+            // that we assume the task has already exited at this point so the
+            // `await` should resolve immediately.
+            let task_exit = task_exits.remove(0);
+            let e = match task_exit {
+                Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
+                Err(_e) => anyhow!("failed joining wasm task"),
+            };
+            Err(e)?
+        }
+    };
+
+    let consumed_fuel = finish_invocation_and_get_fuel_consumption(
+        &mut store.as_context_mut(),
+        raw_function_name,
+        idempotency_key,
+    )
+    .await?;
+
+    match res_or_error {
+        Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, vec![resp])),
+        Err(e) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &e)),
+    }
+}
+
 async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     parsed_function_name: &ParsedFunctionName,
@@ -508,6 +623,18 @@ async fn call_exported_function<Ctx: WorkerCtx>(
         result
     };
 
+    let consumed_fuel_for_call =
+        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name, idempotency_key)
+            .await?;
+
+    Ok((result.map(|_| results), consumed_fuel_for_call))
+}
+
+async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    raw_function_name: &str,
+    idempotency_key: Option<IdempotencyKey>,
+) -> Result<i64, GolemError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store
         .data_mut()
@@ -530,7 +657,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     }
 
     record_invocation_consumption(consumed_fuel_for_call);
-    Ok((result.map(|_| results), consumed_fuel_for_call))
+
+    Ok(consumed_fuel_for_call)
 }
 
 #[derive(Clone, Debug)]
@@ -611,5 +739,28 @@ impl InvokeResult {
             InvokeResult::Exited { .. } => Some(TrapType::Exit),
             _ => None,
         }
+    }
+}
+
+enum FindFunctionResult {
+    ExportedFunction(Func),
+    ResourceDrop,
+    IncomingHttpHandlerBridge,
+}
+
+fn wasi_http_scheme_from_request<T>(
+    req: &hyper::Request<T>,
+) -> Result<wasmtime_wasi_http::bindings::http::types::Scheme, GolemError> {
+    use http::uri::*;
+    use wasmtime_wasi_http::bindings::http::types::Scheme as WasiScheme;
+
+    let raw_scheme = req.uri().scheme().ok_or(GolemError::invalid_request(
+        "Could not extract scheme from uri".to_string(),
+    ))?;
+
+    match raw_scheme {
+        scheme if *scheme == Scheme::HTTP => Ok(WasiScheme::Http),
+        scheme if *scheme == Scheme::HTTPS => Ok(WasiScheme::Https),
+        scheme => Ok(WasiScheme::Other(scheme.to_string())),
     }
 }

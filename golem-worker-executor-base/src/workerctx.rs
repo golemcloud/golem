@@ -50,7 +50,7 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
@@ -365,6 +365,14 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError>;
+
+    /// Resume the replay of a worker instance. Note that if the previous replay
+    /// hasn't reached the end of the replay (which is usually last index in oplog)
+    /// resume_replay will ensure to start replay from the last replayed index.
+    async fn resume_replay(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        instance: &Instance,
+    ) -> Result<RetryDecision, GolemError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.

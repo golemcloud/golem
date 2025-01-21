@@ -228,7 +228,7 @@ pub mod wasm {
         .unwrap();
     }
 
-    pub fn record_host_function_call(iface: &'static str, name: &'static str) {
+    pub fn record_host_function_call(iface: &str, name: &str) {
         debug!("golem {iface}::{name} called");
         HOST_FUNCTION_CALL_TOTAL
             .with_label_values(&[iface, name])

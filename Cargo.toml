@@ -65,6 +65,9 @@ exclude = [
     "test-components/update-test-v3-11",
     "test-components/update-test-v4",
     "test-components/variant-service",
+    "test-components/wasi-http-incoming-request-handler",
+    "test-components/wasi-http-incoming-request-handler-echo",
+    "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
 ]
@@ -110,6 +113,7 @@ futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 git-version = "0.3.9"
+golem-wit = { version = "=1.1.2" }
 hex = "0.4.3"
 http = "1.2.0" # keep in sync with wasmtime
 humansize = "2.1.3"

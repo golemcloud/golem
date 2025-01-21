@@ -367,12 +367,12 @@ impl OpenOplogEntry {
 }
 
 #[derive(Clone)]
-struct OpenOplogs {
+pub struct OpenOplogs {
     oplogs: Cache<WorkerId, (), OpenOplogEntry, ()>,
 }
 
 impl OpenOplogs {
-    fn new(name: &'static str) -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
             oplogs: Cache::new(
                 None,
@@ -383,7 +383,7 @@ impl OpenOplogs {
         }
     }
 
-    async fn get_or_open(
+    pub async fn get_or_open(
         &self,
         worker_id: &WorkerId,
         constructor: impl OplogConstructor + Send + 'static,
@@ -446,7 +446,7 @@ impl Debug for OpenOplogs {
 }
 
 #[async_trait]
-trait OplogConstructor: Clone {
+pub trait OplogConstructor: Clone {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,

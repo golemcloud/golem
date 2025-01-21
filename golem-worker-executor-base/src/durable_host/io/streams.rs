@@ -15,7 +15,7 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{ResourceTable, StreamError};
+use wasmtime_wasi::StreamError;
 
 use crate::durable_host::http::end_http_request;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
@@ -38,8 +38,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
-        if is_incoming_http_body_stream(self.table(), &self_) {
-            let handle = self_.rep();
+        let handle = self_.rep();
+        if is_incoming_http_body_stream(self, &self_) {
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
@@ -71,7 +71,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
-        if is_incoming_http_body_stream(self.table(), &self_) {
+        if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
@@ -100,7 +100,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     }
 
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
-        if is_incoming_http_body_stream(self.table(), &self_) {
+        if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
@@ -132,7 +132,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
-        if is_incoming_http_body_stream(self.table(), &self_) {
+        if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
@@ -168,7 +168,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
         self.observe_function_call("io::streams::input_stream", "drop");
 
-        if is_incoming_http_body_stream(self.table(), &rep) {
+        if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
             if let Some(state) = self.state.open_http_requests.get(&handle) {
                 if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
@@ -297,8 +297,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-fn is_incoming_http_body_stream(table: &ResourceTable, stream: &Resource<InputStream>) -> bool {
-    let stream = table.get::<InputStream>(stream).unwrap();
+fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream: &Resource<InputStream>,
+) -> bool {
+    // incoming-body is used for both incoming http bodies (which don't need durability),
+    // and response bodies. Only in the second case will there be an associated open http request.
+    if !ctx.state.open_http_requests.contains_key(&stream.rep()) {
+        return false;
+    };
+
+    let stream = ctx.table().get::<InputStream>(stream).unwrap();
     stream
         .as_any()
         .downcast_ref::<HostIncomingBodyStream>()

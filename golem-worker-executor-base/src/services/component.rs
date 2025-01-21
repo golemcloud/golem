@@ -484,35 +484,55 @@ async fn get_metadata_via_grpc(
                         .unwrap_or_default(),
                     exports: component
                         .metadata
+                        .as_ref()
                         .map(|metadata| {
-                            let export = metadata.exports;
-                            let vec: Vec<Result<AnalysedExport, String>> =
-                                export.into_iter().map(AnalysedExport::try_from).collect();
+                            let export = &metadata.exports;
+                            let vec: Vec<Result<AnalysedExport, String>> = export
+                                .iter()
+                                .cloned()
+                                .map(AnalysedExport::try_from)
+                                .collect();
                             vec.into_iter().collect()
                         })
                         .unwrap_or_else(|| Ok(Vec::new()))
-                        .map_err(|_| {
-                            GrpcError::Unexpected("Failed to get the exports".to_string())
+                        .map_err(|err| {
+                            GrpcError::Unexpected(format!("Failed to get the exports: {err}"))
                         })?,
                     files: component
                         .files
                         .into_iter()
                         .map(|file| file.try_into())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| {
-                            GrpcError::Unexpected("Failed to get the files".to_string())
+                        .map_err(|err| {
+                            GrpcError::Unexpected(format!("Failed to get the files: {err}"))
                         })?,
                     plugin_installations: component
                         .installed_plugins
                         .into_iter()
                         .map(|plugin| plugin.try_into())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| {
-                            GrpcError::Unexpected(
-                                "Failed to get the plugin installations".to_string(),
-                            )
+                        .map_err(|err| {
+                            GrpcError::Unexpected(format!(
+                                "Failed to get the plugin installations: {err}"
+                            ))
                         })?,
-                    dynamic_linking: HashMap::new(), // TODO
+                    dynamic_linking: HashMap::from_iter(
+                        component
+                            .metadata
+                            .map(|metadata| {
+                                metadata
+                                    .dynamic_linking
+                                    .into_iter()
+                                    .map(|(k, v)| v.try_into().map(|v| (k.clone(), v)))
+                                    .collect::<Result<Vec<_>, String>>()
+                            })
+                            .unwrap_or_else(|| Ok(Vec::new()))
+                            .map_err(|err| {
+                                GrpcError::Unexpected(format!(
+                                    "Failed to get the dynamic linking information: {err}"
+                                ))
+                            })?,
+                    ),
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

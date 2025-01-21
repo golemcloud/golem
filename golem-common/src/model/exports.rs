@@ -16,24 +16,7 @@ use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstanc
 
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
 
-pub trait AnalysedExportExtensions {
-    fn function_names(&self) -> Vec<String>;
-}
-
-impl AnalysedExportExtensions for AnalysedExport {
-    fn function_names(&self) -> Vec<String> {
-        match self {
-            AnalysedExport::Instance(instance) => instance
-                .functions
-                .iter()
-                .map(|function| format!("{}.{{{}}}", instance.name, function.name))
-                .collect(),
-            AnalysedExport::Function(function) => vec![function.name.clone()],
-        }
-    }
-}
-
-pub fn instances(exports: &Vec<AnalysedExport>) -> Vec<AnalysedInstance> {
+fn instances(exports: &Vec<AnalysedExport>) -> Vec<AnalysedInstance> {
     let mut instances = vec![];
     for export in exports {
         if let AnalysedExport::Instance(instance) = export {
@@ -43,7 +26,7 @@ pub fn instances(exports: &Vec<AnalysedExport>) -> Vec<AnalysedInstance> {
     instances
 }
 
-pub fn functions(exports: &Vec<AnalysedExport>) -> Vec<AnalysedFunction> {
+fn functions(exports: &Vec<AnalysedExport>) -> Vec<AnalysedFunction> {
     let mut functions = vec![];
     for export in exports {
         if let AnalysedExport::Function(function) = export {

@@ -25,6 +25,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
+async-scoped = "0.9.0"
 async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
@@ -49,10 +50,10 @@ fs-set-times = "0.20.2"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.5.0"
-golem-wit = { version = "=1.1.1" }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = "1.0.1"                                 # keep in sync with wasmtime
+http-body-util = "0.1.0"                            # keep in sync with wasmtime
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
@@ -110,6 +111,7 @@ tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.19.1"
+golem-wit = { workspace = true }
 
 [[test]]
 name = "integration"

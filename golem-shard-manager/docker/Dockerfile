@@ -16,7 +16,7 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/golem-shard-manager ./
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates libfontconfig1-dev
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
 RUN update-ca-certificates
 
 EXPOSE 8081

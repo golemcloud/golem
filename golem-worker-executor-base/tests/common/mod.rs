@@ -82,7 +82,7 @@ use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem::rpc::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::preview2::golem::api1_1_0;
+use golem_worker_executor_base::preview2::golem::{api1_1_0, api1_2_0};
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
@@ -459,6 +459,13 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             metadata,
         )
         .await
+    }
+
+    async fn resume_replay(
+        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+        instance: &Instance,
+    ) -> Result<RetryDecision, GolemError> {
+        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance).await
     }
 
     async fn prepare_instance(
@@ -1013,6 +1020,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_2_0::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

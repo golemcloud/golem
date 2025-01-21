@@ -40,7 +40,8 @@ use golem_wasm_rpc::golem::rpc::types::{
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
-    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value, ValueAndType, WasmRpcEntry, WitValue,
+    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value, ValueAndType, WasmRpcEntry, WitType,
+    WitValue,
 };
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
@@ -774,7 +775,23 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {}
+impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
+    // NOTE: these extract functions are only added as a workaround for the fact that the binding
+    // generator does not include types that are not used in any exported _functions_
+    async fn extract_value(
+        &mut self,
+        vnt: golem_wasm_rpc::golem::rpc::types::ValueAndType,
+    ) -> anyhow::Result<WitValue> {
+        Ok(vnt.value)
+    }
+
+    async fn extract_type(
+        &mut self,
+        vnt: golem_wasm_rpc::golem::rpc::types::ValueAndType,
+    ) -> anyhow::Result<WitType> {
+        Ok(vnt.typ)
+    }
+}
 
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
 /// target component.
