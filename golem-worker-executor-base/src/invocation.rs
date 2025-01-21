@@ -487,16 +487,9 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
 
     let out = receiver.await;
 
-    tracing::warn!("received response {:?}", out);
-
     let res_or_error = match out {
         Ok(Ok(resp)) => {
-            let out =
-                virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await;
-
-            tracing::warn!("out: ${:?}", out);
-
-            Ok(out?)
+            Ok(virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await?)
         }
         Ok(Err(e)) => Err(anyhow::Error::from(e)),
         Err(_) => {
