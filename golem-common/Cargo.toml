@@ -52,6 +52,7 @@ prost-types = { workspace = true, optional = true }
 rand = { workspace = true }
 range-set-blaze = "0.1.16"
 regex = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

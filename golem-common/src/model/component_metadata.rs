@@ -16,7 +16,7 @@ use bincode::{Decode, Encode};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
-use crate::SafeDisplay;
+use crate::{virtual_exports, SafeDisplay};
 use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
@@ -182,6 +182,7 @@ impl RawComponentMetadata {
             .map_err(ComponentProcessingError::Analysis)?;
 
         add_resource_drops(&mut exports);
+        add_virtual_exports(&mut exports);
 
         let exports = exports.into_iter().collect::<Vec<_>>();
 
@@ -325,6 +326,17 @@ fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
             .collect(),
         results: vec![],
     }
+}
+
+fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
+    // Some interfaces like the golem/http:incoming-handler do not exist on the component,
+    // but are dynamically created by the worker executor based on other existing interfaces.
+
+    if virtual_exports::http_incoming_handler::implements_required_interfaces(exports) {
+        exports.extend(vec![
+            virtual_exports::http_incoming_handler::ANALYZED_EXPORT.clone(),
+        ]);
+    };
 }
 
 #[cfg(feature = "protobuf")]
