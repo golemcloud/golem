@@ -12,11 +12,10 @@ harness = false
 
 [dependencies]
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = { git = "https://github.com/golemcloud/golem.git", tag = "v1.1.12" }
-golem-common = { git = "https://github.com/golemcloud/golem.git", tag = "v1.1.12", default-features = false }
-
-golem-wasm-ast = { workspace = true, default-features = false, features = ["analysis"] }
-golem-wasm-rpc = { workspace = true, default-features = false }
+golem-client = "=1.1.12"
+golem-common = "=1.1.12"
+golem-wasm-ast = { version = "=1.1.12", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { version = "=1.1.12", default-features = false }
 
 async-trait = "^0.1"
 bytes = "^1.5"
