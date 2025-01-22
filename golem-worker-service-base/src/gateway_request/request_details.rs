@@ -38,7 +38,7 @@ pub enum GatewayRequestDetails {
 // api_input_path is still available.
 #[derive(Debug, Clone)]
 pub struct HttpRequestDetails {
-    pub scheme: Option<Scheme>,
+    pub scheme: Scheme,
     pub host: ApiSiteString,
     pub request_method: Method,
     pub api_input_path: ApiInputPath,
@@ -110,23 +110,19 @@ impl HttpRequestDetails {
     }
 
     pub fn url(&self) -> Result<Url, String> {
-        let url_str = if let Some(scheme) = &self.scheme {
-            format!(
-                "{}://{}{}",
-                scheme,
-                &self.host,
-                &self.api_input_path.to_string()
-            )
-        } else {
-            format!("{}{}", &self.host, &self.api_input_path.to_string())
-        };
+        let url_str = format!(
+            "{}://{}{}",
+            &self.scheme,
+            &self.host,
+            &self.api_input_path.to_string()
+        );
 
         Url::parse(&url_str).map_err(|err| err.to_string())
     }
 
     pub fn empty() -> HttpRequestDetails {
         HttpRequestDetails {
-            scheme: Some(Scheme::HTTP),
+            scheme: Scheme::HTTP,
             host: ApiSiteString("".to_string()),
             request_method: Method::GET,
             api_input_path: ApiInputPath {
@@ -220,7 +216,7 @@ impl HttpRequestDetails {
     }
 
     pub fn from_input_http_request(
-        scheme: &Option<Scheme>,
+        scheme: &Scheme,
         host: &ApiSiteString,
         method: Method,
         api_input_path: &ApiInputPath,

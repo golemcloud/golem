@@ -143,6 +143,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                     )
                     .await;
 
+                match result {
+                    Ok(_) => tracing::debug!("http handler binding successful"),
+                    Err(ref e) => tracing::warn!("http handler binding failed: {e:?}"),
+                }
+
                 let mut response = result
                     .to_response(&request_details, &self.gateway_session_store)
                     .await;

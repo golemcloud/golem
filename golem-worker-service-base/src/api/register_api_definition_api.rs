@@ -732,10 +732,7 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
         let v = gateway_binding_data.clone().binding_type;
 
         match v {
-            Some(GatewayBindingType::Default)
-            | Some(GatewayBindingType::FileServer)
-            | Some(GatewayBindingType::HttpHandler)
-            | None => {
+            Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer) | None => {
                 let response = gateway_binding_data
                     .response
                     .ok_or("Missing response field in binding")?;
@@ -771,6 +768,31 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                 } else {
                     Ok(GatewayBinding::Default(worker_binding))
                 }
+            }
+
+            Some(GatewayBindingType::HttpHandler) => {
+                let component_id = gateway_binding_data
+                    .component_id
+                    .ok_or("Missing componentId field in binding")?;
+
+                let worker_name = gateway_binding_data
+                    .worker_name
+                    .map(|name| rib::from_string(name.as_str()).map_err(|e| e.to_string()))
+                    .transpose()?;
+
+                let idempotency_key = if let Some(key) = &gateway_binding_data.idempotency_key {
+                    Some(rib::from_string(key).map_err(|e| e.to_string())?)
+                } else {
+                    None
+                };
+
+                let binding = HttpHandlerBinding {
+                    component_id,
+                    worker_name,
+                    idempotency_key,
+                };
+
+                Ok(GatewayBinding::HttpHandler(binding))
             }
 
             Some(GatewayBindingType::CorsPreflight) => {

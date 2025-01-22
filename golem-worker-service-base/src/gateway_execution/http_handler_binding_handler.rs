@@ -21,7 +21,7 @@ use futures_util::TryStreamExt;
 use golem_common::model::HasAccountId;
 use golem_common::virtual_exports;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Value};
+use golem_wasm_rpc::TypeAnnotatedValueConstructors;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
@@ -47,6 +47,7 @@ pub struct HttpHandlerBindingSuccess {
     pub response: poem::Response,
 }
 
+#[derive(Debug)]
 pub enum HttpHandlerBindingError {
     InternalError(String),
     WorkerRequestExecutorError(WorkerRequestExecutorError),
@@ -104,7 +105,9 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
             };
 
             hic::IncomingHttpRequest {
-                uri: request_details.get_api_input_path(),
+                scheme: request_details.scheme.clone().into(),
+                authority: request_details.host.to_string(),
+                path_with_query: request_details.get_api_input_path(),
                 method: hic::HttpMethod::from_http_method(request_details.request_method.clone()),
                 headers,
                 body: Some(body),
@@ -133,25 +136,28 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
                 namespace: namespace.clone(),
             };
 
-        let response = self
-            .worker_request_executor
-            .execute(resolved_request)
-            .await
-            .map_err(HttpHandlerBindingError::WorkerRequestExecutorError)?;
+        let response = self.worker_request_executor.execute(resolved_request).await;
+
+        // log outcome
+        match response {
+            Ok(_) => {
+                tracing::debug!("http_handler received successful response from worker invocation")
+            }
+            Err(ref e) => tracing::warn!("worker invocation of http_handler failed: {}", e),
+        }
+
+        let response = response.map_err(HttpHandlerBindingError::WorkerRequestExecutorError)?;
 
         let poem_response = {
             use golem_common::virtual_exports::http_incoming_handler as hic;
 
-            let response_value: Value = response.result.try_into().map_err(|e| {
-                HttpHandlerBindingError::InternalError(format!(
-                    "Failed to parse response as wasm rpc value: {}",
-                    e
-                ))
-            })?;
-
-            let parsed_response = hic::HttpResponse::from_value(response_value).map_err(|e| {
-                HttpHandlerBindingError::InternalError(format!("Failed parsing response: {}", e))
-            })?;
+            let parsed_response = hic::HttpResponse::from_function_output(response.result)
+                .map_err(|e| {
+                    HttpHandlerBindingError::InternalError(format!(
+                        "Failed parsing response: {}",
+                        e
+                    ))
+                })?;
 
             let converted_status_code =
                 StatusCode::from_u16(parsed_response.status).map_err(|e| {

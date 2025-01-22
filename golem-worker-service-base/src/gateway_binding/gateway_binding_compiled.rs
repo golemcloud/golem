@@ -154,9 +154,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
             .map_err(|e| format!("Failed to convert binding type: {}", e))?;
 
         match binding_type {
-            ProtoGatewayBindingType::FileServer
-            | ProtoGatewayBindingType::Default
-            | ProtoGatewayBindingType::HttpHandler => {
+            ProtoGatewayBindingType::FileServer | ProtoGatewayBindingType::Default => {
                 // Convert fields for the Worker variant
                 let component_id = value
                     .component
@@ -239,6 +237,55 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     }))
                 }
             }
+            ProtoGatewayBindingType::HttpHandler => {
+                // Convert fields for the Worker variant
+                let component_id = value
+                    .component
+                    .ok_or("Missing component_id for Worker")?
+                    .try_into()?;
+
+                let worker_name_compiled = match (
+                    value.worker_name,
+                    value.compiled_worker_name_expr,
+                    value.worker_name_rib_input,
+                ) {
+                    (Some(worker_name), Some(compiled_worker_name), Some(rib_input_type_info)) => {
+                        Some(WorkerNameCompiled {
+                            worker_name: rib::Expr::try_from(worker_name)?,
+                            compiled_worker_name: rib::RibByteCode::try_from(compiled_worker_name)?,
+                            rib_input_type_info: rib::RibInputTypeInfo::try_from(
+                                rib_input_type_info,
+                            )?,
+                        })
+                    }
+                    _ => None,
+                };
+
+                let idempotency_key_compiled = match (
+                    value.idempotency_key,
+                    value.compiled_idempotency_key_expr,
+                    value.idempotency_key_rib_input,
+                ) {
+                    (Some(idempotency_key), Some(compiled_idempotency_key), Some(rib_input)) => {
+                        Some(IdempotencyKeyCompiled {
+                            idempotency_key: rib::Expr::try_from(idempotency_key)?,
+                            compiled_idempotency_key: rib::RibByteCode::try_from(
+                                compiled_idempotency_key,
+                            )?,
+                            rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
+                        })
+                    }
+                    _ => None,
+                };
+
+                Ok(GatewayBindingCompiled::HttpHandler(
+                    HttpHandlerBindingCompiled {
+                        component_id,
+                        worker_name_compiled,
+                        idempotency_key_compiled,
+                    },
+                ))
+            }
             ProtoGatewayBindingType::CorsPreflight | ProtoGatewayBindingType::AuthCallBack => {
                 let static_binding = value
                     .static_binding
@@ -311,7 +358,7 @@ mod internal {
             GatewayBindingType::Default => 0,
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
-            GatewayBindingType::HttpHandler => 3,
+            GatewayBindingType::HttpHandler => 4,
         };
 
         Ok(
@@ -364,7 +411,7 @@ mod internal {
             GatewayBindingType::Default => 0,
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
-            GatewayBindingType::HttpHandler => 3,
+            GatewayBindingType::HttpHandler => 4,
         };
 
         Ok(
