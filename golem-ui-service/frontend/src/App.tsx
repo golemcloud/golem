@@ -2,8 +2,10 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { ApiDefinitionView } from "./pages/ApiDefinitionDetail";
 import { ApiDefinitionsPage } from "./pages/ApiDefinitions";
+import { AppProviders } from "./components/AppProviders";
 import { ComponentDetail } from "./pages/ComponentDetail";
 import { Components } from "./pages/Components";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import FunctionInvoker from "./pages/FunctionInvoker";
 import { Layout } from "./components/layout/Layout";
 import { Overview } from "./pages/Overview";
@@ -14,37 +16,39 @@ import WorkerDetail from "./pages/WorkerDetail";
 
 function App() {
   return (
-    <BrowserRouter>
+    <AppProviders>
       <Layout>
-        <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/workers" element={<div>Workers Page</div>} />
-          <Route path="/components" element={<Components />} />
-          <Route
-            path="/components/:id/:version"
-            element={<ComponentDetail />}
-          />
-          <Route path="/plugins" element={<PluginsPage />} />
-          <Route path="/apis" element={<ApiDefinitionsPage />} />
-          <Route
-            path="/apis/definitions/:id/:version"
-            element={<ApiDefinitionView />}
-          />
-          <Route
-            path="/plugins/:name/:version"
-            element={<PluginDetailPage />}
-          />
-          <Route
-            path="/components/:componentId/workers/:workerName"
-            element={<WorkerDetail />}
-          />
-          <Route
-            path="/components/:componentId/workers/:workerName/invoke"
-            element={<FunctionInvoker />}
-          />
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/workers" element={<div>Workers Page</div>} />
+            <Route path="/components" element={<Components />} />
+            <Route
+              path="/components/:id/:version"
+              element={<ComponentDetail />}
+            />
+            <Route path="/plugins" element={<PluginsPage />} />
+            <Route path="/apis" element={<ApiDefinitionsPage />} />
+            <Route
+              path="/apis/definitions/:id/:version"
+              element={<ApiDefinitionView />}
+            />
+            <Route
+              path="/plugins/:name/:version"
+              element={<PluginDetailPage />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName"
+              element={<WorkerDetail />}
+            />
+            <Route
+              path="/components/:componentId/workers/:workerName/invoke"
+              element={<FunctionInvoker />}
+            />
 
-          {/* <Route path="/api" */}
-        </Routes>
+            {/* <Route path="/api" */}
+          </Routes>
+        </ErrorBoundary>
         <div>
           {/* This component will render the toasts */}
           <Toaster
@@ -67,7 +71,7 @@ function App() {
           />
         </div>
       </Layout>
-    </BrowserRouter>
+    </AppProviders>
   );
 }
 
