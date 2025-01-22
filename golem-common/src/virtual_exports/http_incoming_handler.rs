@@ -16,8 +16,8 @@ use bytes::Bytes;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm_rpc::Value;
-use lazy_static::lazy_static;
 use semver::Version;
+use std::sync::LazyLock;
 
 // The following wit is modelled here:
 //
@@ -45,92 +45,110 @@ use semver::Version;
 // handle: func(request: request) -> response;
 //
 
-lazy_static! {
-    pub static ref REQUIRED_FUNCTIONS: Vec<rib::ParsedFunctionName> = vec![
+pub static REQUIRED_FUNCTIONS: LazyLock<Vec<rib::ParsedFunctionName>> = LazyLock::new(|| {
+    vec![
         rib::ParsedFunctionName {
             site: rib::ParsedFunctionSite::PackagedInterface {
                 namespace: "wasi".to_string(),
                 package: "http".to_string(),
                 interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 0)))
+                version: Some(rib::SemVer(Version::new(0, 2, 0))),
             },
             function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
+                function: "handle".to_string(),
+            },
         },
         rib::ParsedFunctionName {
             site: rib::ParsedFunctionSite::PackagedInterface {
                 namespace: "wasi".to_string(),
                 package: "http".to_string(),
                 interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 1)))
+                version: Some(rib::SemVer(Version::new(0, 2, 1))),
             },
             function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
+                function: "handle".to_string(),
+            },
         },
         rib::ParsedFunctionName {
             site: rib::ParsedFunctionSite::PackagedInterface {
                 namespace: "wasi".to_string(),
                 package: "http".to_string(),
                 interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 2)))
+                version: Some(rib::SemVer(Version::new(0, 2, 2))),
             },
             function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
+                function: "handle".to_string(),
+            },
         },
         rib::ParsedFunctionName {
             site: rib::ParsedFunctionSite::PackagedInterface {
                 namespace: "wasi".to_string(),
                 package: "http".to_string(),
                 interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 3)))
+                version: Some(rib::SemVer(Version::new(0, 2, 3))),
             },
             function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
-        }
-    ];
-    pub static ref PARSED_FUNCTION_NAME: rib::ParsedFunctionName = rib::ParsedFunctionName {
+                function: "handle".to_string(),
+            },
+        },
+    ]
+});
+
+pub static PARSED_FUNCTION_NAME: LazyLock<rib::ParsedFunctionName> =
+    LazyLock::new(|| rib::ParsedFunctionName {
         site: rib::ParsedFunctionSite::PackagedInterface {
             namespace: "golem".to_string(),
             package: "http".to_string(),
             interface: "incoming-handler".to_string(),
-            version: None
+            version: None,
         },
         function: rib::ParsedFunctionReference::Function {
-            function: "handle".to_string()
-        }
-    };
-    pub static ref ANALYZED_FUNCTION_PARAMETERS: Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter> = {
-        use golem_wasm_ast::analysis::*;
+            function: "handle".to_string(),
+        },
+    });
+
+pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
+    Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter>,
+> = {
+    use golem_wasm_ast::analysis::*;
+    LazyLock::new(|| {
         vec![AnalysedFunctionParameter {
             name: "request".to_string(),
             typ: IncomingHttpRequest::analysed_type(),
         }]
-    };
-    pub static ref ANALYZED_FUNCTION_RESULTS: Vec<golem_wasm_ast::analysis::AnalysedFunctionResult> = {
-        use golem_wasm_ast::analysis::*;
+    })
+};
+
+pub static ANALYZED_FUNCTION_RESULTS: LazyLock<
+    Vec<golem_wasm_ast::analysis::AnalysedFunctionResult>,
+> = {
+    use golem_wasm_ast::analysis::*;
+    LazyLock::new(|| {
         vec![AnalysedFunctionResult {
             name: None,
             typ: HttpResponse::analysed_type(),
         }]
-    };
-    pub static ref ANALYZED_FUNCTION: AnalysedFunction = {
-        use golem_wasm_ast::analysis::*;
+    })
+};
 
-        AnalysedFunction {
-            name: "handle".to_string(),
-            parameters: ANALYZED_FUNCTION_PARAMETERS.clone(),
-            results: ANALYZED_FUNCTION_RESULTS.clone(),
-        }
-    };
-    pub static ref ANALYZED_EXPORT: AnalysedExport = AnalysedExport::Instance(AnalysedInstance {
-        name: "golem:http/incoming-handler".to_string(),
-        functions: vec![ANALYZED_FUNCTION.clone()]
-    });
-}
+pub static ANALYZED_FUNCTION: LazyLock<AnalysedFunction> = {
+    use golem_wasm_ast::analysis::*;
+
+    LazyLock::new(|| AnalysedFunction {
+        name: "handle".to_string(),
+        parameters: ANALYZED_FUNCTION_PARAMETERS.clone(),
+        results: ANALYZED_FUNCTION_RESULTS.clone(),
+    })
+};
+
+pub const FUNCTION_NAME: &str = "golem:http/incoming-handler";
+
+pub static ANALYZED_EXPORT: LazyLock<AnalysedExport> = LazyLock::new(|| {
+    AnalysedExport::Instance(AnalysedInstance {
+        name: FUNCTION_NAME.to_string(),
+        functions: vec![ANALYZED_FUNCTION.clone()],
+    })
+});
 
 pub fn implements_required_interfaces(exports: &[AnalysedExport]) -> bool {
     let compatible_interfaces = [
@@ -247,6 +265,68 @@ impl HttpMethod {
                 Ok(HttpMethod::Custom(custom_method))
             }
             _ => Err("unknown case")?,
+        }
+    }
+
+    pub fn to_value(self) -> Value {
+        match self {
+            HttpMethod::GET => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            HttpMethod::HEAD => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            HttpMethod::POST => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            HttpMethod::PUT => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            HttpMethod::DELETE => Value::Variant {
+                case_idx: 4,
+                case_value: None,
+            },
+            HttpMethod::CONNECT => Value::Variant {
+                case_idx: 5,
+                case_value: None,
+            },
+            HttpMethod::OPTIONS => Value::Variant {
+                case_idx: 6,
+                case_value: None,
+            },
+            HttpMethod::TRACE => Value::Variant {
+                case_idx: 7,
+                case_value: None,
+            },
+            HttpMethod::PATCH => Value::Variant {
+                case_idx: 8,
+                case_value: None,
+            },
+            HttpMethod::Custom(custom_method) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(Value::String(custom_method))),
+            },
+        }
+    }
+
+    pub fn from_http_method(value: http::Method) -> Self {
+        use http::Method as M;
+
+        match value {
+            M::GET => HttpMethod::GET,
+            M::CONNECT => HttpMethod::CONNECT,
+            M::DELETE => HttpMethod::DELETE,
+            M::HEAD => HttpMethod::HEAD,
+            M::OPTIONS => HttpMethod::OPTIONS,
+            M::PATCH => HttpMethod::PATCH,
+            M::POST => HttpMethod::POST,
+            M::PUT => HttpMethod::PUT,
+            M::TRACE => HttpMethod::TRACE,
+            other => HttpMethod::Custom(other.to_string()),
         }
     }
 }
@@ -487,6 +567,15 @@ impl IncomingHttpRequest {
             body,
         })
     }
+
+    pub fn to_value(self) -> Value {
+        Value::Record(vec![
+            Value::String(self.uri),
+            self.method.to_value(),
+            self.headers.to_value(),
+            Value::Option(self.body.map(|b| Box::new(b.to_value()))),
+        ])
+    }
 }
 
 pub struct HttpResponse {
@@ -516,6 +605,41 @@ impl HttpResponse {
                     }),
                 },
             ],
+        })
+    }
+
+    pub fn from_value(value: Value) -> Result<Self, String> {
+        let record_values = extract!(value, Value::Record(inner), inner, "not a record")?;
+
+        if record_values.len() != 3 {
+            Err("wrong length of record data")?;
+        };
+
+        let status = extract!(
+            record_values[0].clone(),
+            Value::U16(inner),
+            inner,
+            "not a u16"
+        )?;
+
+        let headers = HttpFields::from_value(&record_values[1])?;
+
+        let body = extract!(
+            &record_values[2],
+            Value::Option(inner),
+            inner.as_ref(),
+            "not an option"
+        )?;
+        let body = if let Some(b) = body {
+            Some(HttpBodyAndTrailers::from_value(b)?)
+        } else {
+            None
+        };
+
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
         })
     }
 

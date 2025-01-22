@@ -37,6 +37,8 @@ use rib::{RibInput, RibResult};
 use std::sync::Arc;
 use tracing::error;
 
+use super::http_handler_binding_handler::HttpHandlerBindingHandler;
+
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
     async fn execute_http_request(&self, input: poem::Request) -> poem::Response;
@@ -46,6 +48,7 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
+    pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
     pub api_definition_lookup_service: Arc<
         dyn ApiDefinitionsLookup<
                 InputHttpRequest,
@@ -62,6 +65,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
+        http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<
                     InputHttpRequest,
@@ -76,6 +80,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
+            http_handler_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider,
@@ -113,6 +118,33 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                         &mut request_details,
                         resolved_worker_binding,
                     )
+                    .await;
+
+                if let Some(middleware) = middleware_opt {
+                    let result = middleware.process_middleware_out(&mut response).await;
+                    match result {
+                        Ok(_) => response,
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                } else {
+                    response
+                }
+            }
+
+            ResolvedBinding::HttpHandler(http_handler_binding) => {
+                let result = self
+                    .http_handler_binding_handler
+                    .handle_http_handler_binding(
+                        &http_handler_binding.namespace,
+                        &http_handler_binding.worker_detail,
+                        &request_details,
+                    )
+                    .await;
+
+                let mut response = result
+                    .to_response(&request_details, &self.gateway_session_store)
                     .await;
 
                 if let Some(middleware) = middleware_opt {

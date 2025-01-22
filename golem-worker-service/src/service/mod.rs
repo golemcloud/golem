@@ -22,6 +22,9 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::DefaultFileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
+    DefaultHttpHandlerBindingHandler, HttpHandlerBindingHandler,
+};
 use worker_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::gateway_api_definition::http::{
@@ -92,6 +95,8 @@ pub struct Services {
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
+    pub http_handler_binding_handler:
+        Arc<dyn HttpHandlerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
 
 impl Services {
@@ -254,6 +259,12 @@ impl Services {
             worker_service.clone(),
         ));
 
+        let http_handler_binding_handler: Arc<
+            dyn HttpHandlerBindingHandler<DefaultNamespace> + Sync + Send,
+        > = Arc::new(DefaultHttpHandlerBindingHandler::new(
+            worker_to_http_service.clone(),
+        ));
+
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
@@ -295,6 +306,7 @@ impl Services {
             api_definition_validator_service,
             fileserver_binding_handler,
             gateway_session_store,
+            http_handler_binding_handler,
         })
     }
 }

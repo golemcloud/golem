@@ -20,7 +20,7 @@ use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
 use golem_common::SafeDisplay;
 use http::uri::Scheme;
-use http::HeaderMap;
+use http::{HeaderMap, Method};
 use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
@@ -29,37 +29,6 @@ use url::Url;
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
     Http(HttpRequestDetails),
-}
-impl GatewayRequestDetails {
-    // Form the HttpRequestDetails based on what's required by
-    // ApiDefinition. If there are query or path parameters that are not required
-    // by API definition, they will be discarded here.
-    // If there is a need to fetch any query values or path values that are required
-    // in the workflow but not through API definition, use poem::Request directly
-    // as it will be better performing in the hot path
-    pub fn from(
-        scheme: &Option<Scheme>,
-        host: &ApiSiteString,
-        api_input_path: &ApiInputPath,
-        path_params: &HashMap<VarInfo, String>,
-        query_variable_values: &HashMap<String, String>,
-        query_variable_names: &[QueryInfo],
-        request_body: &Value,
-        headers: HeaderMap,
-        middlewares: &Option<HttpMiddlewares>,
-    ) -> Result<Self, Vec<String>> {
-        Ok(Self::Http(HttpRequestDetails::from_input_http_request(
-            scheme,
-            host,
-            api_input_path,
-            path_params,
-            query_variable_values,
-            query_variable_names,
-            request_body,
-            headers,
-            middlewares,
-        )?))
-    }
 }
 
 // A structure that holds the incoming request details
@@ -71,6 +40,7 @@ impl GatewayRequestDetails {
 pub struct HttpRequestDetails {
     pub scheme: Option<Scheme>,
     pub host: ApiSiteString,
+    pub request_method: Method,
     pub api_input_path: ApiInputPath,
     pub request_path_params: RequestPathValues,
     pub request_body_value: RequestBody,
@@ -158,6 +128,7 @@ impl HttpRequestDetails {
         HttpRequestDetails {
             scheme: Some(Scheme::HTTP),
             host: ApiSiteString("".to_string()),
+            request_method: Method::GET,
             api_input_path: ApiInputPath {
                 base_path: "".to_string(),
                 query_path: None,
@@ -251,6 +222,7 @@ impl HttpRequestDetails {
     pub fn from_input_http_request(
         scheme: &Option<Scheme>,
         host: &ApiSiteString,
+        method: Method,
         api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, String>,
         query_variable_values: &HashMap<String, String>,
@@ -267,6 +239,7 @@ impl HttpRequestDetails {
         Ok(Self {
             scheme: scheme.clone(),
             host: host.clone(),
+            request_method: method,
             api_input_path: api_input_path.clone(),
             request_path_params: path_params,
             request_body_value: request_body,
@@ -335,7 +308,8 @@ impl RequestQueryValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestHeaderValues(JsonKeyValues);
+pub struct RequestHeaderValues(pub JsonKeyValues);
+
 impl RequestHeaderValues {
     fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
         let mut headers_map: JsonKeyValues = JsonKeyValues::default();
@@ -353,7 +327,7 @@ impl RequestHeaderValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestBody(Value);
+pub struct RequestBody(pub Value);
 
 impl RequestBody {
     fn from(request_body: &Value) -> Result<RequestBody, Vec<String>> {

@@ -52,8 +52,8 @@ futures-util = { workspace = true }
 gethostname = "0.5.0"
 hex = { workspace = true }
 http = { workspace = true }
-http-body = "1.0.1"                                 # keep in sync with wasmtime
-http-body-util = "0.1.0"                            # keep in sync with wasmtime
+http-body = { workspace = true }
+http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }

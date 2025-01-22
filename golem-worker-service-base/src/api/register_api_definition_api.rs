@@ -18,7 +18,8 @@ use crate::gateway_api_definition::http::{
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
-    GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
+    GatewayBinding, GatewayBindingCompiled, HttpHandlerBinding, HttpHandlerBindingCompiled,
+    StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{CorsPreflightExpr, HttpCors, HttpMiddleware, HttpMiddlewares};
 use crate::gateway_security::{
@@ -373,6 +374,36 @@ impl GatewayBindingData {
             allow_credentials: None,
         })
     }
+
+    pub fn from_http_handler_binding(
+        http_handler_binding: HttpHandlerBinding,
+        binding_type: GatewayBindingType,
+    ) -> Result<Self, String> {
+        let worker_id = http_handler_binding
+            .worker_name
+            .map(|expr| rib::to_string(&expr).map_err(|e| e.to_string()))
+            .transpose()?;
+
+        let idempotency_key = if let Some(key) = &http_handler_binding.idempotency_key {
+            Some(rib::to_string(key).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            binding_type: Some(binding_type),
+            component_id: Some(http_handler_binding.component_id),
+            worker_name: worker_id,
+            idempotency_key,
+            response: None,
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: None,
+            allow_credentials: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -493,6 +524,33 @@ impl GatewayBindingResponseData {
             response_mapping_output: worker_binding.response_compiled.rib_output,
         }
     }
+
+    pub fn from_http_handler_binding_compiled(
+        http_handler_binding: HttpHandlerBindingCompiled,
+        binding_type: GatewayBindingType,
+    ) -> Self {
+        GatewayBindingResponseData {
+            component_id: Some(http_handler_binding.component_id),
+            worker_name: http_handler_binding
+                .worker_name_compiled
+                .clone()
+                .map(|compiled| compiled.worker_name.to_string()),
+            idempotency_key: http_handler_binding.idempotency_key_compiled.clone().map(
+                |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+            ),
+            response: None,
+            binding_type: Some(binding_type),
+            response_mapping_input: None,
+            worker_name_input: http_handler_binding
+                .worker_name_compiled
+                .map(|compiled| compiled.rib_input_type_info),
+            idempotency_key_input: http_handler_binding
+                .idempotency_key_compiled
+                .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
+            cors_preflight: None,
+            response_mapping_output: None,
+        }
+    }
 }
 
 impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
@@ -514,6 +572,12 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
                     GatewayBindingType::Default,
                 ))
             }
+            GatewayBindingCompiled::HttpHandler(http_handler_binding) => Ok(
+                GatewayBindingResponseData::from_http_handler_binding_compiled(
+                    http_handler_binding,
+                    GatewayBindingType::HttpHandler,
+                ),
+            ),
             GatewayBindingCompiled::Static(static_binding) => {
                 let binding_type = match static_binding.deref() {
                     StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
@@ -631,6 +695,13 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 GatewayBindingType::FileServer,
             ),
 
+            GatewayBinding::HttpHandler(http_handler_binding) => {
+                GatewayBindingData::from_http_handler_binding(
+                    http_handler_binding,
+                    GatewayBindingType::HttpHandler,
+                )
+            }
+
             GatewayBinding::Static(static_binding) => match static_binding.deref() {
                 StaticBinding::HttpCorsPreflight(cors) => Ok(GatewayBindingData {
                     binding_type: Some(GatewayBindingType::CorsPreflight),
@@ -661,7 +732,10 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
         let v = gateway_binding_data.clone().binding_type;
 
         match v {
-            Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer) | None => {
+            Some(GatewayBindingType::Default)
+            | Some(GatewayBindingType::FileServer)
+            | Some(GatewayBindingType::HttpHandler)
+            | None => {
                 let response = gateway_binding_data
                     .response
                     .ok_or("Missing response field in binding")?;
