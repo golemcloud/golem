@@ -23,8 +23,8 @@ golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

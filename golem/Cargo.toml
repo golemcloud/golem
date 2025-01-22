@@ -17,17 +17,17 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
-golem-cli = { path = "../golem-cli", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "0.0.0" }
-golem-component-service = { path = "../golem-component-service", version = "0.0.0" }
-golem-component-service-base = { path = "../golem-component-service-base", version = "0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
-golem-shard-manager = { path = "../golem-shard-manager", version = "0.0.0" }
-golem-worker-executor = { path = "../golem-worker-executor", version = "0.0.0" }
-golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
-golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
-golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
+golem-cli = { path = "../golem-cli", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "=0.0.0" }
+golem-component-service = { path = "../golem-component-service", version = "=0.0.0" }
+golem-component-service-base = { path = "../golem-component-service-base", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "=0.0.0" }
+golem-worker-executor = { path = "../golem-worker-executor", version = "=0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0" }
+golem-worker-service = { path = "../golem-worker-service", version = "=0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 bytes = { workspace = true }

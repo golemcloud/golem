@@ -26,8 +26,8 @@ harness = false
 [dependencies]
 assert2 = { workspace = true }
 fs_extra = { workspace = true }
-golem-wasm-ast = { path = "../../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }
+golem-wasm-ast = { path = "../../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "=0.0.0" }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
