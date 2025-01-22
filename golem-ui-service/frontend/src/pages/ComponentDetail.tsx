@@ -119,9 +119,7 @@ export const ComponentDetail = () => {
     setActionModal({ isOpen: true, workerId, action, currentStatus });
   };
 
-  const workers = _workers?.workers.filter(
-    (w) => w.componentVersion == version,
-  );
+  const workers = _workers?.workers
 
   const activeWorkers =
     workers?.filter((w) => w.status != "Failed").length ?? 0;
@@ -261,76 +259,91 @@ export const ComponentDetail = () => {
             Workers
           </h2>
           <div className="space-y-3 md:space-y-4">
-            {workers?.map((worker) => (
-              <div
-                key={worker.workerId.workerName}
-                className="group flex flex-col md:flex-row md:items-center md:justify-between p-3 md:p-4 bg-card/50 rounded-lg
-                         hover:bg-card/80 transition-all duration-200 gap-3"
-              >
-                <div className="flex items-center gap-3 md:gap-4">
-                  <div
-                    className={`p-2 rounded-md bg-card/50 ${getStatusColor(worker.status)}`}
-                  >
-                    <CircleDot size={16} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-medium flex items-center gap-2 text-sm md:text-base">
-                      <Link
-                        to={`/components/${id}/workers/${worker.workerId.workerName}`}
-                        className="truncate hover:text-primary transition-colors"
-                      >
-                        {worker.workerId.workerName}
-                      </Link>
-                    </h3>
-                    <div className="flex flex-wrap gap-2 md:gap-4 mt-1">
-                      <span className="text-xs md:text-sm text-muted-foreground">
-                        Status: {worker.status}
-                      </span>
-                      {worker.env && Object.keys(worker.env).length > 0 && (
+            {workers?.map((worker) => {
+              const isCurrentVersion = worker.componentVersion === component.versionedComponentId.version;
+
+              return (
+                <div
+                  key={worker.workerId.workerName}
+                  className={`group flex flex-col md:flex-row md:items-center md:justify-between p-3 md:p-4 rounded-lg
+                   hover:bg-card/80 transition-all duration-200 gap-3 
+                   ${isCurrentVersion ? 'bg-card/50' : 'bg-card/30 border border-yellow-500/20'}`}
+                >
+                  <div className="flex items-center gap-3 md:gap-4">
+                    <div
+                      className={`p-2 rounded-md bg-card/50 ${getStatusColor(worker.status)}`}
+                    >
+                      <CircleDot size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-medium flex items-center gap-2 text-sm md:text-base">
+                        <Link
+                          to={`/components/${id}/workers/${worker.workerId.workerName}`}
+                          className="truncate hover:text-primary transition-colors"
+                        >
+                          {worker.workerId.workerName}
+                        </Link>
+                        {!isCurrentVersion && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-500">
+                            v{worker.componentVersion}
+                          </span>
+                        )}
+                      </h3>
+                      <div className="flex flex-wrap gap-2 md:gap-4 mt-1">
                         <span className="text-xs md:text-sm text-muted-foreground">
-                          {Object.keys(worker.env).length} env variables
+                          Status: {worker.status}
                         </span>
-                      )}
+                        {worker.env && Object.keys(worker.env).length > 0 && (
+                          <span className="text-xs md:text-sm text-muted-foreground">
+                            {Object.keys(worker.env).length} env variables
+                          </span>
+                        )}
+                        {!isCurrentVersion && (
+                          <span className="text-xs md:text-sm text-yellow-500/80">
+                            Different version than component
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex gap-2 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() =>
+                        handleAction(worker.workerId, "resume", worker.status)
+                      }
+                      className="p-2 text-muted-foreground hover:text-green-400 rounded-md hover:bg-gray-600
+                       transition-colors"
+                      title="Resume worker"
+                    >
+                      <Play size={18} />
+                    </button>
+                    <button
+                      onClick={() =>
+                        handleAction(worker.workerId, "interrupt", worker.status)
+                      }
+                      className="p-2 text-muted-foreground hover:text-yellow-400 rounded-md hover:bg-gray-600
+                       transition-colors"
+                      title="Interrupt worker"
+                    >
+                      <Pause size={18} />
+                    </button>
+                    <button
+                      onClick={() =>
+                        deleteWorkerA(
+                          worker.workerId.workerName,
+                          worker.workerId.componentId,
+                        )
+                      }
+                      className="p-2 text-muted-foreground hover:text-red-400 rounded-md hover:bg-gray-600
+                       transition-colors"
+                      title="Delete worker"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-2 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() =>
-                      handleAction(worker.workerId, "resume", worker.status)
-                    }
-                    className="p-2 text-muted-foreground hover:text-green-400 rounded-md hover:bg-gray-600
-                             transition-colors"
-                    title="Resume worker"
-                  >
-                    <Play size={18} />
-                  </button>
-                  <button
-                    onClick={() =>
-                      handleAction(worker.workerId, "interrupt", worker.status)
-                    }
-                    className="p-2 text-muted-foreground hover:text-yellow-400 rounded-md hover:bg-gray-600
-                             transition-colors"
-                    title="Interrupt worker"
-                  >
-                    <Pause size={18} />
-                  </button>
-                  <button
-                    onClick={() =>
-                      deleteWorkerA(
-                        worker.workerId.workerName,
-                        worker.workerId.componentId,
-                      )
-                    }
-                    className="p-2 text-muted-foreground hover:text-red-400 rounded-md hover:bg-gray-600
-                             transition-colors"
-                    title="Delete worker"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {(!workers || workers.length === 0) && (
               <div className="text-center py-8 md:py-12 text-muted-foreground">

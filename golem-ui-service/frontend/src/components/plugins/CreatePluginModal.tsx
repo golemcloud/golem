@@ -114,7 +114,7 @@ export const CreatePluginModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-start md:items-center justify-center p-4 z-50 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 bg-black/60 flex items-start md:items-center justify-center p-4 z-50 backdrop-blur-sm overflow-y-auto pt-48">
       <div className="bg-card rounded-xl p-4 md:p-6 w-full max-w-2xl shadow-xl my-4 md:my-0">
         <div className="flex justify-between items-start mb-4 md:mb-6">
           <div className="flex items-center gap-2 md:gap-3">

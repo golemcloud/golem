@@ -16,20 +16,23 @@ import {
   Timer,
   XCircle,
 } from "lucide-react";
+import { Component, WorkerUpdate } from "../types/api";
 import {
   Link,
   useNavigate,
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { useActivatePlugin, useDeactivatePlugin } from "../api/plugins";
+import { getComponent, getComponentVersion, useComponent } from "../api/components";
 import {
+  getWorker,
   useDeleteWorker,
   useInterruptWorker,
   useResumeWorker,
   useWorker,
   useWorkerLogs,
 } from "../api/workers";
+import { useActivatePlugin, useDeactivatePlugin } from "../api/plugins";
 import { useEffect, useState } from "react";
 
 import AdvancedTab from "../components/workers/worker-details/AdvancedTab";
@@ -37,9 +40,7 @@ import ConfigTab from "../components/workers/worker-details/Configuration";
 import FilesTab from "../components/workers/worker-details/Files";
 import LogsViewer from "../components/workers/LogsViewer";
 import Overview from "../components/workers/worker-details/Overview";
-import { WorkerUpdate } from "../types/api";
 import toast from "react-hot-toast";
-import { useComponent } from "../api/components";
 
 const StatusIndicator = ({ status }: { status: string }) => {
   const getStatusColor = (status: string) => {
@@ -82,11 +83,10 @@ const TabButton = ({
 }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-      active
-        ? "bg-primary text-primary-foreground"
-        : "text-muted-foreground hover:text-foreground hover:bg-card/60"
-    } ${className}`}
+    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${active
+      ? "bg-primary text-primary-foreground"
+      : "text-muted-foreground hover:text-foreground hover:bg-card/60"
+      } ${className}`}
   >
     <Icon size={16} />
     {children}
@@ -100,8 +100,14 @@ export default function WorkerDetail() {
     componentId: string;
     workerName: string;
   }>();
+  const {
+    data: worker,
+    isLoading,
+    error,
+  } = useWorker(componentId!, workerName!);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [component, setComponent] = useState<Component | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const tabParam = searchParams.get("tab");
     return (tabParam as TabType) || "overview";
@@ -116,16 +122,15 @@ export default function WorkerDetail() {
     setIsMobileMenuOpen(false);
   };
 
-  const {
-    data: worker,
-    isLoading,
-    error,
-  } = useWorker(componentId!, workerName!);
   const interruptWorker = useInterruptWorker();
-  const { data: component } = useComponent(
-    componentId!,
-    worker!.componentVersion!,
-  );
+
+  useEffect(() => {
+    if (worker) {
+      getComponentVersion(componentId!, worker.componentVersion)
+        .then(component => setComponent(component))
+    }
+  }, [worker, componentId]);
+  
   const resumeWorker = useResumeWorker();
   const deleteWorker = useDeleteWorker();
 
@@ -196,7 +201,7 @@ export default function WorkerDetail() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || !component) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2 text-muted-foreground">

@@ -60,7 +60,7 @@ export const DeployModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 pt-48">
       <div className="bg-card rounded-lg p-6 max-w-md w-full">
         <div className="flex justify-between items-start mb-6">
           <div>

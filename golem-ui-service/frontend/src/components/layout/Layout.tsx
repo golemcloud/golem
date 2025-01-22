@@ -168,7 +168,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
             </div>
             <div className="flex items-center gap-4">
               <a
-                href="https://docs.golem.cloud"
+                href="https://learn.golem.cloud"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-gray-500 hover:text-muted-foreground transition-colors"

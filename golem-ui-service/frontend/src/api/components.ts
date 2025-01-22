@@ -1,4 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { Component } from "../types/api";
 import { GolemError } from "../types/error";
@@ -12,7 +16,8 @@ export const componentKeys = {
   list: (filters: Record<string, unknown>) =>
     [...componentKeys.lists(), filters] as const,
   details: () => [...componentKeys.all, "detail"] as const,
-  detail: (id: string,version:string|number) => [...componentKeys.details(), id, version] as const,
+  detail: (id: string, version: string | number) =>
+    [...componentKeys.details(), id, version] as const,
   versions: (id: string) => [...componentKeys.detail(id), "versions"] as const,
 };
 
@@ -26,7 +31,7 @@ export const getComponents = async (componentName?: string) => {
 
 export const getComponentVersions = async (componentId: string) => {
   const { data } = await apiClient.get<Component[]>(
-    `/v1/components/${componentId}`,
+    `/v1/components/${componentId}`
   );
   return data;
 };
@@ -38,10 +43,10 @@ export const deleteComponent = async (componentId: string) => {
 
 export const getComponentVersion = async (
   componentId: string,
-  version: string | number,
+  version: string | number
 ) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/versions/${version}`,
+    `/v1/components/${componentId}/versions/${version}`
   );
   return data;
 };
@@ -69,14 +74,14 @@ export const updateComponent = async ({
       headers: {
         "Content-Type": "multipart/form-data",
       },
-    },
+    }
   );
   return data;
 };
 
 // Hooks
 export const useComponents = (
-  componentName?: string,
+  componentName?: string
 ): {
   data: Component[];
   isLoading: boolean;
@@ -140,7 +145,7 @@ export const useDeleteComponent = () => {
 
 export const useComponent = (
   componentId: string,
-  version: string | number,
+  version: string | number
 ): {
   data: Component;
   isLoading: boolean;
@@ -150,14 +155,14 @@ export const useComponent = (
     queryFn: () => getComponentVersion(componentId, version),
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching component"),
-    enabled: !!componentId, // Only run if componentId is provided
+    enabled: !!componentId && !!version, // Only run if componentId is provided
     cacheTime: 0, // Disable cache
   });
 };
 
 export const getComponent = async (componentId: string) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/latest`,
+    `/v1/components/${componentId}/latest`
   );
   return data;
 };

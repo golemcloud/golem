@@ -403,7 +403,7 @@ export const RouteModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+    <div className="fixed inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48">
       <div className="bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85">
         <div className="flex justify-between items-start mb-6">
           <h2 className="text-xl font-semibold flex items-center gap-2">

@@ -8,11 +8,12 @@ import {
   Terminal,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { getComponentVersion, useComponent } from "../api/components";
 import { useEffect, useState } from "react";
 
+import { Component } from "../types/api";
 import { apiClient } from "../lib/api-client";
 import toast from "react-hot-toast";
-import { useComponent } from "../api/components";
 import { useMutation } from "@tanstack/react-query";
 import { useWorker } from "../api/workers";
 
@@ -183,7 +184,7 @@ const RecursiveParameterInput = ({
           <input
             type={
               typeDef.type.toLowerCase().includes("32") ||
-              typeDef.type.toLowerCase().includes("64")
+                typeDef.type.toLowerCase().includes("64")
                 ? "number"
                 : "text"
             }
@@ -215,21 +216,26 @@ const FunctionInvoker = () => {
   const functionName = queryParams.get("functionName");
   const exportName = functionName?.split(".")[0];
   const navigate = useNavigate();
-
+  const [component, setComponent] = useState<Component | null>(null);
   const {
     data: worker,
     isLoading,
     error: workerError,
   } = useWorker(componentId!, workerName!);
   useEffect(() => {
+    if (worker?.componentVersion) {
+      getComponentVersion(componentId!, worker.componentVersion)
+        .then(component => setComponent(component))
+    }
+  }, [worker, componentId]);
+
+
+  useEffect(() => {
     if (functionName && worker) {
       document.title = `Invoke ${functionName} on ${worker.workerId.workerName} - Golem UI`;
     }
   }, [worker, functionName]);
-  const { data: component } = useComponent(
-    componentId!,
-    worker!.componentVersion,
-  );
+
   const [parameters, setParameters] = useState<Record<string, string>>({});
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -420,9 +426,8 @@ const FunctionInvoker = () => {
       {/* Results */}
       {(result || error) && (
         <div
-          className={`bg-card/80 border rounded-lg p-6 ${
-            error ? "border-destructive/20" : "border-border/10"
-          }`}
+          className={`bg-card/80 border rounded-lg p-6 ${error ? "border-destructive/20" : "border-border/10"
+            }`}
         >
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
             <Code2
