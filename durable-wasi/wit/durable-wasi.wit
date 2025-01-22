@@ -1,6 +1,16 @@
 package golem:wasi;
 
 world durable-wasi {
+    // Blobstore
+    import wasi:blobstore/blobstore;
+    export wasi:blobstore/blobstore;
+
+    import wasi:blobstore/container;
+    export wasi:blobstore/container;
+
+    import wasi:blobstore/types;
+    export wasi:blobstore/types;
+
     // CLI
     import wasi:cli/environment@0.2.0;
     export wasi:cli/environment@0.2.0;

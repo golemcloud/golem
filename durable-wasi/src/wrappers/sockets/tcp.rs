@@ -112,8 +112,8 @@ impl crate::bindings::exports::wasi::sockets::tcp::GuestTcpSocket for WrappedTcp
     fn address_family(&self) -> IpAddressFamily {
         observe_function_call("sockets::tcp", "address_family");
         let family = self.tcp_socket.address_family();
-        let family = unsafe { transmute(family) };
-        family
+
+        unsafe { transmute(family) }
     }
 
     fn set_listen_backlog_size(&self, value: u64) -> Result<(), ErrorCode> {

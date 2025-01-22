@@ -28,6 +28,7 @@ use crate::wrappers::http::{
 use crate::wrappers::io::error::WrappedError;
 use crate::wrappers::io::poll::WrappedPollable;
 use crate::wrappers::SerializableStreamError;
+use std::cell::RefCell;
 use std::cmp::min;
 
 impl From<crate::bindings::wasi::io::streams::StreamError> for StreamError {
@@ -46,6 +47,9 @@ pub enum WrappedInputStream {
     ReplayedIncomingHttpBodyStream {
         handle: Option<u32>,
     },
+    Buffered {
+        data: RefCell<Vec<u8>>,
+    },
 }
 
 impl WrappedInputStream {
@@ -61,6 +65,12 @@ impl WrappedInputStream {
 
     pub fn replayed_incoming_http_body_stream() -> Self {
         WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None }
+    }
+
+    pub fn buffered(data: Vec<u8>) -> Self {
+        WrappedInputStream::Buffered {
+            data: RefCell::new(data),
+        }
     }
 
     pub fn assign_replay_stream_handle(&mut self, handle: u32) {
@@ -123,6 +133,12 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
             WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
                 panic!("No handle associated with replayed incoming HTTP body stream")
             }
+            WrappedInputStream::Buffered { data } => {
+                let mut data = data.borrow_mut();
+                let len = min(len as usize, data.len());
+                let result = data.drain(..len).collect();
+                Ok(result)
+            }
         }
     }
 
@@ -175,6 +191,12 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
             }
             WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
                 panic!("No handle associated with replayed incoming HTTP body stream")
+            }
+            WrappedInputStream::Buffered { data } => {
+                let mut data = data.borrow_mut();
+                let len = min(len as usize, data.len());
+                let result = data.drain(..len).collect();
+                Ok(result)
             }
         }
     }
@@ -229,6 +251,12 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
             WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
                 panic!("No handle associated with replayed incoming HTTP body stream")
             }
+            WrappedInputStream::Buffered { data } => {
+                let mut data = data.borrow_mut();
+                let len = min(len as usize, data.len());
+                data.drain(..len);
+                Ok(len as u64)
+            }
         }
     }
 
@@ -282,6 +310,12 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
             WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
                 panic!("No handle associated with replayed incoming HTTP body stream")
             }
+            WrappedInputStream::Buffered { data } => {
+                let mut data = data.borrow_mut();
+                let len = min(len as usize, data.len());
+                data.drain(..len);
+                Ok(len as u64)
+            }
         }
     }
 
@@ -296,6 +330,7 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
             WrappedInputStream::ReplayedIncomingHttpBodyStream { .. } => {
                 Pollable::new(WrappedPollable::Ready)
             }
+            WrappedInputStream::Buffered { .. } => Pollable::new(WrappedPollable::Ready),
         }
     }
 }
@@ -325,6 +360,7 @@ impl Drop for WrappedInputStream {
                 }
             }),
             WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {}
+            WrappedInputStream::Buffered { .. } => {}
         }
     }
 }

@@ -22,6 +22,7 @@ use bincode::{Decode, Encode};
 use golem_common::base_model::{ComponentId, PromiseId, ShardId, WorkerId};
 use std::fmt::{Display, Formatter};
 
+mod blobstore;
 mod cli;
 mod clock;
 mod filesystem;

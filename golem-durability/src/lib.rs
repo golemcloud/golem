@@ -18,7 +18,7 @@ use std::path::Path;
 use wac_graph::types::{Package, SubtypeChecker};
 use wac_graph::{CompositionGraph, EncodeOptions, PackageId, PlugError};
 
-pub const DURABLE_WASI_WASM: &'static [u8] = include_bytes!(env!("DURABLE_WASI_COMPONENT"));
+pub const DURABLE_WASI_WASM: &[u8] = include_bytes!(env!("DURABLE_WASI_COMPONENT"));
 
 pub fn compose_with_durability_in_fs(source_wasm: &Path, target_wasm: &Path) -> anyhow::Result<()> {
     // Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/src/commands/plug.rs

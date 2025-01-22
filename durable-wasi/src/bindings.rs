@@ -12857,6 +12857,1609 @@ pub mod golem {
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod wasi {
+    pub mod blobstore {
+        /// Types used by blobstore
+        #[allow(dead_code, clippy::all)]
+        pub mod types {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+            pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+            /// name of a container, a collection of objects.
+            /// The container name may be any valid UTF-8 string.
+            pub type ContainerName = _rt::String;
+            /// name of an object within a container
+            /// The object name may be any valid UTF-8 string.
+            pub type ObjectName = _rt::String;
+            /// TODO: define timestamp to include seconds since
+            /// Unix epoch and nanoseconds
+            /// https://github.com/WebAssembly/wasi-blob-store/issues/7
+            pub type Timestamp = u64;
+            /// size of an object, in bytes
+            pub type ObjectSize = u64;
+            pub type Error = _rt::String;
+            /// information about a container
+            #[derive(Clone)]
+            pub struct ContainerMetadata {
+                /// the container's name
+                pub name: ContainerName,
+                /// date and time container was created
+                pub created_at: Timestamp,
+            }
+            impl ::core::fmt::Debug for ContainerMetadata {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ContainerMetadata")
+                        .field("name", &self.name)
+                        .field("created-at", &self.created_at)
+                        .finish()
+                }
+            }
+            /// information about an object
+            #[derive(Clone)]
+            pub struct ObjectMetadata {
+                /// the object's name
+                pub name: ObjectName,
+                /// the object's parent container
+                pub container: ContainerName,
+                /// date and time the object was created
+                pub created_at: Timestamp,
+                /// size of the object, in bytes
+                pub size: ObjectSize,
+            }
+            impl ::core::fmt::Debug for ObjectMetadata {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ObjectMetadata")
+                        .field("name", &self.name)
+                        .field("container", &self.container)
+                        .field("created-at", &self.created_at)
+                        .field("size", &self.size)
+                        .finish()
+                }
+            }
+            /// identifier for an object that includes its container name
+            #[derive(Clone)]
+            pub struct ObjectId {
+                pub container: ContainerName,
+                pub object: ObjectName,
+            }
+            impl ::core::fmt::Debug for ObjectId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ObjectId")
+                        .field("container", &self.container)
+                        .field("object", &self.object)
+                        .finish()
+                }
+            }
+            /// A data is the data stored in a data blob. The value can be of any type
+            /// that can be represented in a byte array. It provides a way to write the value
+            /// to the output-stream defined in the `wasi-io` interface.
+            /// Soon: switch to `resource value { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutgoingValue {
+                handle: _rt::Resource<OutgoingValue>,
+            }
+            impl OutgoingValue {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutgoingValue {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]outgoing-value"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// A incoming-value is a wrapper around a value. It provides a way to read the value
+            /// from the input-stream defined in the `wasi-io` interface.
+            ///
+            /// The incoming-value provides two ways to consume the value:
+            /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+            /// value as a list of bytes.
+            /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+            /// value as an input-stream.
+            /// Soon: switch to `resource incoming-value { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct IncomingValue {
+                handle: _rt::Resource<IncomingValue>,
+            }
+            impl IncomingValue {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for IncomingValue {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]incoming-value"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            pub type IncomingValueAsyncBody = InputStream;
+            pub type IncomingValueSyncBody = _rt::Vec<u8>;
+            impl OutgoingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn new_outgoing_value() -> OutgoingValue {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[static]outgoing-value.new-outgoing-value"]
+                            fn wit_import() -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import() -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import();
+                        OutgoingValue::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl OutgoingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn outgoing_value_write_body(&self) -> Result<OutputStream, ()> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-value.outgoing-value-write-body"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::OutputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = ();
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn incoming_value_consume_sync(
+                    &self,
+                ) -> Result<IncomingValueSyncBody, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-sync"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l6 = *ptr0.add(8).cast::<usize>();
+                                    let len7 = l6;
+                                    let bytes7 = _rt::Vec::from_raw_parts(
+                                        l5.cast(),
+                                        len7,
+                                        len7,
+                                    );
+                                    _rt::string_lift(bytes7)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn incoming_value_consume_async(
+                    &self,
+                ) -> Result<IncomingValueAsyncBody, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-async"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::InputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l4 = *ptr0.add(8).cast::<usize>();
+                                    let len5 = l4;
+                                    let bytes5 = _rt::Vec::from_raw_parts(
+                                        l3.cast(),
+                                        len5,
+                                        len5,
+                                    );
+                                    _rt::string_lift(bytes5)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn size(&self) -> u64 {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/types")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.size"]
+                            fn wit_import(_: i32) -> i64;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i64 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        ret as u64
+                    }
+                }
+            }
+        }
+        /// a Container is a collection of objects
+        #[allow(dead_code, clippy::all)]
+        pub mod container {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type ContainerMetadata = super::super::super::wasi::blobstore::types::ContainerMetadata;
+            pub type Error = super::super::super::wasi::blobstore::types::Error;
+            pub type IncomingValue = super::super::super::wasi::blobstore::types::IncomingValue;
+            pub type ObjectMetadata = super::super::super::wasi::blobstore::types::ObjectMetadata;
+            pub type ObjectName = super::super::super::wasi::blobstore::types::ObjectName;
+            pub type OutgoingValue = super::super::super::wasi::blobstore::types::OutgoingValue;
+            /// this defines the `container` resource
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Container {
+                handle: _rt::Resource<Container>,
+            }
+            impl Container {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Container {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]container"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// this defines the `stream-object-names` resource which is a representation of stream<object-name>
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct StreamObjectNames {
+                handle: _rt::Resource<StreamObjectNames>,
+            }
+            impl StreamObjectNames {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for StreamObjectNames {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]stream-object-names"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns container name
+                pub fn name(&self) -> Result<_rt::String, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.name"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l6 = *ptr0.add(8).cast::<usize>();
+                                    let len7 = l6;
+                                    let bytes7 = _rt::Vec::from_raw_parts(
+                                        l5.cast(),
+                                        len7,
+                                        len7,
+                                    );
+                                    _rt::string_lift(bytes7)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns container metadata
+                pub fn info(&self) -> Result<ContainerMetadata, Error> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 24],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.info"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(12).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    let l5 = *ptr0.add(16).cast::<i64>();
+                                    super::super::super::wasi::blobstore::types::ContainerMetadata {
+                                        name: _rt::string_lift(bytes4),
+                                        created_at: l5 as u64,
+                                    }
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l6 = *ptr0.add(8).cast::<*mut u8>();
+                                    let l7 = *ptr0.add(12).cast::<usize>();
+                                    let len8 = l7;
+                                    let bytes8 = _rt::Vec::from_raw_parts(
+                                        l6.cast(),
+                                        len8,
+                                        len8,
+                                    );
+                                    _rt::string_lift(bytes8)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// retrieves an object or portion of an object, as a resource.
+                /// Start and end offsets are inclusive.
+                /// Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
+                /// of the data-blob resource, even if the object they came from is later deleted.
+                pub fn get_data(
+                    &self,
+                    name: &ObjectName,
+                    start: u64,
+                    end: u64,
+                ) -> Result<IncomingValue, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.get-data"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: i64,
+                                _: i64,
+                                _: *mut u8,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            _rt::as_i64(&start),
+                            _rt::as_i64(&end),
+                            ptr1,
+                        );
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<i32>();
+                                    super::super::super::wasi::blobstore::types::IncomingValue::from_handle(
+                                        l3 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = *ptr1.add(4).cast::<*mut u8>();
+                                    let l5 = *ptr1.add(8).cast::<usize>();
+                                    let len6 = l5;
+                                    let bytes6 = _rt::Vec::from_raw_parts(
+                                        l4.cast(),
+                                        len6,
+                                        len6,
+                                    );
+                                    _rt::string_lift(bytes6)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// creates or replaces an object with the data blob.
+                pub fn write_data(
+                    &self,
+                    name: &ObjectName,
+                    data: &OutgoingValue,
+                ) -> Result<(), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.write-data"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: i32,
+                                _: *mut u8,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            (data).handle() as i32,
+                            ptr1,
+                        );
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<*mut u8>();
+                                    let l4 = *ptr1.add(8).cast::<usize>();
+                                    let len5 = l4;
+                                    let bytes5 = _rt::Vec::from_raw_parts(
+                                        l3.cast(),
+                                        len5,
+                                        len5,
+                                    );
+                                    _rt::string_lift(bytes5)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns list of objects in the container. Order is undefined.
+                pub fn list_objects(&self) -> Result<StreamObjectNames, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.list-objects"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    StreamObjectNames::from_handle(l2 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l4 = *ptr0.add(8).cast::<usize>();
+                                    let len5 = l4;
+                                    let bytes5 = _rt::Vec::from_raw_parts(
+                                        l3.cast(),
+                                        len5,
+                                        len5,
+                                    );
+                                    _rt::string_lift(bytes5)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// deletes object.
+                /// does not return error if object did not exist.
+                pub fn delete_object(&self, name: &ObjectName) -> Result<(), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.delete-object"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<*mut u8>();
+                                    let l4 = *ptr1.add(8).cast::<usize>();
+                                    let len5 = l4;
+                                    let bytes5 = _rt::Vec::from_raw_parts(
+                                        l3.cast(),
+                                        len5,
+                                        len5,
+                                    );
+                                    _rt::string_lift(bytes5)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// deletes multiple objects in the container
+                pub fn delete_objects(&self, names: &[ObjectName]) -> Result<(), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec1 = names;
+                        let len1 = vec1.len();
+                        let layout1 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec1.len() * 8,
+                            4,
+                        );
+                        let result1 = if layout1.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout1).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout1);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec1.into_iter().enumerate() {
+                            let base = result1.add(i * 8);
+                            {
+                                let vec0 = e;
+                                let ptr0 = vec0.as_ptr().cast::<u8>();
+                                let len0 = vec0.len();
+                                *base.add(4).cast::<usize>() = len0;
+                                *base.add(0).cast::<*mut u8>() = ptr0.cast_mut();
+                            }
+                        }
+                        let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.delete-objects"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, result1, len1, ptr2);
+                        let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                        if layout1.size() != 0 {
+                            _rt::alloc::dealloc(result1.cast(), layout1);
+                        }
+                        match l3 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = *ptr2.add(4).cast::<*mut u8>();
+                                    let l5 = *ptr2.add(8).cast::<usize>();
+                                    let len6 = l5;
+                                    let bytes6 = _rt::Vec::from_raw_parts(
+                                        l4.cast(),
+                                        len6,
+                                        len6,
+                                    );
+                                    _rt::string_lift(bytes6)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns true if the object exists in this container
+                pub fn has_object(&self, name: &ObjectName) -> Result<bool, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.has-object"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = {
+                                    let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                    _rt::bool_lift(l3 as u8)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = *ptr1.add(4).cast::<*mut u8>();
+                                    let l5 = *ptr1.add(8).cast::<usize>();
+                                    let len6 = l5;
+                                    let bytes6 = _rt::Vec::from_raw_parts(
+                                        l4.cast(),
+                                        len6,
+                                        len6,
+                                    );
+                                    _rt::string_lift(bytes6)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns metadata for the object
+                pub fn object_info(
+                    &self,
+                    name: &ObjectName,
+                ) -> Result<ObjectMetadata, Error> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 40],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.object-info"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = {
+                                    let l3 = *ptr1.add(8).cast::<*mut u8>();
+                                    let l4 = *ptr1.add(12).cast::<usize>();
+                                    let len5 = l4;
+                                    let bytes5 = _rt::Vec::from_raw_parts(
+                                        l3.cast(),
+                                        len5,
+                                        len5,
+                                    );
+                                    let l6 = *ptr1.add(16).cast::<*mut u8>();
+                                    let l7 = *ptr1.add(20).cast::<usize>();
+                                    let len8 = l7;
+                                    let bytes8 = _rt::Vec::from_raw_parts(
+                                        l6.cast(),
+                                        len8,
+                                        len8,
+                                    );
+                                    let l9 = *ptr1.add(24).cast::<i64>();
+                                    let l10 = *ptr1.add(32).cast::<i64>();
+                                    super::super::super::wasi::blobstore::types::ObjectMetadata {
+                                        name: _rt::string_lift(bytes5),
+                                        container: _rt::string_lift(bytes8),
+                                        created_at: l9 as u64,
+                                        size: l10 as u64,
+                                    }
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l11 = *ptr1.add(8).cast::<*mut u8>();
+                                    let l12 = *ptr1.add(12).cast::<usize>();
+                                    let len13 = l12;
+                                    let bytes13 = _rt::Vec::from_raw_parts(
+                                        l11.cast(),
+                                        len13,
+                                        len13,
+                                    );
+                                    _rt::string_lift(bytes13)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl Container {
+                #[allow(unused_unsafe, clippy::all)]
+                /// removes all objects within the container, leaving the container empty.
+                pub fn clear(&self) -> Result<(), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]container.clear"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    let bytes4 = _rt::Vec::from_raw_parts(
+                                        l2.cast(),
+                                        len4,
+                                        len4,
+                                    );
+                                    _rt::string_lift(bytes4)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl StreamObjectNames {
+                #[allow(unused_unsafe, clippy::all)]
+                /// reads the next number of objects from the stream
+                ///
+                /// This function returns the list of objects read, and a boolean indicating if the end of the stream was reached.
+                pub fn read_stream_object_names(
+                    &self,
+                    len: u64,
+                ) -> Result<(_rt::Vec<ObjectName>, bool), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]stream-object-names.read-stream-object-names"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&len), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let base7 = l2;
+                                    let len7 = l3;
+                                    let mut result7 = _rt::Vec::with_capacity(len7);
+                                    for i in 0..len7 {
+                                        let base = base7.add(i * 8);
+                                        let e7 = {
+                                            let l4 = *base.add(0).cast::<*mut u8>();
+                                            let l5 = *base.add(4).cast::<usize>();
+                                            let len6 = l5;
+                                            let bytes6 = _rt::Vec::from_raw_parts(
+                                                l4.cast(),
+                                                len6,
+                                                len6,
+                                            );
+                                            _rt::string_lift(bytes6)
+                                        };
+                                        result7.push(e7);
+                                    }
+                                    _rt::cabi_dealloc(base7, len7 * 8, 4);
+                                    let l8 = i32::from(*ptr0.add(12).cast::<u8>());
+                                    (result7, _rt::bool_lift(l8 as u8))
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l9 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l10 = *ptr0.add(8).cast::<usize>();
+                                    let len11 = l10;
+                                    let bytes11 = _rt::Vec::from_raw_parts(
+                                        l9.cast(),
+                                        len11,
+                                        len11,
+                                    );
+                                    _rt::string_lift(bytes11)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl StreamObjectNames {
+                #[allow(unused_unsafe, clippy::all)]
+                /// skip the next number of objects in the stream
+                ///
+                /// This function returns the number of objects skipped, and a boolean indicating if the end of the stream was reached.
+                pub fn skip_stream_object_names(
+                    &self,
+                    num: u64,
+                ) -> Result<(u64, bool), Error> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 24],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:blobstore/container")]
+                        extern "C" {
+                            #[link_name = "[method]stream-object-names.skip-stream-object-names"]
+                            fn wit_import(_: i32, _: i64, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&num), ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    let l3 = i32::from(*ptr0.add(16).cast::<u8>());
+                                    (l2 as u64, _rt::bool_lift(l3 as u8))
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = *ptr0.add(8).cast::<*mut u8>();
+                                    let l5 = *ptr0.add(12).cast::<usize>();
+                                    let len6 = l5;
+                                    let bytes6 = _rt::Vec::from_raw_parts(
+                                        l4.cast(),
+                                        len6,
+                                        len6,
+                                    );
+                                    _rt::string_lift(bytes6)
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
+        /// wasi-cloud Blobstore service definition
+        #[allow(dead_code, clippy::all)]
+        pub mod blobstore {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Container = super::super::super::wasi::blobstore::container::Container;
+            pub type Error = super::super::super::wasi::blobstore::types::Error;
+            pub type ContainerName = super::super::super::wasi::blobstore::types::ContainerName;
+            pub type ObjectId = super::super::super::wasi::blobstore::types::ObjectId;
+            #[allow(unused_unsafe, clippy::all)]
+            /// creates a new empty container
+            pub fn create_container(name: &ContainerName) -> Result<Container, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "create-container"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::blobstore::container::Container::from_handle(
+                                    l3 as u32,
+                                )
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(4).cast::<*mut u8>();
+                                let l5 = *ptr1.add(8).cast::<usize>();
+                                let len6 = l5;
+                                let bytes6 = _rt::Vec::from_raw_parts(
+                                    l4.cast(),
+                                    len6,
+                                    len6,
+                                );
+                                _rt::string_lift(bytes6)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// retrieves a container by name
+            pub fn get_container(name: &ContainerName) -> Result<Container, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "get-container"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::blobstore::container::Container::from_handle(
+                                    l3 as u32,
+                                )
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(4).cast::<*mut u8>();
+                                let l5 = *ptr1.add(8).cast::<usize>();
+                                let len6 = l5;
+                                let bytes6 = _rt::Vec::from_raw_parts(
+                                    l4.cast(),
+                                    len6,
+                                    len6,
+                                );
+                                _rt::string_lift(bytes6)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// deletes a container and all objects within it
+            pub fn delete_container(name: &ContainerName) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "delete-container"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = *ptr1.add(4).cast::<*mut u8>();
+                                let l4 = *ptr1.add(8).cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(
+                                    l3.cast(),
+                                    len5,
+                                    len5,
+                                );
+                                _rt::string_lift(bytes5)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// returns true if the container exists
+            pub fn container_exists(name: &ContainerName) -> Result<bool, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "container-exists"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                _rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(4).cast::<*mut u8>();
+                                let l5 = *ptr1.add(8).cast::<usize>();
+                                let len6 = l5;
+                                let bytes6 = _rt::Vec::from_raw_parts(
+                                    l4.cast(),
+                                    len6,
+                                    len6,
+                                );
+                                _rt::string_lift(bytes6)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// copies (duplicates) an object, to the same or a different container.
+            /// returns an error if the target container does not exist.
+            /// overwrites destination object if it already existed.
+            pub fn copy_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let super::super::super::wasi::blobstore::types::ObjectId {
+                        container: container0,
+                        object: object0,
+                    } = src;
+                    let vec1 = container0;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = object0;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let super::super::super::wasi::blobstore::types::ObjectId {
+                        container: container3,
+                        object: object3,
+                    } = dest;
+                    let vec4 = container3;
+                    let ptr4 = vec4.as_ptr().cast::<u8>();
+                    let len4 = vec4.len();
+                    let vec5 = object3;
+                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                    let len5 = vec5.len();
+                    let ptr6 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "copy-object"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        ptr1.cast_mut(),
+                        len1,
+                        ptr2.cast_mut(),
+                        len2,
+                        ptr4.cast_mut(),
+                        len4,
+                        ptr5.cast_mut(),
+                        len5,
+                        ptr6,
+                    );
+                    let l7 = i32::from(*ptr6.add(0).cast::<u8>());
+                    match l7 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = *ptr6.add(4).cast::<*mut u8>();
+                                let l9 = *ptr6.add(8).cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(
+                                    l8.cast(),
+                                    len10,
+                                    len10,
+                                );
+                                _rt::string_lift(bytes10)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// moves or renames an object, to the same or a different container
+            /// returns an error if the destination container does not exist.
+            /// overwrites destination object if it already existed.
+            pub fn move_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let super::super::super::wasi::blobstore::types::ObjectId {
+                        container: container0,
+                        object: object0,
+                    } = src;
+                    let vec1 = container0;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let vec2 = object0;
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    let super::super::super::wasi::blobstore::types::ObjectId {
+                        container: container3,
+                        object: object3,
+                    } = dest;
+                    let vec4 = container3;
+                    let ptr4 = vec4.as_ptr().cast::<u8>();
+                    let len4 = vec4.len();
+                    let vec5 = object3;
+                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                    let len5 = vec5.len();
+                    let ptr6 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                        #[link_name = "move-object"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        ptr1.cast_mut(),
+                        len1,
+                        ptr2.cast_mut(),
+                        len2,
+                        ptr4.cast_mut(),
+                        len4,
+                        ptr5.cast_mut(),
+                        len5,
+                        ptr6,
+                    );
+                    let l7 = i32::from(*ptr6.add(0).cast::<u8>());
+                    match l7 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = *ptr6.add(4).cast::<*mut u8>();
+                                let l9 = *ptr6.add(8).cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(
+                                    l8.cast(),
+                                    len10,
+                                    len10,
+                                );
+                                _rt::string_lift(bytes10)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+    }
     pub mod cli {
         #[allow(dead_code, clippy::all)]
         pub mod environment {
@@ -28210,6 +29813,2279 @@ pub mod wasi {
 #[allow(dead_code, clippy::all)]
 pub mod exports {
     pub mod wasi {
+        pub mod blobstore {
+            /// Types used by blobstore
+            #[allow(dead_code, clippy::all)]
+            pub mod types {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type InputStream = super::super::super::super::exports::wasi::io::streams::InputStream;
+                pub type InputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::InputStreamBorrow<
+                    'a,
+                >;
+                pub type OutputStream = super::super::super::super::exports::wasi::io::streams::OutputStream;
+                pub type OutputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::OutputStreamBorrow<
+                    'a,
+                >;
+                /// name of a container, a collection of objects.
+                /// The container name may be any valid UTF-8 string.
+                pub type ContainerName = _rt::String;
+                /// name of an object within a container
+                /// The object name may be any valid UTF-8 string.
+                pub type ObjectName = _rt::String;
+                /// TODO: define timestamp to include seconds since
+                /// Unix epoch and nanoseconds
+                /// https://github.com/WebAssembly/wasi-blob-store/issues/7
+                pub type Timestamp = u64;
+                /// size of an object, in bytes
+                pub type ObjectSize = u64;
+                pub type Error = _rt::String;
+                /// information about a container
+                #[derive(Clone)]
+                pub struct ContainerMetadata {
+                    /// the container's name
+                    pub name: ContainerName,
+                    /// date and time container was created
+                    pub created_at: Timestamp,
+                }
+                impl ::core::fmt::Debug for ContainerMetadata {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("ContainerMetadata")
+                            .field("name", &self.name)
+                            .field("created-at", &self.created_at)
+                            .finish()
+                    }
+                }
+                /// information about an object
+                #[derive(Clone)]
+                pub struct ObjectMetadata {
+                    /// the object's name
+                    pub name: ObjectName,
+                    /// the object's parent container
+                    pub container: ContainerName,
+                    /// date and time the object was created
+                    pub created_at: Timestamp,
+                    /// size of the object, in bytes
+                    pub size: ObjectSize,
+                }
+                impl ::core::fmt::Debug for ObjectMetadata {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("ObjectMetadata")
+                            .field("name", &self.name)
+                            .field("container", &self.container)
+                            .field("created-at", &self.created_at)
+                            .field("size", &self.size)
+                            .finish()
+                    }
+                }
+                /// identifier for an object that includes its container name
+                #[derive(Clone)]
+                pub struct ObjectId {
+                    pub container: ContainerName,
+                    pub object: ObjectName,
+                }
+                impl ::core::fmt::Debug for ObjectId {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("ObjectId")
+                            .field("container", &self.container)
+                            .field("object", &self.object)
+                            .finish()
+                    }
+                }
+                /// A data is the data stored in a data blob. The value can be of any type
+                /// that can be represented in a byte array. It provides a way to write the value
+                /// to the output-stream defined in the `wasi-io` interface.
+                /// Soon: switch to `resource value { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingValue {
+                    handle: _rt::Resource<OutgoingValue>,
+                }
+                type _OutgoingValueRep<T> = Option<T>;
+                impl OutgoingValue {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `OutgoingValue`.
+                    pub fn new<T: GuestOutgoingValue>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _OutgoingValueRep<T> = Some(val);
+                        let ptr: *mut _OutgoingValueRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestOutgoingValue>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestOutgoingValue>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestOutgoingValue>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _OutgoingValueRep<T>);
+                    }
+                    fn as_ptr<T: GuestOutgoingValue>(
+                        &self,
+                    ) -> *mut _OutgoingValueRep<T> {
+                        OutgoingValue::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`OutgoingValue`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingValueBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a OutgoingValue>,
+                }
+                impl<'a> OutgoingValueBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestOutgoingValue>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _OutgoingValueRep<T> {
+                        OutgoingValue::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for OutgoingValue {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]outgoing-value"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// A incoming-value is a wrapper around a value. It provides a way to read the value
+                /// from the input-stream defined in the `wasi-io` interface.
+                ///
+                /// The incoming-value provides two ways to consume the value:
+                /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+                /// value as a list of bytes.
+                /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+                /// value as an input-stream.
+                /// Soon: switch to `resource incoming-value { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingValue {
+                    handle: _rt::Resource<IncomingValue>,
+                }
+                type _IncomingValueRep<T> = Option<T>;
+                impl IncomingValue {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `IncomingValue`.
+                    pub fn new<T: GuestIncomingValue>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _IncomingValueRep<T> = Some(val);
+                        let ptr: *mut _IncomingValueRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestIncomingValue>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestIncomingValue>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestIncomingValue>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _IncomingValueRep<T>);
+                    }
+                    fn as_ptr<T: GuestIncomingValue>(
+                        &self,
+                    ) -> *mut _IncomingValueRep<T> {
+                        IncomingValue::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`IncomingValue`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingValueBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a IncomingValue>,
+                }
+                impl<'a> IncomingValueBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestIncomingValue>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _IncomingValueRep<T> {
+                        IncomingValue::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for IncomingValue {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]incoming-value"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                pub type IncomingValueAsyncBody = InputStream;
+                pub type IncomingValueAsyncBodyBorrow<'a> = InputStreamBorrow<'a>;
+                pub type IncomingValueSyncBody = _rt::Vec<u8>;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_outgoing_value_new_outgoing_value_cabi<
+                    T: GuestOutgoingValue,
+                >() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::new_outgoing_value();
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_value_outgoing_value_write_body_cabi<
+                    T: GuestOutgoingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::outgoing_value_write_body(
+                        OutgoingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(_) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_incoming_value_consume_sync_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::incoming_value_consume_sync(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec2 = (e).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr1.add(8).cast::<usize>() = len3;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_value_incoming_value_consume_sync<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            let base3 = l1;
+                            let len3 = l2;
+                            _rt::cabi_dealloc(base3, len3 * 1, 1);
+                        }
+                        _ => {
+                            let l4 = *arg0.add(4).cast::<*mut u8>();
+                            let l5 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l4, l5, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_incoming_value_consume_async_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::incoming_value_consume_async(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_value_incoming_value_consume_async<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_size_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> i64 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::size(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    _rt::as_i64(result0)
+                }
+                pub trait Guest {
+                    type OutgoingValue: GuestOutgoingValue;
+                    type IncomingValue: GuestIncomingValue;
+                }
+                pub trait GuestOutgoingValue: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-new]outgoing-value"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]outgoing-value"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn new_outgoing_value() -> OutgoingValue;
+                    fn outgoing_value_write_body(&self) -> Result<OutputStream, ()>;
+                }
+                pub trait GuestIncomingValue: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-new]incoming-value"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]wasi:blobstore/types")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]incoming-value"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn incoming_value_consume_sync(
+                        &self,
+                    ) -> Result<IncomingValueSyncBody, Error>;
+                    fn incoming_value_consume_async(
+                        &self,
+                    ) -> Result<IncomingValueAsyncBody, Error>;
+                    fn size(&self) -> u64;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_blobstore_types_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:blobstore/types#[static]outgoing-value.new-outgoing-value"]
+                        unsafe extern "C" fn
+                        export_static_outgoing_value_new_outgoing_value() -> i32 {
+                        $($path_to_types)*::
+                        _export_static_outgoing_value_new_outgoing_value_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingValue > () } #[export_name
+                        =
+                        "wasi:blobstore/types#[method]outgoing-value.outgoing-value-write-body"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_value_outgoing_value_write_body(arg0 : *
+                        mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_value_outgoing_value_write_body_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::OutgoingValue > (arg0) }
+                        #[export_name =
+                        "wasi:blobstore/types#[method]incoming-value.incoming-value-consume-sync"]
+                        unsafe extern "C" fn
+                        export_method_incoming_value_incoming_value_consume_sync(arg0 : *
+                        mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_value_incoming_value_consume_sync_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/types#[method]incoming-value.incoming-value-consume-sync"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_value_incoming_value_consume_sync(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_incoming_value_incoming_value_consume_sync::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "wasi:blobstore/types#[method]incoming-value.incoming-value-consume-async"]
+                        unsafe extern "C" fn
+                        export_method_incoming_value_incoming_value_consume_async(arg0 :
+                        * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_value_incoming_value_consume_async_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/types#[method]incoming-value.incoming-value-consume-async"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_value_incoming_value_consume_async(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_incoming_value_incoming_value_consume_async::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "wasi:blobstore/types#[method]incoming-value.size"] unsafe extern
+                        "C" fn export_method_incoming_value_size(arg0 : * mut u8,) -> i64
+                        { $($path_to_types)*::
+                        _export_method_incoming_value_size_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingValue > (arg0) } const _ :
+                        () = { #[doc(hidden)] #[export_name =
+                        "wasi:blobstore/types#[dtor]outgoing-value"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: OutgoingValue::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::OutgoingValue > (rep) } }; const _
+                        : () = { #[doc(hidden)] #[export_name =
+                        "wasi:blobstore/types#[dtor]incoming-value"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: IncomingValue::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::IncomingValue > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_blobstore_types_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 12],
+                );
+            }
+            /// a Container is a collection of objects
+            #[allow(dead_code, clippy::all)]
+            pub mod container {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type InputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::InputStreamBorrow<
+                    'a,
+                >;
+                pub type OutputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::OutputStreamBorrow<
+                    'a,
+                >;
+                pub type ContainerMetadata = super::super::super::super::exports::wasi::blobstore::types::ContainerMetadata;
+                pub type Error = super::super::super::super::exports::wasi::blobstore::types::Error;
+                pub type IncomingValue = super::super::super::super::exports::wasi::blobstore::types::IncomingValue;
+                pub type IncomingValueBorrow<'a> = super::super::super::super::exports::wasi::blobstore::types::IncomingValueBorrow<
+                    'a,
+                >;
+                pub type ObjectMetadata = super::super::super::super::exports::wasi::blobstore::types::ObjectMetadata;
+                pub type ObjectName = super::super::super::super::exports::wasi::blobstore::types::ObjectName;
+                pub type OutgoingValue = super::super::super::super::exports::wasi::blobstore::types::OutgoingValue;
+                pub type OutgoingValueBorrow<'a> = super::super::super::super::exports::wasi::blobstore::types::OutgoingValueBorrow<
+                    'a,
+                >;
+                /// this defines the `container` resource
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Container {
+                    handle: _rt::Resource<Container>,
+                }
+                type _ContainerRep<T> = Option<T>;
+                impl Container {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `Container`.
+                    pub fn new<T: GuestContainer>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _ContainerRep<T> = Some(val);
+                        let ptr: *mut _ContainerRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestContainer>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestContainer>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestContainer>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _ContainerRep<T>);
+                    }
+                    fn as_ptr<T: GuestContainer>(&self) -> *mut _ContainerRep<T> {
+                        Container::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`Container`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct ContainerBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a Container>,
+                }
+                impl<'a> ContainerBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestContainer>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _ContainerRep<T> {
+                        Container::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for Container {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]container"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// this defines the `stream-object-names` resource which is a representation of stream<object-name>
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct StreamObjectNames {
+                    handle: _rt::Resource<StreamObjectNames>,
+                }
+                type _StreamObjectNamesRep<T> = Option<T>;
+                impl StreamObjectNames {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `StreamObjectNames`.
+                    pub fn new<T: GuestStreamObjectNames>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _StreamObjectNamesRep<T> = Some(val);
+                        let ptr: *mut _StreamObjectNamesRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestStreamObjectNames>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestStreamObjectNames>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestStreamObjectNames>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _StreamObjectNamesRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestStreamObjectNames>(
+                        &self,
+                    ) -> *mut _StreamObjectNamesRep<T> {
+                        StreamObjectNames::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`StreamObjectNames`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct StreamObjectNamesBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a StreamObjectNames>,
+                }
+                impl<'a> StreamObjectNamesBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestStreamObjectNames>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _StreamObjectNamesRep<T> {
+                        StreamObjectNames::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for StreamObjectNames {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]stream-object-names"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_name_cabi<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::name(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr1.add(8).cast::<usize>() = len3;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_name<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                        _ => {
+                            let l3 = *arg0.add(4).cast::<*mut u8>();
+                            let l4 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l3, l4, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_info_cabi<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::info(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let super::super::super::super::exports::wasi::blobstore::types::ContainerMetadata {
+                                name: name2,
+                                created_at: created_at2,
+                            } = e;
+                            let vec3 = (name2.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr1.add(12).cast::<usize>() = len3;
+                            *ptr1.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                            *ptr1.add(16).cast::<i64>() = _rt::as_i64(created_at2);
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec4 = (e.into_bytes()).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *ptr1.add(12).cast::<usize>() = len4;
+                            *ptr1.add(8).cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_info<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(8).cast::<*mut u8>();
+                            let l2 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                        _ => {
+                            let l3 = *arg0.add(8).cast::<*mut u8>();
+                            let l4 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l3, l4, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_get_data_cabi<T: GuestContainer>(
+                    arg0: *mut u8,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: i64,
+                    arg4: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::get_data(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                        arg3 as u64,
+                        arg4 as u64,
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_get_data<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_write_data_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize, arg3: i32) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::write_data(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                        OutgoingValueBorrow::lift(arg3 as u32 as usize),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_write_data<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_list_objects_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::list_objects(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_list_objects<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_delete_object_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::delete_object(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_delete_object<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_delete_objects_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base3 = arg1;
+                    let len3 = arg2;
+                    let mut result3 = _rt::Vec::with_capacity(len3);
+                    for i in 0..len3 {
+                        let base = base3.add(i * 8);
+                        let e3 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base.add(4).cast::<usize>();
+                            let len2 = l1;
+                            let bytes2 = _rt::Vec::from_raw_parts(l0.cast(), len2, len2);
+                            _rt::string_lift(bytes2)
+                        };
+                        result3.push(e3);
+                    }
+                    _rt::cabi_dealloc(base3, len3 * 8, 4);
+                    let result4 = T::delete_objects(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        result3,
+                    );
+                    let ptr5 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result4 {
+                        Ok(_) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec6 = (e.into_bytes()).into_boxed_slice();
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            ::core::mem::forget(vec6);
+                            *ptr5.add(8).cast::<usize>() = len6;
+                            *ptr5.add(4).cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    };
+                    ptr5
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_delete_objects<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_has_object_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::has_object(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<u8>() = (match e {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_has_object<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_object_info_cabi<
+                    T: GuestContainer,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::object_info(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let super::super::super::super::exports::wasi::blobstore::types::ObjectMetadata {
+                                name: name3,
+                                container: container3,
+                                created_at: created_at3,
+                                size: size3,
+                            } = e;
+                            let vec4 = (name3.into_bytes()).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *ptr2.add(12).cast::<usize>() = len4;
+                            *ptr2.add(8).cast::<*mut u8>() = ptr4.cast_mut();
+                            let vec5 = (container3.into_bytes()).into_boxed_slice();
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            ::core::mem::forget(vec5);
+                            *ptr2.add(20).cast::<usize>() = len5;
+                            *ptr2.add(16).cast::<*mut u8>() = ptr5.cast_mut();
+                            *ptr2.add(24).cast::<i64>() = _rt::as_i64(created_at3);
+                            *ptr2.add(32).cast::<i64>() = _rt::as_i64(size3);
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec6 = (e.into_bytes()).into_boxed_slice();
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            ::core::mem::forget(vec6);
+                            *ptr2.add(12).cast::<usize>() = len6;
+                            *ptr2.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_object_info<
+                    T: GuestContainer,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(8).cast::<*mut u8>();
+                            let l2 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                            let l3 = *arg0.add(16).cast::<*mut u8>();
+                            let l4 = *arg0.add(20).cast::<usize>();
+                            _rt::cabi_dealloc(l3, l4, 1);
+                        }
+                        _ => {
+                            let l5 = *arg0.add(8).cast::<*mut u8>();
+                            let l6 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l5, l6, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_container_clear_cabi<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::clear(
+                        ContainerBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(_) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec2 = (e.into_bytes()).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_container_clear<T: GuestContainer>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_stream_object_names_read_stream_object_names_cabi<
+                    T: GuestStreamObjectNames,
+                >(arg0: *mut u8, arg1: i64) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::read_stream_object_names(
+                        StreamObjectNamesBorrow::lift(arg0 as u32 as usize).get(),
+                        arg1 as u64,
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let (t2_0, t2_1) = e;
+                            let vec4 = t2_0;
+                            let len4 = vec4.len();
+                            let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec4.len() * 8,
+                                4,
+                            );
+                            let result4 = if layout4.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout4);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec4.into_iter().enumerate() {
+                                let base = result4.add(i * 8);
+                                {
+                                    let vec3 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                                    let len3 = vec3.len();
+                                    ::core::mem::forget(vec3);
+                                    *base.add(4).cast::<usize>() = len3;
+                                    *base.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                                }
+                            }
+                            *ptr1.add(8).cast::<usize>() = len4;
+                            *ptr1.add(4).cast::<*mut u8>() = result4;
+                            *ptr1.add(12).cast::<u8>() = (match t2_1 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            ::core::mem::forget(vec5);
+                            *ptr1.add(8).cast::<usize>() = len5;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr5.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_stream_object_names_read_stream_object_names<
+                    T: GuestStreamObjectNames,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            let base5 = l1;
+                            let len5 = l2;
+                            for i in 0..len5 {
+                                let base = base5.add(i * 8);
+                                {
+                                    let l3 = *base.add(0).cast::<*mut u8>();
+                                    let l4 = *base.add(4).cast::<usize>();
+                                    _rt::cabi_dealloc(l3, l4, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base5, len5 * 8, 4);
+                        }
+                        _ => {
+                            let l6 = *arg0.add(4).cast::<*mut u8>();
+                            let l7 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l6, l7, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_stream_object_names_skip_stream_object_names_cabi<
+                    T: GuestStreamObjectNames,
+                >(arg0: *mut u8, arg1: i64) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::skip_stream_object_names(
+                        StreamObjectNamesBorrow::lift(arg0 as u32 as usize).get(),
+                        arg1 as u64,
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let (t2_0, t2_1) = e;
+                            *ptr1.add(8).cast::<i64>() = _rt::as_i64(t2_0);
+                            *ptr1.add(16).cast::<u8>() = (match t2_1 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr1.add(12).cast::<usize>() = len3;
+                            *ptr1.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_stream_object_names_skip_stream_object_names<
+                    T: GuestStreamObjectNames,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(8).cast::<*mut u8>();
+                            let l2 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                pub trait Guest {
+                    type Container: GuestContainer;
+                    type StreamObjectNames: GuestStreamObjectNames;
+                }
+                pub trait GuestContainer: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]container"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]container"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// returns container name
+                    fn name(&self) -> Result<_rt::String, Error>;
+                    /// returns container metadata
+                    fn info(&self) -> Result<ContainerMetadata, Error>;
+                    /// retrieves an object or portion of an object, as a resource.
+                    /// Start and end offsets are inclusive.
+                    /// Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
+                    /// of the data-blob resource, even if the object they came from is later deleted.
+                    fn get_data(
+                        &self,
+                        name: ObjectName,
+                        start: u64,
+                        end: u64,
+                    ) -> Result<IncomingValue, Error>;
+                    /// creates or replaces an object with the data blob.
+                    fn write_data(
+                        &self,
+                        name: ObjectName,
+                        data: OutgoingValueBorrow<'_>,
+                    ) -> Result<(), Error>;
+                    /// returns list of objects in the container. Order is undefined.
+                    fn list_objects(&self) -> Result<StreamObjectNames, Error>;
+                    /// deletes object.
+                    /// does not return error if object did not exist.
+                    fn delete_object(&self, name: ObjectName) -> Result<(), Error>;
+                    /// deletes multiple objects in the container
+                    fn delete_objects(
+                        &self,
+                        names: _rt::Vec<ObjectName>,
+                    ) -> Result<(), Error>;
+                    /// returns true if the object exists in this container
+                    fn has_object(&self, name: ObjectName) -> Result<bool, Error>;
+                    /// returns metadata for the object
+                    fn object_info(
+                        &self,
+                        name: ObjectName,
+                    ) -> Result<ObjectMetadata, Error>;
+                    /// removes all objects within the container, leaving the container empty.
+                    fn clear(&self) -> Result<(), Error>;
+                }
+                pub trait GuestStreamObjectNames: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]stream-object-names"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:blobstore/container"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]stream-object-names"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// reads the next number of objects from the stream
+                    ///
+                    /// This function returns the list of objects read, and a boolean indicating if the end of the stream was reached.
+                    fn read_stream_object_names(
+                        &self,
+                        len: u64,
+                    ) -> Result<(_rt::Vec<ObjectName>, bool), Error>;
+                    /// skip the next number of objects in the stream
+                    ///
+                    /// This function returns the number of objects skipped, and a boolean indicating if the end of the stream was reached.
+                    fn skip_stream_object_names(
+                        &self,
+                        num: u64,
+                    ) -> Result<(u64, bool), Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_blobstore_container_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:blobstore/container#[method]container.name"] unsafe extern
+                        "C" fn export_method_container_name(arg0 : * mut u8,) -> * mut u8
+                        { $($path_to_types)*:: _export_method_container_name_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::Container > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.name"]
+                        unsafe extern "C" fn _post_return_method_container_name(arg0 : *
+                        mut u8,) { $($path_to_types)*::
+                        __post_return_method_container_name::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.info"] unsafe
+                        extern "C" fn export_method_container_info(arg0 : * mut u8,) -> *
+                        mut u8 { $($path_to_types)*::
+                        _export_method_container_info_cabi::<<$ty as $($path_to_types)*::
+                        Guest >::Container > (arg0) } #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.info"]
+                        unsafe extern "C" fn _post_return_method_container_info(arg0 : *
+                        mut u8,) { $($path_to_types)*::
+                        __post_return_method_container_info::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.get-data"] unsafe
+                        extern "C" fn export_method_container_get_data(arg0 : * mut u8,
+                        arg1 : * mut u8, arg2 : usize, arg3 : i64, arg4 : i64,) -> * mut
+                        u8 { $($path_to_types)*::
+                        _export_method_container_get_data_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2,
+                        arg3, arg4) } #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.get-data"]
+                        unsafe extern "C" fn _post_return_method_container_get_data(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_container_get_data::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.write-data"] unsafe
+                        extern "C" fn export_method_container_write_data(arg0 : * mut u8,
+                        arg1 : * mut u8, arg2 : usize, arg3 : i32,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_container_write_data_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2,
+                        arg3) } #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.write-data"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_write_data(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_write_data::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.list-objects"]
+                        unsafe extern "C" fn export_method_container_list_objects(arg0 :
+                        * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_container_list_objects_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        =
+                        "cabi_post_wasi:blobstore/container#[method]container.list-objects"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_list_objects(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_list_objects::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.delete-object"]
+                        unsafe extern "C" fn export_method_container_delete_object(arg0 :
+                        * mut u8, arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_container_delete_object_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.delete-object"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_delete_object(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_delete_object::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.delete-objects"]
+                        unsafe extern "C" fn export_method_container_delete_objects(arg0
+                        : * mut u8, arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_container_delete_objects_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.delete-objects"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_delete_objects(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_delete_objects::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.has-object"] unsafe
+                        extern "C" fn export_method_container_has_object(arg0 : * mut u8,
+                        arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_container_has_object_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.has-object"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_has_object(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_has_object::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.object-info"]
+                        unsafe extern "C" fn export_method_container_object_info(arg0 : *
+                        mut u8, arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_container_object_info_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0, arg1, arg2) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]container.object-info"]
+                        unsafe extern "C" fn
+                        _post_return_method_container_object_info(arg0 : * mut u8,) {
+                        $($path_to_types)*::
+                        __post_return_method_container_object_info::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "wasi:blobstore/container#[method]container.clear"] unsafe
+                        extern "C" fn export_method_container_clear(arg0 : * mut u8,) ->
+                        * mut u8 { $($path_to_types)*::
+                        _export_method_container_clear_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        = "cabi_post_wasi:blobstore/container#[method]container.clear"]
+                        unsafe extern "C" fn _post_return_method_container_clear(arg0 : *
+                        mut u8,) { $($path_to_types)*::
+                        __post_return_method_container_clear::<<$ty as
+                        $($path_to_types)*:: Guest >::Container > (arg0) } #[export_name
+                        =
+                        "wasi:blobstore/container#[method]stream-object-names.read-stream-object-names"]
+                        unsafe extern "C" fn
+                        export_method_stream_object_names_read_stream_object_names(arg0 :
+                        * mut u8, arg1 : i64,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_stream_object_names_read_stream_object_names_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::StreamObjectNames > (arg0, arg1)
+                        } #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]stream-object-names.read-stream-object-names"]
+                        unsafe extern "C" fn
+                        _post_return_method_stream_object_names_read_stream_object_names(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_stream_object_names_read_stream_object_names::<<$ty
+                        as $($path_to_types)*:: Guest >::StreamObjectNames > (arg0) }
+                        #[export_name =
+                        "wasi:blobstore/container#[method]stream-object-names.skip-stream-object-names"]
+                        unsafe extern "C" fn
+                        export_method_stream_object_names_skip_stream_object_names(arg0 :
+                        * mut u8, arg1 : i64,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_stream_object_names_skip_stream_object_names_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::StreamObjectNames > (arg0, arg1)
+                        } #[export_name =
+                        "cabi_post_wasi:blobstore/container#[method]stream-object-names.skip-stream-object-names"]
+                        unsafe extern "C" fn
+                        _post_return_method_stream_object_names_skip_stream_object_names(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_stream_object_names_skip_stream_object_names::<<$ty
+                        as $($path_to_types)*:: Guest >::StreamObjectNames > (arg0) }
+                        const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:blobstore/container#[dtor]container"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: Container::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::Container > (rep) } }; const _ : ()
+                        = { #[doc(hidden)] #[export_name =
+                        "wasi:blobstore/container#[dtor]stream-object-names"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: StreamObjectNames::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::StreamObjectNames > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_blobstore_container_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 40],
+                );
+            }
+            /// wasi-cloud Blobstore service definition
+            #[allow(dead_code, clippy::all)]
+            pub mod blobstore {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Container = super::super::super::super::exports::wasi::blobstore::container::Container;
+                pub type ContainerBorrow<'a> = super::super::super::super::exports::wasi::blobstore::container::ContainerBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::blobstore::types::Error;
+                pub type ContainerName = super::super::super::super::exports::wasi::blobstore::types::ContainerName;
+                pub type ObjectId = super::super::super::super::exports::wasi::blobstore::types::ObjectId;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_create_container_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::create_container(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_create_container<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_container_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::get_container(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_container<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_delete_container_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::delete_container(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_delete_container<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_container_exists_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::container_exists(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<u8>() = (match e {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec3 = (e.into_bytes()).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2.add(8).cast::<usize>() = len3;
+                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_container_exists<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_copy_object_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: *mut u8,
+                    arg3: usize,
+                    arg4: *mut u8,
+                    arg5: usize,
+                    arg6: *mut u8,
+                    arg7: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let len1 = arg3;
+                    let bytes1 = _rt::Vec::from_raw_parts(arg2.cast(), len1, len1);
+                    let len2 = arg5;
+                    let bytes2 = _rt::Vec::from_raw_parts(arg4.cast(), len2, len2);
+                    let len3 = arg7;
+                    let bytes3 = _rt::Vec::from_raw_parts(arg6.cast(), len3, len3);
+                    let result4 = T::copy_object(
+                        super::super::super::super::exports::wasi::blobstore::types::ObjectId {
+                            container: _rt::string_lift(bytes0),
+                            object: _rt::string_lift(bytes1),
+                        },
+                        super::super::super::super::exports::wasi::blobstore::types::ObjectId {
+                            container: _rt::string_lift(bytes2),
+                            object: _rt::string_lift(bytes3),
+                        },
+                    );
+                    let ptr5 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result4 {
+                        Ok(_) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec6 = (e.into_bytes()).into_boxed_slice();
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            ::core::mem::forget(vec6);
+                            *ptr5.add(8).cast::<usize>() = len6;
+                            *ptr5.add(4).cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    };
+                    ptr5
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_copy_object<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_move_object_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: *mut u8,
+                    arg3: usize,
+                    arg4: *mut u8,
+                    arg5: usize,
+                    arg6: *mut u8,
+                    arg7: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let len1 = arg3;
+                    let bytes1 = _rt::Vec::from_raw_parts(arg2.cast(), len1, len1);
+                    let len2 = arg5;
+                    let bytes2 = _rt::Vec::from_raw_parts(arg4.cast(), len2, len2);
+                    let len3 = arg7;
+                    let bytes3 = _rt::Vec::from_raw_parts(arg6.cast(), len3, len3);
+                    let result4 = T::move_object(
+                        super::super::super::super::exports::wasi::blobstore::types::ObjectId {
+                            container: _rt::string_lift(bytes0),
+                            object: _rt::string_lift(bytes1),
+                        },
+                        super::super::super::super::exports::wasi::blobstore::types::ObjectId {
+                            container: _rt::string_lift(bytes2),
+                            object: _rt::string_lift(bytes3),
+                        },
+                    );
+                    let ptr5 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result4 {
+                        Ok(_) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec6 = (e.into_bytes()).into_boxed_slice();
+                            let ptr6 = vec6.as_ptr().cast::<u8>();
+                            let len6 = vec6.len();
+                            ::core::mem::forget(vec6);
+                            *ptr5.add(8).cast::<usize>() = len6;
+                            *ptr5.add(4).cast::<*mut u8>() = ptr6.cast_mut();
+                        }
+                    };
+                    ptr5
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_move_object<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                pub trait Guest {
+                    /// creates a new empty container
+                    fn create_container(name: ContainerName) -> Result<Container, Error>;
+                    /// retrieves a container by name
+                    fn get_container(name: ContainerName) -> Result<Container, Error>;
+                    /// deletes a container and all objects within it
+                    fn delete_container(name: ContainerName) -> Result<(), Error>;
+                    /// returns true if the container exists
+                    fn container_exists(name: ContainerName) -> Result<bool, Error>;
+                    /// copies (duplicates) an object, to the same or a different container.
+                    /// returns an error if the target container does not exist.
+                    /// overwrites destination object if it already existed.
+                    fn copy_object(src: ObjectId, dest: ObjectId) -> Result<(), Error>;
+                    /// moves or renames an object, to the same or a different container
+                    /// returns an error if the destination container does not exist.
+                    /// overwrites destination object if it already existed.
+                    fn move_object(src: ObjectId, dest: ObjectId) -> Result<(), Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_blobstore_blobstore_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:blobstore/blobstore#create-container"] unsafe extern "C" fn
+                        export_create_container(arg0 : * mut u8, arg1 : usize,) -> * mut
+                        u8 { $($path_to_types)*:: _export_create_container_cabi::<$ty >
+                        (arg0, arg1) } #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#create-container"] unsafe
+                        extern "C" fn _post_return_create_container(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_create_container::<$ty >
+                        (arg0) } #[export_name =
+                        "wasi:blobstore/blobstore#get-container"] unsafe extern "C" fn
+                        export_get_container(arg0 : * mut u8, arg1 : usize,) -> * mut u8
+                        { $($path_to_types)*:: _export_get_container_cabi::<$ty > (arg0,
+                        arg1) } #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#get-container"] unsafe extern
+                        "C" fn _post_return_get_container(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_get_container::<$ty > (arg0) }
+                        #[export_name = "wasi:blobstore/blobstore#delete-container"]
+                        unsafe extern "C" fn export_delete_container(arg0 : * mut u8,
+                        arg1 : usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_delete_container_cabi::<$ty > (arg0, arg1) }
+                        #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#delete-container"] unsafe
+                        extern "C" fn _post_return_delete_container(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_delete_container::<$ty >
+                        (arg0) } #[export_name =
+                        "wasi:blobstore/blobstore#container-exists"] unsafe extern "C" fn
+                        export_container_exists(arg0 : * mut u8, arg1 : usize,) -> * mut
+                        u8 { $($path_to_types)*:: _export_container_exists_cabi::<$ty >
+                        (arg0, arg1) } #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#container-exists"] unsafe
+                        extern "C" fn _post_return_container_exists(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_container_exists::<$ty >
+                        (arg0) } #[export_name = "wasi:blobstore/blobstore#copy-object"]
+                        unsafe extern "C" fn export_copy_object(arg0 : * mut u8, arg1 :
+                        usize, arg2 : * mut u8, arg3 : usize, arg4 : * mut u8, arg5 :
+                        usize, arg6 : * mut u8, arg7 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_copy_object_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3, arg4, arg5, arg6, arg7) } #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#copy-object"] unsafe extern
+                        "C" fn _post_return_copy_object(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_copy_object::<$ty > (arg0) }
+                        #[export_name = "wasi:blobstore/blobstore#move-object"] unsafe
+                        extern "C" fn export_move_object(arg0 : * mut u8, arg1 : usize,
+                        arg2 : * mut u8, arg3 : usize, arg4 : * mut u8, arg5 : usize,
+                        arg6 : * mut u8, arg7 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_move_object_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3, arg4, arg5, arg6, arg7) } #[export_name =
+                        "cabi_post_wasi:blobstore/blobstore#move-object"] unsafe extern
+                        "C" fn _post_return_move_object(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_move_object::<$ty > (arg0) }
+                        };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_blobstore_blobstore_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 12],
+                );
+            }
+        }
         pub mod cli {
             #[allow(dead_code, clippy::all)]
             pub mod environment {
@@ -45965,29 +49841,6 @@ pub mod exports {
 }
 #[rustfmt::skip]
 mod _rt {
-    pub use alloc_crate::vec::Vec;
-    pub use alloc_crate::string::String;
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
-        }
-    }
-    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
-        if size == 0 {
-            return;
-        }
-        let layout = alloc::Layout::from_size_align_unchecked(size, align);
-        alloc::dealloc(ptr, layout);
-    }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
     use core::fmt;
     use core::marker;
     use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -46062,6 +49915,15 @@ mod _rt {
             }
         }
     }
+    pub use alloc_crate::string::String;
+    pub use alloc_crate::vec::Vec;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
     pub unsafe fn bool_lift(val: u8) -> bool {
         if cfg!(debug_assertions) {
             match val {
@@ -46080,7 +49942,7 @@ mod _rt {
     pub trait AsI64 {
         fn as_i64(self) -> i64;
     }
-    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
+    impl<T: Copy + AsI64> AsI64 for &T {
         fn as_i64(self) -> i64 {
             (*self).as_i64()
         }
@@ -46088,7 +49950,7 @@ mod _rt {
     impl AsI64 for i64 {
         #[inline]
         fn as_i64(self) -> i64 {
-            self as i64
+            self
         }
     }
     impl AsI64 for u64 {
@@ -46097,13 +49959,27 @@ mod _rt {
             self as i64
         }
     }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
+    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
+        if size == 0 {
+            return;
+        }
+        let layout = alloc::Layout::from_size_align_unchecked(size, align);
+        alloc::dealloc(ptr, layout);
+    }
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
     }
     pub trait AsI32 {
         fn as_i32(self) -> i32;
     }
-    impl<'a, T: Copy + AsI32> AsI32 for &'a T {
+    impl<T: Copy + AsI32> AsI32 for &T {
         fn as_i32(self) -> i32 {
             (*self).as_i32()
         }
@@ -46111,7 +49987,7 @@ mod _rt {
     impl AsI32 for i32 {
         #[inline]
         fn as_i32(self) -> i32 {
-            self as i32
+            self
         }
     }
     impl AsI32 for u32 {
@@ -46162,7 +50038,7 @@ mod _rt {
     pub trait AsF32 {
         fn as_f32(self) -> f32;
     }
-    impl<'a, T: Copy + AsF32> AsF32 for &'a T {
+    impl<T: Copy + AsF32> AsF32 for &T {
         fn as_f32(self) -> f32 {
             (*self).as_f32()
         }
@@ -46170,7 +50046,7 @@ mod _rt {
     impl AsF32 for f32 {
         #[inline]
         fn as_f32(self) -> f32 {
-            self as f32
+            self
         }
     }
     pub fn as_f64<T: AsF64>(t: T) -> f64 {
@@ -46179,7 +50055,7 @@ mod _rt {
     pub trait AsF64 {
         fn as_f64(self) -> f64;
     }
-    impl<'a, T: Copy + AsF64> AsF64 for &'a T {
+    impl<T: Copy + AsF64> AsF64 for &T {
         fn as_f64(self) -> f64 {
             (*self).as_f64()
         }
@@ -46187,7 +50063,7 @@ mod _rt {
     impl AsF64 for f64 {
         #[inline]
         fn as_f64(self) -> f64 {
-            self as f64
+            self
         }
     }
     pub unsafe fn char_lift(val: u32) -> char {
@@ -46197,11 +50073,11 @@ mod _rt {
             core::char::from_u32_unchecked(val)
         }
     }
+    pub use alloc_crate::boxed::Box;
     #[cfg(target_arch = "wasm32")]
     pub fn run_ctors_once() {
         wit_bindgen_rt::run_ctors_once();
     }
-    pub use alloc_crate::boxed::Box;
     extern crate alloc as alloc_crate;
 }
 /// Generates `#[no_mangle]` functions to export the specified type as the
@@ -46228,11 +50104,6 @@ macro_rules! __export_durable_wasi_impl {
     };
     ($ty:ident with_types_in $($path_to_types_root:tt)*) => {
         $($path_to_types_root)*::
-        exports::wasi::cli::environment::__export_wasi_cli_environment_0_2_0_cabi!($ty
-        with_types_in $($path_to_types_root)*:: exports::wasi::cli::environment);
-        $($path_to_types_root)*::
-        exports::wasi::cli::exit::__export_wasi_cli_exit_0_2_0_cabi!($ty with_types_in
-        $($path_to_types_root)*:: exports::wasi::cli::exit); $($path_to_types_root)*::
         exports::wasi::io::error::__export_wasi_io_error_0_2_0_cabi!($ty with_types_in
         $($path_to_types_root)*:: exports::wasi::io::error); $($path_to_types_root)*::
         exports::wasi::io::poll::__export_wasi_io_poll_0_2_0_cabi!($ty with_types_in
@@ -46240,6 +50111,20 @@ macro_rules! __export_durable_wasi_impl {
         exports::wasi::io::streams::__export_wasi_io_streams_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::io::streams);
         $($path_to_types_root)*::
+        exports::wasi::blobstore::types::__export_wasi_blobstore_types_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::blobstore::types);
+        $($path_to_types_root)*::
+        exports::wasi::blobstore::container::__export_wasi_blobstore_container_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::blobstore::container);
+        $($path_to_types_root)*::
+        exports::wasi::blobstore::blobstore::__export_wasi_blobstore_blobstore_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::blobstore::blobstore);
+        $($path_to_types_root)*::
+        exports::wasi::cli::environment::__export_wasi_cli_environment_0_2_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::cli::environment);
+        $($path_to_types_root)*::
+        exports::wasi::cli::exit::__export_wasi_cli_exit_0_2_0_cabi!($ty with_types_in
+        $($path_to_types_root)*:: exports::wasi::cli::exit); $($path_to_types_root)*::
         exports::wasi::cli::stderr::__export_wasi_cli_stderr_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::cli::stderr);
         $($path_to_types_root)*::
@@ -46321,73 +50206,623 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 38597] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc1\xac\x02\x01A\x02\
-\x01A\xa1\x01\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 42749] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf9\xcc\x02\x01A\x02\
+\x01A\xb6\x01\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\
+\0\x1d[method]error.to-debug-string\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05\0\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
+\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x05error\x02\x03\0\x01\x08pollable\x01\
+B(\x02\x03\x02\x01\x02\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x03\x04\0\x08polla\
+ble\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\
+\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-s\
+tream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\
+\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.bloc\
+king-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19\
+[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\
+\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\
+\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\
+\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[met\
+hod]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-f\
+lush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\
+\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\
+\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\
+\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stre\
+am.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03le\
+nw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stre\
+am.blocking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.0\x05\x04\x02\x03\0\x02\x0c\
+input-stream\x02\x03\0\x02\x0doutput-stream\x01B+\x02\x03\x02\x01\x05\x04\0\x0ci\
+nput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x01s\x04\
+\0\x0econtainer-name\x03\0\x04\x01s\x04\0\x0bobject-name\x03\0\x06\x01w\x04\0\x09\
+timestamp\x03\0\x08\x01w\x04\0\x0bobject-size\x03\0\x0a\x01s\x04\0\x05error\x03\0\
+\x0c\x01r\x02\x04name\x05\x0acreated-at\x09\x04\0\x12container-metadata\x03\0\x0e\
+\x01r\x04\x04name\x07\x09container\x05\x0acreated-at\x09\x04size\x0b\x04\0\x0fob\
+ject-metadata\x03\0\x10\x01r\x02\x09container\x05\x06object\x07\x04\0\x09object-\
+id\x03\0\x12\x04\0\x0eoutgoing-value\x03\x01\x04\0\x0eincoming-value\x03\x01\x04\
+\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-bod\
+y\x03\0\x17\x01i\x14\x01@\0\0\x19\x04\0)[static]outgoing-value.new-outgoing-valu\
+e\x01\x1a\x01h\x14\x01i\x03\x01j\x01\x1c\0\x01@\x01\x04self\x1b\0\x1d\x04\00[met\
+hod]outgoing-value.outgoing-value-write-body\x01\x1e\x01h\x15\x01j\x01\x18\x01\x0d\
+\x01@\x01\x04self\x1f\0\x20\x04\02[method]incoming-value.incoming-value-consume-\
+sync\x01!\x01i\x16\x01j\x01\"\x01\x0d\x01@\x01\x04self\x1f\0#\x04\03[method]inco\
+ming-value.incoming-value-consume-async\x01$\x01@\x01\x04self\x1f\0w\x04\0\x1b[m\
+ethod]incoming-value.size\x01%\x03\0\x14wasi:blobstore/types\x05\x07\x02\x03\0\x03\
+\x12container-metadata\x02\x03\0\x03\x05error\x02\x03\0\x03\x0eincoming-value\x02\
+\x03\0\x03\x0fobject-metadata\x02\x03\0\x03\x0bobject-name\x02\x03\0\x03\x0eoutg\
+oing-value\x01B;\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\
+\x06\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x12container-met\
+adata\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x05error\x03\0\x06\x02\x03\x02\x01\x0a\
+\x04\0\x0eincoming-value\x03\0\x08\x02\x03\x02\x01\x0b\x04\0\x0fobject-metadata\x03\
+\0\x0a\x02\x03\x02\x01\x0c\x04\0\x0bobject-name\x03\0\x0c\x02\x03\x02\x01\x0d\x04\
+\0\x0eoutgoing-value\x03\0\x0e\x04\0\x09container\x03\x01\x04\0\x13stream-object\
+-names\x03\x01\x01h\x10\x01j\x01s\x01\x07\x01@\x01\x04self\x12\0\x13\x04\0\x16[m\
+ethod]container.name\x01\x14\x01j\x01\x05\x01\x07\x01@\x01\x04self\x12\0\x15\x04\
+\0\x16[method]container.info\x01\x16\x01i\x09\x01j\x01\x17\x01\x07\x01@\x04\x04s\
+elf\x12\x04name\x0d\x05startw\x03endw\0\x18\x04\0\x1a[method]container.get-data\x01\
+\x19\x01h\x0f\x01j\0\x01\x07\x01@\x03\x04self\x12\x04name\x0d\x04data\x1a\0\x1b\x04\
+\0\x1c[method]container.write-data\x01\x1c\x01i\x11\x01j\x01\x1d\x01\x07\x01@\x01\
+\x04self\x12\0\x1e\x04\0\x1e[method]container.list-objects\x01\x1f\x01@\x02\x04s\
+elf\x12\x04name\x0d\0\x1b\x04\0\x1f[method]container.delete-object\x01\x20\x01p\x0d\
+\x01@\x02\x04self\x12\x05names!\0\x1b\x04\0\x20[method]container.delete-objects\x01\
+\"\x01j\x01\x7f\x01\x07\x01@\x02\x04self\x12\x04name\x0d\0#\x04\0\x1c[method]con\
+tainer.has-object\x01$\x01j\x01\x0b\x01\x07\x01@\x02\x04self\x12\x04name\x0d\0%\x04\
+\0\x1d[method]container.object-info\x01&\x01@\x01\x04self\x12\0\x1b\x04\0\x17[me\
+thod]container.clear\x01'\x01h\x11\x01o\x02!\x7f\x01j\x01)\x01\x07\x01@\x02\x04s\
+elf(\x03lenw\0*\x04\04[method]stream-object-names.read-stream-object-names\x01+\x01\
+o\x02w\x7f\x01j\x01,\x01\x07\x01@\x02\x04self(\x03numw\0-\x04\04[method]stream-o\
+bject-names.skip-stream-object-names\x01.\x03\0\x18wasi:blobstore/container\x05\x0e\
+\x02\x03\0\x04\x09container\x02\x03\0\x03\x0econtainer-name\x02\x03\0\x03\x09obj\
+ect-id\x01B\x16\x02\x03\x02\x01\x0f\x04\0\x09container\x03\0\0\x02\x03\x02\x01\x09\
+\x04\0\x05error\x03\0\x02\x02\x03\x02\x01\x10\x04\0\x0econtainer-name\x03\0\x04\x02\
+\x03\x02\x01\x11\x04\0\x09object-id\x03\0\x06\x01i\x01\x01j\x01\x08\x01\x03\x01@\
+\x01\x04name\x05\0\x09\x04\0\x10create-container\x01\x0a\x04\0\x0dget-container\x01\
+\x0a\x01j\0\x01\x03\x01@\x01\x04name\x05\0\x0b\x04\0\x10delete-container\x01\x0c\
+\x01j\x01\x7f\x01\x03\x01@\x01\x04name\x05\0\x0d\x04\0\x10container-exists\x01\x0e\
+\x01@\x02\x03src\x07\x04dest\x07\0\x0b\x04\0\x0bcopy-object\x01\x0f\x04\0\x0bmov\
+e-object\x01\x0f\x03\0\x18wasi:blobstore/blobstore\x05\x12\x01B\x0a\x01o\x02ss\x01\
+p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0dge\
+t-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x03\0\x1awas\
+i:cli/environment@0.2.0\x05\x13\x01B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\
+\0\x04exit\x01\x01\x03\0\x13wasi:cli/exit@0.2.0\x05\x14\x01B\x05\x02\x03\x02\x01\
+\x06\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stderr\x01\
+\x03\x03\0\x15wasi:cli/stderr@0.2.0\x05\x15\x01B\x05\x02\x03\x02\x01\x05\x04\0\x0c\
+input-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x03\0\x14w\
+asi:cli/stdin@0.2.0\x05\x16\x01B\x05\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\
+\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x03\0\x15wasi:cli/stdout@\
+0.2.0\x05\x17\x01B\x01\x04\0\x0eterminal-input\x03\x01\x03\0\x1dwasi:cli/termina\
+l-input@0.2.0\x05\x18\x01B\x01\x04\0\x0fterminal-output\x03\x01\x03\0\x1ewasi:cl\
+i/terminal-output@0.2.0\x05\x19\x02\x03\0\x0c\x0fterminal-output\x01B\x06\x02\x03\
+\x02\x01\x1a\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\
+\0\x13get-terminal-stderr\x01\x04\x03\0\x1ewasi:cli/terminal-stderr@0.2.0\x05\x1b\
+\x02\x03\0\x0b\x0eterminal-input\x01B\x06\x02\x03\x02\x01\x1c\x04\0\x0eterminal-\
+input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdin\x01\x04\
+\x03\0\x1dwasi:cli/terminal-stdin@0.2.0\x05\x1d\x01B\x06\x02\x03\x02\x01\x1a\x04\
+\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-termin\
+al-stdout\x01\x04\x03\0\x1ewasi:cli/terminal-stdout@0.2.0\x05\x1e\x01B\x0f\x02\x03\
+\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\
+\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0ar\
+esolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\
+\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wa\
+si:clocks/monotonic-clock@0.2.0\x05\x1f\x01B\x05\x01r\x02\x07secondsw\x0bnanosec\
+ondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresol\
+ution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.0\x05\x20\x02\x03\0\x02\x05err\
+or\x02\x03\0\x11\x08datetime\x01Br\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\
+\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01!\x04\0\
+\x05error\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08\
+filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10character-device\x09di\
+rectory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\0\x0fdescriptor-t\
+ype\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\x13data-integrity\
+-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10descriptor-flags\x03\0\
+\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\x01n\x04\x06create\
+\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0a\
+link-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-count\x13\x04size\x09\
+\x15data-access-timestamp\x14\x1bdata-modification-timestamp\x14\x17status-chang\
+e-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03\
+now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\
+\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06access\x0bwould-block\x07\
+already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05exist\x0efile-too-larg\
+e\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07invalid\x02io\x0cis-\
+directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-too-long\x09no-devic\
+e\x08no-entry\x07no-lock\x13insufficient-memory\x12insufficient-space\x0dnot-dir\
+ectory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-tty\x0eno-such-devic\
+e\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinvalid-seek\x0etext-file\
+-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\x06normal\x0asequen\
+tial\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01\
+r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\x1f\x04\0\x0adescri\
+ptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\
+\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descriptor.read-via-strea\
+m\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\x09\0(\x04\0#[meth\
+od]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0$[method]descripto\
+r.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06offset\x09\x06lengt\
+h\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\x01@\x01\x04self#\
+\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04\
+self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\
+\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\x04self#\x04size\
+\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04self#\x15data-acce\
+ss-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c[method]descript\
+or.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\x04self#\x06len\
+gth\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01j\x01\x09\x01\x1c\
+\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method]descriptor.write\
+\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![method]descriptor.rea\
+d-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\x04self#\x04path\
+s\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\x16\x01\x1c\x01@\
+\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\x04self#\x0apath\
+-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\x01@\x05\x04self\
+#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bdata-modification-t\
+imestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01@\x05\x04self#\x0e\
+old-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1a[met\
+hod]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apa\
+th-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\x1a[method]de\
+scriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\
+\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.remove-director\
+y-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\
+\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-paths\x08new-path\
+s\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]descriptor.unlink\
+-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]descriptor.is-same\
+-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\x20[method]des\
+criptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\
+\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\
+\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry-stream.read-direct\
+ory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15filesyst\
+em-error-code\x01T\x03\0\x1bwasi:filesystem/types@0.2.0\x05#\x02\x03\0\x12\x0ade\
+scriptor\x01B\x07\x02\x03\x02\x01$\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\
+\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x03\0\x1ewasi:files\
+ystem/preopens@0.2.0\x05%\x02\x03\0\x10\x08duration\x01B\xc0\x01\x02\x03\x02\x01\
+&\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\x02\x02\
+\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x02\x04\0\x08i\
+o-error\x03\0\x06\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03ge\
+t\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\
+\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\
+\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01\
+r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01\
+r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\
+\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-pa\
+yload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15\
+destination-not-found\0\0\x17destination-unavailable\0\0\x19destination-IP-prohi\
+bited\0\0\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15connecti\
+on-terminated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\0\x18co\
+nnection-write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\
+\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-reques\
+t-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\
+\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-re\
+quest-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-req\
+uest-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-r\
+equest-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-head\
+er-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-respons\
+e-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-resp\
+onse-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-r\
+esponse-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-fa\
+iled\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\
+\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid\
+-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01\
+s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\0\x06fie\
+lds\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10incoming\
+-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\
+\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\0\x11in\
+coming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\
+\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18\
+future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructor]fields\x01\
+2\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\x18[static\
+]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\0\x12[m\
+ethod]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[method]field\
+s.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\0\x12[m\
+ethod]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]fields.d\
+elete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]fields.ap\
+pend\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\x01\x04\
+self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\
+\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([m\
+ethod]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\
+\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming-request\
+.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]incoming-r\
+equest.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20\
+[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\
+\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04\
+self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\x04self\xcd\
+\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\x02\x04self\
+\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-method\x01S\x01@\
+\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01T\x01\
+@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]outgoing-reques\
+t.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgo\
+ing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[me\
+thod]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-request.authority\x01\
+T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]outgoing-request\
+.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-req\
+uest.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]request-options\x01\
+[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]request-options.co\
+nnect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\0\x04\0+[metho\
+d]request-options.set-connect-timeout\x01_\x04\0*[method]request-options.first-b\
+yte-timeout\x01^\x04\0.[method]request-options.set-first-byte-timeout\x01_\x04\0\
+-[method]request-options.between-bytes-timeout\x01^\x04\01[method]request-option\
+s.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05\
+param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outparam.set\x01c\x01\
+h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.status\x01e\x01@\
+\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.headers\x01f\x01@\x01\
+\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01g\x01h,\x01i\x03\
+\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[method]incoming-body.\
+stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[static]incoming-body.\
+finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0![method]future-t\
+railers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01\
+k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-trailers.get\x01v\
+\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoing-response\x01w\x01\
+h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response.status-code\x01y\x01\
+@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]outgoing-response.set-\
+status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![method]outgoing-response.\
+headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[method]outgoing-response.b\
+ody\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b\
+[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\x04this\xce\0\x08\
+trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\x01\x82\x01\x01h0\
+\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incoming-response.subscri\
+be\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\0\x01k\x87\x01\x01\
+@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming-response.get\x01\x89\
+\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\0\x0fhttp-error-cod\
+e\x01\x8c\x01\x03\0\x15wasi:http/types@0.2.0\x05'\x02\x03\0\x14\x10outgoing-requ\
+est\x02\x03\0\x14\x0frequest-options\x02\x03\0\x14\x18future-incoming-response\x02\
+\x03\0\x14\x0aerror-code\x01B\x0f\x02\x03\x02\x01(\x04\0\x10outgoing-request\x03\
+\0\0\x02\x03\x02\x01)\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01*\x04\0\x18\
+future-incoming-response\x03\0\x04\x02\x03\x02\x01+\x04\0\x0aerror-code\x03\0\x06\
+\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\
+\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:http/outgoing-handle\
+r@0.2.0\x05,\x01B\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05error\x08cri\
+tical\x04\0\x05level\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messages\x01\0\
+\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/logging\x05-\x01B\x05\x01p}\x01@\x01\
+\x03lenw\0\0\x04\0\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\x17get-i\
+nsecure-random-u64\x01\x02\x03\0\x1awasi:random/insecure@0.2.0\x05.\x01B\x03\x01\
+o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\x01\x03\0\x1fwasi:random/insecure-\
+seed@0.2.0\x05/\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\
+\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\x03\0\x18wasi:random/random@0.2.0\
+\x050\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0d\
+not-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concurrency-con\
+flict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14\
+address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connection-refus\
+ed\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11name-unres\
+olvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerr\
+or-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01\
+o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\
+\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\
+\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01\
+r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-ad\
+dress\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-\
+address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.0\x051\x02\x03\0\x1a\x07netw\
+ork\x01B\x05\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\
+\0\x10instance-network\x01\x03\x03\0#wasi:sockets/instance-network@0.2.0\x053\x02\
+\x03\0\x1a\x0aerror-code\x02\x03\0\x1a\x0aip-address\x01B\x16\x02\x03\x02\x01\x03\
+\x04\0\x08pollable\x03\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\
+\x014\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x015\x04\0\x0aip-address\x03\0\x06\
+\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01\
+@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve-next-addres\
+s\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stre\
+am.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\
+\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lo\
+okup@0.2.0\x056\x02\x03\0\x1a\x11ip-socket-address\x02\x03\0\x1a\x11ip-address-f\
+amily\x01BT\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\
+\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x04\
+\x02\x03\x02\x01&\x04\0\x08duration\x03\0\x06\x02\x03\x02\x012\x04\0\x07network\x03\
+\0\x08\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x017\x04\0\x11\
+ip-socket-address\x03\0\x0c\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x0e\
+\x01m\x03\x07receive\x04send\x04both\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0at\
+cp-socket\x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07netwo\
+rk\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d[method]tcp-socket.start-bind\x01\x16\
+\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]tcp-socket.finish-bind\x01\x17\x01@\
+\x03\x04self\x13\x07network\x14\x0eremote-address\x0d\0\x15\x04\0\x20[method]tcp\
+-socket.start-connect\x01\x18\x01i\x01\x01i\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\
+\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![method]tcp-socket.finish-connect\x01\x1d\x04\
+\0\x1f[method]tcp-socket.start-listen\x01\x17\x04\0\x20[method]tcp-socket.finish\
+-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04s\
+elf\x13\0\x20\x04\0\x19[method]tcp-socket.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\
+\x04self\x13\0\"\x04\0\x20[method]tcp-socket.local-address\x01#\x04\0![method]tc\
+p-socket.remote-address\x01#\x01@\x01\x04self\x13\0\x7f\x04\0\x1f[method]tcp-soc\
+ket.is-listening\x01$\x01@\x01\x04self\x13\0\x0f\x04\0![method]tcp-socket.addres\
+s-family\x01%\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]tcp-socket.set-\
+listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\x01@\x01\x04self\x13\0'\x04\0%[met\
+hod]tcp-socket.keep-alive-enabled\x01(\x01@\x02\x04self\x13\x05value\x7f\0\x15\x04\
+\0)[method]tcp-socket.set-keep-alive-enabled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\x04\
+self\x13\0*\x04\0'[method]tcp-socket.keep-alive-idle-time\x01+\x01@\x02\x04self\x13\
+\x05value\x07\0\x15\x04\0+[method]tcp-socket.set-keep-alive-idle-time\x01,\x04\0\
+&[method]tcp-socket.keep-alive-interval\x01+\x04\0*[method]tcp-socket.set-keep-a\
+live-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\x04self\x13\0-\x04\0#[method]tcp-s\
+ocket.keep-alive-count\x01.\x01@\x02\x04self\x13\x05valuey\0\x15\x04\0'[method]t\
+cp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\x0b\x01@\x01\x04self\x13\00\x04\
+\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\x04self\x13\x05value}\0\x15\x04\
+\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\
+\03\x04\0&[method]tcp-socket.receive-buffer-size\x014\x04\0*[method]tcp-socket.s\
+et-receive-buffer-size\x01&\x04\0#[method]tcp-socket.send-buffer-size\x014\x04\0\
+'[method]tcp-socket.set-send-buffer-size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\
+\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\
+\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x017\x03\0\x16wasi:sockets/tcp@0.2.0\
+\x059\x02\x03\0\x1d\x0atcp-socket\x01B\x0c\x02\x03\x02\x012\x04\0\x07network\x03\
+\0\0\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip\
+-address-family\x03\0\x04\x02\x03\x02\x01:\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\
+\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-tcp-s\
+ocket\x01\x0a\x03\0$wasi:sockets/tcp-create-socket@0.2.0\x05;\x01BD\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\
+\x02\x014\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x017\x04\0\x11ip-socket-addr\
+ess\x03\0\x06\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x08\x01p}\x01r\x02\
+\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagram\x03\0\x0b\x01k\x07\
+\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoing-datagram\x03\0\x0e\
+\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-stream\x03\x01\x04\0\x18\
+outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\x05\x01@\x03\x04se\
+lf\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\0\x1d[method]udp-socket.sta\
+rt-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]udp-socket.finish-bi\
+nd\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\x1a\x01\x05\x01@\x02\x04s\
+elf\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]udp-socket.stream\x01\x1c\x01\
+j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20[method]udp-socket.local-a\
+ddress\x01\x1e\x04\0![method]udp-socket.remote-address\x01\x1e\x01@\x01\x04self\x13\
+\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\x01j\x01}\x01\x05\x01@\x01\
+\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-hop-limit\x01!\x01@\x02\x04s\
+elf\x13\x05value}\0\x15\x04\0([method]udp-socket.set-unicast-hop-limit\x01\"\x01\
+j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]udp-socket.receive-buffer-s\
+ize\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]udp-socket.set-recei\
+ve-buffer-size\x01%\x04\0#[method]udp-socket.send-buffer-size\x01$\x04\0'[method\
+]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\x04self\x13\0&\x04\0\x1c\
+[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01j\x01)\x01\x05\x01@\x02\x04\
+self(\x0bmax-resultsw\0*\x04\0([method]incoming-datagram-stream.receive\x01+\x01\
+@\x01\x04self(\0&\x04\0*[method]incoming-datagram-stream.subscribe\x01,\x01h\x12\
+\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stream.check-send\x01.\x01\
+p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]outgoing-datagram-stream.\
+send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-datagram-stream.subscribe\x01\
+1\x03\0\x16wasi:sockets/udp@0.2.0\x05<\x02\x03\0\x1f\x0audp-socket\x01B\x0c\x02\x03\
+\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x02\
+\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01=\x04\0\x0a\
+udp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\
+\0\x09\x04\0\x11create-udp-socket\x01\x0a\x03\0$wasi:sockets/udp-create-socket@0\
+.2.0\x05>\x01B@\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode\
+-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05owned\x08borrow\
+ed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\
+\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-ty\
+pe\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\
+\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\x01\x03\0\x0bre\
+sult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\
+\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\
+\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-t\
+ype\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\
+\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\
+\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\
+\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\
+\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0a\
+list-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim\
+-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01\
+~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01\
+v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-st\
+ring\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05\
+nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0e\
+value-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-\
+found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08\
+wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\x08locatio\
+n\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01\
+@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]wasm-rpc.i\
+nvoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction\
+-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfun\
+ction-names\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-and-await\
+\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-result.sub\
+scribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-result.get\
+\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vnt\"\0\x15\
+\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05?\x02\x03\0!\x03ur\
+i\x01Bg\x02\x03\x02\x01@\x04\0\x03uri\x03\0\0\x02\x03\x02\x01&\x04\0\x08duration\
+\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\
+\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04u\
+uid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-n\
+ames\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\
+\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01k\
+u\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09max-delay\x03\x0amultiplieru\x11\
+max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fpersist-nothin\
+g\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\
+\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x17\
+\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04les\
+s\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05equal\x09not-equal\x04like\x08\
+not-like\x04\0\x18string-filter-comparator\x03\0\x1b\x01m\x07\x07running\x04idle\
+\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-sta\
+tus\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\0\x12worker-name-filter\x03\
+\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\x14worker-status-filter\x03\
+\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15worker-version-filter\x03\0#\x01\
+r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-created-at-filter\x03\0%\x01r\x03\
+\x04names\x0acomparator\x1c\x05values\x04\0\x11worker-env-filter\x03\0'\x01q\x05\
+\x04name\x01\x20\0\x06status\x01\"\0\x07version\x01$\0\x0acreated-at\x01&\0\x03e\
+nv\x01(\0\x04\0\x16worker-property-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\
+\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11worker-any-filt\
+er\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04args1\x03env3\x06s\
+tatus\x1e\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\04\x04\
+\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\x0b\x06filter7\x07\
+precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h6\x01p5\x01k;\x01@\x01\
+\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecr\
+eate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0dawait-promise\x01\
+@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\0\x10complete-promise\x01A\x01@\x01\
+\x0apromise-id\x0f\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\x05\x04\0\x0fget-\
+oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01D\x01\
+@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14mark-begin-operatio\
+n\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operation\x01F\x01@\0\0\x14\
+\x04\0\x10get-retry-policy\x01G\x01@\x01\x10new-retry-policy\x14\x01\0\x04\0\x10\
+set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1bget-oplog-persistence-level\x01I\x01\
+@\x01\x15new-persistence-level\x16\x01\0\x04\0\x1bset-oplog-persistence-level\x01\
+J\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\
+\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency\
+-key\x01M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\
+\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09\
+worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\0\x14golem:api/host@\
+1.1.0\x05A\x02\x03\0!\x09wit-value\x02\x03\0\"\x0aaccount-id\x02\x03\0\"\x11comp\
+onent-version\x02\x03\0\"\x0boplog-index\x02\x03\0\"\x0cretry-policy\x02\x03\0\"\
+\x04uuid\x02\x03\0\"\x09worker-id\x01Be\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\
+\0\x02\x03\x02\x01B\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01C\x04\0\x0aaccou\
+nt-id\x03\0\x04\x02\x03\x02\x01D\x04\0\x11component-version\x03\0\x06\x02\x03\x02\
+\x01E\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01F\x04\0\x0cretry-policy\x03\0\
+\x0a\x02\x03\x02\x01G\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01H\x04\0\x09worker-i\
+d\x03\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remot\
+e\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-fun\
+ction-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04name\
+s\x07versions\x0aparameters\x14\x04\0\x1fplugin-installation-description\x03\0\x15\
+\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component\
+-version\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent\
+-sizew\x20initial-total-linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11\
+create-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07reque\
+st\x03\x08response\x03\x15wrapped-function-type\x12\x04\0$imported-function-invo\
+ked-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07\
+request\x1e\x0fidempotency-keys\x04\0$exported-function-invoked-parameters\x03\0\
+\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-\
+function-completed-parameters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10\
+error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0f\
+jump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1ech\
+ange-retry-policy-parameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\
+\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin\
+-index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidem\
+potency-keys\x0dfunction-names\x05input-\x04\0'exported-function-invocation-para\
+meters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\
+\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pe\
+nding-worker-invocation-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0es\
+napshot-based\x014\0\x04\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\
+\x0etarget-version\x07\x12update-description6\x04\0\x19pending-update-parameters\
+\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12\
+new-active-plugins\x19\x04\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\
+\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\0\x18failed-update-param\
+eters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\
+\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bres\
+ource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\
+\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09times\
+tamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1c\
+describe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05deb\
+ug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09ti\
+mestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0\
+J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\
+\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactivate-plugin-parameter\
+s\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-invoked\x01\x1d\0\x19\
+exported-function-invoked\x01\x20\0\x1bexported-function-completed\x01\"\0\x07su\
+spend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\
+\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13begin-atomic-reg\
+ion\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\x01\0\x10end\
+-remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending-update\x018\0\
+\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memory\x01?\0\x0fcr\
+eate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe-resource\x01\xc7\
+\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11d\
+eactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\
+\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\
+\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04\
+self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09wo\
+rker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\
+\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method\
+]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x05I\x02\x03\0\"\x11p\
+ersistence-level\x02\x03\0#\x0boplog-index\x02\x03\0#\x15wrapped-function-type\x02\
+\x03\0!\x0evalue-and-type\x01B\x20\x02\x03\x02\x01J\x04\0\x11persistence-level\x03\
+\0\0\x02\x03\x02\x01K\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01L\x04\0\x15w\
+rapped-function-type\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\x06\x02\
+\x03\x02\x01M\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\
+\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17durable-executi\
+on-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01\
+p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\
+\x0dentry-version\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\
+\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\
+\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0d\
+function-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\
+\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunct\
+ion-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persis\
+t-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08\
+response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durable-function-inv\
+ocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\
+\x18\x03\0!golem:durability/durability@1.2.0\x05N\x01B\x04\x04\0\x05error\x03\x01\
+\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\x04\
+\0\x13wasi:io/error@0.2.0\x05O\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\
+\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\
+\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\
+\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.0\x05P\x01B(\x02\x03\x02\x01\x02\
+\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01i\x01\
+\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\
+\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\
+\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]\
+input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\
+\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.s\
+kip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04\
+self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\
+\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\
+\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\
+\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04\
+self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output\
+-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]outpu\
+t-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]out\
+put-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroe\
+s-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[meth\
+od]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\
+\x04\0\x15wasi:io/streams@0.2.0\x05Q\x01B+\x02\x03\x02\x01\x05\x04\0\x0cinput-st\
+ream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x01s\x04\0\x0e\
+container-name\x03\0\x04\x01s\x04\0\x0bobject-name\x03\0\x06\x01w\x04\0\x09times\
+tamp\x03\0\x08\x01w\x04\0\x0bobject-size\x03\0\x0a\x01s\x04\0\x05error\x03\0\x0c\
+\x01r\x02\x04name\x05\x0acreated-at\x09\x04\0\x12container-metadata\x03\0\x0e\x01\
+r\x04\x04name\x07\x09container\x05\x0acreated-at\x09\x04size\x0b\x04\0\x0fobject\
+-metadata\x03\0\x10\x01r\x02\x09container\x05\x06object\x07\x04\0\x09object-id\x03\
+\0\x12\x04\0\x0eoutgoing-value\x03\x01\x04\0\x0eincoming-value\x03\x01\x04\0\x19\
+incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-body\x03\0\
+\x17\x01i\x14\x01@\0\0\x19\x04\0)[static]outgoing-value.new-outgoing-value\x01\x1a\
+\x01h\x14\x01i\x03\x01j\x01\x1c\0\x01@\x01\x04self\x1b\0\x1d\x04\00[method]outgo\
+ing-value.outgoing-value-write-body\x01\x1e\x01h\x15\x01j\x01\x18\x01\x0d\x01@\x01\
+\x04self\x1f\0\x20\x04\02[method]incoming-value.incoming-value-consume-sync\x01!\
+\x01i\x16\x01j\x01\"\x01\x0d\x01@\x01\x04self\x1f\0#\x04\03[method]incoming-valu\
+e.incoming-value-consume-async\x01$\x01@\x01\x04self\x1f\0w\x04\0\x1b[method]inc\
+oming-value.size\x01%\x04\0\x14wasi:blobstore/types\x05R\x01B;\x02\x03\x02\x01\x05\
+\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\
+\x02\x03\x02\x01\x08\x04\0\x12container-metadata\x03\0\x04\x02\x03\x02\x01\x09\x04\
+\0\x05error\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x0eincoming-value\x03\0\x08\x02\x03\
+\x02\x01\x0b\x04\0\x0fobject-metadata\x03\0\x0a\x02\x03\x02\x01\x0c\x04\0\x0bobj\
+ect-name\x03\0\x0c\x02\x03\x02\x01\x0d\x04\0\x0eoutgoing-value\x03\0\x0e\x04\0\x09\
+container\x03\x01\x04\0\x13stream-object-names\x03\x01\x01h\x10\x01j\x01s\x01\x07\
+\x01@\x01\x04self\x12\0\x13\x04\0\x16[method]container.name\x01\x14\x01j\x01\x05\
+\x01\x07\x01@\x01\x04self\x12\0\x15\x04\0\x16[method]container.info\x01\x16\x01i\
+\x09\x01j\x01\x17\x01\x07\x01@\x04\x04self\x12\x04name\x0d\x05startw\x03endw\0\x18\
+\x04\0\x1a[method]container.get-data\x01\x19\x01h\x0f\x01j\0\x01\x07\x01@\x03\x04\
+self\x12\x04name\x0d\x04data\x1a\0\x1b\x04\0\x1c[method]container.write-data\x01\
+\x1c\x01i\x11\x01j\x01\x1d\x01\x07\x01@\x01\x04self\x12\0\x1e\x04\0\x1e[method]c\
+ontainer.list-objects\x01\x1f\x01@\x02\x04self\x12\x04name\x0d\0\x1b\x04\0\x1f[m\
+ethod]container.delete-object\x01\x20\x01p\x0d\x01@\x02\x04self\x12\x05names!\0\x1b\
+\x04\0\x20[method]container.delete-objects\x01\"\x01j\x01\x7f\x01\x07\x01@\x02\x04\
+self\x12\x04name\x0d\0#\x04\0\x1c[method]container.has-object\x01$\x01j\x01\x0b\x01\
+\x07\x01@\x02\x04self\x12\x04name\x0d\0%\x04\0\x1d[method]container.object-info\x01\
+&\x01@\x01\x04self\x12\0\x1b\x04\0\x17[method]container.clear\x01'\x01h\x11\x01o\
+\x02!\x7f\x01j\x01)\x01\x07\x01@\x02\x04self(\x03lenw\0*\x04\04[method]stream-ob\
+ject-names.read-stream-object-names\x01+\x01o\x02w\x7f\x01j\x01,\x01\x07\x01@\x02\
+\x04self(\x03numw\0-\x04\04[method]stream-object-names.skip-stream-object-names\x01\
+.\x04\0\x18wasi:blobstore/container\x05S\x01B\x16\x02\x03\x02\x01\x0f\x04\0\x09c\
+ontainer\x03\0\0\x02\x03\x02\x01\x09\x04\0\x05error\x03\0\x02\x02\x03\x02\x01\x10\
+\x04\0\x0econtainer-name\x03\0\x04\x02\x03\x02\x01\x11\x04\0\x09object-id\x03\0\x06\
+\x01i\x01\x01j\x01\x08\x01\x03\x01@\x01\x04name\x05\0\x09\x04\0\x10create-contai\
+ner\x01\x0a\x04\0\x0dget-container\x01\x0a\x01j\0\x01\x03\x01@\x01\x04name\x05\0\
+\x0b\x04\0\x10delete-container\x01\x0c\x01j\x01\x7f\x01\x03\x01@\x01\x04name\x05\
+\0\x0d\x04\0\x10container-exists\x01\x0e\x01@\x02\x03src\x07\x04dest\x07\0\x0b\x04\
+\0\x0bcopy-object\x01\x0f\x04\0\x0bmove-object\x01\x0f\x04\0\x18wasi:blobstore/b\
+lobstore\x05T\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\
 \x02\x01ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0b\
-initial-cwd\x01\x06\x03\0\x1awasi:cli/environment@0.2.0\x05\0\x01B\x03\x01j\0\0\x01\
-@\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x03\0\x13wasi:cli/exit@0.2.0\x05\x01\
-\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method\
-]error.to-debug-string\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05\x02\x01B\x0a\x04\
-\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollab\
-le.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\
-\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\x12wasi:io/\
-poll@0.2.0\x05\x03\x02\x03\0\x02\x05error\x02\x03\0\x03\x08pollable\x01B(\x02\x03\
-\x02\x01\x04\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x02\
-\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstr\
-eam-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\
-\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19\
-[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\
-\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-str\
-eam.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\
-\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01\
-@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\
-\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.w\
-rite\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\
-\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]ou\
-tput-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]o\
-utput-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method\
-]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-z\
-eroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[\
-method]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\
-\x18\x03\0\x15wasi:io/streams@0.2.0\x05\x06\x02\x03\0\x04\x0doutput-stream\x01B\x05\
-\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0a\
-get-stderr\x01\x03\x03\0\x15wasi:cli/stderr@0.2.0\x05\x08\x02\x03\0\x04\x0cinput\
--stream\x01B\x05\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\
-\0\0\x02\x04\0\x09get-stdin\x01\x03\x03\0\x14wasi:cli/stdin@0.2.0\x05\x0a\x01B\x05\
-\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0a\
-get-stdout\x01\x03\x03\0\x15wasi:cli/stdout@0.2.0\x05\x0b\x01B\x01\x04\0\x0eterm\
-inal-input\x03\x01\x03\0\x1dwasi:cli/terminal-input@0.2.0\x05\x0c\x01B\x01\x04\0\
-\x0fterminal-output\x03\x01\x03\0\x1ewasi:cli/terminal-output@0.2.0\x05\x0d\x02\x03\
-\0\x09\x0fterminal-output\x01B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\
-\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x03\0\x1e\
-wasi:cli/terminal-stderr@0.2.0\x05\x0f\x02\x03\0\x08\x0eterminal-input\x01B\x06\x02\
-\x03\x02\x01\x10\x04\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\
-\0\x12get-terminal-stdin\x01\x04\x03\0\x1dwasi:cli/terminal-stdin@0.2.0\x05\x11\x01\
-B\x06\x02\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01\
-@\0\0\x03\x04\0\x13get-terminal-stdout\x01\x04\x03\0\x1ewasi:cli/terminal-stdout\
-@0.2.0\x05\x12\x01B\x0f\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\
-\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\
-\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\
-\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subs\
-cribe-duration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x13\x01B\x05\x01\
-r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03\
-now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.0\x05\
-\x14\x02\x03\0\x04\x05error\x02\x03\0\x0e\x08datetime\x01Br\x02\x03\x02\x01\x09\x04\
-\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\
-\x03\x02\x01\x15\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\
-\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10c\
-haracter-device\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\
-\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\
-\x13data-integrity-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10des\
-criptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\
-\x01n\x04\x06create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\
-\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-\
-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bdata-modification-timestam\
-p\x14\x17status-change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\
-\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\
-\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06a\
-ccess\x0bwould-block\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05\
+initial-cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05U\x01B\x03\x01j\0\0\x01\
+@\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05V\x01\
+B\x05\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\
+\0\x0aget-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x05W\x01B\x05\x02\x03\x02\
+\x01\x05\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\
+\x03\x04\0\x14wasi:cli/stdin@0.2.0\x05X\x01B\x05\x02\x03\x02\x01\x06\x04\0\x0dou\
+tput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15w\
+asi:cli/stdout@0.2.0\x05Y\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi\
+:cli/terminal-input@0.2.0\x05Z\x01B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1e\
+wasi:cli/terminal-output@0.2.0\x05[\x01B\x06\x02\x03\x02\x01\x1a\x04\0\x0ftermin\
+al-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\
+\x04\x04\0\x1ewasi:cli/terminal-stderr@0.2.0\x05\\\x01B\x06\x02\x03\x02\x01\x1c\x04\
+\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-termina\
+l-stdin\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x05]\x01B\x06\x02\x03\x02\
+\x01\x1a\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13\
+get-terminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x05^\x01B\x0f\
+\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01\
+w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\
+\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-\
+instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\
+\0!wasi:clocks/monotonic-clock@0.2.0\x05_\x01B\x05\x01r\x02\x07secondsw\x0bnanos\
+econdsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0ares\
+olution\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x05`\x01Br\x02\x03\x02\x01\
+\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\
+\0\x02\x02\x03\x02\x01!\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08date\
+time\x03\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-dev\
+ice\x10character-device\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06\
+socket\x04\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-inte\
+grity-sync\x13data-integrity-sync\x14requested-write-sync\x10mutate-directory\x04\
+\0\x10descriptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\
+\0\x0e\x01n\x04\x06create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-fl\
+ags\x03\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0a\
+link-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bdata-modification-tim\
+estamp\x14\x17status-change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01\
+q\x03\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\
+\0\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06\
+access\x0bwould-block\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05\
 exist\x0efile-too-large\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07\
 invalid\x02io\x0cis-directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-\
 too-long\x09no-device\x08no-entry\x07no-lock\x13insufficient-memory\x12insuffici\
@@ -46431,663 +50866,205 @@ criptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0
 paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01\
 j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry\
 -stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\
-\x04\0\x15filesystem-error-code\x01T\x03\0\x1bwasi:filesystem/types@0.2.0\x05\x17\
-\x02\x03\0\x0f\x0adescriptor\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\
-\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\
-\x03\0\x1ewasi:filesystem/preopens@0.2.0\x05\x19\x02\x03\0\x0d\x08duration\x01B\xc0\
-\x01\x02\x03\x02\x01\x1a\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x09\x04\0\x0c\
-input-stream\x03\0\x02\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x04\x02\x03\
-\x02\x01\x04\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\
-\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07c\
-onnect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06met\
-hod\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\
-\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-pay\
-load\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-\
-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\
-\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09\
-DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19\
-destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-ref\
-used\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\x17connection-re\
-ad-timeout\0\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12\
-TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\
-\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-reques\
-t-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-inv\
-alid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\
-\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\
-\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HT\
-TP-response-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\
-\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\
-\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\
-\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTT\
-P-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configur\
-ation-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\
-\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\
-\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\
-\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10\
-incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-opti\
-ons\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\
-\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-t\
-railers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\
-\x04\0\x18future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructo\
-r]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\
-\x18[static]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\
-\0\x12[method]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[meth\
-od]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\
-\0\x12[method]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]\
-fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]f\
-ields.append\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\
-\x01\x04self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\
-\0\x0b\x04\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\
-\x04\0([method]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\
-\0\0\xc4\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming\
--request.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]in\
-coming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\
-\x04\0\x20[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\
-\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01\
-@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\
-\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\
-\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-meth\
-od\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-qu\
-ery\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]out\
-going-request.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[\
-method]outgoing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\
-\0\x04\0#[method]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-reques\
-t.authority\x01T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]o\
-utgoing-request.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[meth\
-od]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]requ\
-est-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]req\
-uest-options.connect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\
-\0\x04\0+[method]request-options.set-connect-timeout\x01_\x04\0*[method]request-\
-options.first-byte-timeout\x01^\x04\0.[method]request-options.set-first-byte-tim\
-eout\x01_\x04\0-[method]request-options.between-bytes-timeout\x01^\x04\01[method\
-]request-options.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\
-\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outpa\
-ram.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.\
-status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.heade\
-rs\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01\
-g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[metho\
-d]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[stati\
-c]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0!\
-[method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01\
-j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-\
-trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoi\
-ng-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response\
-.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]o\
-utgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![meth\
-od]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[metho\
-d]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\
-\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\
-\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\
-\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incomin\
-g-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\
-\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming\
--response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\
-\0\x0fhttp-error-code\x01\x8c\x01\x03\0\x15wasi:http/types@0.2.0\x05\x1b\x02\x03\
-\0\x11\x10outgoing-request\x02\x03\0\x11\x0frequest-options\x02\x03\0\x11\x18fut\
-ure-incoming-response\x02\x03\0\x11\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x1c\x04\
-\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x1d\x04\0\x0frequest-options\x03\0\
-\x02\x02\x03\x02\x01\x1e\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\
-\x01\x1f\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\
-\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\
-\x03\0\x20wasi:http/outgoing-handler@0.2.0\x05\x20\x01B\x04\x01m\x06\x05trace\x05\
-debug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05le\
-vel\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging\
-/logging\x05!\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-b\
-ytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x03\0\x1awasi:ra\
-ndom/insecure@0.2.0\x05\"\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\
-\x01\x03\0\x1fwasi:random/insecure-seed@0.2.0\x05#\x01B\x05\x01p}\x01@\x01\x03le\
-nw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\
-\x03\0\x18wasi:random/random@0.2.0\x05$\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\
-\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memo\
-ry\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinval\
-id-state\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote\
--unreachable\x12connection-refused\x10connection-reset\x12connection-aborted\x12\
-datagram-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermane\
-nt-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\
-\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01\
-o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\
-\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13\
-ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08\
-scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04i\
-pv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\0\x1awasi:sockets/network\
-@0.2.0\x05%\x02\x03\0\x17\x07network\x01B\x05\x02\x03\x02\x01&\x04\0\x07network\x03\
-\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/\
-instance-network@0.2.0\x05'\x02\x03\0\x17\x0aerror-code\x02\x03\0\x17\x0aip-addr\
-ess\x01B\x16\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\0\
-\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
-\x01)\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\
-\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]reso\
-lve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\
-\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\
-\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\
-\x12\x03\0!wasi:sockets/ip-name-lookup@0.2.0\x05*\x02\x03\0\x17\x11ip-socket-add\
-ress\x02\x03\0\x17\x11ip-address-family\x01BT\x02\x03\x02\x01\x09\x04\0\x0cinput\
--stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\
-\x01\x05\x04\0\x08pollable\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x08duration\x03\0\
-\x06\x02\x03\x02\x01&\x04\0\x07network\x03\0\x08\x02\x03\x02\x01(\x04\0\x0aerror\
--code\x03\0\x0a\x02\x03\x02\x01+\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\x02\
-\x01,\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04both\x04\
-\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\x01j\
-\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d\
-[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[metho\
-d]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0eremote-a\
-ddress\x0d\0\x15\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\x01i\
-\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![met\
-hod]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-listen\x01\
-\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\
-\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-socket\
-.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]tcp-\
-socket.local-address\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\x04\
-self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04self\x13\
-\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05valu\
-ew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\
-\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01@\x02\
-\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-enabled\x01\
-)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.keep-ali\
-ve-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]tcp-sock\
-et.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-interval\x01\
-+\x04\0*[method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\
-\x04self\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\x04self\x13\
-\x05valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\
-\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\
-\x04self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\
-\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive-buffer-si\
-ze\x014\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[method]tcp-\
-socket.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-size\x01&\x01\
-i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\
-\x04self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x01\
-7\x03\0\x16wasi:sockets/tcp@0.2.0\x05-\x02\x03\0\x1a\x0atcp-socket\x01B\x0c\x02\x03\
-\x02\x01&\x04\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\
-\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01.\x04\0\x0a\
-tcp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\
-\0\x09\x04\0\x11create-tcp-socket\x01\x0a\x03\0$wasi:sockets/tcp-create-socket@0\
-.2.0\x05/\x01BD\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\
-\0\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
-\x01+\x04\0\x11ip-socket-address\x03\0\x06\x02\x03\x02\x01,\x04\0\x11ip-address-\
-family\x03\0\x08\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incom\
-ing-datagram\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\
-\x11outgoing-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-da\
-tagram-stream\x03\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\
-\x01j\0\x01\x05\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\
-\0\x1d[method]udp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e\
-[method]udp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\
-\x1a\x01\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]u\
-dp-socket.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20\
-[method]udp-socket.local-address\x01\x1e\x04\0![method]udp-socket.remote-address\
-\x01\x1e\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\
-\x01j\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-h\
-op-limit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\0([method]udp-socket.set-\
-unicast-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]\
-udp-socket.receive-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[\
-method]udp-socket.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.send-buf\
-fer-size\x01$\x04\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\
-\x04self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01\
-j\x01)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incoming-datag\
-ram-stream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-datagram-str\
-eam.subscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram\
--stream.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[metho\
-d]outgoing-datagram-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing\
--datagram-stream.subscribe\x011\x03\0\x16wasi:sockets/udp@0.2.0\x050\x02\x03\0\x1c\
-\x0audp-socket\x01B\x0c\x02\x03\x02\x01&\x04\0\x07network\x03\0\0\x02\x03\x02\x01\
-(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\
-\x04\x02\x03\x02\x011\x04\0\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\
-\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x03\0$w\
-asi:sockets/udp-create-socket@0.2.0\x052\x01B@\x02\x03\x02\x01\x05\x04\0\x08poll\
-able\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\
-\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01\
-p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\
-\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\
-\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0b\
-option-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-t\
-ype\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s1\
-6-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dpri\
-m-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\
-\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05\
-nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01\
-o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\
-\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0b\
-tuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresul\
-t-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08pri\
-m-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\
-\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09pri\
-m-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\
-\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05v\
-alue\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01\
-s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
-rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
-\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01\
-p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0\
-+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0d\
-function-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i\
-&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\0'[method]wasm-\
-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[metho\
-d]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[metho\
-d]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x01\
-6\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.\
-1.1\x053\x02\x03\0\x1e\x03uri\x01Bg\x02\x03\x02\x014\x04\0\x03uri\x03\0\0\x02\x03\
-\x02\x01\x1a\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01\
-w\x04\0\x11component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\
-\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\
-\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09wo\
-rker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\
-\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09m\
-ax-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\
-\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\
-\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-base\
-d\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\
-\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05\
-equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1b\
-\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06\
-exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\
-\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\
-\x14worker-status-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15wo\
-rker-version-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-\
-created-at-filter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\0\x11\
-worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07version\
-\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\x03\0\
-)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07\
-filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09wo\
-rker-id\x0d\x04args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-countw\
-\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\
-\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-work\
-ers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get\
--next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-i\
-d\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\
-\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-pro\
-mise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\
-\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-comm\
-it\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12\
-mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\x10\
-new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1b\
-get-oplog-persistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\x04\
-\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence-mod\
-e\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\
-\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0etarge\
-t-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11g\
-et-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-worke\
-r-metadata\x01Q\x03\0\x14golem:api/host@1.1.0\x055\x02\x03\0\x1e\x09wit-value\x02\
-\x03\0\x1f\x0aaccount-id\x02\x03\0\x1f\x11component-version\x02\x03\0\x1f\x0bopl\
-og-index\x02\x03\0\x1f\x0cretry-policy\x02\x03\0\x1f\x04uuid\x02\x03\0\x1f\x09wo\
-rker-id\x01Be\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\0\x02\x03\x02\x016\x04\
-\0\x09wit-value\x03\0\x02\x02\x03\x02\x017\x04\0\x0aaccount-id\x03\0\x04\x02\x03\
-\x02\x018\x04\0\x11component-version\x03\0\x06\x02\x03\x02\x019\x04\0\x0boplog-i\
-ndex\x03\0\x08\x02\x03\x02\x01:\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01;\
-\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01<\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01\
-q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\
-\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\
-\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04names\x07versions\x0aparamete\
-rs\x14\x04\0\x1fplugin-installation-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\
-\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component-version\x07\x04args\x17\
-\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent-sizew\x20initial-total-\
-linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11create-parameters\x03\
-\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\x08response\x03\
-\x15wrapped-function-type\x12\x04\0$imported-function-invoked-parameters\x03\0\x1c\
-\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07request\x1e\x0fidempote\
-ncy-keys\x04\0$exported-function-invoked-parameters\x03\0\x1f\x01r\x03\x09timest\
-amp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-function-completed-para\
-meters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10error-parameters\x03\0\
-#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0fjump-parameters\x03\
-\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1echange-retry-policy-p\
-arameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomi\
-c-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1b\
-end-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunc\
-tion-names\x05input-\x04\0'exported-function-invocation-parameters\x03\0.\x01q\x02\
-\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\0\x11worker-invocati\
-on\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pending-worker-invocati\
-on-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\
-\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x12\
-update-description6\x04\0\x19pending-update-parameters\x03\07\x01r\x04\x09timest\
-amp\x01\x0etarget-version\x07\x12new-component-sizew\x12new-active-plugins\x19\x04\
-\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etar\
-get-version\x07\x07details;\x04\0\x18failed-update-parameters\x03\0<\x01r\x02\x09\
-timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\x03\0>\x01w\x04\0\x12wor\
-ker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x1ac\
-reate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\
-\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\
-\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1cdescribe-resource-parameter\
-s\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\
-\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07\
-contexts\x07messages\x04\0\x0elog-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06\
-plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06\
-plugin\x16\x04\0\x1cdeactivate-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\
-\0\x19imported-function-invoked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\
-\x1bexported-function-completed\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05\
-no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13c\
-hange-retry-policy\x01(\0\x13begin-atomic-region\x01\x01\0\x11end-atomic-region\x01\
-*\0\x12begin-remote-write\x01\x01\0\x10end-remote-write\x01,\0\x19pending-worker\
--invocation\x013\0\x0epending-update\x018\0\x11successful-update\x01:\0\x0dfaile\
-d-update\x01=\0\x0bgrow-memory\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-res\
-ource\x01\xc5\0\0\x11describe-resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\
-\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\
-\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01\
-iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\0\x04\0\x16[constructor]get-oplo\
-g\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[meth\
-od]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\
-\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\
-\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method]search-oplog.get-next\x01`\x03\0\
-\x15golem:api/oplog@1.1.0\x05=\x02\x03\0\x1f\x11persistence-level\x02\x03\0\x20\x0b\
-oplog-index\x02\x03\0\x20\x15wrapped-function-type\x02\x03\0\x1e\x0evalue-and-ty\
-pe\x01B\x20\x02\x03\x02\x01>\x04\0\x11persistence-level\x03\0\0\x02\x03\x02\x01?\
-\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01@\x04\0\x15wrapped-function-type\x03\
-\0\x04\x02\x03\x02\x01\x16\x04\0\x08datetime\x03\0\x06\x02\x03\x02\x01A\x04\0\x0e\
-value-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\0\x05\x01r\x02\x07is\
--live\x7f\x11persistence-level\x01\x04\0\x17durable-execution-state\x03\0\x0b\x01\
-m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01p}\x01r\x05\x09times\
-tamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\x0dentry-version\
-\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\x02\x05ifaces\x08\
-functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\x0dfunction-type\
-\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0dfunction-type\x0a\
-\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\x01@\0\0\x0c\x04\
-\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunction-names\x07requ\
-est\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persist-durable-functio\
-n-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08response\x09\x0d\
-function-type\x0a\x01\0\x04\0)persist-typed-durable-function-invocation\x01\x17\x01\
-@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\x18\x03\0!golem:d\
-urability/durability@1.2.0\x05B\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0f\
-get-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01\
-@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05C\x01\
-B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cl\
-i/exit@0.2.0\x05D\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\
-\x04\0\x1d[method]error.to-debug-string\x01\x02\x04\0\x13wasi:io/error@0.2.0\x05\
-E\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16\
-[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]polla\
-ble.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x04\
-\0\x12wasi:io/poll@0.2.0\x05F\x01B(\x02\x03\x02\x01\x04\x04\0\x05error\x03\0\0\x02\
-\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation\
--failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-s\
-tream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\
-\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\
-\0\"[method]input-stream.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04sel\
-f\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]in\
-put-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[m\
-ethod]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![\
-method]output-stream.check-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08\
-contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\x01\x14\x04\0.[method]ou\
-tput-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b\
-[method]output-stream.flush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\
-\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\
-\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\
-\x17\x04\05[method]output-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\
-\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\
-\x04\0%[method]output-stream.blocking-splice\x01\x18\x04\0\x15wasi:io/streams@0.\
-2.0\x05G\x01B\x05\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01\
-@\0\0\x02\x04\0\x0aget-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x05H\x01B\x05\
-\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09\
-get-stdin\x01\x03\x04\0\x14wasi:cli/stdin@0.2.0\x05I\x01B\x05\x02\x03\x02\x01\x07\
-\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\
-\x04\0\x15wasi:cli/stdout@0.2.0\x05J\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\
-\0\x1dwasi:cli/terminal-input@0.2.0\x05K\x01B\x01\x04\0\x0fterminal-output\x03\x01\
-\x04\0\x1ewasi:cli/terminal-output@0.2.0\x05L\x01B\x06\x02\x03\x02\x01\x0e\x04\0\
-\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal\
--stderr\x01\x04\x04\0\x1ewasi:cli/terminal-stderr@0.2.0\x05M\x01B\x06\x02\x03\x02\
-\x01\x10\x04\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12\
-get-terminal-stdin\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x05N\x01B\x06\x02\
-\x03\x02\x01\x0e\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\
-\x04\0\x13get-terminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x05\
-O\x01B\x0f\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\
-\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\
-\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11\
-subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\
-\x01\x0a\x04\0!wasi:clocks/monotonic-clock@0.2.0\x05P\x01B\x05\x01r\x02\x07secon\
-dsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\
-\0\x0aresolution\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x05Q\x01Br\x02\x03\
-\x02\x01\x09\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-s\
-tream\x03\0\x02\x02\x03\x02\x01\x15\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\x16\
-\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknow\
-n\x0cblock-device\x10character-device\x09directory\x04fifo\x0dsymbolic-link\x0cr\
-egular-file\x06socket\x04\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05wri\
-te\x13file-integrity-sync\x13data-integrity-sync\x14requested-write-sync\x10muta\
-te-directory\x04\0\x10descriptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\
-\x0apath-flags\x03\0\x0e\x01n\x04\x06create\x09directory\x09exclusive\x08truncat\
-e\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\
-\x06\x04type\x0b\x0alink-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bd\
-ata-modification-timestamp\x14\x17status-change-timestamp\x14\x04\0\x0fdescripto\
-r-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\
-\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-e\
-ntry\x03\0\x19\x01m%\x06access\x0bwould-block\x07already\x0ebad-descriptor\x04bu\
-sy\x08deadlock\x05quota\x05exist\x0efile-too-large\x15illegal-byte-sequence\x0bi\
-n-progress\x0binterrupted\x07invalid\x02io\x0cis-directory\x04loop\x0etoo-many-l\
-inks\x0cmessage-size\x0dname-too-long\x09no-device\x08no-entry\x07no-lock\x13ins\
-ufficient-memory\x12insufficient-space\x0dnot-directory\x09not-empty\x0fnot-reco\
-verable\x0bunsupported\x06no-tty\x0eno-such-device\x08overflow\x0dnot-permitted\x04\
-pipe\x09read-only\x0cinvalid-seek\x0etext-file-busy\x0ccross-device\x04\0\x0aerr\
-or-code\x03\0\x1b\x01m\x06\x06normal\x0asequential\x06random\x09will-need\x09don\
-t-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13\
-metadata-hash-value\x03\0\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16directory-ent\
-ry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self#\x06offset\x09\
-\0%\x04\0\"[method]descriptor.read-via-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01\
-@\x02\x04self#\x06offset\x09\0(\x04\0#[method]descriptor.write-via-stream\x01)\x01\
-@\x01\x04self#\0(\x04\0$[method]descriptor.append-via-stream\x01*\x01j\0\x01\x1c\
-\x01@\x04\x04self#\x06offset\x09\x06length\x09\x06advice\x1e\0+\x04\0\x19[method\
-]descriptor.advise\x01,\x01@\x01\x04self#\0+\x04\0\x1c[method]descriptor.sync-da\
-ta\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]descriptor.ge\
-t-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[method]descript\
-or.get-type\x011\x01@\x02\x04self#\x04size\x09\0+\x04\0\x1b[method]descriptor.se\
-t-size\x012\x01@\x03\x04self#\x15data-access-timestamp\x18\x1bdata-modification-\
-timestamp\x18\0+\x04\0\x1c[method]descriptor.set-times\x013\x01p}\x01o\x024\x7f\x01\
-j\x015\x01\x1c\x01@\x03\x04self#\x06length\x09\x06offset\x09\06\x04\0\x17[method\
-]descriptor.read\x017\x01j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buffer4\x06offse\
-t\x09\08\x04\0\x18[method]descriptor.write\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\
-\x04self#\0;\x04\0![method]descriptor.read-directory\x01<\x04\0\x17[method]descr\
-iptor.sync\x01-\x01@\x02\x04self#\x04paths\0+\x04\0&[method]descriptor.create-di\
-rectory-at\x01=\x01j\x01\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17[method]descr\
-iptor.stat\x01?\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0>\x04\0\x1a[method\
-]descriptor.stat-at\x01@\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x15data-ac\
-cess-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1f[method]descri\
-ptor.set-times-at\x01A\x01@\x05\x04self#\x0eold-path-flags\x0f\x08old-paths\x0en\
-ew-descriptor#\x08new-paths\0+\x04\0\x1a[method]descriptor.link-at\x01B\x01i!\x01\
-j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x0aopen-flags\x11\
-\x05flags\x0d\0\xc4\0\x04\0\x1a[method]descriptor.open-at\x01E\x01j\x01s\x01\x1c\
-\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\x1e[method]descriptor.readlink-at\x01G\
-\x04\0&[method]descriptor.remove-directory-at\x01=\x01@\x04\x04self#\x08old-path\
-s\x0enew-descriptor#\x08new-paths\0+\x04\0\x1c[method]descriptor.rename-at\x01H\x01\
-@\x03\x04self#\x08old-paths\x08new-paths\0+\x04\0\x1d[method]descriptor.symlink-\
-at\x01I\x04\0![method]descriptor.unlink-file-at\x01=\x01@\x02\x04self#\x05other#\
-\0\x7f\x04\0![method]descriptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\
-\x04self#\0\xcb\0\x04\0\x20[method]descriptor.metadata-hash\x01L\x01@\x03\x04sel\
-f#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01\
-M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[m\
-ethod]directory-entry-stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\
-\x03err\xd2\0\0\xd3\0\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesyst\
-em/types@0.2.0\x05R\x01B\x07\x02\x03\x02\x01\x18\x04\0\x0adescriptor\x03\0\0\x01\
-i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\
-\x1ewasi:filesystem/preopens@0.2.0\x05S\x01B\xc0\x01\x02\x03\x02\x01\x1a\x04\0\x08\
-duration\x03\0\0\x02\x03\x02\x01\x09\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\
-\x01\x07\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x04\x04\0\x08io-error\x03\
-\0\x06\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04he\
-ad\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05tra\
-ce\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\
-\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05\
-rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08\
-alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01\
-ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\
-\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destinati\
-on-not-found\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\
-\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-termin\
-ated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-\
-write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15T\
-LS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\
-\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHT\
-TP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-UR\
-I-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-hea\
-der-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-t\
-railer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-secti\
-on-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-s\
-ize\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-tra\
-iler-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-\
-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\
-\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0ei\
-nternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\
-\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\
-\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\
-\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10incoming-reques\
-t\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\
-\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incomi\
-ng-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\
-\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18futu\
-re-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructor]fields\x012\x01\
-o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\x18[static]fiel\
-ds.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\0\x12[method\
-]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\
-\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\0\x12[method\
-]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]fields.delete\
-\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]fields.append\x01\
->\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\x01\x04self7\01\
-\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f\
-[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]\
-incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\
-\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming-request.autho\
-rity\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]incoming-request\
-.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[me\
-thod]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\
-\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04\
-self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\x04self\xcd\
-\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\x02\x04self\
-\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-method\x01S\x01@\
-\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01T\x01\
-@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]outgoing-reques\
-t.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgo\
-ing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[me\
-thod]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-request.authority\x01\
-T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]outgoing-request\
-.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-req\
-uest.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]request-options\x01\
-[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]request-options.co\
-nnect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\0\x04\0+[metho\
-d]request-options.set-connect-timeout\x01_\x04\0*[method]request-options.first-b\
-yte-timeout\x01^\x04\0.[method]request-options.set-first-byte-timeout\x01_\x04\0\
--[method]request-options.between-bytes-timeout\x01^\x04\01[method]request-option\
-s.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05\
-param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outparam.set\x01c\x01\
-h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.status\x01e\x01@\
-\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.headers\x01f\x01@\x01\
-\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01g\x01h,\x01i\x03\
-\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[method]incoming-body.\
-stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[static]incoming-body.\
-finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0![method]future-t\
-railers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01\
-k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-trailers.get\x01v\
-\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoing-response\x01w\x01\
-h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response.status-code\x01y\x01\
-@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]outgoing-response.set-\
-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![method]outgoing-response.\
-headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[method]outgoing-response.b\
-ody\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b\
-[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\x04this\xce\0\x08\
-trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\x01\x82\x01\x01h0\
-\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incoming-response.subscri\
-be\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\0\x01k\x87\x01\x01\
-@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming-response.get\x01\x89\
-\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\0\x0fhttp-error-cod\
-e\x01\x8c\x01\x04\0\x15wasi:http/types@0.2.0\x05T\x01B\x0f\x02\x03\x02\x01\x1c\x04\
-\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x1d\x04\0\x0frequest-options\x03\0\
-\x02\x02\x03\x02\x01\x1e\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\
-\x01\x1f\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\
-\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\
-\x04\0\x20wasi:http/outgoing-handler@0.2.0\x05U\x01B\x04\x01m\x06\x05trace\x05de\
-bug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05leve\
-l\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x04\0\x14wasi:logging/l\
-ogging\x05V\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-byt\
-es\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x04\0\x1awasi:rand\
-om/insecure@0.2.0\x05W\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\
-\x01\x04\0\x1fwasi:random/insecure-seed@0.2.0\x05X\x01B\x05\x01p}\x01@\x01\x03le\
-nw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\
-\x04\0\x18wasi:random/random@0.2.0\x05Y\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\
-\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memo\
-ry\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinval\
-id-state\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote\
--unreachable\x12connection-refused\x10connection-reset\x12connection-aborted\x12\
-datagram-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermane\
-nt-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\
-\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01\
-o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\
-\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13\
-ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08\
-scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04i\
-pv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x04\0\x1awasi:sockets/network\
-@0.2.0\x05Z\x01B\x05\x02\x03\x02\x01&\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\
-\x02\x04\0\x10instance-network\x01\x03\x04\0#wasi:sockets/instance-network@0.2.0\
-\x05[\x01B\x16\x02\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\
-\0\x07network\x03\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
-\x01)\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\
-\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]reso\
-lve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\
-\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\
-\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\
-\x12\x04\0!wasi:sockets/ip-name-lookup@0.2.0\x05\\\x01BT\x02\x03\x02\x01\x09\x04\
-\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0doutput-stream\x03\0\x02\x02\
-\x03\x02\x01\x05\x04\0\x08pollable\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x08durati\
-on\x03\0\x06\x02\x03\x02\x01&\x04\0\x07network\x03\0\x08\x02\x03\x02\x01(\x04\0\x0a\
-error-code\x03\0\x0a\x02\x03\x02\x01+\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\
-\x02\x01,\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04bo\
-th\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\
-\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\
-\0\x1d[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e\
-[method]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0ere\
-mote-address\x0d\0\x15\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\
-\x01i\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0\
-![method]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-lis\
-ten\x01\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\
-\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-so\
-cket.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]\
-tcp-socket.local-address\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\
-\x04self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04sel\
-f\x13\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05\
-valuew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\
-\x0b\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01\
-@\x02\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-ena\
-bled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.\
-keep-alive-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]\
-tcp-socket.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-int\
-erval\x01+\x04\0*[method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\
-\x01@\x01\x04self\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\
-\x04self\x13\x05valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01\
-j\x01}\x01\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x01\
-1\x01@\x02\x04self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\
-\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive\
--buffer-size\x014\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[m\
-ethod]tcp-socket.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-\
-size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\
-\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socke\
-t.shutdown\x017\x04\0\x16wasi:sockets/tcp@0.2.0\x05]\x01B\x0c\x02\x03\x02\x01&\x04\
-\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\
-\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01.\x04\0\x0atcp-socket\x03\
-\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11\
-create-tcp-socket\x01\x0a\x04\0$wasi:sockets/tcp-create-socket@0.2.0\x05^\x01BD\x02\
-\x03\x02\x01\x05\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01&\x04\0\x07network\x03\
-\0\x02\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01+\x04\0\x11\
-ip-socket-address\x03\0\x06\x02\x03\x02\x01,\x04\0\x11ip-address-family\x03\0\x08\
-\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagram\x03\
-\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoing-dat\
-agram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-stream\x03\
-\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\x05\x01\
-@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\0\x1d[method]udp\
--socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]udp-socke\
-t.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\x1a\x01\x05\x01\
-@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]udp-socket.stream\
-\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20[method]udp-so\
-cket.local-address\x01\x1e\x04\0![method]udp-socket.remote-address\x01\x1e\x01@\x01\
-\x04self\x13\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\x01j\x01}\x01\
-\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-hop-limit\x01!\x01\
-@\x02\x04self\x13\x05value}\0\x15\x04\0([method]udp-socket.set-unicast-hop-limit\
-\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]udp-socket.receiv\
-e-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]udp-socket\
-.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.send-buffer-size\x01$\x04\
-\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\x04self\x13\0&\
-\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01j\x01)\x01\x05\x01\
-@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incoming-datagram-stream.receive\
-\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-datagram-stream.subscribe\x01,\
-\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stream.check-send\
-\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]outgoing-datagra\
-m-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-datagram-stream.s\
-ubscribe\x011\x04\0\x16wasi:sockets/udp@0.2.0\x05_\x01B\x0c\x02\x03\x02\x01&\x04\
-\0\x07network\x03\0\0\x02\x03\x02\x01(\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\
-\x01,\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x011\x04\0\x0audp-socket\x03\
-\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11\
-create-udp-socket\x01\x0a\x04\0$wasi:sockets/udp-create-socket@0.2.0\x05`\x04\0\x17\
-golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cdurable-wasi\x03\0\0\0G\x09produc\
-ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060\
-.36.0";
+\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesystem/types@0.2.0\x05a\x01\
+B\x07\x02\x03\x02\x01$\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\
+\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\x1ewasi:filesystem/preopens\
+@0.2.0\x05b\x01B\xc0\x01\x02\x03\x02\x01&\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+\x05\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\
+\0\x04\x02\x03\x02\x01\x02\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x03\x04\0\
+\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06\
+delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\
+\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\
+\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11\
+DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\
+\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0af\
+ield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-\
+timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-u\
+navailable\0\0\x19destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\
+\x12connection-refused\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\
+\x17connection-read-timeout\0\0\x18connection-write-timeout\0\0\x18connection-li\
+mit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-al\
+ert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-require\
+d\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18\
+HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-he\
+ader-section-size\x01\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-t\
+railer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-res\
+ponse-incomplete\0\0!HTTP-response-header-section-size\x01\x15\0\x19HTTP-respons\
+e-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trai\
+ler-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-respo\
+nse-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-\
+response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dlo\
+op-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0a\
+error-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutabl\
+e\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\
+\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\
+\0\x08trailers\x03\0\"\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing-reque\
+st\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11response-outparam\x03\x01\x01\
+{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incoming-response\x03\x01\x04\0\x0dincomi\
+ng-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-response\x03\x01\
+\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\x01i\"\
+\x01@\0\01\x04\0\x13[constructor]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\
+\x01@\x01\x07entries4\05\x04\0\x18[static]fields.from-list\x016\x01h\"\x01p!\x01\
+@\x02\x04self7\x04name\x1f\08\x04\0\x12[method]fields.get\x019\x01@\x02\x04self7\
+\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04s\
+elf7\x04name\x1f\x05value8\0;\x04\0\x12[method]fields.set\x01<\x01@\x02\x04self7\
+\x04name\x1f\0;\x04\0\x15[method]fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\
+\x05value!\0;\x04\0\x15[method]fields.append\x01>\x01@\x01\x04self7\04\x04\0\x16\
+[method]fields.entries\x01?\x01@\x01\x04self7\01\x04\0\x14[method]fields.clone\x01\
+@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f[method]incoming-request.method\x01\
+B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]incoming-request.path-with-query\x01\
+C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\0\x1f[method]incoming-request.sche\
+me\x01E\x04\0\"[method]incoming-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\
+\0\0\xc6\0\x04\0\x20[method]incoming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\
+\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[method]incoming-request.consume\x01J\x01\
+i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\
+\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]ou\
+tgoing-request.body\x01P\x01@\x01\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-\
+request.method\x01Q\x01j\0\0\x01@\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#\
+[method]outgoing-request.set-method\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([met\
+hod]outgoing-request.path-with-query\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-qu\
+ery\x0e\0\xd2\0\x04\0,[method]outgoing-request.set-path-with-query\x01U\x01@\x01\
+\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgoing-request.scheme\x01V\x01@\x02\x04\
+self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[method]outgoing-request.set-scheme\x01\
+W\x04\0\"[method]outgoing-request.authority\x01T\x01@\x02\x04self\xcd\0\x09autho\
+rity\x0e\0\xd2\0\x04\0&[method]outgoing-request.set-authority\x01X\x01@\x01\x04s\
+elf\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\
+\0\x04\0\x1c[constructor]request-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\
+\0\0\xdd\0\x04\0'[method]request-options.connect-timeout\x01^\x01@\x02\x04self\xdc\
+\0\x08duration\xdd\0\0\xd2\0\x04\0+[method]request-options.set-connect-timeout\x01\
+_\x04\0*[method]request-options.first-byte-timeout\x01^\x04\0.[method]request-op\
+tions.set-first-byte-timeout\x01_\x04\0-[method]request-options.between-bytes-ti\
+meout\x01^\x04\01[method]request-options.set-between-bytes-timeout\x01_\x01i(\x01\
+i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d\
+[static]response-outparam.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[met\
+hod]incoming-response.status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]i\
+ncoming-response.headers\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incom\
+ing-response.consume\x01g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\
+\0\xea\0\x04\0\x1c[method]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\
+\0\xec\0\x04\0\x1c[static]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04s\
+elf\xee\0\0\xef\0\x04\0![method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01\
+j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\
+\0\x1b[method]future-trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e\
+[constructor]outgoing-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[metho\
+d]outgoing-response.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\
+\0\x04\0)[method]outgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\
+\xc6\0\x04\0![method]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\
+\0\x04\0\x1e[method]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01\
+@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01\
+j\0\x01\x1b\x01@\x02\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]\
+outgoing-body.finish\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[m\
+ethod]future-incoming-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\
+\x01j\x01\x86\x01\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[metho\
+d]future-incoming-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\
+\x01\0\x8b\x01\x04\0\x0fhttp-error-code\x01\x8c\x01\x04\0\x15wasi:http/types@0.2\
+.0\x05c\x01B\x0f\x02\x03\x02\x01(\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\
+)\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01*\x04\0\x18future-incoming-r\
+esponse\x03\0\x04\x02\x03\x02\x01+\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\
+\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\
+\x0c\x04\0\x06handle\x01\x0d\x04\0\x20wasi:http/outgoing-handler@0.2.0\x05d\x01B\
+\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x05le\
+vel\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\
+\x02\x04\0\x14wasi:logging/logging\x05e\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\
+\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\
+\x01\x02\x04\0\x1awasi:random/insecure@0.2.0\x05f\x01B\x03\x01o\x02ww\x01@\0\0\0\
+\x04\0\x0dinsecure-seed\x01\x01\x04\0\x1fwasi:random/insecure-seed@0.2.0\x05g\x01\
+B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\
+\0\x0eget-random-u64\x01\x02\x04\0\x18wasi:random/random@0.2.0\x05h\x01B\x11\x04\
+\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0dnot-supported\x10i\
+nvalid-argument\x0dout-of-memory\x07timeout\x14concurrency-conflict\x0fnot-in-pr\
+ogress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14address-not-bindab\
+le\x0eaddress-in-use\x12remote-unreachable\x12connection-refused\x10connection-r\
+eset\x12connection-aborted\x12datagram-too-large\x11name-unresolvable\x1atempora\
+ry-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01\
+m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0c\
+ipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\
+\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04p\
+ort{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09\
+flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01\
+q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x04\
+\0\x1awasi:sockets/network@0.2.0\x05i\x01B\x05\x02\x03\x02\x012\x04\0\x07network\
+\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x04\0#wasi:sock\
+ets/instance-network@0.2.0\x05j\x01B\x16\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\
+\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\x014\x04\0\x0aerror\
+-code\x03\0\x04\x02\x03\x02\x015\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-\
+address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\
+\0\x0b\x04\03[method]resolve-address-stream.resolve-next-address\x01\x0c\x01i\x01\
+\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stream.subscribe\x01\x0e\
+\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\
+\0\x11resolve-addresses\x01\x12\x04\0!wasi:sockets/ip-name-lookup@0.2.0\x05k\x01\
+BT\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0d\
+output-stream\x03\0\x02\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x04\x02\x03\x02\
+\x01&\x04\0\x08duration\x03\0\x06\x02\x03\x02\x012\x04\0\x07network\x03\0\x08\x02\
+\x03\x02\x014\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x017\x04\0\x11ip-socket-\
+address\x03\0\x0c\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\
+\x07receive\x04send\x04both\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\
+\x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0d\
+local-address\x0d\0\x15\x04\0\x1d[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04\
+self\x13\0\x15\x04\0\x1e[method]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\
+\x07network\x14\x0eremote-address\x0d\0\x15\x04\0\x20[method]tcp-socket.start-co\
+nnect\x01\x18\x01i\x01\x01i\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04\
+self\x13\0\x1c\x04\0![method]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]\
+tcp-socket.start-listen\x01\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\
+\x01i\x12\x01o\x03\x1e\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\
+\0\x19[method]tcp-socket.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\
+\"\x04\0\x20[method]tcp-socket.local-address\x01#\x04\0![method]tcp-socket.remot\
+e-address\x01#\x01@\x01\x04self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listeni\
+ng\x01$\x01@\x01\x04self\x13\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01\
+@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-si\
+ze\x01&\x01j\x01\x7f\x01\x0b\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.ke\
+ep-alive-enabled\x01(\x01@\x02\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-\
+socket.set-keep-alive-enabled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\
+\0'[method]tcp-socket.keep-alive-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\
+\0\x15\x04\0+[method]tcp-socket.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-\
+socket.keep-alive-interval\x01+\x04\0*[method]tcp-socket.set-keep-alive-interval\
+\x01,\x01j\x01y\x01\x0b\x01@\x01\x04self\x13\0-\x04\0#[method]tcp-socket.keep-al\
+ive-count\x01.\x01@\x02\x04self\x13\x05valuey\0\x15\x04\0'[method]tcp-socket.set\
+-keep-alive-count\x01/\x01j\x01}\x01\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[metho\
+d]tcp-socket.hop-limit\x011\x01@\x02\x04self\x13\x05value}\0\x15\x04\0\x20[metho\
+d]tcp-socket.set-hop-limit\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&\
+[method]tcp-socket.receive-buffer-size\x014\x04\0*[method]tcp-socket.set-receive\
+-buffer-size\x01&\x04\0#[method]tcp-socket.send-buffer-size\x014\x04\0'[method]t\
+cp-socket.set-send-buffer-size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[m\
+ethod]tcp-socket.subscribe\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\0\x15\x04\
+\0\x1b[method]tcp-socket.shutdown\x017\x04\0\x16wasi:sockets/tcp@0.2.0\x05l\x01B\
+\x0c\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-c\
+ode\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01\
+:\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddres\
+s-family\x05\0\x09\x04\0\x11create-tcp-socket\x01\x0a\x04\0$wasi:sockets/tcp-cre\
+ate-socket@0.2.0\x05m\x01BD\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x02\x03\
+\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x04\
+\x02\x03\x02\x017\x04\0\x11ip-socket-address\x03\0\x06\x02\x03\x02\x018\x04\0\x11\
+ip-address-family\x03\0\x08\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\
+\0\x11incoming-datagram\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-addres\
+s\x0d\x04\0\x11outgoing-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18\
+incoming-datagram-stream\x03\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\
+\x01h\x03\x01j\0\x01\x05\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\
+\0\x15\x04\0\x1d[method]udp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\
+\x04\0\x1e[method]udp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\
+\x01j\x01\x1a\x01\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19\
+[method]udp-socket.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\
+\x04\0\x20[method]udp-socket.local-address\x01\x1e\x04\0![method]udp-socket.remo\
+te-address\x01\x1e\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-socket.address-f\
+amily\x01\x1f\x01j\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-soc\
+ket.unicast-hop-limit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\0([method]ud\
+p-socket.set-unicast-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\
+\0&[method]udp-socket.receive-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\
+\x04\0*[method]udp-socket.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.\
+send-buffer-size\x01$\x04\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\
+\x01@\x01\x04self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01\
+p\x0c\x01j\x01)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incom\
+ing-datagram-stream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-dat\
+agram-stream.subscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing\
+-datagram-stream.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\
+\0%[method]outgoing-datagram-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method\
+]outgoing-datagram-stream.subscribe\x011\x04\0\x16wasi:sockets/udp@0.2.0\x05n\x01\
+B\x0c\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-\
+code\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\
+\x01=\x04\0\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0ead\
+dress-family\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x04\0$wasi:sockets/udp\
+-create-socket@0.2.0\x05o\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0c\
+durable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
+0.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

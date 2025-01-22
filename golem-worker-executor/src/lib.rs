@@ -227,13 +227,13 @@ fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
     &mut ctx.durable_ctx
 }
 
-fn get_wastime_impl<'a>(ctx: &'a mut Context) -> WasiImpl<DurableWorkerCtxWasiView<'a, Context>> {
+fn get_wastime_impl(ctx: &mut Context) -> WasiImpl<DurableWorkerCtxWasiView<'_, Context>> {
     ctx.durable_ctx.as_wasi_view()
 }
 
-fn get_wasmtime_http_impl<'a>(
-    ctx: &'a mut Context,
-) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'a, Context>> {
+fn get_wasmtime_http_impl(
+    ctx: &mut Context,
+) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, Context>> {
     ctx.durable_ctx.as_wasi_http_view()
 }
 

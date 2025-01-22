@@ -40,8 +40,8 @@ impl crate::bindings::exports::wasi::http::outgoing_handler::Guest for crate::Co
         let begin_index = begin_durable_function(DurableFunctionType::WriteRemoteBatched(None));
 
         let mut wrapped_request = request.into_inner::<WrappedOutgoingRequest>();
-        let authority = wrapped_request.authority().unwrap_or(String::new());
-        let path_with_query = wrapped_request.path_with_query().unwrap_or(String::new());
+        let authority = wrapped_request.authority().unwrap_or_default();
+        let path_with_query = wrapped_request.path_with_query().unwrap_or_default();
         let uri = format!("{}{}", authority, path_with_query);
         let method = wrapped_request.method().into();
         let headers: HashMap<String, String> = wrapped_request

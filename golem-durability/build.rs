@@ -25,13 +25,13 @@ fn main() {
 
     if profile == "release" {
         Command::new("cargo")
-            .args(&["component", "build", "--release"])
+            .args(["component", "build", "--release"])
             .current_dir(durable_wasi_path.clone())
             .status()
             .unwrap();
     } else {
         Command::new("cargo")
-            .args(&["component", "build"])
+            .args(["component", "build"])
             .current_dir(durable_wasi_path.clone())
             .status()
             .unwrap();
@@ -53,5 +53,8 @@ fn main() {
 
     std::fs::copy(source_path, target_path.clone()).unwrap();
 
-    println!("cargo::rustc-env=DURABLE_WASI_COMPONENT={}", target_path.to_str().unwrap());
+    println!(
+        "cargo::rustc-env=DURABLE_WASI_COMPONENT={}",
+        target_path.to_str().unwrap()
+    );
 }

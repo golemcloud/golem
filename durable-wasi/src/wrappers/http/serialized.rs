@@ -411,19 +411,10 @@ mod tests {
     use crate::bindings::wasi::http::types::{
         DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
     };
-    use crate::wrappers::http::serialized::{SerializableErrorCode, SerializedHttpVersion};
+    use crate::wrappers::http::serialized::SerializableErrorCode;
     use proptest::option::of;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
-    // fn version_strat() -> impl Strategy<Value = Version> {
-    //     prop_oneof![
-    //         Just(Version::HTTP_09),
-    //         Just(Version::HTTP_10),
-    //         Just(Version::HTTP_11),
-    //         Just(Version::HTTP_2),
-    //         Just(Version::HTTP_3),
-    //     ]
-    // }
 
     fn field_size_payload_strat() -> impl Strategy<Value = FieldSizePayload> {
         (of(".*"), of(any::<u32>())).prop_map(|(field_name, field_size)| FieldSizePayload {

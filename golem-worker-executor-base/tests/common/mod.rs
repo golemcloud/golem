@@ -1033,14 +1033,14 @@ fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerC
     &mut ctx.durable_ctx
 }
 
-fn get_wastime_impl<'a>(
-    ctx: &'a mut TestWorkerCtx,
-) -> WasiImpl<DurableWorkerCtxWasiView<'a, TestWorkerCtx>> {
+fn get_wastime_impl(
+    ctx: &mut TestWorkerCtx,
+) -> WasiImpl<DurableWorkerCtxWasiView<'_, TestWorkerCtx>> {
     ctx.durable_ctx.as_wasi_view()
 }
 
-fn get_wasmtime_http_impl<'a>(
-    ctx: &'a mut TestWorkerCtx,
-) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'a, TestWorkerCtx>> {
+fn get_wasmtime_http_impl(
+    ctx: &mut TestWorkerCtx,
+) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, TestWorkerCtx>> {
     ctx.durable_ctx.as_wasi_http_view()
 }

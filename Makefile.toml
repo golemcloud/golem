@@ -65,11 +65,13 @@ script_runner = "@duckscript"
 script = """
 rm -r durable-wasi/wit/deps
 mkdir durable-wasi/wit/deps
+cp wit/deps/blobstore durable-wasi/wit/deps
 cp wit/deps/cli durable-wasi/wit/deps
 cp wit/deps/clocks durable-wasi/wit/deps
 cp wit/deps/filesystem durable-wasi/wit/deps
 cp wit/deps/http durable-wasi/wit/deps
 cp wit/deps/io durable-wasi/wit/deps
+cp wit/deps/keyvalue durable-wasi/wit/deps
 cp wit/deps/logging durable-wasi/wit/deps
 cp wit/deps/random durable-wasi/wit/deps
 cp wit/deps/sockets durable-wasi/wit/deps
@@ -181,13 +183,20 @@ args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
-dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+dependencies = ["wit", "fix-clippy", "fix-rustfmt", "fix-rustfmt-durable-wasi"]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
 install_crate = "rustfmt"
 command = "cargo"
 args = ["fmt", "--all"]
+
+[tasks.fix-rustfmt-durable-wasi]
+description = "Runs rustfmt checks and applies fixes for durable-wasi"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all"]
+cwd = "durable-wasi"
 
 [tasks.fix-clippy]
 description = "Runs clippy checks and applies fixes"
@@ -202,7 +211,6 @@ args = [
     "--no-deps",
     "-Dwarnings",
 ]
-
 ## ** TEST **
 
 [tasks.test]

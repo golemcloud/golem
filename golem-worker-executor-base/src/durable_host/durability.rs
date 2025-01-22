@@ -107,18 +107,12 @@ pub trait DurabilityHost {
 impl From<durability::DurableFunctionType> for DurableFunctionType {
     fn from(value: durability::DurableFunctionType) -> Self {
         match value {
-            durability::DurableFunctionType::WriteRemote => {
-                DurableFunctionType::WriteRemote
-            }
-            durability::DurableFunctionType::WriteLocal => {
-                DurableFunctionType::WriteLocal
-            }
+            durability::DurableFunctionType::WriteRemote => DurableFunctionType::WriteRemote,
+            durability::DurableFunctionType::WriteLocal => DurableFunctionType::WriteLocal,
             durability::DurableFunctionType::WriteRemoteBatched(oplog_index) => {
                 DurableFunctionType::WriteRemoteBatched(oplog_index.map(OplogIndex::from_u64))
             }
-            durability::DurableFunctionType::ReadRemote => {
-                DurableFunctionType::ReadRemote
-            }
+            durability::DurableFunctionType::ReadRemote => DurableFunctionType::ReadRemote,
             durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
         }
     }
@@ -127,20 +121,14 @@ impl From<durability::DurableFunctionType> for DurableFunctionType {
 impl From<DurableFunctionType> for durability::DurableFunctionType {
     fn from(value: DurableFunctionType) -> Self {
         match value {
-            DurableFunctionType::WriteRemote => {
-                durability::DurableFunctionType::WriteRemote
-            }
-            DurableFunctionType::WriteLocal => {
-                durability::DurableFunctionType::WriteLocal
-            }
+            DurableFunctionType::WriteRemote => durability::DurableFunctionType::WriteRemote,
+            DurableFunctionType::WriteLocal => durability::DurableFunctionType::WriteLocal,
             DurableFunctionType::WriteRemoteBatched(oplog_index) => {
                 durability::DurableFunctionType::WriteRemoteBatched(
                     oplog_index.map(|idx| idx.into()),
                 )
             }
-            DurableFunctionType::ReadRemote => {
-                durability::DurableFunctionType::ReadRemote
-            }
+            DurableFunctionType::ReadRemote => durability::DurableFunctionType::ReadRemote,
             DurableFunctionType::ReadLocal => durability::DurableFunctionType::ReadLocal,
         }
     }
@@ -155,9 +143,7 @@ impl From<OplogEntryVersion> for durability::OplogEntryVersion {
     }
 }
 
-impl From<PersistedDurableFunctionInvocation>
-    for durability::PersistedDurableFunctionInvocation
-{
+impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFunctionInvocation {
     fn from(value: PersistedDurableFunctionInvocation) -> Self {
         durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
@@ -209,9 +195,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         Ok(durability::DurableExecutionState {
             is_live: state.is_live,
             persistence_level: match state.persistence_level {
-                PersistenceLevel::PersistNothing => {
-                    durability::PersistenceLevel::PersistNothing
-                }
+                PersistenceLevel::PersistNothing => durability::PersistenceLevel::PersistNothing,
                 PersistenceLevel::PersistRemoteSideEffects => {
                     durability::PersistenceLevel::PersistRemoteSideEffects
                 }

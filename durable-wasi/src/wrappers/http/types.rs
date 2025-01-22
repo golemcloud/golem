@@ -132,8 +132,8 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingRequest for Wrapp
     fn method(&self) -> Method {
         observe_function_call("http::types::incoming_request", "method");
         let method = self.request.method();
-        let method = unsafe { transmute(method) };
-        method
+
+        unsafe { transmute(method) }
     }
 
     fn path_with_query(&self) -> Option<String> {
@@ -144,8 +144,8 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingRequest for Wrapp
     fn scheme(&self) -> Option<Scheme> {
         observe_function_call("http::types::incoming_request", "scheme");
         let scheme = self.request.scheme();
-        let scheme = unsafe { transmute(scheme) };
-        scheme
+
+        unsafe { transmute(scheme) }
     }
 
     fn authority(&self) -> Option<String> {
@@ -202,14 +202,14 @@ impl crate::bindings::exports::wasi::http::types::GuestOutgoingRequest for Wrapp
     fn method(&self) -> Method {
         observe_function_call("http::types::outgoing_request", "method");
         let method = self.request.as_ref().unwrap().method();
-        let method = unsafe { transmute(method) };
-        method
+
+        unsafe { transmute(method) }
     }
 
     fn set_method(&self, method: Method) -> Result<(), ()> {
         observe_function_call("http::types::outgoing_request", "set_method");
         let method = unsafe { transmute(method) };
-        Ok(self.request.as_ref().unwrap().set_method(&method)?)
+        self.request.as_ref().unwrap().set_method(&method)
     }
 
     fn path_with_query(&self) -> Option<String> {
@@ -219,26 +219,25 @@ impl crate::bindings::exports::wasi::http::types::GuestOutgoingRequest for Wrapp
 
     fn set_path_with_query(&self, path_with_query: Option<String>) -> Result<(), ()> {
         observe_function_call("http::types::outgoing_request", "set_path_with_query");
-        let path_with_query = path_with_query.as_ref().map(|s| s.as_str());
-        Ok(self
-            .request
+        let path_with_query = path_with_query.as_deref();
+        self.request
             .as_ref()
             .unwrap()
-            .set_path_with_query(path_with_query)?)
+            .set_path_with_query(path_with_query)
     }
 
     fn scheme(&self) -> Option<Scheme> {
         observe_function_call("http::types::outgoing_request", "scheme");
         let scheme = self.request.as_ref().unwrap().scheme();
-        let scheme = unsafe { transmute(scheme) };
-        scheme
+
+        unsafe { transmute(scheme) }
     }
 
     fn set_scheme(&self, scheme: Option<Scheme>) -> Result<(), ()> {
         observe_function_call("http::types::outgoing_request", "set_scheme");
         let scheme: Option<crate::bindings::wasi::http::types::Scheme> =
             unsafe { transmute(scheme) };
-        Ok(self.request.as_ref().unwrap().set_scheme(scheme.as_ref())?)
+        self.request.as_ref().unwrap().set_scheme(scheme.as_ref())
     }
 
     fn authority(&self) -> Option<String> {
@@ -248,8 +247,8 @@ impl crate::bindings::exports::wasi::http::types::GuestOutgoingRequest for Wrapp
 
     fn set_authority(&self, authority: Option<String>) -> Result<(), ()> {
         observe_function_call("http::types::outgoing_request", "set_authority");
-        let authority = authority.as_ref().map(|s| s.as_str());
-        Ok(self.request.as_ref().unwrap().set_authority(authority)?)
+        let authority = authority.as_deref();
+        self.request.as_ref().unwrap().set_authority(authority)
     }
 
     fn headers(&self) -> Headers {
@@ -291,11 +290,7 @@ impl crate::bindings::exports::wasi::http::types::GuestRequestOptions for Wrappe
 
     fn set_connect_timeout(&self, duration: Option<Duration>) -> Result<(), ()> {
         observe_function_call("http::types::request_options", "set_connect_timeout_ms");
-        Ok(self
-            .options
-            .as_ref()
-            .unwrap()
-            .set_connect_timeout(duration)?)
+        self.options.as_ref().unwrap().set_connect_timeout(duration)
     }
 
     fn first_byte_timeout(&self) -> Option<Duration> {
@@ -305,11 +300,10 @@ impl crate::bindings::exports::wasi::http::types::GuestRequestOptions for Wrappe
 
     fn set_first_byte_timeout(&self, duration: Option<Duration>) -> Result<(), ()> {
         observe_function_call("http::types::request_options", "set_first_byte_timeout_ms");
-        Ok(self
-            .options
+        self.options
             .as_ref()
             .unwrap()
-            .set_first_byte_timeout(duration)?)
+            .set_first_byte_timeout(duration)
     }
 
     fn between_bytes_timeout(&self) -> Option<Duration> {
@@ -322,11 +316,10 @@ impl crate::bindings::exports::wasi::http::types::GuestRequestOptions for Wrappe
             "http::types::request_options",
             "set_between_bytes_timeout_ms",
         );
-        Ok(self
-            .options
+        self.options
             .as_ref()
             .unwrap()
-            .set_between_bytes_timeout(duration)?)
+            .set_between_bytes_timeout(duration)
     }
 }
 
@@ -767,7 +760,7 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureTrailers for Wrappe
                                 Some(Err(_)) => (Some(Err(())), Some(Err(()))),
                                 None => (None, None),
                             };
-                            let _ = durability.persist_serializable(request, Ok(to_serialize));
+                            durability.persist_serializable(request, Ok(to_serialize));
                             result
                         }
                         WrappedFutureTrailers::Replayed { .. } => {
@@ -840,11 +833,7 @@ impl crate::bindings::exports::wasi::http::types::GuestOutgoingResponse
 
     fn set_status_code(&self, status_code: StatusCode) -> Result<(), ()> {
         observe_function_call("http::types::outgoing_response", "set_status_code");
-        Ok(self
-            .response
-            .as_ref()
-            .unwrap()
-            .set_status_code(status_code)?)
+        self.response.as_ref().unwrap().set_status_code(status_code)
     }
 
     fn headers(&self) -> Headers {
@@ -1078,8 +1067,8 @@ impl crate::bindings::exports::wasi::http::types::Guest for crate::Component {
         match err {
             WrappedError::Proxied { error } => {
                 let error_code = http_error_code(error);
-                let error_code = unsafe { transmute(error_code) };
-                error_code
+
+                unsafe { transmute(error_code) }
             }
             WrappedError::Message { .. } => None,
         }

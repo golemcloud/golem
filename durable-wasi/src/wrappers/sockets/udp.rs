@@ -74,8 +74,8 @@ impl crate::bindings::exports::wasi::sockets::udp::GuestUdpSocket for WrappedUdp
     fn address_family(&self) -> IpAddressFamily {
         observe_function_call("sockets::udp", "address_family");
         let address_family = self.udp_socket.address_family();
-        let address_family = unsafe { transmute(address_family) };
-        address_family
+
+        unsafe { transmute(address_family) }
     }
 
     fn unicast_hop_limit(&self) -> Result<u8, ErrorCode> {
