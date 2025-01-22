@@ -11,11 +11,11 @@ name = "tests"
 harness = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-service-base = { path = "../golem-service-base" }
-golem-rib = { path = "../golem-rib" }
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
