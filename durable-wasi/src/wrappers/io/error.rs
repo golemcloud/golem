@@ -14,14 +14,34 @@
 
 use crate::bindings::golem::durability::durability::observe_function_call;
 
-pub struct WrappedError {
-    pub error: crate::bindings::wasi::io::error::Error,
+pub enum WrappedError {
+    Proxied {
+        error: crate::bindings::wasi::io::error::Error,
+    },
+    Message {
+        message: String,
+    },
+}
+
+impl WrappedError {
+    pub fn proxied(error: crate::bindings::wasi::io::error::Error) -> Self {
+        WrappedError::Proxied { error }
+    }
+
+    pub fn message(message: &str) -> Self {
+        WrappedError::Message {
+            message: message.to_string(),
+        }
+    }
 }
 
 impl crate::bindings::exports::wasi::io::error::GuestError for WrappedError {
     fn to_debug_string(&self) -> String {
         observe_function_call("io::error", "to_debug_string");
-        self.error.to_debug_string()
+        match self {
+            WrappedError::Proxied { error } => error.to_debug_string(),
+            WrappedError::Message { message } => message.clone(),
+        }
     }
 }
 

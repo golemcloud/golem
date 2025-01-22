@@ -30,7 +30,8 @@ use golem_worker_executor_base::services::golem_config::{
 };
 
 use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, DurableWorkerCtxWasiView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, DurableWorkerCtxWasiHttpView, DurableWorkerCtxWasiView,
+    PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -100,7 +101,7 @@ use tracing::{debug, info};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::{WasiImpl, WasiView};
-use wasmtime_wasi_http::WasiHttpView;
+use wasmtime_wasi_http::{WasiHttpImpl, WasiHttpView};
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
@@ -1010,7 +1011,12 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
-        let mut linker = create_linker(engine, get_durable_ctx, get_wastime_impl)?;
+        let mut linker = create_linker(
+            engine,
+            get_durable_ctx,
+            get_wastime_impl,
+            get_wasmtime_http_impl,
+        )?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
@@ -1031,4 +1037,10 @@ fn get_wastime_impl<'a>(
     ctx: &'a mut TestWorkerCtx,
 ) -> WasiImpl<DurableWorkerCtxWasiView<'a, TestWorkerCtx>> {
     ctx.durable_ctx.as_wasi_view()
+}
+
+fn get_wasmtime_http_impl<'a>(
+    ctx: &'a mut TestWorkerCtx,
+) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'a, TestWorkerCtx>> {
+    ctx.durable_ctx.as_wasi_http_view()
 }

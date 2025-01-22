@@ -15,16 +15,7 @@
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident, $proto_type:path) => {
-        #[derive(
-            Clone,
-            Debug,
-            PartialOrd,
-            Ord,
-            derive_more::FromStr,
-            Eq,
-            Hash,
-            PartialEq,
-        )]
+        #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
         #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
         #[cfg_attr(feature = "model", serde(transparent))]
         pub struct $name(pub Uuid);
@@ -36,7 +27,10 @@ macro_rules! newtype_uuid {
         }
 
         impl bincode::Encode for $name {
-            fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+            fn encode<E: bincode::enc::Encoder>(
+                &self,
+                encoder: &mut E,
+            ) -> Result<(), bincode::error::EncodeError> {
                 use bincode::enc::write::Writer;
 
                 encoder.writer().write(self.0.as_bytes())
@@ -44,7 +38,9 @@ macro_rules! newtype_uuid {
         }
 
         impl bincode::Decode for $name {
-            fn decode<D: bincode::de::Decoder>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+            fn decode<D: bincode::de::Decoder>(
+                decoder: &mut D,
+            ) -> Result<Self, bincode::error::DecodeError> {
                 use bincode::de::read::Reader;
 
                 let mut bytes = [0u8; 16];
@@ -54,7 +50,9 @@ macro_rules! newtype_uuid {
         }
 
         impl<'de> bincode::BorrowDecode<'de> for $name {
-            fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+            fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+                decoder: &mut D,
+            ) -> Result<Self, bincode::error::DecodeError> {
                 use bincode::de::read::Reader;
 
                 let mut bytes = [0u8; 16];

@@ -21,9 +21,6 @@ impl crate::bindings::exports::wasi::cli::stdin::Guest for crate::Component {
     fn get_stdin() -> InputStream {
         observe_function_call("cli::stdin", "get_stdin");
         let input_stream = get_stdin();
-        InputStream::new(WrappedInputStream {
-            input_stream,
-            is_incoming_http_body_stream: false,
-        })
+        InputStream::new(WrappedInputStream::proxied(input_stream))
     }
 }

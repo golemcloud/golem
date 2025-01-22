@@ -14,9 +14,13 @@
 
 use bincode::{Decode, Encode};
 
-use std::collections::HashMap;
-use std::str::FromStr;
+use crate::bindings::exports::wasi::http::types::Method;
+use crate::bindings::wasi::http::types::{
+    DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
+};
 use crate::wrappers::SerializableError;
+use std::collections::HashMap;
+use std::mem::transmute;
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub enum SerializedHttpVersion {
@@ -30,38 +34,38 @@ pub enum SerializedHttpVersion {
     /// `HTTP/3.0`
     Http3,
 }
-
-impl TryFrom<Version> for SerializedHttpVersion {
-    type Error = String;
-
-    fn try_from(value: Version) -> Result<Self, Self::Error> {
-        if value == Version::HTTP_09 {
-            Ok(SerializedHttpVersion::Http09)
-        } else if value == Version::HTTP_10 {
-            Ok(SerializedHttpVersion::Http10)
-        } else if value == Version::HTTP_11 {
-            Ok(SerializedHttpVersion::Http11)
-        } else if value == Version::HTTP_2 {
-            Ok(SerializedHttpVersion::Http2)
-        } else if value == Version::HTTP_3 {
-            Ok(SerializedHttpVersion::Http3)
-        } else {
-            Err(format!("Unknown HTTP version: {:?}", value))
-        }
-    }
-}
-
-impl From<SerializedHttpVersion> for Version {
-    fn from(value: SerializedHttpVersion) -> Self {
-        match value {
-            SerializedHttpVersion::Http09 => Version::HTTP_09,
-            SerializedHttpVersion::Http10 => Version::HTTP_10,
-            SerializedHttpVersion::Http11 => Version::HTTP_11,
-            SerializedHttpVersion::Http2 => Version::HTTP_2,
-            SerializedHttpVersion::Http3 => Version::HTTP_3,
-        }
-    }
-}
+//
+// impl TryFrom<Version> for SerializedHttpVersion {
+//     type Error = String;
+//
+//     fn try_from(value: Version) -> Result<Self, Self::Error> {
+//         if value == Version::HTTP_09 {
+//             Ok(SerializedHttpVersion::Http09)
+//         } else if value == Version::HTTP_10 {
+//             Ok(SerializedHttpVersion::Http10)
+//         } else if value == Version::HTTP_11 {
+//             Ok(SerializedHttpVersion::Http11)
+//         } else if value == Version::HTTP_2 {
+//             Ok(SerializedHttpVersion::Http2)
+//         } else if value == Version::HTTP_3 {
+//             Ok(SerializedHttpVersion::Http3)
+//         } else {
+//             Err(format!("Unknown HTTP version: {:?}", value))
+//         }
+//     }
+// }
+//
+// impl From<SerializedHttpVersion> for Version {
+//     fn from(value: SerializedHttpVersion) -> Self {
+//         match value {
+//             SerializedHttpVersion::Http09 => Version::HTTP_09,
+//             SerializedHttpVersion::Http10 => Version::HTTP_10,
+//             SerializedHttpVersion::Http11 => Version::HTTP_11,
+//             SerializedHttpVersion::Http2 => Version::HTTP_2,
+//             SerializedHttpVersion::Http3 => Version::HTTP_3,
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableResponse {
@@ -75,41 +79,6 @@ pub enum SerializableResponse {
 pub struct SerializableResponseHeaders {
     pub status: u16,
     pub headers: HashMap<String, Vec<u8>>,
-}
-
-impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
-    type Error = anyhow::Error;
-
-    fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
-        let mut headers = HashMap::new();
-        for (key, value) in response.headers.iter() {
-            headers.insert(key.as_str().to_string(), value.as_bytes().to_vec());
-        }
-
-        Ok(Self {
-            status: response.status,
-            headers,
-        })
-    }
-}
-
-impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut headers = FieldMap::new();
-        for (key, value) in value.headers {
-            headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
-        }
-
-        Ok(Self {
-            status: value.status,
-            headers,
-            body: Some(HostIncomingBody::failing(
-                "Body stream was interrupted due to a restart".to_string(),
-            )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -227,6 +196,13 @@ pub enum SerializableErrorCode {
     InternalError(Option<String>),
 }
 
+impl From<crate::bindings::exports::wasi::http::types::ErrorCode> for SerializableErrorCode {
+    fn from(value: crate::bindings::exports::wasi::http::types::ErrorCode) -> Self {
+        let error_code: ErrorCode = unsafe { transmute(value) };
+        error_code.into()
+    }
+}
+
 impl From<ErrorCode> for SerializableErrorCode {
     fn from(value: ErrorCode) -> Self {
         (&value).into()
@@ -306,6 +282,13 @@ impl From<&ErrorCode> for SerializableErrorCode {
                 SerializableErrorCode::InternalError(payload.clone())
             }
         }
+    }
+}
+
+impl From<SerializableErrorCode> for crate::bindings::exports::wasi::http::types::ErrorCode {
+    fn from(value: SerializableErrorCode) -> Self {
+        let error_code: ErrorCode = value.into();
+        unsafe { transmute(error_code) }
     }
 }
 
@@ -425,24 +408,22 @@ pub struct SerializableHttpRequest {
 mod tests {
     use test_r::test;
 
-    use crate::durable_host::http::serialized::{SerializableErrorCode, SerializedHttpVersion};
-    use http::Version;
+    use crate::bindings::wasi::http::types::{
+        DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
+    };
+    use crate::wrappers::http::serialized::{SerializableErrorCode, SerializedHttpVersion};
     use proptest::option::of;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
-    use wasmtime_wasi_http::bindings::http::types::{
-        DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
-    };
-
-    fn version_strat() -> impl Strategy<Value = Version> {
-        prop_oneof![
-            Just(Version::HTTP_09),
-            Just(Version::HTTP_10),
-            Just(Version::HTTP_11),
-            Just(Version::HTTP_2),
-            Just(Version::HTTP_3),
-        ]
-    }
+    // fn version_strat() -> impl Strategy<Value = Version> {
+    //     prop_oneof![
+    //         Just(Version::HTTP_09),
+    //         Just(Version::HTTP_10),
+    //         Just(Version::HTTP_11),
+    //         Just(Version::HTTP_2),
+    //         Just(Version::HTTP_3),
+    //     ]
+    // }
 
     fn field_size_payload_strat() -> impl Strategy<Value = FieldSizePayload> {
         (of(".*"), of(any::<u32>())).prop_map(|(field_name, field_size)| FieldSizePayload {
@@ -496,12 +477,12 @@ mod tests {
     }
 
     proptest! {
-        #[test]
-        fn test_http_version_roundtrip(version in version_strat()) {
-            let serialized: SerializedHttpVersion = version.try_into().unwrap();
-            let deserialized: Version = serialized.into();
-            prop_assert_eq!(version, deserialized);
-        }
+        // #[test]
+        // fn test_http_version_roundtrip(version in version_strat()) {
+        //     let serialized: SerializedHttpVersion = version.try_into().unwrap();
+        //     let deserialized: Version = serialized.into();
+        //     prop_assert_eq!(version, deserialized);
+        // }
 
         #[test]
         fn test_error_code_roundtrip(error_code in error_code_strat()) {

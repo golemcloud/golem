@@ -27,7 +27,7 @@ mod types;
 /// Indicates which step of the http request handling is responsible for closing an open
 /// http request (by calling end_function)
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum HttpRequestCloseOwner {
+pub enum HttpRequestCloseOwner {
     FutureIncomingResponseDrop,
     IncomingResponseDrop,
     IncomingBodyDropOrFinish,
@@ -36,7 +36,7 @@ enum HttpRequestCloseOwner {
 
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
-struct HttpRequestState {
+pub struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
     /// The handle of the FutureIncomingResponse that is registered into the open_function_table
@@ -47,12 +47,12 @@ struct HttpRequestState {
 
 thread_local! {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
-    pub static OPEN_HTTP_REQUESTS: RefCell<HashMap<u32, HttpRequestState>> = const { RefCell::new(HashMap::new()) };
+    pub static OPEN_HTTP_REQUESTS: RefCell<HashMap<u32, HttpRequestState>> = RefCell::new(HashMap::new());
 
-    pub static OPEN_FUNCTION_TABLE: RefCell<HashMap<u32, OplogIndex>> = const { RefCell::new(HashMap::new()) };
+    pub static OPEN_FUNCTION_TABLE: RefCell<HashMap<u32, OplogIndex>> = RefCell::new(HashMap::new());
 }
 
-fn end_http_request(current_handle: u32) {
+pub fn end_http_request(current_handle: u32) {
     OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
         OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
             if let Some(state) = open_http_requests.remove(&current_handle) {

@@ -21,9 +21,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
-use golem_wasm_ast::analysis::analysed_type::{
-    field, list, r#enum, record, str, tuple, u32, u64,
-};
+use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::IntoValue;
 use http::Uri;

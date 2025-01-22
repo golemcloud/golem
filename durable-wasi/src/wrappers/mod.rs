@@ -14,7 +14,10 @@
 
 use crate::bindings;
 use crate::bindings::exports::wasi::clocks::wall_clock;
+use crate::bindings::exports::wasi::io::error::{Error, GuestError};
+use crate::bindings::exports::wasi::io::streams::StreamError;
 use crate::bindings::exports::wasi::sockets::ip_name_lookup::{ErrorCode, IpAddress};
+use crate::wrappers::io::error::WrappedError;
 use bincode::{Decode, Encode};
 use golem_common::base_model::{ComponentId, PromiseId, ShardId, WorkerId};
 use std::fmt::{Display, Formatter};
@@ -22,11 +25,11 @@ use std::fmt::{Display, Formatter};
 mod cli;
 mod clock;
 mod filesystem;
+mod http;
 mod io;
 mod logging;
 mod random;
 mod sockets;
-mod http;
 
 // TODO: try to avoid having copies of these types here
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -180,6 +183,20 @@ impl From<SerializableError> for ErrorCode {
     }
 }
 
+impl From<&Error> for SerializableError {
+    fn from(value: &Error) -> Self {
+        Self::Generic {
+            message: value.get::<WrappedError>().to_debug_string(),
+        }
+    }
+}
+
+impl From<SerializableError> for Error {
+    fn from(value: SerializableError) -> Self {
+        Error::new(WrappedError::message(&value.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableDateTime {
     pub seconds: u64,
@@ -306,11 +323,49 @@ fn decode_socket_error(code: u8) -> Option<bindings::exports::wasi::sockets::net
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub enum SerializableStreamError {
+    Closed,
+    LastOperationFailed(SerializableError),
+    Trap(SerializableError),
+}
+
+impl From<&StreamError> for SerializableStreamError {
+    fn from(value: &StreamError) -> Self {
+        match value {
+            StreamError::Closed => Self::Closed,
+            StreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.into()),
+        }
+    }
+}
+
+impl From<SerializableStreamError> for StreamError {
+    fn from(value: SerializableStreamError) -> Self {
+        match value {
+            SerializableStreamError::Closed => Self::Closed,
+            SerializableStreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.into()),
+            SerializableStreamError::Trap(e) => {
+                panic!("Serialized stream error trap: {e}")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use proptest::proptest;
+    use crate::bindings::exports::wasi::sockets::network::IpAddress;
+    use crate::wrappers::{SerializableIpAddress, SerializableIpAddresses};
+    use proptest::collection::vec;
+    use proptest::prelude::{any, Strategy};
+    use proptest::{prop_assert, prop_assert_eq, prop_oneof, proptest};
     use test_r::test;
 
+    fn ipaddress_strat() -> impl Strategy<Value = IpAddress> {
+        prop_oneof! {
+            (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(a, b, c, d)| IpAddress::Ipv4((a, b, c, d))),
+            (any::<u16>(), any::<u16>(), any::<u16>(), any::<u16>(), any::<u16>(), any::<u16>(), any::<u16>(), any::<u16>()).prop_map(|(a, b, c, d, e, f, g, h)| IpAddress::Ipv6((a, b, c, d, e, f, g, h))),
+        }
+    }
     proptest! {
 
         #[test]

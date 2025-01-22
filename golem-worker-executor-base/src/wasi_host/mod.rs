@@ -15,7 +15,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxWasiView};
+use crate::durable_host::{
+    DurableWorkerCtx, DurableWorkerCtxWasiHttpView, DurableWorkerCtxWasiView,
+};
 use crate::workerctx::WorkerCtx;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
@@ -23,20 +25,24 @@ use wasmtime_wasi::{
     DirPerms, FilePerms, ResourceTable, StdinStream, StdoutStream, WasiCtx, WasiCtxBuilder,
     WasiImpl,
 };
+use wasmtime_wasi_http::WasiHttpImpl;
 
 pub mod helpers;
 pub mod logging;
 
-pub fn create_linker<Ctx: WorkerCtx + Send + Sync, F, G>(
+pub fn create_linker<Ctx: WorkerCtx + Send + Sync, F, G, H>(
     engine: &Engine,
     get: F,
     get_wasmtime: G,
+    get_wasmtime_http: H,
 ) -> wasmtime::Result<Linker<Ctx>>
 where
     F: for<'a> Fn(&'a mut Ctx) -> &'a mut DurableWorkerCtx<Ctx> + Send,
     F: Copy + Send + Sync + 'static,
     G: for<'a> Fn(&'a mut Ctx) -> WasiImpl<DurableWorkerCtxWasiView<'a, Ctx>> + Send,
     G: Copy + Send + Sync + 'static,
+    H: for<'a> Fn(&'a mut Ctx) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'a, Ctx>> + Send,
+    H: Copy + Send + Sync + 'static,
 {
     let mut linker = Linker::new(engine);
 
@@ -121,9 +127,12 @@ where
 
     wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
         &mut linker,
-        get,
+        get_wasmtime_http,
     )?;
-    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(&mut linker, get)?;
+    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(
+        &mut linker,
+        get_wasmtime_http,
+    )?;
 
     crate::preview2::wasi::blobstore::blobstore::add_to_linker_get_host(&mut linker, get)?;
     crate::preview2::wasi::blobstore::container::add_to_linker_get_host(&mut linker, get)?;

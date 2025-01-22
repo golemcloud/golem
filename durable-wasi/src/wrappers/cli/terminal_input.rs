@@ -18,7 +18,10 @@ pub struct WrappedTerminalInput {
     pub terminal_input: crate::bindings::wasi::cli::terminal_input::TerminalInput,
 }
 
-impl crate::bindings::exports::wasi::cli::terminal_input::GuestTerminalInput for WrappedTerminalInput {}
+impl crate::bindings::exports::wasi::cli::terminal_input::GuestTerminalInput
+    for WrappedTerminalInput
+{
+}
 
 impl Drop for WrappedTerminalInput {
     fn drop(&mut self) {

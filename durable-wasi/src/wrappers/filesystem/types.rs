@@ -46,10 +46,7 @@ impl crate::bindings::exports::wasi::filesystem::types::GuestDescriptor for Wrap
         observe_function_call("filesystem::types::descriptor", "read_via_stream");
         let input_stream = self.descriptor.read_via_stream(offset)?;
         Ok(InputStream::new(
-            crate::wrappers::io::streams::WrappedInputStream {
-                input_stream,
-                is_incoming_http_body_stream: false,
-            },
+            crate::wrappers::io::streams::WrappedInputStream::proxied(input_stream),
         ))
     }
 
@@ -401,9 +398,14 @@ impl crate::bindings::exports::wasi::filesystem::types::Guest for crate::Compone
     type DirectoryEntryStream = StableDirectoryEntryStream;
 
     fn filesystem_error_code(err: ErrorBorrow<'_>) -> Option<ErrorCode> {
-        let error = &err.get::<WrappedError>().error;
-        let code = filesystem_error_code(error);
-        unsafe { transmute(code) }
+        let error = err.get::<WrappedError>();
+        match error {
+            WrappedError::Proxied { error } => {
+                let code = filesystem_error_code(error);
+                unsafe { transmute(code) }
+            }
+            WrappedError::Message { .. } => None,
+        }
     }
 }
 

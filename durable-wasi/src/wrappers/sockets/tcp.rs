@@ -60,10 +60,7 @@ impl crate::bindings::exports::wasi::sockets::tcp::GuestTcpSocket for WrappedTcp
     fn finish_connect(&self) -> Result<(InputStream, OutputStream), ErrorCode> {
         observe_function_call("sockets::tcp", "finish_connect");
         let (input, output) = self.tcp_socket.finish_connect()?;
-        let input = InputStream::new(WrappedInputStream {
-            input_stream: input,
-            is_incoming_http_body_stream: false,
-        });
+        let input = InputStream::new(WrappedInputStream::proxied(input));
         let output = OutputStream::new(WrappedOutputStream {
             output_stream: output,
         });
@@ -86,10 +83,7 @@ impl crate::bindings::exports::wasi::sockets::tcp::GuestTcpSocket for WrappedTcp
         observe_function_call("sockets::tcp", "accept");
         let (socket, input, output) = self.tcp_socket.accept()?;
         let socket = TcpSocket::new(WrappedTcpSocket { tcp_socket: socket });
-        let input = InputStream::new(WrappedInputStream {
-            input_stream: input,
-            is_incoming_http_body_stream: false,
-        });
+        let input = InputStream::new(WrappedInputStream::proxied(input));
         let output = OutputStream::new(WrappedOutputStream {
             output_stream: output,
         });
