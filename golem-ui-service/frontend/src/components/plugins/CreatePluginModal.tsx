@@ -216,40 +216,33 @@ export const CreatePluginModal = ({
           </div>
 
           {type === "OplogProcessor" ? (
-            <div className="space-y-4 border-t border-gray-700 pt-4">
+            <div className="space-y-4 border-t border-border/10 pt-4">
               <div>
-                <label className="block text-sm font-medium mb-1.5 text-gray-300">
-                  Component
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                  Component and Version
                 </label>
                 <select
-                  value={selectedComponentId}
-                  onChange={(e) => setSelectedComponentId(e.target.value)}
-                  className="w-full px-3 md:px-4 py-2 md:py-2.5 bg-card/50 rounded-lg border border-gray-600 
-                           focus:border-blue-500 outline-none text-sm md:text-base"
+                  value={`${selectedComponentId}:${selectedVersion}`}
+                  onChange={(e) => {
+                    const [componentId, version] = e.target.value.split(':');
+                    setSelectedComponentId(componentId);
+                    setSelectedVersion(Number(version));
+                  }}
+                  className="w-full px-3 md:px-4 py-2 md:py-2.5 bg-card/50 rounded-lg border border-border/10 
+                           focus:border-primary focus:ring-1 focus:ring-primary outline-none text-sm md:text-base"
                   disabled={isSubmitting}
                 >
                   <option value="">Select a component</option>
                   {components?.map((component) => (
                     <option
-                      key={component.versionedComponentId.componentId}
-                      value={component.versionedComponentId.componentId}
+                      key={`${component.versionedComponentId.componentId}:${component.versionedComponentId.version}`}
+                      value={`${component.versionedComponentId.componentId}:${component.versionedComponentId.version}`}
                     >
-                      {component.componentName}
+                      {component.componentName} (v{component.versionedComponentId.version})
                     </option>
                   ))}
                 </select>
               </div>
-
-              {selectedComponentId && (
-                <Input
-                  label="Version"
-                  type="number"
-                  value={selectedVersion}
-                  onChange={(e) => setSelectedVersion(Number(e.target.value))}
-                  disabled={isSubmitting}
-                  min="0"
-                />
-              )}
             </div>
           ) : (
             <div className="space-y-4 border-t border-gray-700 pt-4">

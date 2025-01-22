@@ -171,11 +171,10 @@ export const PluginDetailPage = () => {
           <div className="flex items-center gap-3">
             <span
               className={`px-3 py-1 rounded-full text-xs md:text-sm
-                      ${
-                        plugin.scope.type === "Global"
-                          ? "bg-primary/10 text-primary"
-                          : "bg-purple-500/10 text-purple-400"
-                      }`}
+                      ${plugin.scope.type === "Global"
+                  ? "bg-primary/10 text-primary"
+                  : "bg-purple-500/10 text-purple-400"
+                }`}
             >
               {plugin.scope.type}
             </span>
@@ -290,26 +289,47 @@ export const PluginDetailPage = () => {
                   <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Component ID
                   </label>
-                  <div
-                    className="font-mono text-xs md:text-sm bg-gray-900/50 p-3 rounded-lg
-                              border border-gray-700/50 break-all"
+                  <Link
+                    to={`/components/${plugin.specs.componentId}/${plugin.specs.componentVersion}`}
+                    className="group block"
                   >
-                    {plugin.specs.componentId}
-                  </div>
+                    <div
+                      className="font-mono text-xs md:text-sm bg-card/60 p-3 rounded-lg
+                              border border-border/10 break-all hover:bg-card/80 
+                              transition-colors group-hover:border-border/20"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span>{plugin.specs.componentId}</span>
+                        <ExternalLink
+                          size={14}
+                          className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                        />
+                      </div>
+                    </div>
+                  </Link>
                 </div>
                 <div>
                   <label className="text-xs md:text-sm text-muted-foreground block mb-1">
                     Version
                   </label>
-                  <div className="flex items-center gap-2">
+                  <Link
+                    to={`/components/${plugin.specs.componentId}`}
+                    className="flex items-center gap-2 p-2 hover:bg-card/60 rounded-lg 
+                          transition-colors group w-fit"
+                  >
                     <Package
                       size={16}
-                      className="text-muted-foreground flex-shrink-0"
+                      className="text-muted-foreground flex-shrink-0 group-hover:text-primary 
+                              transition-colors"
                     />
-                    <span className="text-sm">
-                      {plugin.specs.componentVersion}
+                    <span className="text-sm group-hover:text-primary transition-colors">
+                      Version {plugin.specs.componentVersion}
                     </span>
-                  </div>
+                    <ExternalLink
+                      size={14}
+                      className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                    />
+                  </Link>
                 </div>
               </div>
             </DetailsCard>

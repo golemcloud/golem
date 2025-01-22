@@ -8,11 +8,11 @@ import {
   Terminal,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { getComponentVersion, useComponent } from "../api/components";
 import { useEffect, useState } from "react";
 
 import { Component } from "../types/api";
 import { apiClient } from "../lib/api-client";
+import { getComponentVersion } from "../api/components";
 import toast from "react-hot-toast";
 import { useMutation } from "@tanstack/react-query";
 import { useWorker } from "../api/workers";
@@ -223,7 +223,7 @@ const FunctionInvoker = () => {
     error: workerError,
   } = useWorker(componentId!, workerName!);
   useEffect(() => {
-    if (worker?.componentVersion) {
+    if (worker) {
       getComponentVersion(componentId!, worker.componentVersion)
         .then(component => setComponent(component))
     }
@@ -293,6 +293,7 @@ const FunctionInvoker = () => {
   const exportDef = component?.metadata?.exports.find(
     (e) => e.name === exportName,
   );
+  console.log(functionName?.split(".")[1].replace("{", "").replace("}", ""), exportDef?.functions)
   const functionDef = exportDef?.functions.find(
     (f) =>
       f.name === functionName?.split(".")[1].replace("{", "").replace("}", ""),
