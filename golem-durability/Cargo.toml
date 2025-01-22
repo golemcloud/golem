@@ -1,0 +1,18 @@
+[package]
+name = "golem-durability"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Packages the durable-wasi WASM component"
+
+include = ["wasm/*.wasm"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+wac-graph = { workspace = true }

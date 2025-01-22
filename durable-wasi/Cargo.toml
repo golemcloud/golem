@@ -17,15 +17,15 @@ harness = false
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0", default-features = false, features = ["base-model", "serialization"] }
 
-bincode = { workspace = true }
-bytes = { workspace = true }
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+bytes = "1.9.0"
 metrohash = "1.0.7"
 
 wit-bindgen-rt = { version = "=0.36.0", features = ["bitflags"] }
 
 [dev-dependencies]
-proptest = { workspace = true }
-test-r = { workspace = true }
+proptest = "1.5.0"
+test-r = { version = "2.0.1", default-features = true }
 
 [build-dependencies]
 

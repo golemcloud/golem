@@ -58,7 +58,7 @@ syn = "2.0.90"
 tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = "0.8.19"
-wac-graph = "=0.6.1"
+wac-graph = { workspace = true }
 walkdir = "2.5.0"
 wit-bindgen-rust = "=0.26.0"
 wit-encoder = "=0.221.2"

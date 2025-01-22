@@ -13,6 +13,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-durability = { path = "../golem-durability", version = "0.0.0", optional = true }
 golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
@@ -53,3 +54,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+
+[features]
+default = []
+golem-durability = ["dep:golem-durability"]

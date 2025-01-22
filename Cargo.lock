@@ -2850,19 +2850,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "durable-wasi"
-version = "0.0.0"
-dependencies = [
- "bincode",
- "bytes 1.9.0",
- "golem-common",
- "metrohash",
- "proptest",
- "test-r",
- "wit-bindgen-rt",
-]
-
-[[package]]
 name = "dwrote"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4094,6 +4081,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-durability"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "log 0.4.22",
+ "wac-graph",
+]
+
+[[package]]
 name = "golem-examples"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4265,6 +4261,7 @@ dependencies = [
  "console-subscriber",
  "golem-api-grpc",
  "golem-common",
+ "golem-durability",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",

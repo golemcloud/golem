@@ -70,6 +70,7 @@ impl FileSystemComponentService {
 
         let target_path = target_dir.join(format!("{component_id}-{component_version}.wasm"));
 
+        #[cfg(not(feature = "golem-durability"))]
         tokio::fs::copy(source_path, &target_path)
             .await
             .map_err(|err| {
@@ -77,6 +78,9 @@ impl FileSystemComponentService {
                     "Failed to copy WASM to the local component store: {err}"
                 ))
             })?;
+        #[cfg(feature = "golem-durability")]
+        golem_durability::compose_with_durability_in_fs(source_path, &target_path)
+            .map_err(|err| AddComponentError::Other(err.to_string()))?;
 
         let (memories, exports) = if skip_analysis {
             (vec![], vec![])
