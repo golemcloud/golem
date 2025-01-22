@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -32,6 +33,7 @@ use crate::services::{HasOplogService, HasPlugins};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::OwnedWorkerId;
 use golem_common::model::RetryConfig;
 use std::time::Duration;
@@ -179,6 +181,47 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         golem::api0_2_0::host::Host::get_worker_metadata(self, worker_id.into())
             .await
             .map(|x| x.map(|x| x.into()))
+    }
+
+    async fn fork_worker(
+        &mut self,
+        source_worker_id: WorkerId,
+        target_worker_id: WorkerId,
+        oplog_idx_cut_off: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let durability = Durability::<(), SerializableError>::new(
+            self,
+            "golem::api",
+            "fork-worker",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let source_worker_id: golem_common::model::WorkerId = source_worker_id.into();
+
+        let target_worker_id: golem_common::model::WorkerId = target_worker_id.into();
+
+        let oplog_index_cut_off: golem_common::model::oplog::OplogIndex =
+            golem_common::model::oplog::OplogIndex::from_u64(oplog_idx_cut_off);
+
+        if durability.is_live() {
+            let result = self
+                .state
+                .worker_proxy
+                .fork_worker(&source_worker_id, &target_worker_id, &oplog_index_cut_off)
+                .await;
+            durability
+                .persist(
+                    self,
+                    (source_worker_id, target_worker_id, oplog_idx_cut_off),
+                    result,
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        Ok(())
     }
 }
 
