@@ -8,8 +8,6 @@ import {
   Paper,
   Divider,
   Stack,
-  Tabs,
-  Tab,
 } from "@mui/material";
 import { Button2 as Button } from "@/components/ui/button";
 import { Trash } from "lucide-react";
@@ -21,6 +19,8 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { TabsContent, TabsTrigger, TabsList, Tabs } from "./ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
 const ApiDetails = ({
   route,
@@ -121,43 +121,6 @@ const ApiDetails = ({
           </Box>
         </Box>
 
-        <Tabs
-          value={activeTab}
-          onChange={handleTabChange}
-          variant="scrollable"
-          aria-label="Api Tabs"
-          textColor="inherit"
-          sx={{
-            paddingBottom: "5px",
-
-            "& .MuiTab-root": {
-              textTransform: "none",
-              minWidth: "80px",
-              padding: "2px 2px",
-            },
-            "& .MuiTabs-scroller": {
-              overflowX: "auto",
-            },
-            "@media (max-width: 600px)": {
-              "& .MuiTab-root": {
-                fontSize: "11px",
-                minWidth: "40px",
-              },
-              "& .MuiTabs-flexContainer": {
-                gap: "4px",
-              },
-            },
-            "& .MuiTabs-indicator": {
-              bgcolor: "#373737",
-            },
-          }}
-        >
-          <Tab label="View" />
-          <Tab label="Edit" />
-          <Tab label="Try-it-out" />
-        </Tabs>
-
-        {/* Sections */}
         <Grid container spacing={2}>
           {/* Component */}
           <Grid size={12}>
@@ -171,61 +134,137 @@ const ApiDetails = ({
           <Link
             href={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
           >
-            <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
-              <Typography variant="body2" fontFamily="monospace">
-                {route?.binding?.componentId?.componentId}
-                {"/"}
-                {route?.binding?.componentId?.version}
-              </Typography>
-            </Grid>
+            <Typography variant="body2" fontFamily="monospace">
+              {route?.binding?.componentId?.componentId}
+              {"/"}
+              {route?.binding?.componentId?.version}
+            </Typography>
           </Link>
-
           <Grid size={12}>
             <Divider className="bg-border my-2" />
           </Grid>
+        </Grid>
 
-          {/*TODO: Path Parameters */}
-          {route && activeTab == 0 && (
-            <>
-              {paramStructure && (
+        <Tabs defaultValue="view" className="w-full">
+          <TabsList>
+            <TabsTrigger value="view"> View </TabsTrigger>
+            <TabsTrigger value="edit"> Edit </TabsTrigger>
+            <TabsTrigger value="try-it-out"> Try-it-out </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="view">
+            <Card>
+              <CardHeader>
+                <CardTitle>Route Details</CardTitle>
+              </CardHeader>
+              <CardContent>
                 <>
+                  {paramStructure && (
+                    <>
+                      <Grid size={{ xs: 12, sm: 3 }}>
+                        <Typography
+                          variant="body2"
+                          className="text-muted-foreground"
+                        >
+                          Path Parameters
+                        </Typography>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 9 }}>
+                        <Stack direction="row" gap={5} alignItems="center">
+                          <Paper
+                            elevation={0}
+                            className="w-full"
+                            sx={{
+                              p: 2,
+                              fontFamily: "monospace",
+                              fontSize: "0.875rem",
+                            }}
+                          >
+                            {parseStructure(paramStructure)}
+                          </Paper>
+                        </Stack>
+                      </Grid>
+                      <Grid size={12}>
+                        <Divider className="bg-border my-2" />
+                      </Grid>
+                    </>
+                  )}
+                  {/*TODO: Request Body */}
+                  {bodyStructure && (
+                    <>
+                      <Grid size={{ xs: 12, sm: 3 }}>
+                        <Typography
+                          variant="body2"
+                          className="text-muted-foreground"
+                        >
+                          Request Body
+                        </Typography>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 9 }}>
+                        <Paper
+                          elevation={0}
+                          sx={{
+                            p: 2,
+                            fontFamily: "monospace",
+                            fontSize: "0.875rem",
+                          }}
+                        >
+                          {parseStructure(bodyStructure)}
+                        </Paper>
+                      </Grid>
+
+                      <Grid size={12}>
+                        <Divider className="bg-border my-2" />
+                      </Grid>
+                    </>
+                  )}
                   <Grid size={{ xs: 12, sm: 3 }}>
-                    <Typography
-                      variant="body2"
-                      className="text-muted-foreground"
-                    >
-                      Path Parameters
+                    <Typography variant="body2">
+                      <Box display="flex" flexDirection="column" gap={1}>
+                        <span className="text-muted-foreground">Response</span>
+                        <Button
+                          variant="primary"
+                          size="icon_sm"
+                          className="font-mono w-fit"
+                        >
+                          Rib
+                        </Button>
+                      </Box>
                     </Typography>
                   </Grid>
+
                   <Grid size={{ xs: 12, sm: 9 }}>
-                    <Stack direction="row" gap={5} alignItems="center">
-                      <Paper
-                        elevation={0}
-                        className="w-full"
-                        sx={{
-                          p: 2,
-                          fontFamily: "monospace",
-                          fontSize: "0.875rem",
-                        }}
-                      >
-                        {parseStructure(paramStructure)}
-                      </Paper>
-                    </Stack>
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        p: 2,
+                        fontFamily: "monospace",
+                        fontSize: "0.875rem",
+                      }}
+                    >
+                      {route?.binding?.response}
+                    </Paper>
                   </Grid>
+
                   <Grid size={12}>
                     <Divider className="bg-border my-2" />
                   </Grid>
-                </>
-              )}
-              {/*TODO: Request Body */}
-              {bodyStructure && (
-                <>
+
+                  {/* Worker Name */}
                   <Grid size={{ xs: 12, sm: 3 }}>
-                    <Typography
-                      variant="body2"
-                      className="text-muted-foreground"
-                    >
-                      Request Body
+                    <Typography variant="body2">
+                      <Box display="flex" flexDirection="column" gap={1}>
+                        <span className="text-muted-foreground">
+                          Worker Name
+                        </span>
+                        <Button
+                          variant="primary"
+                          size="icon_sm"
+                          className="font-mono w-fit"
+                        >
+                          Rib
+                        </Button>
+                      </Box>
                     </Typography>
                   </Grid>
                   <Grid size={{ xs: 12, sm: 9 }}>
@@ -237,83 +276,45 @@ const ApiDetails = ({
                         fontSize: "0.875rem",
                       }}
                     >
-                      {parseStructure(bodyStructure)}
+                      {route?.binding?.workerName}
+                      <br />
                     </Paper>
                   </Grid>
-
-                  <Grid size={12}>
-                    <Divider className="bg-border my-2" />
-                  </Grid>
                 </>
-              )}
-              <Grid size={{ xs: 12, sm: 3 }}>
-                <Typography variant="body2">
-                  <Box display="flex" flexDirection="column" gap={1}>
-                    <span className="text-muted-foreground">Response</span>
-                    <Button
-                      variant="primary"
-                      size="icon_sm"
-                      className="font-mono w-fit"
-                    >
-                      Rib
-                    </Button>
-                  </Box>
-                </Typography>
-              </Grid>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-              <Grid size={{ xs: 12, sm: 9 }}>
-                <Paper
-                  elevation={0}
-                  sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-                >
-                  {route?.binding?.response}
-                </Paper>
-              </Grid>
+          <TabsContent value="edit">
+            <Card>
+              <CardHeader>
+                <CardTitle>Edit Route</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {route && (
+                  <NewRouteForm
+                    apiId={apiId}
+                    version={version}
+                    defaultRoute={route}
+                    onSuccess={() => setActiveTab(0)}
+                    noRedirect={noRedirect}
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-              <Grid size={12}>
-                <Divider className="bg-border my-2" />
-              </Grid>
-
-              {/* Worker Name */}
-              <Grid size={{ xs: 12, sm: 3 }}>
-                <Typography variant="body2">
-                  <Box display="flex" flexDirection="column" gap={1}>
-                    <span className="text-muted-foreground">Worker Name</span>
-                    <Button
-                      variant="primary"
-                      size="icon_sm"
-                      className="font-mono w-fit"
-                    >
-                      Rib
-                    </Button>
-                  </Box>
-                </Typography>
-              </Grid>
-              <Grid size={{ xs: 12, sm: 9 }}>
-                <Paper
-                  elevation={0}
-                  sx={{ p: 2, fontFamily: "monospace", fontSize: "0.875rem" }}
-                >
-                  {route?.binding?.workerName}
-                  <br />
-                </Paper>
-              </Grid>
-            </>
-          )}
-
-          {route && activeTab == 1 && (
-            <NewRouteForm
-              apiId={apiId}
-              version={version}
-              defaultRoute={route}
-              onSuccess={() => setActiveTab(0)}
-              noRedirect={noRedirect}
-            />
-          )}
-          {route && activeTab == 2 && (
-            <TryItOut route={route} version={version} />
-          )}
-        </Grid>
+          <TabsContent value="try-it-out">
+            <Card>
+              <CardHeader>
+                <CardTitle>Try-it-out</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {route && <TryItOut route={route} version={version} />}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </Box>
     </>
   );

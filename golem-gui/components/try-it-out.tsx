@@ -217,6 +217,7 @@ export default function TryItOut({
               )
             )}
           </Select>
+          
           {curl && <JsonEditor json={curl} />}
         </Box>
       ) : (
