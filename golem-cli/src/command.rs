@@ -18,6 +18,7 @@ pub mod api_security;
 pub mod component;
 pub mod plugin;
 pub mod profile;
+pub mod ui;
 pub mod worker;
 
 use crate::command::api_security::ApiSecuritySchemeSubcommand;
@@ -39,6 +40,7 @@ use plugin::PluginSubcommand;
 use profile::{ProfileSubCommand, UniversalProfileAdd};
 use std::future::Future;
 use std::path::PathBuf;
+use ui::UiCommand;
 use worker::WorkerSubcommand;
 
 pub trait ComponentRefSplit<ProjectRef> {
@@ -248,6 +250,10 @@ pub enum SharedCommand<
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
     },
+
+    /// Open web console
+    #[command()]
+    Ui(UiCommand),
 }
 
 /// Context before the user has initialized the profile.

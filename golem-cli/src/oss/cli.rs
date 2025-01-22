@@ -272,6 +272,7 @@ impl<ProfileAdd: clap::Args + Into<UniversalProfileAdd>> CliCommand<OssCommandCo
                     )
                     .await
             }
+            SharedCommand::Ui(cmd) => cmd.handle().await,
         }
     }
 }
