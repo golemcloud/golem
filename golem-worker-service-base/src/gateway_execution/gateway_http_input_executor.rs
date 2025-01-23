@@ -24,6 +24,7 @@ use crate::gateway_execution::file_server_binding_handler::FileServerBindingHand
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
+use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
@@ -32,6 +33,7 @@ use bytes::Bytes;
 use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
+use poem_openapi::error::AuthorizationError;
 use rib::{RibInput, RibResult};
 use std::sync::Arc;
 use tracing::error;
@@ -76,10 +78,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     pub async fn execute(
         &self,
-        http_request_details: &HttpRequestDetails,
+        http_request_details: &poem::Request,
+        middlewares: Option<HttpMiddlewares>,
         binding: ResolvedBinding<Namespace>,
     ) -> poem::Response {
-        let middleware_opt = &http_request_details.http_middlewares;
         let mut request_details = http_request_details.clone();
 
         match &binding {
@@ -107,7 +109,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                     )
                     .await;
 
-                if let Some(middleware) = middleware_opt {
+                if let Some(middlewares) = middlewares {
                     let result = middleware.process_middleware_out(&mut response).await;
                     match result {
                         Ok(_) => response,
@@ -123,8 +125,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             ResolvedBinding::HttpHandler(http_handler_binding) => {
                 let mut response = self.handle_http_handler_binding(&mut request_details, http_handler_binding).await;
 
-                if let Some(middleware) = middleware_opt {
-                    let result = middleware.process_middleware_out(&mut response).await;
+                if let Some(middlewares) = middlewares {
+                    let result = middlewares.process_middleware_out(&mut response).await;
                     match result {
                         Ok(_) => response,
                         Err(err) => {
@@ -322,10 +324,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     where
         AuthCallBackResult: ToHttpResponse,
     {
+
         let authorisation_result = self
             .auth_call_back_binding_handler
             .handle_auth_call_back(
-                http_request,
+                &http_request.url().unwrap(),
                 security_scheme_with_metadata,
                 &self.gateway_session_store,
                 &self.identity_provider,

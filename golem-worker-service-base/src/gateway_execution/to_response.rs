@@ -34,7 +34,7 @@ use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBi
 pub trait ToHttpResponse {
     async fn to_response(
         self,
-        request_details: &HttpRequestDetails,
+        request_details: &poem::Request,
         session_store: &GatewaySessionStore,
     ) -> poem::Response;
 }
@@ -43,7 +43,7 @@ pub trait ToHttpResponse {
 impl ToHttpResponse for FileServerBindingResult {
     async fn to_response(
         self,
-        _request_details: &HttpRequestDetails,
+        _request_details: &poem::Request,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
@@ -73,7 +73,7 @@ impl ToHttpResponse for FileServerBindingResult {
 impl ToHttpResponse for HttpHandlerBindingResult {
     async fn to_response(
         self,
-        _request_details: &HttpRequestDetails,
+        _request_details: &poem::Request,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
@@ -97,7 +97,7 @@ impl ToHttpResponse for HttpHandlerBindingResult {
 impl ToHttpResponse for CorsPreflight {
     async fn to_response(
         self,
-        _request_details: &HttpRequestDetails,
+        _request_details: &poem::Request,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
@@ -143,7 +143,7 @@ impl ToHttpResponse for CorsPreflight {
 impl ToHttpResponse for RibResult {
     async fn to_response(
         self,
-        request_details: &HttpRequestDetails,
+        request_details: &poem::Request,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
@@ -157,7 +157,7 @@ impl ToHttpResponse for RibResult {
 impl ToHttpResponse for AuthCallBackResult {
     async fn to_response(
         self,
-        _request_details: &HttpRequestDetails,
+        _request_details: &poem::Request,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
@@ -265,7 +265,7 @@ mod internal {
 
         pub(crate) fn to_http_response(
             &self,
-            request_details: &HttpRequestDetails,
+            request_details: &poem::Request,
         ) -> poem::Response {
             let response_content_type = self.headers.get_content_type();
             let response_headers = self.headers.headers.clone();
@@ -273,7 +273,7 @@ mod internal {
             let status = &self.status;
             let evaluation_result = &self.body;
 
-            let accepted_content_types = request_details.get_accept_content_type_header();
+            let accepted_content_types = request_details.header(http::header::ACCEPT).map(|s| s.to_string());
 
             let content_type =
                 ContentTypeHeaders::from(response_content_type, accepted_content_types);
