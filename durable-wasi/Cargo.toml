@@ -50,6 +50,7 @@ world = "durable-wasi"
 "wasi:filesystem" = { path = "wit/deps/filesystem" }
 "wasi:http" = { path = "wit/deps/http" }
 "wasi:io" = { path = "wit/deps/io" }
+"wasi:keyvalue" = { path = "wit/deps/keyvalue" }
 "wasi:logging" = { path = "wit/deps/logging" }
 "wasi:random" = { path = "wit/deps/random" }
 "wasi:sockets" = { path = "wit/deps/sockets" }

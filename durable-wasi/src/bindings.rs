@@ -25280,6 +25280,2159 @@ pub mod wasi {
             }
         }
     }
+    pub mod keyvalue {
+        #[allow(dead_code, clippy::all)]
+        pub mod wasi_keyvalue_error {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// An error resource type for keyvalue operations.
+            ///
+            /// Common errors:
+            /// - Connectivity errors (e.g. network errors): when the client cannot establish
+            /// a connection to the keyvalue service.
+            /// - Authentication and Authorization errors: when the client fails to authenticate
+            /// or does not have the required permissions to perform the operation.
+            /// - Data errors: when the client sends incompatible or corrupted data.
+            /// - Resource errors: when the system runs out of resources (e.g. memory).
+            /// - Internal errors: unexpected errors on the server side.
+            ///
+            /// Currently, this provides only one function to return a string representation
+            /// of the error. In the future, this will be extended to provide more information
+            /// about the error.
+            /// Soon: switch to `resource error { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Error {
+                handle: _rt::Resource<Error>,
+            }
+            impl Error {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Error {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(
+                            wasm_import_module = "wasi:keyvalue/wasi-keyvalue-error@0.1.0"
+                        )]
+                        extern "C" {
+                            #[link_name = "[resource-drop]error"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            impl Error {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn trace(&self) -> _rt::String {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(
+                            wasm_import_module = "wasi:keyvalue/wasi-keyvalue-error@0.1.0"
+                        )]
+                        extern "C" {
+                            #[link_name = "[method]error.trace"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = *ptr0.add(0).cast::<*mut u8>();
+                        let l2 = *ptr0.add(4).cast::<usize>();
+                        let len3 = l2;
+                        let bytes3 = _rt::Vec::from_raw_parts(l1.cast(), len3, len3);
+                        _rt::string_lift(bytes3)
+                    }
+                }
+            }
+        }
+        /// A generic keyvalue interface for WASI.
+        #[allow(dead_code, clippy::all)]
+        pub mod types {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+            pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+            pub type Error = super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error;
+            /// A bucket is a collection of key-value pairs. Each key-value pair is stored
+            /// as a entry in the bucket, and the bucket itself acts as a collection of all
+            /// these entries.
+            ///
+            /// It is worth noting that the exact terminology for bucket in key-value stores
+            /// can very depending on the specific implementation. For example,
+            /// 1. Amazon DynamoDB calls a collection of key-value pairs a table
+            /// 2. Redis has hashes, sets, and sorted sets as different types of collections
+            /// 3. Cassandra calls a collection of key-value pairs a column family
+            /// 4. MongoDB calls a collection of key-value pairs a collection
+            /// 5. Riak calls a collection of key-value pairs a bucket
+            /// 6. Memcached calls a collection of key-value pairs a slab
+            /// 7. Azure Cosmos DB calls a collection of key-value pairs a container
+            ///
+            /// In this interface, we use the term `bucket` to refer to a collection of key-value
+            /// Soon: switch to `resource bucket { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Bucket {
+                handle: _rt::Resource<Bucket>,
+            }
+            impl Bucket {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Bucket {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]bucket"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// A key is a unique identifier for a value in a bucket. The key is used to
+            /// retrieve the value from the bucket.
+            pub type Key = _rt::String;
+            /// A value is the data stored in a key-value pair. The value can be of any type
+            /// that can be represented in a byte array. It provides a way to write the value
+            /// to the output-stream defined in the `wasi-io` interface.
+            /// Soon: switch to `resource value { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct OutgoingValue {
+                handle: _rt::Resource<OutgoingValue>,
+            }
+            impl OutgoingValue {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for OutgoingValue {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]outgoing-value"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            pub type OutgoingValueBodyAsync = OutputStream;
+            pub type OutgoingValueBodySync = _rt::Vec<u8>;
+            /// A incoming-value is a wrapper around a value. It provides a way to read the value
+            /// from the `input-stream` defined in the `wasi-io` interface.
+            ///
+            /// The incoming-value provides two ways to consume the value:
+            /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+            /// value as a `list<u8>`.
+            /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+            /// value as an `input-stream`.
+            /// In addition, it provides a `incoming-value-size` function to get the size of the value.
+            /// This is useful when the value is large and the caller wants to allocate a buffer of
+            /// the right size to consume the value.
+            /// Soon: switch to `resource incoming-value { ... }`
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct IncomingValue {
+                handle: _rt::Resource<IncomingValue>,
+            }
+            impl IncomingValue {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for IncomingValue {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]incoming-value"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            pub type IncomingValueAsyncBody = InputStream;
+            pub type IncomingValueSyncBody = _rt::Vec<u8>;
+            impl Bucket {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Opens a bucket with the given name.
+                ///
+                /// If any error occurs, including if the bucket does not exist, it returns an `Err(error)`.
+                pub fn open_bucket(name: &str) -> Result<Bucket, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[static]bucket.open-bucket"]
+                            fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<i32>();
+                                    Bucket::from_handle(l3 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = *ptr1.add(4).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l4 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn new_outgoing_value() -> OutgoingValue {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[static]outgoing-value.new-outgoing-value"]
+                            fn wit_import() -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import() -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import();
+                        OutgoingValue::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl OutgoingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Writes the value to the output-stream asynchronously.
+                /// If any other error occurs, it returns an `Err(error)`.
+                pub fn outgoing_value_write_body_async(
+                    &self,
+                ) -> Result<OutgoingValueBodyAsync, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-value.outgoing-value-write-body-async"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::OutputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l3 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl OutgoingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Writes the value to the output-stream synchronously.
+                /// If any other error occurs, it returns an `Err(error)`.
+                pub fn outgoing_value_write_body_sync(
+                    &self,
+                    value: &OutgoingValueBodySync,
+                ) -> Result<(), Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let vec0 = value;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]outgoing-value.outgoing-value-write-body-sync"]
+                            fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = ();
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l3 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Consumes the value synchronously and returns the value as a list of bytes.
+                /// If any other error occurs, it returns an `Err(error)`.
+                pub fn incoming_value_consume_sync(
+                    &self,
+                ) -> Result<IncomingValueSyncBody, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-sync"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                    let l3 = *ptr0.add(8).cast::<usize>();
+                                    let len4 = l3;
+                                    _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l5 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l5 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Consumes the value asynchronously and returns the value as an `input-stream`.
+                /// If any other error occurs, it returns an `Err(error)`.
+                pub fn incoming_value_consume_async(
+                    &self,
+                ) -> Result<IncomingValueAsyncBody, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 8],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-async"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::io::streams::InputStream::from_handle(
+                                        l2 as u32,
+                                    )
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0.add(4).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l3 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl IncomingValue {
+                #[allow(unused_unsafe, clippy::all)]
+                /// The size of the value in bytes.
+                /// If the size is unknown or unavailable, this function returns an `Err(error)`.
+                pub fn incoming_value_size(&self) -> Result<u64, Error> {
+                    unsafe {
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-size"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => {
+                                let e = {
+                                    let l2 = *ptr0.add(8).cast::<i64>();
+                                    l2 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0.add(8).cast::<i32>();
+                                    super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                        l3 as u32,
+                                    )
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
+        /// A keyvalue interface that provides atomic operations.
+        ///
+        /// Atomic operations are single, indivisible operations. When a fault causes
+        /// an atomic operation to fail, it will appear to the invoker of the atomic
+        /// operation that the action either completed successfully or did nothing
+        /// at all.
+        #[allow(dead_code, clippy::all)]
+        pub mod atomic {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+            pub type Error = super::super::super::wasi::keyvalue::types::Error;
+            pub type Key = super::super::super::wasi::keyvalue::types::Key;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Atomically increment the value associated with the key in the bucket by the
+            /// given delta. It returns the new value.
+            ///
+            /// If the key does not exist in the bucket, it creates a new key-value pair
+            /// with the value set to the given delta.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn increment(
+                bucket: &Bucket,
+                key: &Key,
+                delta: u64,
+            ) -> Result<u64, Error> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/atomic@0.1.0")]
+                    extern "C" {
+                        #[link_name = "increment"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        (bucket).handle() as i32,
+                        ptr0.cast_mut(),
+                        len0,
+                        _rt::as_i64(&delta),
+                        ptr1,
+                    );
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                l3 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(8).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l4 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Compare-and-swap (CAS) atomically updates the value associated with the key
+            /// in the bucket if the value matches the old value. This operation returns
+            /// `Ok(true)` if the swap was successful, `Ok(false)` if the value did not match,
+            ///
+            /// A successful CAS operation means the current value matched the `old` value
+            /// and was replaced with the `new` value.
+            ///
+            /// If the key does not exist in the bucket, it returns `Ok(false)`.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn compare_and_swap(
+                bucket: &Bucket,
+                key: &Key,
+                old: u64,
+                new: u64,
+            ) -> Result<bool, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/atomic@0.1.0")]
+                    extern "C" {
+                        #[link_name = "compare-and-swap"]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: i64,
+                            _: i64,
+                            _: *mut u8,
+                        );
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: i64,
+                        _: i64,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        (bucket).handle() as i32,
+                        ptr0.cast_mut(),
+                        len0,
+                        _rt::as_i64(&old),
+                        _rt::as_i64(&new),
+                        ptr1,
+                    );
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                _rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l4 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        /// The `wasi:keyvalue/cache` interface defines the operations of a single
+        /// instance of a "cache", which is a non-durable, weakly-consistent key-value
+        /// store. "Non-durable" means that caches are allowed and expected to
+        /// arbitrarily discard key-value entries. "Weakly-consistent" means that there
+        /// are essentially no guarantees that operations will agree on their results: a
+        /// get following a set may not observe the set value; multiple gets may observe
+        /// different previous set values; etc. The only guarantee is that values are
+        /// not materialized "out of thin air": if a `get` returns a value, that value
+        /// was passed to a `set` operation at some point in time in the past.
+        /// Additionally, caches MUST make a best effort to respect the supplied
+        /// Time-to-Live values (within the usual limitations around time in a
+        /// distributed setting).
+        #[allow(dead_code, clippy::all)]
+        pub mod cache {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            pub type Key = super::super::super::wasi::keyvalue::types::Key;
+            pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+            pub type OutgoingValue = super::super::super::wasi::keyvalue::types::OutgoingValue;
+            pub type Error = super::super::super::wasi::keyvalue::types::Error;
+            /// This block defines a special resource type used by `get` to emulate
+            /// `future<result<option<incoming-value>,error>>`. In the return value
+            /// of the `get` method, the outer `option` returns `none` when the pollable
+            /// is not yet ready and the inner `option` returns `none` when the
+            /// requested key wasn't present.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureGetResult {
+                handle: _rt::Resource<FutureGetResult>,
+            }
+            impl FutureGetResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureGetResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-get-result"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// This block defines a special resource type used by `exists` to emulate
+            /// `future<result<bool,error>>`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureExistsResult {
+                handle: _rt::Resource<FutureExistsResult>,
+            }
+            impl FutureExistsResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureExistsResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-exists-result"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// This block defines a special resource type used by `set` and `delete` to
+            /// emulate `future<result<_,error>>`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureResult {
+                handle: _rt::Resource<FutureResult>,
+            }
+            impl FutureResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-result"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// This block defines a special resource type used by `get-or-set` to
+            /// emulate `future<result<get-or-set-entry,error>>`.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureGetOrSetResult {
+                handle: _rt::Resource<FutureGetOrSetResult>,
+            }
+            impl FutureGetOrSetResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for FutureGetOrSetResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-get-or-set-result"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// The following block defines the `vacancy` resource type. (When resource
+            /// types are added, the `u32` type aliases can be replaced by proper
+            /// `resource` types.) When the caller of `get-or-set` receives a `vacancy`,
+            /// they must either call the `fill` method or drop the `vacancy` to
+            /// indicate an error that prevents calling `fill`. An implementation MAY
+            /// have a timeout that drops a vacancy that hasn't been filled in order
+            /// to unblock other waiting `get-or-set` callers.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Vacancy {
+                handle: _rt::Resource<Vacancy>,
+            }
+            impl Vacancy {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Vacancy {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]vacancy"]
+                            fn drop(_: u32);
+                        }
+                        drop(_handle);
+                    }
+                }
+            }
+            /// The `get-or-set` operation asynchronously returns one of two cases
+            /// enumerated by `get-or-set-entry`: in the `occupied` case, the given key
+            /// already has a value present in the cache; in the `vacant` case, there
+            /// was no value and the caller should write a value into the returned
+            /// `vacancy`. This operation allows multiple concurrent `get-or-set`
+            /// invocations to rendezvous such that only one invocation receives the
+            /// `vacant` result while all other invocations wait until the vacancy is
+            /// filled before receiving an `occupied` result. Implementations are not
+            /// required to implement this rendezvous or to rendezvous in all possible
+            /// cases.
+            pub enum GetOrSetEntry {
+                Occupied(IncomingValue),
+                Vacant(Vacancy),
+            }
+            impl ::core::fmt::Debug for GetOrSetEntry {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        GetOrSetEntry::Occupied(e) => {
+                            f.debug_tuple("GetOrSetEntry::Occupied").field(e).finish()
+                        }
+                        GetOrSetEntry::Vacant(e) => {
+                            f.debug_tuple("GetOrSetEntry::Vacant").field(e).finish()
+                        }
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The `get` operation returns the value passed by a previous `set` for the
+            /// same key within the given TTL or none if there is no such value.
+            pub fn get(k: &Key) -> FutureGetResult {
+                unsafe {
+                    let vec0 = k;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                    extern "C" {
+                        #[link_name = "get"]
+                        fn wit_import(_: *mut u8, _: usize) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(ptr0.cast_mut(), len0);
+                    FutureGetResult::from_handle(ret as u32)
+                }
+            }
+            impl FutureGetResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn future_get_result_get(
+                    &self,
+                ) -> Option<Result<Option<IncomingValue>, Error>> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-get-result.future-get-result-get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                                match l3 {
+                                                    0 => None,
+                                                    1 => {
+                                                        let e = {
+                                                            let l4 = *ptr0.add(12).cast::<i32>();
+                                                            super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(
+                                                                l4 as u32,
+                                                            )
+                                                        };
+                                                        Some(e)
+                                                    }
+                                                    _ => _rt::invalid_enum_discriminant(),
+                                                }
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = {
+                                                let l5 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                                    l5 as u32,
+                                                )
+                                            };
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl FutureGetResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn listen_to_future_get_result(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-get-result.listen-to-future-get-result"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The `exists` operation returns whether a value was previously `set` for
+            /// the given key within the TTL.
+            pub fn exists(k: &Key) -> FutureExistsResult {
+                unsafe {
+                    let vec0 = k;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                    extern "C" {
+                        #[link_name = "exists"]
+                        fn wit_import(_: *mut u8, _: usize) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(ptr0.cast_mut(), len0);
+                    FutureExistsResult::from_handle(ret as u32)
+                }
+            }
+            impl FutureExistsResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn future_exists_result_get(&self) -> Option<Result<bool, Error>> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-exists-result.future-exists-result-get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                                _rt::bool_lift(l3 as u8)
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = {
+                                                let l4 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                                    l4 as u32,
+                                                )
+                                            };
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl FutureExistsResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn listen_to_future_exists_result(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-exists-result.listen-to-future-exists-result"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The `set` operation sets the given value for the given key for the given
+            /// time-to-live (TTL) duration, if supplied, specified in milliseconds. If
+            /// a TTL is not supplied, the key may be kept indefinitely (as-if a very
+            /// large TTL were used). If the key is already present in the cache, the
+            /// value is updated in-place. In the common case of computing and caching a
+            /// value if the given key is not already in the cache, consider using
+            /// `get-or-set` (below) intead of separate `get` and `set` operations.
+            pub fn set(k: &Key, v: &OutgoingValue, ttl_ms: Option<u32>) -> FutureResult {
+                unsafe {
+                    let vec0 = k;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let (result1_0, result1_1) = match ttl_ms {
+                        Some(e) => (1i32, _rt::as_i32(e)),
+                        None => (0i32, 0i32),
+                    };
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                    extern "C" {
+                        #[link_name = "set"]
+                        fn wit_import(
+                            _: *mut u8,
+                            _: usize,
+                            _: i32,
+                            _: i32,
+                            _: i32,
+                        ) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: i32, _: i32, _: i32) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(
+                        ptr0.cast_mut(),
+                        len0,
+                        (v).handle() as i32,
+                        result1_0,
+                        result1_1,
+                    );
+                    FutureResult::from_handle(ret as u32)
+                }
+            }
+            impl FutureResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn future_result_get(&self) -> Option<Result<(), Error>> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 12],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-result.future-result-get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = ();
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = {
+                                                let l3 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                                    l3 as u32,
+                                                )
+                                            };
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl FutureResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn listen_to_future_result(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-result.listen-to-future-result"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_or_set(k: &Key) -> FutureGetOrSetResult {
+                unsafe {
+                    let vec0 = k;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                    extern "C" {
+                        #[link_name = "get-or-set"]
+                        fn wit_import(_: *mut u8, _: usize) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(ptr0.cast_mut(), len0);
+                    FutureGetOrSetResult::from_handle(ret as u32)
+                }
+            }
+            impl FutureGetOrSetResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn future_get_or_set_result_get(
+                    &self,
+                ) -> Option<Result<GetOrSetEntry, Error>> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 16],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-get-or-set-result.future-get-or-set-result-get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = i32::from(*ptr0.add(8).cast::<u8>());
+                                                let v6 = match l3 {
+                                                    0 => {
+                                                        let e6 = {
+                                                            let l4 = *ptr0.add(12).cast::<i32>();
+                                                            super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(
+                                                                l4 as u32,
+                                                            )
+                                                        };
+                                                        GetOrSetEntry::Occupied(e6)
+                                                    }
+                                                    n => {
+                                                        debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                                        let e6 = {
+                                                            let l5 = *ptr0.add(12).cast::<i32>();
+                                                            Vacancy::from_handle(l5 as u32)
+                                                        };
+                                                        GetOrSetEntry::Vacant(e6)
+                                                    }
+                                                };
+                                                v6
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = {
+                                                let l7 = *ptr0.add(8).cast::<i32>();
+                                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                                    l7 as u32,
+                                                )
+                                            };
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl FutureGetOrSetResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn listen_to_future_get_or_set_result(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-get-or-set-result.listen-to-future-get-or-set-result"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            impl Vacancy {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn vacancy_fill(&self, ttl_ms: Option<u32>) -> OutgoingValue {
+                    unsafe {
+                        let (result0_0, result0_1) = match ttl_ms {
+                            Some(e) => (1i32, _rt::as_i32(e)),
+                            None => (0i32, 0i32),
+                        };
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]vacancy.vacancy-fill"]
+                            fn wit_import(_: i32, _: i32, _: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            result0_0,
+                            result0_1,
+                        );
+                        super::super::super::wasi::keyvalue::types::OutgoingValue::from_handle(
+                            ret as u32,
+                        )
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// The `delete` operation removes any value with the given key from the
+            /// cache. Like all cache operations, `delete` is weakly ordered and thus
+            /// concurrent `get` calls may still see deleted keys for a period of time.
+            /// Additionally, due to weak ordering, concurrent `set` calls for the same
+            /// key may or may not get deleted.
+            pub fn delete(k: &Key) -> FutureResult {
+                unsafe {
+                    let vec0 = k;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/cache@0.1.0")]
+                    extern "C" {
+                        #[link_name = "delete"]
+                        fn wit_import(_: *mut u8, _: usize) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(ptr0.cast_mut(), len0);
+                    FutureResult::from_handle(ret as u32)
+                }
+            }
+        }
+        /// A keyvalue interface that provides eventually consistent CRUD operations.
+        ///
+        /// A CRUD operation is an operation that acts on a single key-value pair.
+        ///
+        /// The value in the key-value pair is defined as a `u8` byte array and the intention
+        /// is that it is the common denominator for all data types defined by different
+        /// key-value stores to handle data, ensuring compatibility between different
+        /// key-value stores. Note: the clients will be expecting serialization/deserialization overhead
+        /// to be handled by the key-value store. The value could be a serialized object from
+        /// JSON, HTML or vendor-specific data types like AWS S3 objects.
+        ///
+        /// Data consistency in a key value store refers to the gaurantee that once a
+        /// write operation completes, all subsequent read operations will return the
+        /// value that was written.
+        ///
+        /// The level of consistency in readwrite interfaces is **eventual consistency**,
+        /// which means that if a write operation completes successfully, all subsequent
+        /// read operations will eventually return the value that was written. In other words,
+        /// if we pause the updates to the system, the system eventually will return
+        /// the last updated value for read.
+        #[allow(dead_code, clippy::all)]
+        pub mod eventual {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+            pub type Error = super::super::super::wasi::keyvalue::types::Error;
+            pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+            pub type Key = super::super::super::wasi::keyvalue::types::Key;
+            pub type OutgoingValue = super::super::super::wasi::keyvalue::types::OutgoingValue;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the value associated with the key in the bucket.
+            ///
+            /// The value is returned as an option. If the key-value pair exists in the
+            /// bucket, it returns `Ok(value)`. If the key does not exist in the
+            /// bucket, it returns `Ok(none)`.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn get(
+                bucket: &Bucket,
+                key: &Key,
+            ) -> Result<Option<IncomingValue>, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                    extern "C" {
+                        #[link_name = "get"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                match l3 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l4 = *ptr1.add(8).cast::<i32>();
+                                            super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(
+                                                l4 as u32,
+                                            )
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l5 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Set the value associated with the key in the bucket. If the key already
+            /// exists in the bucket, it overwrites the value.
+            ///
+            /// If the key does not exist in the bucket, it creates a new key-value pair.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn set(
+                bucket: &Bucket,
+                key: &Key,
+                outgoing_value: &OutgoingValue,
+            ) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                    extern "C" {
+                        #[link_name = "set"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        (bucket).handle() as i32,
+                        ptr0.cast_mut(),
+                        len0,
+                        (outgoing_value).handle() as i32,
+                        ptr1,
+                    );
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l3 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Delete the key-value pair associated with the key in the bucket.
+            ///
+            /// If the key does not exist in the bucket, it does nothing.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn delete(bucket: &Bucket, key: &Key) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                    extern "C" {
+                        #[link_name = "delete"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l3 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l3 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Check if the key exists in the bucket.
+            ///
+            /// If the key exists in the bucket, it returns `Ok(true)`. If the key does
+            /// not exist in the bucket, it returns `Ok(false)`.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn exists(bucket: &Bucket, key: &Key) -> Result<bool, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                    extern "C" {
+                        #[link_name = "exists"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = i32::from(*ptr1.add(4).cast::<u8>());
+                                _rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr1.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l4 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        /// A keyvalue interface that provides eventually consistent batch operations.
+        ///
+        /// A batch operation is an operation that operates on multiple keys at once.
+        ///
+        /// Batch operations are useful for reducing network round-trip time. For example,
+        /// if you want to get the values associated with 100 keys, you can either do 100 get
+        /// operations or you can do 1 batch get operation. The batch operation is
+        /// faster because it only needs to make 1 network call instead of 100.
+        ///
+        /// A batch operation does not guarantee atomicity, meaning that if the batch
+        /// operation fails, some of the keys may have been modified and some may not.
+        /// Transactional operations are being worked on and will be added in the future to
+        /// provide atomicity.
+        ///
+        /// Data consistency in a key value store refers to the gaurantee that once a
+        /// write operation completes, all subsequent read operations will return the
+        /// value that was written.
+        ///
+        /// The level of consistency in batch operations is **eventual consistency**, the same
+        /// with the readwrite interface. This interface does not guarantee strong consistency,
+        /// meaning that if a write operation completes, subsequent read operations may not return
+        /// the value that was written.
+        #[allow(dead_code, clippy::all)]
+        pub mod eventual_batch {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+            pub type Error = super::super::super::wasi::keyvalue::types::Error;
+            pub type Key = super::super::super::wasi::keyvalue::types::Key;
+            pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+            pub type OutgoingValue = super::super::super::wasi::keyvalue::types::OutgoingValue;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get the values associated with the keys in the bucket. It returns a list of
+            /// incoming-value that can be consumed to get the value associated with the key.
+            ///
+            /// If any of the keys do not exist in the bucket, it returns a `none` value for
+            /// that key in the list.
+            ///
+            /// Note that the key-value pairs are guaranteed to be returned in the same order
+            ///
+            /// MAY show an out-of-date value if there are concurrent writes to the bucket.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`.
+            pub fn get_many(
+                bucket: &Bucket,
+                keys: &[Key],
+            ) -> Result<_rt::Vec<Option<IncomingValue>>, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let vec1 = keys;
+                    let len1 = vec1.len();
+                    let layout1 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec1.len() * 8,
+                        4,
+                    );
+                    let result1 = if layout1.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout1).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout1);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec1.into_iter().enumerate() {
+                        let base = result1.add(i * 8);
+                        {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+                            *base.add(4).cast::<usize>() = len0;
+                            *base.add(0).cast::<*mut u8>() = ptr0.cast_mut();
+                        }
+                    }
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "get-many"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, result1, len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    if layout1.size() != 0 {
+                        _rt::alloc::dealloc(result1.cast(), layout1);
+                    }
+                    match l3 {
+                        0 => {
+                            let e = {
+                                let l4 = *ptr2.add(4).cast::<*mut u8>();
+                                let l5 = *ptr2.add(8).cast::<usize>();
+                                let base8 = l4;
+                                let len8 = l5;
+                                let mut result8 = _rt::Vec::with_capacity(len8);
+                                for i in 0..len8 {
+                                    let base = base8.add(i * 8);
+                                    let e8 = {
+                                        let l6 = i32::from(*base.add(0).cast::<u8>());
+                                        match l6 {
+                                            0 => None,
+                                            1 => {
+                                                let e = {
+                                                    let l7 = *base.add(4).cast::<i32>();
+                                                    super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(
+                                                        l7 as u32,
+                                                    )
+                                                };
+                                                Some(e)
+                                            }
+                                            _ => _rt::invalid_enum_discriminant(),
+                                        }
+                                    };
+                                    result8.push(e8);
+                                }
+                                _rt::cabi_dealloc(base8, len8 * 8, 4);
+                                result8
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l9 = *ptr2.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l9 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get all the keys in the bucket. It returns a list of keys.
+            ///
+            /// Note that the keys are not guaranteed to be returned in any particular order.
+            ///
+            /// If the bucket is empty, it returns an empty list.
+            ///
+            /// MAY show an out-of-date list of keys if there are concurrent writes to the bucket.
+            ///
+            /// If any error occurs, it returns an `Err(error)`.
+            pub fn keys(bucket: &Bucket) -> Result<_rt::Vec<Key>, Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 12]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "keys"]
+                        fn wit_import(_: i32, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => {
+                            let e = {
+                                let l2 = *ptr0.add(4).cast::<*mut u8>();
+                                let l3 = *ptr0.add(8).cast::<usize>();
+                                let base7 = l2;
+                                let len7 = l3;
+                                let mut result7 = _rt::Vec::with_capacity(len7);
+                                for i in 0..len7 {
+                                    let base = base7.add(i * 8);
+                                    let e7 = {
+                                        let l4 = *base.add(0).cast::<*mut u8>();
+                                        let l5 = *base.add(4).cast::<usize>();
+                                        let len6 = l5;
+                                        let bytes6 = _rt::Vec::from_raw_parts(
+                                            l4.cast(),
+                                            len6,
+                                            len6,
+                                        );
+                                        _rt::string_lift(bytes6)
+                                    };
+                                    result7.push(e7);
+                                }
+                                _rt::cabi_dealloc(base7, len7 * 8, 4);
+                                result7
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = *ptr0.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l8 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Set the values associated with the keys in the bucket. If the key already
+            /// exists in the bucket, it overwrites the value.
+            ///
+            /// Note that the key-value pairs are not guaranteed to be set in the order
+            /// they are provided.
+            ///
+            /// If any of the keys do not exist in the bucket, it creates a new key-value pair.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+            /// does not rollback the key-value pairs that were already set. Thus, this batch operation
+            /// does not guarantee atomicity, implying that some key-value pairs could be
+            /// set while others might fail.
+            ///
+            /// Other concurrent operations may also be able to see the partial results.
+            pub fn set_many(
+                bucket: &Bucket,
+                key_values: &[(Key, &OutgoingValue)],
+            ) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec2 = key_values;
+                    let len2 = vec2.len();
+                    let layout2 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec2.len() * 12,
+                        4,
+                    );
+                    let result2 = if layout2.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout2).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout2);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec2.into_iter().enumerate() {
+                        let base = result2.add(i * 12);
+                        {
+                            let (t0_0, t0_1) = e;
+                            let vec1 = t0_0;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+                            *base.add(4).cast::<usize>() = len1;
+                            *base.add(0).cast::<*mut u8>() = ptr1.cast_mut();
+                            *base.add(8).cast::<i32>() = (t0_1).handle() as i32;
+                        }
+                    }
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "set-many"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, result2, len2, ptr3);
+                    let l4 = i32::from(*ptr3.add(0).cast::<u8>());
+                    if layout2.size() != 0 {
+                        _rt::alloc::dealloc(result2.cast(), layout2);
+                    }
+                    match l4 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr3.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l5 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Delete the key-value pairs associated with the keys in the bucket.
+            ///
+            /// Note that the key-value pairs are not guaranteed to be deleted in the order
+            /// they are provided.
+            ///
+            /// If any of the keys do not exist in the bucket, it skips the key.
+            ///
+            /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+            /// does not rollback the key-value pairs that were already deleted. Thus, this batch operation
+            /// does not guarantee atomicity, implying that some key-value pairs could be
+            /// deleted while others might fail.
+            ///
+            /// Other concurrent operations may also be able to see the partial results.
+            pub fn delete_many(bucket: &Bucket, keys: &[Key]) -> Result<(), Error> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec1 = keys;
+                    let len1 = vec1.len();
+                    let layout1 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec1.len() * 8,
+                        4,
+                    );
+                    let result1 = if layout1.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout1).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout1);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec1.into_iter().enumerate() {
+                        let base = result1.add(i * 8);
+                        {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr().cast::<u8>();
+                            let len0 = vec0.len();
+                            *base.add(4).cast::<usize>() = len0;
+                            *base.add(0).cast::<*mut u8>() = ptr0.cast_mut();
+                        }
+                    }
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "delete-many"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import((bucket).handle() as i32, result1, len1, ptr2);
+                    let l3 = i32::from(*ptr2.add(0).cast::<u8>());
+                    if layout1.size() != 0 {
+                        _rt::alloc::dealloc(result1.cast(), layout1);
+                    }
+                    match l3 {
+                        0 => {
+                            let e = ();
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l4 = *ptr2.add(4).cast::<i32>();
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(
+                                    l4 as u32,
+                                )
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+        }
+        /// A keyvalue interface that provides handle-watch operations.
+        ///
+        /// This interface is used to provide event-driven mechanisms to handle
+        /// keyvalue changes.
+        #[allow(dead_code, clippy::all)]
+        pub mod handle_watch {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+            pub type Key = super::super::super::wasi::keyvalue::types::Key;
+            pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+            #[allow(unused_unsafe, clippy::all)]
+            /// Handle the `set` event for the given bucket and key.
+            /// It returns a `incoming-value` that represents the new value being set.
+            /// The new value can be consumed by the handler.
+            pub fn on_set(bucket: Bucket, key: &Key, incoming_value: &IncomingValue) {
+                unsafe {
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/handle-watch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "on-set"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: i32);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize, _: i32) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        (&bucket).take_handle() as i32,
+                        ptr0.cast_mut(),
+                        len0,
+                        (incoming_value).handle() as i32,
+                    );
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Handle the `delete` event for the given bucket and key.
+            /// It returns a `key` that represents the key being deleted.
+            pub fn on_delete(bucket: Bucket, key: &Key) {
+                unsafe {
+                    let vec0 = key;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:keyvalue/handle-watch@0.1.0")]
+                    extern "C" {
+                        #[link_name = "on-delete"]
+                        fn wit_import(_: i32, _: *mut u8, _: usize);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: *mut u8, _: usize) {
+                        unreachable!()
+                    }
+                    wit_import((&bucket).take_handle() as i32, ptr0.cast_mut(), len0);
+                }
+            }
+        }
+    }
     pub mod logging {
         /// WASI Logging is a logging API intended to let users emit log messages with
         /// simple priority levels and context values.
@@ -45230,6 +47383,3300 @@ pub mod exports {
                 );
             }
         }
+        pub mod keyvalue {
+            #[allow(dead_code, clippy::all)]
+            pub mod wasi_keyvalue_error {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                /// An error resource type for keyvalue operations.
+                ///
+                /// Common errors:
+                /// - Connectivity errors (e.g. network errors): when the client cannot establish
+                /// a connection to the keyvalue service.
+                /// - Authentication and Authorization errors: when the client fails to authenticate
+                /// or does not have the required permissions to perform the operation.
+                /// - Data errors: when the client sends incompatible or corrupted data.
+                /// - Resource errors: when the system runs out of resources (e.g. memory).
+                /// - Internal errors: unexpected errors on the server side.
+                ///
+                /// Currently, this provides only one function to return a string representation
+                /// of the error. In the future, this will be extended to provide more information
+                /// about the error.
+                /// Soon: switch to `resource error { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Error {
+                    handle: _rt::Resource<Error>,
+                }
+                type _ErrorRep<T> = Option<T>;
+                impl Error {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `Error`.
+                    pub fn new<T: GuestError>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _ErrorRep<T> = Some(val);
+                        let ptr: *mut _ErrorRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestError>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestError>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestError>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _ErrorRep<T>);
+                    }
+                    fn as_ptr<T: GuestError>(&self) -> *mut _ErrorRep<T> {
+                        Error::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`Error`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct ErrorBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a Error>,
+                }
+                impl<'a> ErrorBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestError>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _ErrorRep<T> {
+                        Error::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for Error {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/wasi-keyvalue-error@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]error"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_error_trace_cabi<T: GuestError>(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::trace(
+                        ErrorBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec2 = (result0.into_bytes()).into_boxed_slice();
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    ::core::mem::forget(vec2);
+                    *ptr1.add(4).cast::<usize>() = len2;
+                    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_error_trace<T: GuestError>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
+                pub trait Guest {
+                    type Error: GuestError;
+                }
+                pub trait GuestError: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/wasi-keyvalue-error@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]error"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/wasi-keyvalue-error@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]error"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn trace(&self) -> _rt::String;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_wasi_keyvalue_error_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/wasi-keyvalue-error@0.1.0#[method]error.trace"]
+                        unsafe extern "C" fn export_method_error_trace(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_error_trace_cabi::<<$ty as $($path_to_types)*::
+                        Guest >::Error > (arg0) } #[export_name =
+                        "cabi_post_wasi:keyvalue/wasi-keyvalue-error@0.1.0#[method]error.trace"]
+                        unsafe extern "C" fn _post_return_method_error_trace(arg0 : * mut
+                        u8,) { $($path_to_types)*::
+                        __post_return_method_error_trace::<<$ty as $($path_to_types)*::
+                        Guest >::Error > (arg0) } const _ : () = { #[doc(hidden)]
+                        #[export_name =
+                        "wasi:keyvalue/wasi-keyvalue-error@0.1.0#[dtor]error"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: Error::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::Error > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_wasi_keyvalue_error_0_1_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 8],
+                );
+            }
+            /// A generic keyvalue interface for WASI.
+            #[allow(dead_code, clippy::all)]
+            pub mod types {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type InputStream = super::super::super::super::exports::wasi::io::streams::InputStream;
+                pub type InputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::InputStreamBorrow<
+                    'a,
+                >;
+                pub type OutputStream = super::super::super::super::exports::wasi::io::streams::OutputStream;
+                pub type OutputStreamBorrow<'a> = super::super::super::super::exports::wasi::io::streams::OutputStreamBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::keyvalue::wasi_keyvalue_error::Error;
+                pub type ErrorBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::wasi_keyvalue_error::ErrorBorrow<
+                    'a,
+                >;
+                /// A bucket is a collection of key-value pairs. Each key-value pair is stored
+                /// as a entry in the bucket, and the bucket itself acts as a collection of all
+                /// these entries.
+                ///
+                /// It is worth noting that the exact terminology for bucket in key-value stores
+                /// can very depending on the specific implementation. For example,
+                /// 1. Amazon DynamoDB calls a collection of key-value pairs a table
+                /// 2. Redis has hashes, sets, and sorted sets as different types of collections
+                /// 3. Cassandra calls a collection of key-value pairs a column family
+                /// 4. MongoDB calls a collection of key-value pairs a collection
+                /// 5. Riak calls a collection of key-value pairs a bucket
+                /// 6. Memcached calls a collection of key-value pairs a slab
+                /// 7. Azure Cosmos DB calls a collection of key-value pairs a container
+                ///
+                /// In this interface, we use the term `bucket` to refer to a collection of key-value
+                /// Soon: switch to `resource bucket { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Bucket {
+                    handle: _rt::Resource<Bucket>,
+                }
+                type _BucketRep<T> = Option<T>;
+                impl Bucket {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `Bucket`.
+                    pub fn new<T: GuestBucket>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _BucketRep<T> = Some(val);
+                        let ptr: *mut _BucketRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestBucket>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestBucket>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestBucket>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _BucketRep<T>);
+                    }
+                    fn as_ptr<T: GuestBucket>(&self) -> *mut _BucketRep<T> {
+                        Bucket::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`Bucket`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct BucketBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a Bucket>,
+                }
+                impl<'a> BucketBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestBucket>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _BucketRep<T> {
+                        Bucket::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for Bucket {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]bucket"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// A key is a unique identifier for a value in a bucket. The key is used to
+                /// retrieve the value from the bucket.
+                pub type Key = _rt::String;
+                /// A value is the data stored in a key-value pair. The value can be of any type
+                /// that can be represented in a byte array. It provides a way to write the value
+                /// to the output-stream defined in the `wasi-io` interface.
+                /// Soon: switch to `resource value { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingValue {
+                    handle: _rt::Resource<OutgoingValue>,
+                }
+                type _OutgoingValueRep<T> = Option<T>;
+                impl OutgoingValue {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `OutgoingValue`.
+                    pub fn new<T: GuestOutgoingValue>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _OutgoingValueRep<T> = Some(val);
+                        let ptr: *mut _OutgoingValueRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestOutgoingValue>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestOutgoingValue>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestOutgoingValue>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _OutgoingValueRep<T>);
+                    }
+                    fn as_ptr<T: GuestOutgoingValue>(
+                        &self,
+                    ) -> *mut _OutgoingValueRep<T> {
+                        OutgoingValue::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`OutgoingValue`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingValueBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a OutgoingValue>,
+                }
+                impl<'a> OutgoingValueBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestOutgoingValue>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _OutgoingValueRep<T> {
+                        OutgoingValue::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for OutgoingValue {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]outgoing-value"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                pub type OutgoingValueBodyAsync = OutputStream;
+                pub type OutgoingValueBodyAsyncBorrow<'a> = OutputStreamBorrow<'a>;
+                pub type OutgoingValueBodySync = _rt::Vec<u8>;
+                /// A incoming-value is a wrapper around a value. It provides a way to read the value
+                /// from the `input-stream` defined in the `wasi-io` interface.
+                ///
+                /// The incoming-value provides two ways to consume the value:
+                /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+                /// value as a `list<u8>`.
+                /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+                /// value as an `input-stream`.
+                /// In addition, it provides a `incoming-value-size` function to get the size of the value.
+                /// This is useful when the value is large and the caller wants to allocate a buffer of
+                /// the right size to consume the value.
+                /// Soon: switch to `resource incoming-value { ... }`
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingValue {
+                    handle: _rt::Resource<IncomingValue>,
+                }
+                type _IncomingValueRep<T> = Option<T>;
+                impl IncomingValue {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `IncomingValue`.
+                    pub fn new<T: GuestIncomingValue>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _IncomingValueRep<T> = Some(val);
+                        let ptr: *mut _IncomingValueRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestIncomingValue>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestIncomingValue>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestIncomingValue>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _IncomingValueRep<T>);
+                    }
+                    fn as_ptr<T: GuestIncomingValue>(
+                        &self,
+                    ) -> *mut _IncomingValueRep<T> {
+                        IncomingValue::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`IncomingValue`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingValueBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a IncomingValue>,
+                }
+                impl<'a> IncomingValueBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestIncomingValue>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _IncomingValueRep<T> {
+                        IncomingValue::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for IncomingValue {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]incoming-value"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                pub type IncomingValueAsyncBody = InputStream;
+                pub type IncomingValueAsyncBodyBorrow<'a> = InputStreamBorrow<'a>;
+                pub type IncomingValueSyncBody = _rt::Vec<u8>;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_bucket_open_bucket_cabi<T: GuestBucket>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::open_bucket(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_static_outgoing_value_new_outgoing_value_cabi<
+                    T: GuestOutgoingValue,
+                >() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::new_outgoing_value();
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_value_outgoing_value_write_body_async_cabi<
+                    T: GuestOutgoingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::outgoing_value_write_body_async(
+                        OutgoingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_outgoing_value_outgoing_value_write_body_sync_cabi<
+                    T: GuestOutgoingValue,
+                >(arg0: *mut u8, arg1: *mut u8, arg2: usize) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let result1 = T::outgoing_value_write_body_sync(
+                        OutgoingValueBorrow::lift(arg0 as u32 as usize).get(),
+                        _rt::Vec::from_raw_parts(arg1.cast(), len0, len0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_incoming_value_consume_sync_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::incoming_value_consume_sync(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec2 = (e).into_boxed_slice();
+                            let ptr2 = vec2.as_ptr().cast::<u8>();
+                            let len2 = vec2.len();
+                            ::core::mem::forget(vec2);
+                            *ptr1.add(8).cast::<usize>() = len2;
+                            *ptr1.add(4).cast::<*mut u8>() = ptr2.cast_mut();
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_method_incoming_value_incoming_value_consume_sync<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            let base3 = l1;
+                            let len3 = l2;
+                            _rt::cabi_dealloc(base3, len3 * 1, 1);
+                        }
+                        _ => {}
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_incoming_value_consume_async_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::incoming_value_consume_async(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_incoming_value_incoming_value_size_cabi<
+                    T: GuestIncomingValue,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::incoming_value_size(
+                        IncomingValueBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr1.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr1
+                }
+                pub trait Guest {
+                    type Bucket: GuestBucket;
+                    type OutgoingValue: GuestOutgoingValue;
+                    type IncomingValue: GuestIncomingValue;
+                }
+                pub trait GuestBucket: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]bucket"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]bucket"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Opens a bucket with the given name.
+                    ///
+                    /// If any error occurs, including if the bucket does not exist, it returns an `Err(error)`.
+                    fn open_bucket(name: _rt::String) -> Result<Bucket, Error>;
+                }
+                pub trait GuestOutgoingValue: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]outgoing-value"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]outgoing-value"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn new_outgoing_value() -> OutgoingValue;
+                    /// Writes the value to the output-stream asynchronously.
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn outgoing_value_write_body_async(
+                        &self,
+                    ) -> Result<OutgoingValueBodyAsync, Error>;
+                    /// Writes the value to the output-stream synchronously.
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn outgoing_value_write_body_sync(
+                        &self,
+                        value: OutgoingValueBodySync,
+                    ) -> Result<(), Error>;
+                }
+                pub trait GuestIncomingValue: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]incoming-value"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/types@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]incoming-value"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    /// Consumes the value synchronously and returns the value as a list of bytes.
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn incoming_value_consume_sync(
+                        &self,
+                    ) -> Result<IncomingValueSyncBody, Error>;
+                    /// Consumes the value asynchronously and returns the value as an `input-stream`.
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn incoming_value_consume_async(
+                        &self,
+                    ) -> Result<IncomingValueAsyncBody, Error>;
+                    /// The size of the value in bytes.
+                    /// If the size is unknown or unavailable, this function returns an `Err(error)`.
+                    fn incoming_value_size(&self) -> Result<u64, Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_types_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[static]bucket.open-bucket"] unsafe
+                        extern "C" fn export_static_bucket_open_bucket(arg0 : * mut u8,
+                        arg1 : usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_static_bucket_open_bucket_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Bucket > (arg0, arg1) }
+                        #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[static]outgoing-value.new-outgoing-value"]
+                        unsafe extern "C" fn
+                        export_static_outgoing_value_new_outgoing_value() -> i32 {
+                        $($path_to_types)*::
+                        _export_static_outgoing_value_new_outgoing_value_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::OutgoingValue > () } #[export_name
+                        =
+                        "wasi:keyvalue/types@0.1.0#[method]outgoing-value.outgoing-value-write-body-async"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_value_outgoing_value_write_body_async(arg0
+                        : * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_outgoing_value_outgoing_value_write_body_async_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::OutgoingValue > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[method]outgoing-value.outgoing-value-write-body-sync"]
+                        unsafe extern "C" fn
+                        export_method_outgoing_value_outgoing_value_write_body_sync(arg0
+                        : * mut u8, arg1 : * mut u8, arg2 : usize,) -> * mut u8 {
+                        $($path_to_types)*::
+                        _export_method_outgoing_value_outgoing_value_write_body_sync_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::OutgoingValue > (arg0, arg1,
+                        arg2) } #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[method]incoming-value.incoming-value-consume-sync"]
+                        unsafe extern "C" fn
+                        export_method_incoming_value_incoming_value_consume_sync(arg0 : *
+                        mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_value_incoming_value_consume_sync_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:keyvalue/types@0.1.0#[method]incoming-value.incoming-value-consume-sync"]
+                        unsafe extern "C" fn
+                        _post_return_method_incoming_value_incoming_value_consume_sync(arg0
+                        : * mut u8,) { $($path_to_types)*::
+                        __post_return_method_incoming_value_incoming_value_consume_sync::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[method]incoming-value.incoming-value-consume-async"]
+                        unsafe extern "C" fn
+                        export_method_incoming_value_incoming_value_consume_async(arg0 :
+                        * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_value_incoming_value_consume_async_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::IncomingValue > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[method]incoming-value.incoming-value-size"]
+                        unsafe extern "C" fn
+                        export_method_incoming_value_incoming_value_size(arg0 : * mut
+                        u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_incoming_value_incoming_value_size_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::IncomingValue > (arg0) } const _ :
+                        () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[dtor]bucket"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: Bucket::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::Bucket > (rep) } }; const _ : () =
+                        { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[dtor]outgoing-value"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: OutgoingValue::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::OutgoingValue > (rep) } }; const _
+                        : () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/types@0.1.0#[dtor]incoming-value"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: IncomingValue::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::IncomingValue > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_types_0_1_0_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 16],
+                );
+            }
+            /// A keyvalue interface that provides atomic operations.
+            ///
+            /// Atomic operations are single, indivisible operations. When a fault causes
+            /// an atomic operation to fail, it will appear to the invoker of the atomic
+            /// operation that the action either completed successfully or did nothing
+            /// at all.
+            #[allow(dead_code, clippy::all)]
+            pub mod atomic {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Bucket = super::super::super::super::exports::wasi::keyvalue::types::Bucket;
+                pub type BucketBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::BucketBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::keyvalue::types::Error;
+                pub type ErrorBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::ErrorBorrow<
+                    'a,
+                >;
+                pub type Key = super::super::super::super::exports::wasi::keyvalue::types::Key;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_increment_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::increment(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                        arg3 as u64,
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(8).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_compare_and_swap_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: i64,
+                    arg4: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::compare_and_swap(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                        arg3 as u64,
+                        arg4 as u64,
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<u8>() = (match e {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                pub trait Guest {
+                    /// Atomically increment the value associated with the key in the bucket by the
+                    /// given delta. It returns the new value.
+                    ///
+                    /// If the key does not exist in the bucket, it creates a new key-value pair
+                    /// with the value set to the given delta.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn increment(
+                        bucket: BucketBorrow<'_>,
+                        key: Key,
+                        delta: u64,
+                    ) -> Result<u64, Error>;
+                    /// Compare-and-swap (CAS) atomically updates the value associated with the key
+                    /// in the bucket if the value matches the old value. This operation returns
+                    /// `Ok(true)` if the swap was successful, `Ok(false)` if the value did not match,
+                    ///
+                    /// A successful CAS operation means the current value matched the `old` value
+                    /// and was replaced with the `new` value.
+                    ///
+                    /// If the key does not exist in the bucket, it returns `Ok(false)`.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn compare_and_swap(
+                        bucket: BucketBorrow<'_>,
+                        key: Key,
+                        old: u64,
+                        new: u64,
+                    ) -> Result<bool, Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_atomic_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/atomic@0.1.0#increment"] unsafe extern "C" fn
+                        export_increment(arg0 : i32, arg1 : * mut u8, arg2 : usize, arg3
+                        : i64,) -> * mut u8 { $($path_to_types)*::
+                        _export_increment_cabi::<$ty > (arg0, arg1, arg2, arg3) }
+                        #[export_name = "wasi:keyvalue/atomic@0.1.0#compare-and-swap"]
+                        unsafe extern "C" fn export_compare_and_swap(arg0 : i32, arg1 : *
+                        mut u8, arg2 : usize, arg3 : i64, arg4 : i64,) -> * mut u8 {
+                        $($path_to_types)*:: _export_compare_and_swap_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3, arg4) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_atomic_0_1_0_cabi;
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 16],
+                );
+            }
+            /// The `wasi:keyvalue/cache` interface defines the operations of a single
+            /// instance of a "cache", which is a non-durable, weakly-consistent key-value
+            /// store. "Non-durable" means that caches are allowed and expected to
+            /// arbitrarily discard key-value entries. "Weakly-consistent" means that there
+            /// are essentially no guarantees that operations will agree on their results: a
+            /// get following a set may not observe the set value; multiple gets may observe
+            /// different previous set values; etc. The only guarantee is that values are
+            /// not materialized "out of thin air": if a `get` returns a value, that value
+            /// was passed to a `set` operation at some point in time in the past.
+            /// Additionally, caches MUST make a best effort to respect the supplied
+            /// Time-to-Live values (within the usual limitations around time in a
+            /// distributed setting).
+            #[allow(dead_code, clippy::all)]
+            pub mod cache {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Pollable = super::super::super::super::exports::wasi::io::poll::Pollable;
+                pub type PollableBorrow<'a> = super::super::super::super::exports::wasi::io::poll::PollableBorrow<
+                    'a,
+                >;
+                pub type Key = super::super::super::super::exports::wasi::keyvalue::types::Key;
+                pub type IncomingValue = super::super::super::super::exports::wasi::keyvalue::types::IncomingValue;
+                pub type IncomingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::IncomingValueBorrow<
+                    'a,
+                >;
+                pub type OutgoingValue = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValue;
+                pub type OutgoingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValueBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::keyvalue::types::Error;
+                pub type ErrorBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::ErrorBorrow<
+                    'a,
+                >;
+                /// This block defines a special resource type used by `get` to emulate
+                /// `future<result<option<incoming-value>,error>>`. In the return value
+                /// of the `get` method, the outer `option` returns `none` when the pollable
+                /// is not yet ready and the inner `option` returns `none` when the
+                /// requested key wasn't present.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureGetResult {
+                    handle: _rt::Resource<FutureGetResult>,
+                }
+                type _FutureGetResultRep<T> = Option<T>;
+                impl FutureGetResult {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureGetResult`.
+                    pub fn new<T: GuestFutureGetResult>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureGetResultRep<T> = Some(val);
+                        let ptr: *mut _FutureGetResultRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureGetResult>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureGetResult>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureGetResult>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _FutureGetResultRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestFutureGetResult>(
+                        &self,
+                    ) -> *mut _FutureGetResultRep<T> {
+                        FutureGetResult::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureGetResult`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureGetResultBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureGetResult>,
+                }
+                impl<'a> FutureGetResultBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureGetResult>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureGetResultRep<T> {
+                        FutureGetResult::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureGetResult {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-get-result"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// This block defines a special resource type used by `exists` to emulate
+                /// `future<result<bool,error>>`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureExistsResult {
+                    handle: _rt::Resource<FutureExistsResult>,
+                }
+                type _FutureExistsResultRep<T> = Option<T>;
+                impl FutureExistsResult {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureExistsResult`.
+                    pub fn new<T: GuestFutureExistsResult>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureExistsResultRep<T> = Some(val);
+                        let ptr: *mut _FutureExistsResultRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureExistsResult>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureExistsResult>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureExistsResult>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _FutureExistsResultRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestFutureExistsResult>(
+                        &self,
+                    ) -> *mut _FutureExistsResultRep<T> {
+                        FutureExistsResult::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureExistsResult`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureExistsResultBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureExistsResult>,
+                }
+                impl<'a> FutureExistsResultBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureExistsResult>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureExistsResultRep<T> {
+                        FutureExistsResult::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureExistsResult {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-exists-result"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// This block defines a special resource type used by `set` and `delete` to
+                /// emulate `future<result<_,error>>`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureResult {
+                    handle: _rt::Resource<FutureResult>,
+                }
+                type _FutureResultRep<T> = Option<T>;
+                impl FutureResult {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureResult`.
+                    pub fn new<T: GuestFutureResult>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureResultRep<T> = Some(val);
+                        let ptr: *mut _FutureResultRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureResult>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureResult>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureResult>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _FutureResultRep<T>);
+                    }
+                    fn as_ptr<T: GuestFutureResult>(&self) -> *mut _FutureResultRep<T> {
+                        FutureResult::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureResult`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureResultBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureResult>,
+                }
+                impl<'a> FutureResultBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureResult>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureResultRep<T> {
+                        FutureResult::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureResult {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-result"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// This block defines a special resource type used by `get-or-set` to
+                /// emulate `future<result<get-or-set-entry,error>>`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureGetOrSetResult {
+                    handle: _rt::Resource<FutureGetOrSetResult>,
+                }
+                type _FutureGetOrSetResultRep<T> = Option<T>;
+                impl FutureGetOrSetResult {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureGetOrSetResult`.
+                    pub fn new<T: GuestFutureGetOrSetResult>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureGetOrSetResultRep<T> = Some(val);
+                        let ptr: *mut _FutureGetOrSetResultRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureGetOrSetResult>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureGetOrSetResult>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureGetOrSetResult>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(
+                            handle as *mut _FutureGetOrSetResultRep<T>,
+                        );
+                    }
+                    fn as_ptr<T: GuestFutureGetOrSetResult>(
+                        &self,
+                    ) -> *mut _FutureGetOrSetResultRep<T> {
+                        FutureGetOrSetResult::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`FutureGetOrSetResult`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureGetOrSetResultBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureGetOrSetResult>,
+                }
+                impl<'a> FutureGetOrSetResultBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureGetOrSetResult>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureGetOrSetResultRep<T> {
+                        FutureGetOrSetResult::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for FutureGetOrSetResult {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-get-or-set-result"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// The following block defines the `vacancy` resource type. (When resource
+                /// types are added, the `u32` type aliases can be replaced by proper
+                /// `resource` types.) When the caller of `get-or-set` receives a `vacancy`,
+                /// they must either call the `fill` method or drop the `vacancy` to
+                /// indicate an error that prevents calling `fill`. An implementation MAY
+                /// have a timeout that drops a vacancy that hasn't been filled in order
+                /// to unblock other waiting `get-or-set` callers.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Vacancy {
+                    handle: _rt::Resource<Vacancy>,
+                }
+                type _VacancyRep<T> = Option<T>;
+                impl Vacancy {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `Vacancy`.
+                    pub fn new<T: GuestVacancy>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _VacancyRep<T> = Some(val);
+                        let ptr: *mut _VacancyRep<T> = _rt::Box::into_raw(
+                            _rt::Box::new(val),
+                        );
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestVacancy>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestVacancy>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestVacancy>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(! cfg!(target_feature = "atomics"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => {
+                                    assert!(
+                                        ty == id, "cannot use two types with this resource type"
+                                    )
+                                }
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _VacancyRep<T>);
+                    }
+                    fn as_ptr<T: GuestVacancy>(&self) -> *mut _VacancyRep<T> {
+                        Vacancy::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+                /// A borrowed version of [`Vacancy`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct VacancyBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a Vacancy>,
+                }
+                impl<'a> VacancyBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestVacancy>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+                    fn as_ptr<T: 'static>(&self) -> *mut _VacancyRep<T> {
+                        Vacancy::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+                unsafe impl _rt::WasmResource for Vacancy {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-drop]vacancy"]
+                                fn drop(_: u32);
+                            }
+                            drop(_handle);
+                        }
+                    }
+                }
+                /// The `get-or-set` operation asynchronously returns one of two cases
+                /// enumerated by `get-or-set-entry`: in the `occupied` case, the given key
+                /// already has a value present in the cache; in the `vacant` case, there
+                /// was no value and the caller should write a value into the returned
+                /// `vacancy`. This operation allows multiple concurrent `get-or-set`
+                /// invocations to rendezvous such that only one invocation receives the
+                /// `vacant` result while all other invocations wait until the vacancy is
+                /// filled before receiving an `occupied` result. Implementations are not
+                /// required to implement this rendezvous or to rendezvous in all possible
+                /// cases.
+                pub enum GetOrSetEntry {
+                    Occupied(IncomingValue),
+                    Vacant(Vacancy),
+                }
+                impl ::core::fmt::Debug for GetOrSetEntry {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            GetOrSetEntry::Occupied(e) => {
+                                f.debug_tuple("GetOrSetEntry::Occupied").field(e).finish()
+                            }
+                            GetOrSetEntry::Vacant(e) => {
+                                f.debug_tuple("GetOrSetEntry::Vacant").field(e).finish()
+                            }
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::get(_rt::string_lift(bytes0));
+                    (result1).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_get_result_future_get_result_get_cabi<
+                    T: GuestFutureGetResult,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::future_get_result_get(
+                        FutureGetResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                    match e {
+                                        Some(e) => {
+                                            *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(12).cast::<i32>() = (e).take_handle() as i32;
+                                        }
+                                        None => {
+                                            *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                                Err(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                    *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_get_result_listen_to_future_get_result_cabi<
+                    T: GuestFutureGetResult,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::listen_to_future_get_result(
+                        FutureGetResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_exists_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::exists(_rt::string_lift(bytes0));
+                    (result1).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_exists_result_future_exists_result_get_cabi<
+                    T: GuestFutureExistsResult,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::future_exists_result_get(
+                        FutureExistsResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                    *ptr1.add(8).cast::<u8>() = (match e {
+                                        true => 1,
+                                        false => 0,
+                                    }) as u8;
+                                }
+                                Err(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                    *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_exists_result_listen_to_future_exists_result_cabi<
+                    T: GuestFutureExistsResult,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::listen_to_future_exists_result(
+                        FutureExistsResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_set_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: i32,
+                    arg3: i32,
+                    arg4: i32,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::set(
+                        _rt::string_lift(bytes0),
+                        OutgoingValueBorrow::lift(arg2 as u32 as usize),
+                        match arg3 {
+                            0 => None,
+                            1 => {
+                                let e = arg4 as u32;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    (result1).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_result_future_result_get_cabi<
+                    T: GuestFutureResult,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::future_result_get(
+                        FutureResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(_) => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                }
+                                Err(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                    *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_result_listen_to_future_result_cabi<
+                    T: GuestFutureResult,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::listen_to_future_result(
+                        FutureResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_or_set_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::get_or_set(_rt::string_lift(bytes0));
+                    (result1).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_get_or_set_result_future_get_or_set_result_get_cabi<
+                    T: GuestFutureGetOrSetResult,
+                >(arg0: *mut u8) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::future_get_or_set_result_get(
+                        FutureGetOrSetResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            match e {
+                                Ok(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (0i32) as u8;
+                                    match e {
+                                        GetOrSetEntry::Occupied(e) => {
+                                            *ptr1.add(8).cast::<u8>() = (0i32) as u8;
+                                            *ptr1.add(12).cast::<i32>() = (e).take_handle() as i32;
+                                        }
+                                        GetOrSetEntry::Vacant(e) => {
+                                            *ptr1.add(8).cast::<u8>() = (1i32) as u8;
+                                            *ptr1.add(12).cast::<i32>() = (e).take_handle() as i32;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    *ptr1.add(4).cast::<u8>() = (1i32) as u8;
+                                    *ptr1.add(8).cast::<i32>() = (e).take_handle() as i32;
+                                }
+                            };
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_get_or_set_result_listen_to_future_get_or_set_result_cabi<
+                    T: GuestFutureGetOrSetResult,
+                >(arg0: *mut u8) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::listen_to_future_get_or_set_result(
+                        FutureGetOrSetResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_vacancy_vacancy_fill_cabi<T: GuestVacancy>(
+                    arg0: *mut u8,
+                    arg1: i32,
+                    arg2: i32,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::vacancy_fill(
+                        VacancyBorrow::lift(arg0 as u32 as usize).get(),
+                        match arg1 {
+                            0 => None,
+                            1 => {
+                                let e = arg2 as u32;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_delete_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::delete(_rt::string_lift(bytes0));
+                    (result1).take_handle() as i32
+                }
+                pub trait Guest {
+                    type FutureGetResult: GuestFutureGetResult;
+                    type FutureExistsResult: GuestFutureExistsResult;
+                    type FutureResult: GuestFutureResult;
+                    type FutureGetOrSetResult: GuestFutureGetOrSetResult;
+                    type Vacancy: GuestVacancy;
+                    /// The `get` operation returns the value passed by a previous `set` for the
+                    /// same key within the given TTL or none if there is no such value.
+                    fn get(k: Key) -> FutureGetResult;
+                    /// The `exists` operation returns whether a value was previously `set` for
+                    /// the given key within the TTL.
+                    fn exists(k: Key) -> FutureExistsResult;
+                    /// The `set` operation sets the given value for the given key for the given
+                    /// time-to-live (TTL) duration, if supplied, specified in milliseconds. If
+                    /// a TTL is not supplied, the key may be kept indefinitely (as-if a very
+                    /// large TTL were used). If the key is already present in the cache, the
+                    /// value is updated in-place. In the common case of computing and caching a
+                    /// value if the given key is not already in the cache, consider using
+                    /// `get-or-set` (below) intead of separate `get` and `set` operations.
+                    fn set(
+                        k: Key,
+                        v: OutgoingValueBorrow<'_>,
+                        ttl_ms: Option<u32>,
+                    ) -> FutureResult;
+                    fn get_or_set(k: Key) -> FutureGetOrSetResult;
+                    /// The `delete` operation removes any value with the given key from the
+                    /// cache. Like all cache operations, `delete` is weakly ordered and thus
+                    /// concurrent `get` calls may still see deleted keys for a period of time.
+                    /// Additionally, due to weak ordering, concurrent `set` calls for the same
+                    /// key may or may not get deleted.
+                    fn delete(k: Key) -> FutureResult;
+                }
+                pub trait GuestFutureGetResult: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-get-result"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-get-result"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn future_get_result_get(
+                        &self,
+                    ) -> Option<Result<Option<IncomingValue>, Error>>;
+                    fn listen_to_future_get_result(&self) -> Pollable;
+                }
+                pub trait GuestFutureExistsResult: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-exists-result"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-exists-result"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn future_exists_result_get(&self) -> Option<Result<bool, Error>>;
+                    fn listen_to_future_exists_result(&self) -> Pollable;
+                }
+                pub trait GuestFutureResult: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-result"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-result"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn future_result_get(&self) -> Option<Result<(), Error>>;
+                    fn listen_to_future_result(&self) -> Pollable;
+                }
+                pub trait GuestFutureGetOrSetResult: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-get-or-set-result"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-get-or-set-result"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn future_get_or_set_result_get(
+                        &self,
+                    ) -> Option<Result<GetOrSetEntry, Error>>;
+                    fn listen_to_future_get_or_set_result(&self) -> Pollable;
+                }
+                pub trait GuestVacancy: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-new]vacancy"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(
+                                wasm_import_module = "[export]wasi:keyvalue/cache@0.1.0"
+                            )]
+                            extern "C" {
+                                #[link_name = "[resource-rep]vacancy"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+                    fn vacancy_fill(&self, ttl_ms: Option<u32>) -> OutgoingValue;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_cache_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name = "wasi:keyvalue/cache@0.1.0#get"]
+                        unsafe extern "C" fn export_get(arg0 : * mut u8, arg1 : usize,)
+                        -> i32 { $($path_to_types)*:: _export_get_cabi::<$ty > (arg0,
+                        arg1) } #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-get-result.future-get-result-get"]
+                        unsafe extern "C" fn
+                        export_method_future_get_result_future_get_result_get(arg0 : *
+                        mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_future_get_result_future_get_result_get_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureGetResult > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-get-result.listen-to-future-get-result"]
+                        unsafe extern "C" fn
+                        export_method_future_get_result_listen_to_future_get_result(arg0
+                        : * mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_get_result_listen_to_future_get_result_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureGetResult > (arg0) }
+                        #[export_name = "wasi:keyvalue/cache@0.1.0#exists"] unsafe extern
+                        "C" fn export_exists(arg0 : * mut u8, arg1 : usize,) -> i32 {
+                        $($path_to_types)*:: _export_exists_cabi::<$ty > (arg0, arg1) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-exists-result.future-exists-result-get"]
+                        unsafe extern "C" fn
+                        export_method_future_exists_result_future_exists_result_get(arg0
+                        : * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_future_exists_result_future_exists_result_get_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureExistsResult > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-exists-result.listen-to-future-exists-result"]
+                        unsafe extern "C" fn
+                        export_method_future_exists_result_listen_to_future_exists_result(arg0
+                        : * mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_exists_result_listen_to_future_exists_result_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureExistsResult > (arg0) }
+                        #[export_name = "wasi:keyvalue/cache@0.1.0#set"] unsafe extern
+                        "C" fn export_set(arg0 : * mut u8, arg1 : usize, arg2 : i32, arg3
+                        : i32, arg4 : i32,) -> i32 { $($path_to_types)*::
+                        _export_set_cabi::<$ty > (arg0, arg1, arg2, arg3, arg4) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-result.future-result-get"]
+                        unsafe extern "C" fn
+                        export_method_future_result_future_result_get(arg0 : * mut u8,)
+                        -> * mut u8 { $($path_to_types)*::
+                        _export_method_future_result_future_result_get_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::FutureResult > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-result.listen-to-future-result"]
+                        unsafe extern "C" fn
+                        export_method_future_result_listen_to_future_result(arg0 : * mut
+                        u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_result_listen_to_future_result_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureResult > (arg0) }
+                        #[export_name = "wasi:keyvalue/cache@0.1.0#get-or-set"] unsafe
+                        extern "C" fn export_get_or_set(arg0 : * mut u8, arg1 : usize,)
+                        -> i32 { $($path_to_types)*:: _export_get_or_set_cabi::<$ty >
+                        (arg0, arg1) } #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-get-or-set-result.future-get-or-set-result-get"]
+                        unsafe extern "C" fn
+                        export_method_future_get_or_set_result_future_get_or_set_result_get(arg0
+                        : * mut u8,) -> * mut u8 { $($path_to_types)*::
+                        _export_method_future_get_or_set_result_future_get_or_set_result_get_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureGetOrSetResult > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]future-get-or-set-result.listen-to-future-get-or-set-result"]
+                        unsafe extern "C" fn
+                        export_method_future_get_or_set_result_listen_to_future_get_or_set_result(arg0
+                        : * mut u8,) -> i32 { $($path_to_types)*::
+                        _export_method_future_get_or_set_result_listen_to_future_get_or_set_result_cabi::<<$ty
+                        as $($path_to_types)*:: Guest >::FutureGetOrSetResult > (arg0) }
+                        #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[method]vacancy.vacancy-fill"] unsafe
+                        extern "C" fn export_method_vacancy_vacancy_fill(arg0 : * mut u8,
+                        arg1 : i32, arg2 : i32,) -> i32 { $($path_to_types)*::
+                        _export_method_vacancy_vacancy_fill_cabi::<<$ty as
+                        $($path_to_types)*:: Guest >::Vacancy > (arg0, arg1, arg2) }
+                        #[export_name = "wasi:keyvalue/cache@0.1.0#delete"] unsafe extern
+                        "C" fn export_delete(arg0 : * mut u8, arg1 : usize,) -> i32 {
+                        $($path_to_types)*:: _export_delete_cabi::<$ty > (arg0, arg1) }
+                        const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[dtor]future-get-result"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureGetResult::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::FutureGetResult > (rep) } }; const
+                        _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[dtor]future-exists-result"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureExistsResult::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::FutureExistsResult > (rep) } };
+                        const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[dtor]future-result"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureResult::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::FutureResult > (rep) } }; const _ :
+                        () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[dtor]future-get-or-set-result"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: FutureGetOrSetResult::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::FutureGetOrSetResult > (rep) } };
+                        const _ : () = { #[doc(hidden)] #[export_name =
+                        "wasi:keyvalue/cache@0.1.0#[dtor]vacancy"]
+                        #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
+                        u8) { $($path_to_types)*:: Vacancy::dtor::< <$ty as
+                        $($path_to_types)*:: Guest >::Vacancy > (rep) } }; };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_cache_0_1_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 16],
+                );
+            }
+            /// A keyvalue interface that provides eventually consistent CRUD operations.
+            ///
+            /// A CRUD operation is an operation that acts on a single key-value pair.
+            ///
+            /// The value in the key-value pair is defined as a `u8` byte array and the intention
+            /// is that it is the common denominator for all data types defined by different
+            /// key-value stores to handle data, ensuring compatibility between different
+            /// key-value stores. Note: the clients will be expecting serialization/deserialization overhead
+            /// to be handled by the key-value store. The value could be a serialized object from
+            /// JSON, HTML or vendor-specific data types like AWS S3 objects.
+            ///
+            /// Data consistency in a key value store refers to the gaurantee that once a
+            /// write operation completes, all subsequent read operations will return the
+            /// value that was written.
+            ///
+            /// The level of consistency in readwrite interfaces is **eventual consistency**,
+            /// which means that if a write operation completes successfully, all subsequent
+            /// read operations will eventually return the value that was written. In other words,
+            /// if we pause the updates to the system, the system eventually will return
+            /// the last updated value for read.
+            #[allow(dead_code, clippy::all)]
+            pub mod eventual {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Bucket = super::super::super::super::exports::wasi::keyvalue::types::Bucket;
+                pub type BucketBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::BucketBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::keyvalue::types::Error;
+                pub type ErrorBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::ErrorBorrow<
+                    'a,
+                >;
+                pub type IncomingValue = super::super::super::super::exports::wasi::keyvalue::types::IncomingValue;
+                pub type IncomingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::IncomingValueBorrow<
+                    'a,
+                >;
+                pub type Key = super::super::super::super::exports::wasi::keyvalue::types::Key;
+                pub type OutgoingValue = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValue;
+                pub type OutgoingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValueBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::get(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            match e {
+                                Some(e) => {
+                                    *ptr2.add(4).cast::<u8>() = (1i32) as u8;
+                                    *ptr2.add(8).cast::<i32>() = (e).take_handle() as i32;
+                                }
+                                None => {
+                                    *ptr2.add(4).cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_set_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::set(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                        OutgoingValueBorrow::lift(arg3 as u32 as usize),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_delete_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::delete(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(_) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_exists_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::exists(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        _rt::string_lift(bytes0),
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr2.add(4).cast::<u8>() = (match e {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr2.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr2
+                }
+                pub trait Guest {
+                    /// Get the value associated with the key in the bucket.
+                    ///
+                    /// The value is returned as an option. If the key-value pair exists in the
+                    /// bucket, it returns `Ok(value)`. If the key does not exist in the
+                    /// bucket, it returns `Ok(none)`.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn get(
+                        bucket: BucketBorrow<'_>,
+                        key: Key,
+                    ) -> Result<Option<IncomingValue>, Error>;
+                    /// Set the value associated with the key in the bucket. If the key already
+                    /// exists in the bucket, it overwrites the value.
+                    ///
+                    /// If the key does not exist in the bucket, it creates a new key-value pair.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn set(
+                        bucket: BucketBorrow<'_>,
+                        key: Key,
+                        outgoing_value: OutgoingValueBorrow<'_>,
+                    ) -> Result<(), Error>;
+                    /// Delete the key-value pair associated with the key in the bucket.
+                    ///
+                    /// If the key does not exist in the bucket, it does nothing.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn delete(bucket: BucketBorrow<'_>, key: Key) -> Result<(), Error>;
+                    /// Check if the key exists in the bucket.
+                    ///
+                    /// If the key exists in the bucket, it returns `Ok(true)`. If the key does
+                    /// not exist in the bucket, it returns `Ok(false)`.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn exists(bucket: BucketBorrow<'_>, key: Key) -> Result<bool, Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_eventual_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/eventual@0.1.0#get"] unsafe extern "C" fn
+                        export_get(arg0 : i32, arg1 : * mut u8, arg2 : usize,) -> * mut
+                        u8 { $($path_to_types)*:: _export_get_cabi::<$ty > (arg0, arg1,
+                        arg2) } #[export_name = "wasi:keyvalue/eventual@0.1.0#set"]
+                        unsafe extern "C" fn export_set(arg0 : i32, arg1 : * mut u8, arg2
+                        : usize, arg3 : i32,) -> * mut u8 { $($path_to_types)*::
+                        _export_set_cabi::<$ty > (arg0, arg1, arg2, arg3) } #[export_name
+                        = "wasi:keyvalue/eventual@0.1.0#delete"] unsafe extern "C" fn
+                        export_delete(arg0 : i32, arg1 : * mut u8, arg2 : usize,) -> *
+                        mut u8 { $($path_to_types)*:: _export_delete_cabi::<$ty > (arg0,
+                        arg1, arg2) } #[export_name =
+                        "wasi:keyvalue/eventual@0.1.0#exists"] unsafe extern "C" fn
+                        export_exists(arg0 : i32, arg1 : * mut u8, arg2 : usize,) -> *
+                        mut u8 { $($path_to_types)*:: _export_exists_cabi::<$ty > (arg0,
+                        arg1, arg2) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_eventual_0_1_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 12],
+                );
+            }
+            /// A keyvalue interface that provides eventually consistent batch operations.
+            ///
+            /// A batch operation is an operation that operates on multiple keys at once.
+            ///
+            /// Batch operations are useful for reducing network round-trip time. For example,
+            /// if you want to get the values associated with 100 keys, you can either do 100 get
+            /// operations or you can do 1 batch get operation. The batch operation is
+            /// faster because it only needs to make 1 network call instead of 100.
+            ///
+            /// A batch operation does not guarantee atomicity, meaning that if the batch
+            /// operation fails, some of the keys may have been modified and some may not.
+            /// Transactional operations are being worked on and will be added in the future to
+            /// provide atomicity.
+            ///
+            /// Data consistency in a key value store refers to the gaurantee that once a
+            /// write operation completes, all subsequent read operations will return the
+            /// value that was written.
+            ///
+            /// The level of consistency in batch operations is **eventual consistency**, the same
+            /// with the readwrite interface. This interface does not guarantee strong consistency,
+            /// meaning that if a write operation completes, subsequent read operations may not return
+            /// the value that was written.
+            #[allow(dead_code, clippy::all)]
+            pub mod eventual_batch {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Bucket = super::super::super::super::exports::wasi::keyvalue::types::Bucket;
+                pub type BucketBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::BucketBorrow<
+                    'a,
+                >;
+                pub type Error = super::super::super::super::exports::wasi::keyvalue::types::Error;
+                pub type ErrorBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::ErrorBorrow<
+                    'a,
+                >;
+                pub type Key = super::super::super::super::exports::wasi::keyvalue::types::Key;
+                pub type IncomingValue = super::super::super::super::exports::wasi::keyvalue::types::IncomingValue;
+                pub type IncomingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::IncomingValueBorrow<
+                    'a,
+                >;
+                pub type OutgoingValue = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValue;
+                pub type OutgoingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::OutgoingValueBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_many_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base3 = arg1;
+                    let len3 = arg2;
+                    let mut result3 = _rt::Vec::with_capacity(len3);
+                    for i in 0..len3 {
+                        let base = base3.add(i * 8);
+                        let e3 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base.add(4).cast::<usize>();
+                            let len2 = l1;
+                            let bytes2 = _rt::Vec::from_raw_parts(l0.cast(), len2, len2);
+                            _rt::string_lift(bytes2)
+                        };
+                        result3.push(e3);
+                    }
+                    _rt::cabi_dealloc(base3, len3 * 8, 4);
+                    let result4 = T::get_many(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        result3,
+                    );
+                    let ptr5 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result4 {
+                        Ok(e) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec6 = e;
+                            let len6 = vec6.len();
+                            let layout6 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec6.len() * 8,
+                                4,
+                            );
+                            let result6 = if layout6.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout6);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec6.into_iter().enumerate() {
+                                let base = result6.add(i * 8);
+                                {
+                                    match e {
+                                        Some(e) => {
+                                            *base.add(0).cast::<u8>() = (1i32) as u8;
+                                            *base.add(4).cast::<i32>() = (e).take_handle() as i32;
+                                        }
+                                        None => {
+                                            *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        }
+                                    };
+                                }
+                            }
+                            *ptr5.add(8).cast::<usize>() = len6;
+                            *ptr5.add(4).cast::<*mut u8>() = result6;
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr5.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr5
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_many<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            let base3 = l1;
+                            let len3 = l2;
+                            _rt::cabi_dealloc(base3, len3 * 8, 4);
+                        }
+                        _ => {}
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_keys_cabi<T: Guest>(arg0: i32) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::keys(BucketBorrow::lift(arg0 as u32 as usize));
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Ok(e) => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec3 = e;
+                            let len3 = vec3.len();
+                            let layout3 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec3.len() * 8,
+                                4,
+                            );
+                            let result3 = if layout3.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout3).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout3);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec3.into_iter().enumerate() {
+                                let base = result3.add(i * 8);
+                                {
+                                    let vec2 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                                    let len2 = vec2.len();
+                                    ::core::mem::forget(vec2);
+                                    *base.add(4).cast::<usize>() = len2;
+                                    *base.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                                }
+                            }
+                            *ptr1.add(8).cast::<usize>() = len3;
+                            *ptr1.add(4).cast::<*mut u8>() = result3;
+                        }
+                        Err(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr1.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_keys<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0.add(4).cast::<*mut u8>();
+                            let l2 = *arg0.add(8).cast::<usize>();
+                            let base5 = l1;
+                            let len5 = l2;
+                            for i in 0..len5 {
+                                let base = base5.add(i * 8);
+                                {
+                                    let l3 = *base.add(0).cast::<*mut u8>();
+                                    let l4 = *base.add(4).cast::<usize>();
+                                    _rt::cabi_dealloc(l3, l4, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base5, len5 * 8, 4);
+                        }
+                        _ => {}
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_set_many_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base4 = arg1;
+                    let len4 = arg2;
+                    let mut result4 = _rt::Vec::with_capacity(len4);
+                    for i in 0..len4 {
+                        let base = base4.add(i * 12);
+                        let e4 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base.add(4).cast::<usize>();
+                            let len2 = l1;
+                            let bytes2 = _rt::Vec::from_raw_parts(l0.cast(), len2, len2);
+                            let l3 = *base.add(8).cast::<i32>();
+                            (
+                                _rt::string_lift(bytes2),
+                                OutgoingValueBorrow::lift(l3 as u32 as usize),
+                            )
+                        };
+                        result4.push(e4);
+                    }
+                    _rt::cabi_dealloc(base4, len4 * 12, 4);
+                    let result5 = T::set_many(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        result4,
+                    );
+                    let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result5 {
+                        Ok(_) => {
+                            *ptr6.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr6.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr6.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr6
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_delete_many_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base3 = arg1;
+                    let len3 = arg2;
+                    let mut result3 = _rt::Vec::with_capacity(len3);
+                    for i in 0..len3 {
+                        let base = base3.add(i * 8);
+                        let e3 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base.add(4).cast::<usize>();
+                            let len2 = l1;
+                            let bytes2 = _rt::Vec::from_raw_parts(l0.cast(), len2, len2);
+                            _rt::string_lift(bytes2)
+                        };
+                        result3.push(e3);
+                    }
+                    _rt::cabi_dealloc(base3, len3 * 8, 4);
+                    let result4 = T::delete_many(
+                        BucketBorrow::lift(arg0 as u32 as usize),
+                        result3,
+                    );
+                    let ptr5 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result4 {
+                        Ok(_) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            *ptr5.add(4).cast::<i32>() = (e).take_handle() as i32;
+                        }
+                    };
+                    ptr5
+                }
+                pub trait Guest {
+                    /// Get the values associated with the keys in the bucket. It returns a list of
+                    /// incoming-value that can be consumed to get the value associated with the key.
+                    ///
+                    /// If any of the keys do not exist in the bucket, it returns a `none` value for
+                    /// that key in the list.
+                    ///
+                    /// Note that the key-value pairs are guaranteed to be returned in the same order
+                    ///
+                    /// MAY show an out-of-date value if there are concurrent writes to the bucket.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    fn get_many(
+                        bucket: BucketBorrow<'_>,
+                        keys: _rt::Vec<Key>,
+                    ) -> Result<_rt::Vec<Option<IncomingValue>>, Error>;
+                    /// Get all the keys in the bucket. It returns a list of keys.
+                    ///
+                    /// Note that the keys are not guaranteed to be returned in any particular order.
+                    ///
+                    /// If the bucket is empty, it returns an empty list.
+                    ///
+                    /// MAY show an out-of-date list of keys if there are concurrent writes to the bucket.
+                    ///
+                    /// If any error occurs, it returns an `Err(error)`.
+                    fn keys(bucket: BucketBorrow<'_>) -> Result<_rt::Vec<Key>, Error>;
+                    /// Set the values associated with the keys in the bucket. If the key already
+                    /// exists in the bucket, it overwrites the value.
+                    ///
+                    /// Note that the key-value pairs are not guaranteed to be set in the order
+                    /// they are provided.
+                    ///
+                    /// If any of the keys do not exist in the bucket, it creates a new key-value pair.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+                    /// does not rollback the key-value pairs that were already set. Thus, this batch operation
+                    /// does not guarantee atomicity, implying that some key-value pairs could be
+                    /// set while others might fail.
+                    ///
+                    /// Other concurrent operations may also be able to see the partial results.
+                    fn set_many(
+                        bucket: BucketBorrow<'_>,
+                        key_values: _rt::Vec<(Key, OutgoingValueBorrow<'_>)>,
+                    ) -> Result<(), Error>;
+                    /// Delete the key-value pairs associated with the keys in the bucket.
+                    ///
+                    /// Note that the key-value pairs are not guaranteed to be deleted in the order
+                    /// they are provided.
+                    ///
+                    /// If any of the keys do not exist in the bucket, it skips the key.
+                    ///
+                    /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+                    /// does not rollback the key-value pairs that were already deleted. Thus, this batch operation
+                    /// does not guarantee atomicity, implying that some key-value pairs could be
+                    /// deleted while others might fail.
+                    ///
+                    /// Other concurrent operations may also be able to see the partial results.
+                    fn delete_many(
+                        bucket: BucketBorrow<'_>,
+                        keys: _rt::Vec<Key>,
+                    ) -> Result<(), Error>;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_eventual_batch_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/eventual-batch@0.1.0#get-many"] unsafe extern "C"
+                        fn export_get_many(arg0 : i32, arg1 : * mut u8, arg2 : usize,) ->
+                        * mut u8 { $($path_to_types)*:: _export_get_many_cabi::<$ty >
+                        (arg0, arg1, arg2) } #[export_name =
+                        "cabi_post_wasi:keyvalue/eventual-batch@0.1.0#get-many"] unsafe
+                        extern "C" fn _post_return_get_many(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_get_many::<$ty > (arg0) }
+                        #[export_name = "wasi:keyvalue/eventual-batch@0.1.0#keys"] unsafe
+                        extern "C" fn export_keys(arg0 : i32,) -> * mut u8 {
+                        $($path_to_types)*:: _export_keys_cabi::<$ty > (arg0) }
+                        #[export_name =
+                        "cabi_post_wasi:keyvalue/eventual-batch@0.1.0#keys"] unsafe
+                        extern "C" fn _post_return_keys(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_keys::<$ty > (arg0) }
+                        #[export_name = "wasi:keyvalue/eventual-batch@0.1.0#set-many"]
+                        unsafe extern "C" fn export_set_many(arg0 : i32, arg1 : * mut u8,
+                        arg2 : usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_set_many_cabi::<$ty > (arg0, arg1, arg2) } #[export_name
+                        = "wasi:keyvalue/eventual-batch@0.1.0#delete-many"] unsafe extern
+                        "C" fn export_delete_many(arg0 : i32, arg1 : * mut u8, arg2 :
+                        usize,) -> * mut u8 { $($path_to_types)*::
+                        _export_delete_many_cabi::<$ty > (arg0, arg1, arg2) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_eventual_batch_0_1_0_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 12]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 12],
+                );
+            }
+            /// A keyvalue interface that provides handle-watch operations.
+            ///
+            /// This interface is used to provide event-driven mechanisms to handle
+            /// keyvalue changes.
+            #[allow(dead_code, clippy::all)]
+            pub mod handle_watch {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Bucket = super::super::super::super::exports::wasi::keyvalue::types::Bucket;
+                pub type BucketBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::BucketBorrow<
+                    'a,
+                >;
+                pub type Key = super::super::super::super::exports::wasi::keyvalue::types::Key;
+                pub type IncomingValue = super::super::super::super::exports::wasi::keyvalue::types::IncomingValue;
+                pub type IncomingValueBorrow<'a> = super::super::super::super::exports::wasi::keyvalue::types::IncomingValueBorrow<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_on_set_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                    arg3: i32,
+                ) {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    T::on_set(
+                        super::super::super::super::exports::wasi::keyvalue::types::Bucket::from_handle(
+                            arg0 as u32,
+                        ),
+                        _rt::string_lift(bytes0),
+                        IncomingValueBorrow::lift(arg3 as u32 as usize),
+                    );
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_on_delete_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg2;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    T::on_delete(
+                        super::super::super::super::exports::wasi::keyvalue::types::Bucket::from_handle(
+                            arg0 as u32,
+                        ),
+                        _rt::string_lift(bytes0),
+                    );
+                }
+                pub trait Guest {
+                    /// Handle the `set` event for the given bucket and key.
+                    /// It returns a `incoming-value` that represents the new value being set.
+                    /// The new value can be consumed by the handler.
+                    fn on_set(
+                        bucket: Bucket,
+                        key: Key,
+                        incoming_value: IncomingValueBorrow<'_>,
+                    );
+                    /// Handle the `delete` event for the given bucket and key.
+                    /// It returns a `key` that represents the key being deleted.
+                    fn on_delete(bucket: Bucket, key: Key);
+                }
+                #[doc(hidden)]
+                macro_rules! __export_wasi_keyvalue_handle_watch_0_1_0_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[export_name =
+                        "wasi:keyvalue/handle-watch@0.1.0#on-set"] unsafe extern "C" fn
+                        export_on_set(arg0 : i32, arg1 : * mut u8, arg2 : usize, arg3 :
+                        i32,) { $($path_to_types)*:: _export_on_set_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3) } #[export_name =
+                        "wasi:keyvalue/handle-watch@0.1.0#on-delete"] unsafe extern "C"
+                        fn export_on_delete(arg0 : i32, arg1 : * mut u8, arg2 : usize,) {
+                        $($path_to_types)*:: _export_on_delete_cabi::<$ty > (arg0, arg1,
+                        arg2) } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_wasi_keyvalue_handle_watch_0_1_0_cabi;
+            }
+        }
         pub mod logging {
             /// WASI Logging is a logging API intended to let users emit log messages with
             /// simple priority levels and context values.
@@ -45810,22 +51257,22 @@ pub mod exports {
                             ErrorCode::AccessDenied => {
                                 "Access denied.
 
-                                                                        POSIX equivalent: EACCES, EPERM"
+                  POSIX equivalent: EACCES, EPERM"
                             }
                             ErrorCode::NotSupported => {
                                 "The operation is not supported.
 
-                                                                        POSIX equivalent: EOPNOTSUPP"
+                  POSIX equivalent: EOPNOTSUPP"
                             }
                             ErrorCode::InvalidArgument => {
                                 "One of the arguments is invalid.
 
-                                                                        POSIX equivalent: EINVAL"
+                  POSIX equivalent: EINVAL"
                             }
                             ErrorCode::OutOfMemory => {
                                 "Not enough memory to complete the operation.
 
-                                                                        POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
+                  POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
                             }
                             ErrorCode::Timeout => {
                                 "The operation timed out before it could finish completely."
@@ -45833,19 +51280,19 @@ pub mod exports {
                             ErrorCode::ConcurrencyConflict => {
                                 "This operation is incompatible with another asynchronous operation that is already in progress.
 
-                                                                        POSIX equivalent: EALREADY"
+                  POSIX equivalent: EALREADY"
                             }
                             ErrorCode::NotInProgress => {
                                 "Trying to finish an asynchronous operation that:
-                                                                        - has not been started yet, or:
-                                                                        - was already finished by a previous `finish-*` call.
+                  - has not been started yet, or:
+                  - was already finished by a previous `finish-*` call.
 
-                                                                        Note: this is scheduled to be removed when `future`s are natively supported."
+                  Note: this is scheduled to be removed when `future`s are natively supported."
                             }
                             ErrorCode::WouldBlock => {
                                 "The operation has been aborted because it could not be completed immediately.
 
-                                                                        Note: this is scheduled to be removed when `future`s are natively supported."
+                  Note: this is scheduled to be removed when `future`s are natively supported."
                             }
                             ErrorCode::InvalidState => {
                                 "The operation is not valid in the socket's current state."
@@ -45871,7 +51318,7 @@ pub mod exports {
                             }
                             ErrorCode::DatagramTooLarge => {
                                 "The size of a datagram sent to a UDP socket exceeded the maximum
-                                                                        supported size."
+                  supported size."
                             }
                             ErrorCode::NameUnresolvable => {
                                 "Name does not exist or has no suitable associated IP addresses."
@@ -49942,7 +55389,7 @@ mod _rt {
     pub trait AsI64 {
         fn as_i64(self) -> i64;
     }
-    impl<T: Copy + AsI64> AsI64 for &T {
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
         fn as_i64(self) -> i64 {
             (*self).as_i64()
         }
@@ -49950,7 +55397,7 @@ mod _rt {
     impl AsI64 for i64 {
         #[inline]
         fn as_i64(self) -> i64 {
-            self
+            self as i64
         }
     }
     impl AsI64 for u64 {
@@ -49979,7 +55426,7 @@ mod _rt {
     pub trait AsI32 {
         fn as_i32(self) -> i32;
     }
-    impl<T: Copy + AsI32> AsI32 for &T {
+    impl<'a, T: Copy + AsI32> AsI32 for &'a T {
         fn as_i32(self) -> i32 {
             (*self).as_i32()
         }
@@ -49987,7 +55434,7 @@ mod _rt {
     impl AsI32 for i32 {
         #[inline]
         fn as_i32(self) -> i32 {
-            self
+            self as i32
         }
     }
     impl AsI32 for u32 {
@@ -50038,7 +55485,7 @@ mod _rt {
     pub trait AsF32 {
         fn as_f32(self) -> f32;
     }
-    impl<T: Copy + AsF32> AsF32 for &T {
+    impl<'a, T: Copy + AsF32> AsF32 for &'a T {
         fn as_f32(self) -> f32 {
             (*self).as_f32()
         }
@@ -50046,7 +55493,7 @@ mod _rt {
     impl AsF32 for f32 {
         #[inline]
         fn as_f32(self) -> f32 {
-            self
+            self as f32
         }
     }
     pub fn as_f64<T: AsF64>(t: T) -> f64 {
@@ -50055,7 +55502,7 @@ mod _rt {
     pub trait AsF64 {
         fn as_f64(self) -> f64;
     }
-    impl<T: Copy + AsF64> AsF64 for &T {
+    impl<'a, T: Copy + AsF64> AsF64 for &'a T {
         fn as_f64(self) -> f64 {
             (*self).as_f64()
         }
@@ -50063,7 +55510,7 @@ mod _rt {
     impl AsF64 for f64 {
         #[inline]
         fn as_f64(self) -> f64 {
-            self
+            self as f64
         }
     }
     pub unsafe fn char_lift(val: u32) -> char {
@@ -50166,6 +55613,27 @@ macro_rules! __export_durable_wasi_impl {
         exports::wasi::http::outgoing_handler::__export_wasi_http_outgoing_handler_0_2_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::http::outgoing_handler);
         $($path_to_types_root)*::
+        exports::wasi::keyvalue::wasi_keyvalue_error::__export_wasi_keyvalue_wasi_keyvalue_error_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*::
+        exports::wasi::keyvalue::wasi_keyvalue_error); $($path_to_types_root)*::
+        exports::wasi::keyvalue::types::__export_wasi_keyvalue_types_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::types);
+        $($path_to_types_root)*::
+        exports::wasi::keyvalue::atomic::__export_wasi_keyvalue_atomic_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::atomic);
+        $($path_to_types_root)*::
+        exports::wasi::keyvalue::cache::__export_wasi_keyvalue_cache_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::cache);
+        $($path_to_types_root)*::
+        exports::wasi::keyvalue::eventual::__export_wasi_keyvalue_eventual_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::eventual);
+        $($path_to_types_root)*::
+        exports::wasi::keyvalue::eventual_batch::__export_wasi_keyvalue_eventual_batch_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::eventual_batch);
+        $($path_to_types_root)*::
+        exports::wasi::keyvalue::handle_watch::__export_wasi_keyvalue_handle_watch_0_1_0_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::wasi::keyvalue::handle_watch);
+        $($path_to_types_root)*::
         exports::wasi::logging::logging::__export_wasi_logging_logging_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::wasi::logging::logging);
         $($path_to_types_root)*::
@@ -50206,9 +55674,9 @@ pub(crate) use __export_durable_wasi_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:wasi:durable-wasi:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 42749] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf9\xcc\x02\x01A\x02\
-\x01A\xb6\x01\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 48656] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8c\xfb\x02\x01A\x02\
+\x01A\xd8\x01\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\
 \0\x1d[method]error.to-debug-string\x01\x02\x03\0\x13wasi:io/error@0.2.0\x05\0\x01\
 B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
 od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
@@ -50463,540 +55931,111 @@ est\x02\x03\0\x14\x0frequest-options\x02\x03\0\x14\x18future-incoming-response\x
 future-incoming-response\x03\0\x04\x02\x03\x02\x01+\x04\0\x0aerror-code\x03\0\x06\
 \x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\
 \x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:http/outgoing-handle\
-r@0.2.0\x05,\x01B\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05error\x08cri\
-tical\x04\0\x05level\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messages\x01\0\
-\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/logging\x05-\x01B\x05\x01p}\x01@\x01\
-\x03lenw\0\0\x04\0\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\x17get-i\
-nsecure-random-u64\x01\x02\x03\0\x1awasi:random/insecure@0.2.0\x05.\x01B\x03\x01\
-o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\x01\x03\0\x1fwasi:random/insecure-\
-seed@0.2.0\x05/\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\
-\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\x03\0\x18wasi:random/random@0.2.0\
-\x050\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0d\
-not-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concurrency-con\
-flict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14\
-address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connection-refus\
-ed\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11name-unres\
-olvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerr\
-or-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01\
-o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\
-\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\
-\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01\
-r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-ad\
-dress\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-\
-address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.0\x051\x02\x03\0\x1a\x07netw\
-ork\x01B\x05\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\
-\0\x10instance-network\x01\x03\x03\0#wasi:sockets/instance-network@0.2.0\x053\x02\
-\x03\0\x1a\x0aerror-code\x02\x03\0\x1a\x0aip-address\x01B\x16\x02\x03\x02\x01\x03\
-\x04\0\x08pollable\x03\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\
-\x014\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x015\x04\0\x0aip-address\x03\0\x06\
+r@0.2.0\x05,\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\
+\x13[method]error.trace\x01\x02\x03\0'wasi:keyvalue/wasi-keyvalue-error@0.1.0\x05\
+-\x02\x03\0\x16\x05error\x01B,\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\
+\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01.\x04\0\x05\
+error\x03\0\x04\x04\0\x06bucket\x03\x01\x01s\x04\0\x03key\x03\0\x07\x04\0\x0eout\
+going-value\x03\x01\x04\0\x19outgoing-value-body-async\x03\0\x03\x01p}\x04\0\x18\
+outgoing-value-body-sync\x03\0\x0b\x04\0\x0eincoming-value\x03\x01\x04\0\x19inco\
+ming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-body\x03\0\x0f\
+\x01i\x06\x01i\x05\x01j\x01\x11\x01\x12\x01@\x01\x04names\0\x13\x04\0\x1a[static\
+]bucket.open-bucket\x01\x14\x01i\x09\x01@\0\0\x15\x04\0)[static]outgoing-value.n\
+ew-outgoing-value\x01\x16\x01h\x09\x01i\x0a\x01j\x01\x18\x01\x12\x01@\x01\x04sel\
+f\x17\0\x19\x04\06[method]outgoing-value.outgoing-value-write-body-async\x01\x1a\
+\x01j\0\x01\x12\x01@\x02\x04self\x17\x05value\x0c\0\x1b\x04\05[method]outgoing-v\
+alue.outgoing-value-write-body-sync\x01\x1c\x01h\x0d\x01j\x01\x10\x01\x12\x01@\x01\
+\x04self\x1d\0\x1e\x04\02[method]incoming-value.incoming-value-consume-sync\x01\x1f\
+\x01i\x0e\x01j\x01\x20\x01\x12\x01@\x01\x04self\x1d\0!\x04\03[method]incoming-va\
+lue.incoming-value-consume-async\x01\"\x01j\x01w\x01\x12\x01@\x01\x04self\x1d\0#\
+\x04\0*[method]incoming-value.incoming-value-size\x01$\x03\0\x19wasi:keyvalue/ty\
+pes@0.1.0\x05/\x02\x03\0\x17\x06bucket\x02\x03\0\x17\x05error\x02\x03\0\x17\x03k\
+ey\x01B\x0e\x02\x03\x02\x010\x04\0\x06bucket\x03\0\0\x02\x03\x02\x011\x04\0\x05e\
+rror\x03\0\x02\x02\x03\x02\x012\x04\0\x03key\x03\0\x04\x01h\x01\x01i\x03\x01j\x01\
+w\x01\x07\x01@\x03\x06bucket\x06\x03key\x05\x05deltaw\0\x08\x04\0\x09increment\x01\
+\x09\x01j\x01\x7f\x01\x07\x01@\x04\x06bucket\x06\x03key\x05\x03oldw\x03neww\0\x0a\
+\x04\0\x10compare-and-swap\x01\x0b\x03\0\x1awasi:keyvalue/atomic@0.1.0\x053\x02\x03\
+\0\x17\x0eincoming-value\x02\x03\0\x17\x0eoutgoing-value\x01BF\x02\x03\x02\x01\x03\
+\x04\0\x08pollable\x03\0\0\x02\x03\x02\x012\x04\0\x03key\x03\0\x02\x02\x03\x02\x01\
+4\x04\0\x0eincoming-value\x03\0\x04\x02\x03\x02\x015\x04\0\x0eoutgoing-value\x03\
+\0\x06\x02\x03\x02\x011\x04\0\x05error\x03\0\x08\x04\0\x11future-get-result\x03\x01\
+\x04\0\x14future-exists-result\x03\x01\x04\0\x0dfuture-result\x03\x01\x04\0\x18f\
+uture-get-or-set-result\x03\x01\x04\0\x07vacancy\x03\x01\x01i\x05\x01i\x0e\x01q\x02\
+\x08occupied\x01\x0f\0\x06vacant\x01\x10\0\x04\0\x10get-or-set-entry\x03\0\x11\x01\
+h\x0a\x01k\x0f\x01i\x09\x01j\x01\x14\x01\x15\x01k\x16\x01@\x01\x04self\x13\0\x17\
+\x04\0/[method]future-get-result.future-get-result-get\x01\x18\x01i\x01\x01@\x01\
+\x04self\x13\0\x19\x04\05[method]future-get-result.listen-to-future-get-result\x01\
+\x1a\x01h\x0b\x01j\x01\x7f\x01\x15\x01k\x1c\x01@\x01\x04self\x1b\0\x1d\x04\05[me\
+thod]future-exists-result.future-exists-result-get\x01\x1e\x01@\x01\x04self\x1b\0\
+\x19\x04\0;[method]future-exists-result.listen-to-future-exists-result\x01\x1f\x01\
+h\x0c\x01j\0\x01\x15\x01k!\x01@\x01\x04self\x20\0\"\x04\0'[method]future-result.\
+future-result-get\x01#\x01@\x01\x04self\x20\0\x19\x04\0-[method]future-result.li\
+sten-to-future-result\x01$\x01h\x0d\x01j\x01\x12\x01\x15\x01k&\x01@\x01\x04self%\
+\0'\x04\0=[method]future-get-or-set-result.future-get-or-set-result-get\x01(\x01\
+@\x01\x04self%\0\x19\x04\0C[method]future-get-or-set-result.listen-to-future-get\
+-or-set-result\x01)\x01h\x0e\x01ky\x01i\x07\x01@\x02\x04self*\x06TTL-ms+\0,\x04\0\
+\x1c[method]vacancy.vacancy-fill\x01-\x01i\x0a\x01@\x01\x01k\x03\0.\x04\0\x03get\
+\x01/\x01i\x0b\x01@\x01\x01k\x03\00\x04\0\x06exists\x011\x01h\x07\x01i\x0c\x01@\x03\
+\x01k\x03\x01v2\x06TTL-ms+\03\x04\0\x03set\x014\x01i\x0d\x01@\x01\x01k\x03\05\x04\
+\0\x0aget-or-set\x016\x01@\x01\x01k\x03\03\x04\0\x06delete\x017\x03\0\x19wasi:ke\
+yvalue/cache@0.1.0\x056\x01B\x1a\x02\x03\x02\x010\x04\0\x06bucket\x03\0\0\x02\x03\
+\x02\x011\x04\0\x05error\x03\0\x02\x02\x03\x02\x014\x04\0\x0eincoming-value\x03\0\
+\x04\x02\x03\x02\x012\x04\0\x03key\x03\0\x06\x02\x03\x02\x015\x04\0\x0eoutgoing-\
+value\x03\0\x08\x01h\x01\x01i\x05\x01k\x0b\x01i\x03\x01j\x01\x0c\x01\x0d\x01@\x02\
+\x06bucket\x0a\x03key\x07\0\x0e\x04\0\x03get\x01\x0f\x01h\x09\x01j\0\x01\x0d\x01\
+@\x03\x06bucket\x0a\x03key\x07\x0eoutgoing-value\x10\0\x11\x04\0\x03set\x01\x12\x01\
+@\x02\x06bucket\x0a\x03key\x07\0\x11\x04\0\x06delete\x01\x13\x01j\x01\x7f\x01\x0d\
+\x01@\x02\x06bucket\x0a\x03key\x07\0\x14\x04\0\x06exists\x01\x15\x03\0\x1cwasi:k\
+eyvalue/eventual@0.1.0\x057\x01B\x1e\x02\x03\x02\x010\x04\0\x06bucket\x03\0\0\x02\
+\x03\x02\x011\x04\0\x05error\x03\0\x02\x02\x03\x02\x012\x04\0\x03key\x03\0\x04\x02\
+\x03\x02\x014\x04\0\x0eincoming-value\x03\0\x06\x02\x03\x02\x015\x04\0\x0eoutgoi\
+ng-value\x03\0\x08\x01h\x01\x01p\x05\x01i\x07\x01k\x0c\x01p\x0d\x01i\x03\x01j\x01\
+\x0e\x01\x0f\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x10\x04\0\x08get-many\x01\x11\x01\
+j\x01\x0b\x01\x0f\x01@\x01\x06bucket\x0a\0\x12\x04\0\x04keys\x01\x13\x01h\x09\x01\
+o\x02\x05\x14\x01p\x15\x01j\0\x01\x0f\x01@\x02\x06bucket\x0a\x0akey-values\x16\0\
+\x17\x04\0\x08set-many\x01\x18\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x17\x04\0\x0b\
+delete-many\x01\x19\x03\0\"wasi:keyvalue/eventual-batch@0.1.0\x058\x01B\x0c\x02\x03\
+\x02\x010\x04\0\x06bucket\x03\0\0\x02\x03\x02\x012\x04\0\x03key\x03\0\x02\x02\x03\
+\x02\x014\x04\0\x0eincoming-value\x03\0\x04\x01i\x01\x01h\x05\x01@\x03\x06bucket\
+\x06\x03key\x03\x0eincoming-value\x07\x01\0\x04\0\x06on-set\x01\x08\x01@\x02\x06\
+bucket\x06\x03key\x03\x01\0\x04\0\x09on-delete\x01\x09\x03\0\x20wasi:keyvalue/ha\
+ndle-watch@0.1.0\x059\x01B\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05err\
+or\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messa\
+ges\x01\0\x04\0\x03log\x01\x02\x03\0\x14wasi:logging/logging\x05:\x01B\x05\x01p}\
+\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\
+\x17get-insecure-random-u64\x01\x02\x03\0\x1awasi:random/insecure@0.2.0\x05;\x01\
+B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\x01\x03\0\x1fwasi:random/\
+insecure-seed@0.2.0\x05<\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random\
+-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\x03\0\x18wasi:random/ra\
+ndom@0.2.0\x05=\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-\
+denied\x0dnot-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concu\
+rrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket\
+-limit\x14address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connec\
+tion-refused\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11\
+name-unresolvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\
+\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\
+\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cip\
+v6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-ad\
+dress\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\
+\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6\
+-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11\
+ip-socket-address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.0\x05>\x02\x03\0!\x07\
+network\x01B\x05\x02\x03\x02\x01?\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\
+\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/instance-network@0.2.0\x05\
+@\x02\x03\0!\x0aerror-code\x02\x03\0!\x0aip-address\x01B\x16\x02\x03\x02\x01\x03\
+\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01?\x04\0\x07network\x03\0\x02\x02\x03\x02\
+\x01A\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01B\x04\0\x0aip-address\x03\0\x06\
 \x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01\
 @\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve-next-addres\
 s\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stre\
 am.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\
 \x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lo\
-okup@0.2.0\x056\x02\x03\0\x1a\x11ip-socket-address\x02\x03\0\x1a\x11ip-address-f\
-amily\x01BT\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\
-\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x04\
-\x02\x03\x02\x01&\x04\0\x08duration\x03\0\x06\x02\x03\x02\x012\x04\0\x07network\x03\
-\0\x08\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x017\x04\0\x11\
-ip-socket-address\x03\0\x0c\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x0e\
-\x01m\x03\x07receive\x04send\x04both\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0at\
-cp-socket\x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07netwo\
-rk\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d[method]tcp-socket.start-bind\x01\x16\
-\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]tcp-socket.finish-bind\x01\x17\x01@\
-\x03\x04self\x13\x07network\x14\x0eremote-address\x0d\0\x15\x04\0\x20[method]tcp\
--socket.start-connect\x01\x18\x01i\x01\x01i\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\
-\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![method]tcp-socket.finish-connect\x01\x1d\x04\
-\0\x1f[method]tcp-socket.start-listen\x01\x17\x04\0\x20[method]tcp-socket.finish\
--listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04s\
-elf\x13\0\x20\x04\0\x19[method]tcp-socket.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\
-\x04self\x13\0\"\x04\0\x20[method]tcp-socket.local-address\x01#\x04\0![method]tc\
-p-socket.remote-address\x01#\x01@\x01\x04self\x13\0\x7f\x04\0\x1f[method]tcp-soc\
-ket.is-listening\x01$\x01@\x01\x04self\x13\0\x0f\x04\0![method]tcp-socket.addres\
-s-family\x01%\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]tcp-socket.set-\
-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\x01@\x01\x04self\x13\0'\x04\0%[met\
-hod]tcp-socket.keep-alive-enabled\x01(\x01@\x02\x04self\x13\x05value\x7f\0\x15\x04\
-\0)[method]tcp-socket.set-keep-alive-enabled\x01)\x01j\x01\x07\x01\x0b\x01@\x01\x04\
-self\x13\0*\x04\0'[method]tcp-socket.keep-alive-idle-time\x01+\x01@\x02\x04self\x13\
-\x05value\x07\0\x15\x04\0+[method]tcp-socket.set-keep-alive-idle-time\x01,\x04\0\
-&[method]tcp-socket.keep-alive-interval\x01+\x04\0*[method]tcp-socket.set-keep-a\
-live-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\x04self\x13\0-\x04\0#[method]tcp-s\
-ocket.keep-alive-count\x01.\x01@\x02\x04self\x13\x05valuey\0\x15\x04\0'[method]t\
-cp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\x0b\x01@\x01\x04self\x13\00\x04\
-\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\x04self\x13\x05value}\0\x15\x04\
-\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\
-\03\x04\0&[method]tcp-socket.receive-buffer-size\x014\x04\0*[method]tcp-socket.s\
-et-receive-buffer-size\x01&\x04\0#[method]tcp-socket.send-buffer-size\x014\x04\0\
-'[method]tcp-socket.set-send-buffer-size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\
-\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\
-\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x017\x03\0\x16wasi:sockets/tcp@0.2.0\
-\x059\x02\x03\0\x1d\x0atcp-socket\x01B\x0c\x02\x03\x02\x012\x04\0\x07network\x03\
-\0\0\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip\
--address-family\x03\0\x04\x02\x03\x02\x01:\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\
-\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-tcp-s\
-ocket\x01\x0a\x03\0$wasi:sockets/tcp-create-socket@0.2.0\x05;\x01BD\x02\x03\x02\x01\
-\x03\x04\0\x08pollable\x03\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\
-\x02\x014\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x017\x04\0\x11ip-socket-addr\
-ess\x03\0\x06\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x08\x01p}\x01r\x02\
-\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagram\x03\0\x0b\x01k\x07\
-\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoing-datagram\x03\0\x0e\
-\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-stream\x03\x01\x04\0\x18\
-outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\x05\x01@\x03\x04se\
-lf\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\0\x1d[method]udp-socket.sta\
-rt-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]udp-socket.finish-bi\
-nd\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\x1a\x01\x05\x01@\x02\x04s\
-elf\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]udp-socket.stream\x01\x1c\x01\
-j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20[method]udp-socket.local-a\
-ddress\x01\x1e\x04\0![method]udp-socket.remote-address\x01\x1e\x01@\x01\x04self\x13\
-\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\x01j\x01}\x01\x05\x01@\x01\
-\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-hop-limit\x01!\x01@\x02\x04s\
-elf\x13\x05value}\0\x15\x04\0([method]udp-socket.set-unicast-hop-limit\x01\"\x01\
-j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]udp-socket.receive-buffer-s\
-ize\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[method]udp-socket.set-recei\
-ve-buffer-size\x01%\x04\0#[method]udp-socket.send-buffer-size\x01$\x04\0'[method\
-]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\x04self\x13\0&\x04\0\x1c\
-[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01j\x01)\x01\x05\x01@\x02\x04\
-self(\x0bmax-resultsw\0*\x04\0([method]incoming-datagram-stream.receive\x01+\x01\
-@\x01\x04self(\0&\x04\0*[method]incoming-datagram-stream.subscribe\x01,\x01h\x12\
-\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stream.check-send\x01.\x01\
-p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]outgoing-datagram-stream.\
-send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-datagram-stream.subscribe\x01\
-1\x03\0\x16wasi:sockets/udp@0.2.0\x05<\x02\x03\0\x1f\x0audp-socket\x01B\x0c\x02\x03\
-\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x02\
-\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01=\x04\0\x0a\
-udp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\
-\0\x09\x04\0\x11create-udp-socket\x01\x0a\x03\0$wasi:sockets/udp-create-socket@0\
-.2.0\x05>\x01B@\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode\
--index\x03\0\x02\x01w\x04\0\x0bresource-id\x03\0\x04\x01m\x02\x05owned\x08borrow\
-ed\x04\0\x0dresource-mode\x03\0\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\
-\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-ty\
-pe\x01\x09\0\x0cvariant-type\x01\x0c\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\
-\0\x0atuple-type\x01\x0e\0\x09list-type\x01\x03\0\x0boption-type\x01\x03\0\x0bre\
-sult-type\x01\x0f\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\
-\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\
-\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-t\
-ype\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\
-\0\x0dwit-type-node\x03\0\x11\x01p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\
-\0\x14\x01r\x01\x05values\x04\0\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\
-\x0a\x01\x0a\x01o\x02\x17w\x01q\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\
-\x18\0\x0aenum-value\x01y\0\x0bflags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0a\
-list-value\x01\x0e\0\x0coption-value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim\
--u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01\
-~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01\
-v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-st\
-ring\x01s\0\x06handle\x01\x1b\0\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05\
-nodes\x1e\x04\0\x09wit-value\x03\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0e\
-value-and-type\x03\0!\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-\
-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08\
-wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i%\x01@\x01\x08locatio\
-n\x17\0'\x04\0\x15[constructor]wasm-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01\
-@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0+\x04\0![method]wasm-rpc.i\
-nvoke-and-await\x01,\x01j\0\x01$\x01@\x03\x04self)\x0dfunction-names\x0ffunction\
--params*\0-\x04\0\x17[method]wasm-rpc.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfun\
-ction-names\x0ffunction-params*\0/\x04\0'[method]wasm-rpc.async-invoke-and-await\
-\x010\x01h&\x01i\x01\x01@\x01\x04self1\02\x04\0&[method]future-invoke-result.sub\
-scribe\x013\x01k+\x01@\x01\x04self1\04\x04\0\x20[method]future-invoke-result.get\
-\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0dextract-value\x016\x01@\x01\x03vnt\"\0\x15\
-\x04\0\x0cextract-type\x017\x03\0\x15golem:rpc/types@0.1.1\x05?\x02\x03\0!\x03ur\
-i\x01Bg\x02\x03\x02\x01@\x04\0\x03uri\x03\0\0\x02\x03\x02\x01&\x04\0\x08duration\
-\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\
-\0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04u\
-uid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-n\
-ames\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\
-\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01k\
-u\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09max-delay\x03\x0amultiplieru\x11\
-max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\x13\x01q\x03\x0fpersist-nothin\
-g\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\
-\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x17\
-\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04les\
-s\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05equal\x09not-equal\x04like\x08\
-not-like\x04\0\x18string-filter-comparator\x03\0\x1b\x01m\x07\x07running\x04idle\
-\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-sta\
-tus\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\0\x12worker-name-filter\x03\
-\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\x14worker-status-filter\x03\
-\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15worker-version-filter\x03\0#\x01\
-r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-created-at-filter\x03\0%\x01r\x03\
-\x04names\x0acomparator\x1c\x05values\x04\0\x11worker-env-filter\x03\0'\x01q\x05\
-\x04name\x01\x20\0\x06status\x01\"\0\x07version\x01$\0\x0acreated-at\x01&\0\x03e\
-nv\x01(\0\x04\0\x16worker-property-filter\x03\0)\x01p*\x01r\x01\x07filters+\x04\0\
-\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07filters.\x04\0\x11worker-any-filt\
-er\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09worker-id\x0d\x04args1\x03env3\x06s\
-tatus\x1e\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\04\x04\
-\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\x0ccomponent-id\x0b\x06filter7\x07\
-precise\x7f\08\x04\0\x18[constructor]get-workers\x019\x01h6\x01p5\x01k;\x01@\x01\
-\x04self:\0<\x04\0\x1c[method]get-workers.get-next\x01=\x01@\0\0\x0f\x04\0\x0ecr\
-eate-promise\x01>\x01p}\x01@\x01\x0apromise-id\x0f\0?\x04\0\x0dawait-promise\x01\
-@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\0\x10complete-promise\x01A\x01@\x01\
-\x0apromise-id\x0f\x01\0\x04\0\x0edelete-promise\x01B\x01@\0\0\x05\x04\0\x0fget-\
-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01D\x01\
-@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01E\x04\0\x14mark-begin-operatio\
-n\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operation\x01F\x01@\0\0\x14\
-\x04\0\x10get-retry-policy\x01G\x01@\x01\x10new-retry-policy\x14\x01\0\x04\0\x10\
-set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1bget-oplog-persistence-level\x01I\x01\
-@\x01\x15new-persistence-level\x16\x01\0\x04\0\x1bset-oplog-persistence-level\x01\
-J\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01K\x01@\x01\x0aidempotent\x7f\x01\
-\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\0\x09\x04\0\x18generate-idempotency\
--key\x01M\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x18\x01\0\x04\0\
-\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11get-self-metadata\x01O\x01k5\x01@\x01\x09\
-worker-id\x0d\0\xd0\0\x04\0\x13get-worker-metadata\x01Q\x03\0\x14golem:api/host@\
-1.1.0\x05A\x02\x03\0!\x09wit-value\x02\x03\0\"\x0aaccount-id\x02\x03\0\"\x11comp\
-onent-version\x02\x03\0\"\x0boplog-index\x02\x03\0\"\x0cretry-policy\x02\x03\0\"\
-\x04uuid\x02\x03\0\"\x09worker-id\x01Be\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\
-\0\x02\x03\x02\x01B\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01C\x04\0\x0aaccou\
-nt-id\x03\0\x04\x02\x03\x02\x01D\x04\0\x11component-version\x03\0\x06\x02\x03\x02\
-\x01E\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01F\x04\0\x0cretry-policy\x03\0\
-\x0a\x02\x03\x02\x01G\x04\0\x04uuid\x03\0\x0c\x02\x03\x02\x01H\x04\0\x09worker-i\
-d\x03\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remot\
-e\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\x10\0\x04\0\x15wrapped-fun\
-ction-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0finstallation-id\x0d\x04name\
-s\x07versions\x0aparameters\x14\x04\0\x1fplugin-installation-description\x03\0\x15\
-\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09worker-id\x0f\x11component\
--version\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06parent\x18\x0ecomponent\
--sizew\x20initial-total-linear-memory-sizew\x16initial-active-plugins\x19\x04\0\x11\
-create-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0dfunction-names\x07reque\
-st\x03\x08response\x03\x15wrapped-function-type\x12\x04\0$imported-function-invo\
-ked-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\x0dfunction-names\x07\
-request\x1e\x0fidempotency-keys\x04\0$exported-function-invoked-parameters\x03\0\
-\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed-fuelx\x04\0&exported-\
-function-completed-parameters\x03\0!\x01r\x02\x09timestamp\x01\x05errors\x04\0\x10\
-error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\x0f\
-jump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cretry-policy\x0b\x04\0\x1ech\
-ange-retry-policy-parameters\x03\0'\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\
-\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\x09timestamp\x01\x0bbegin\
--index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\x01k\x1e\x01r\x03\x0fidem\
-potency-keys\x0dfunction-names\x05input-\x04\0'exported-function-invocation-para\
-meters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0dmanual-update\x01\x07\0\x04\
-\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\x0ainvocation1\x04\0$pe\
-nding-worker-invocation-parameters\x03\02\x01p}\x01q\x02\x0bauto-update\0\0\x0es\
-napshot-based\x014\0\x04\0\x12update-description\x03\05\x01r\x03\x09timestamp\x01\
-\x0etarget-version\x07\x12update-description6\x04\0\x19pending-update-parameters\
-\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12new-component-sizew\x12\
-new-active-plugins\x19\x04\0\x1csuccessful-update-parameters\x03\09\x01ks\x01r\x03\
-\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\0\x18failed-update-param\
-eters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16grow-memory-parameters\
-\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09timestamp\x01\x0bres\
-ource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01r\x02\x09timestamp\x01\
-\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\0D\x01r\x04\x09times\
-tamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource-params\x1e\x04\0\x1c\
-describe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06stderr\x05trace\x05deb\
-ug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\0H\x01r\x04\x09ti\
-mestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elog-parameters\x03\0\
-J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-plugin-parameters\x03\
-\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactivate-plugin-parameter\
-s\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-invoked\x01\x1d\0\x19\
-exported-function-invoked\x01\x20\0\x1bexported-function-completed\x01\"\0\x07su\
-spend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01&\0\x0binterrupted\
-\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13begin-atomic-reg\
-ion\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\x01\0\x10end\
--remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending-update\x018\0\
-\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memory\x01?\0\x0fcr\
-eate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe-resource\x01\xc7\
-\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\x01\xcd\0\0\x11d\
-eactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09get-oplog\x03\x01\
-\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05start\x09\0\xd4\
-\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\0\x01@\x01\x04\
-self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\x01@\x02\x09wo\
-rker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01[\x01hS\x01o\x02\
-\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\0\x1d[method\
-]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x05I\x02\x03\0\"\x11p\
-ersistence-level\x02\x03\0#\x0boplog-index\x02\x03\0#\x15wrapped-function-type\x02\
-\x03\0!\x0evalue-and-type\x01B\x20\x02\x03\x02\x01J\x04\0\x11persistence-level\x03\
-\0\0\x02\x03\x02\x01K\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\x01L\x04\0\x15w\
-rapped-function-type\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\x06\x02\
-\x03\x02\x01M\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable-function-type\x03\
-\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17durable-executi\
-on-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-version\x03\0\x0d\x01\
-p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0dfunction-type\x0a\
-\x0dentry-version\x0e\x04\0%persisted-durable-function-invocation\x03\0\x10\x01@\
-\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-call\x01\x12\x01@\x01\
-\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\x13\x01@\x02\x0d\
-function-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable-function\x01\x14\
-\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01@\x04\x0dfunct\
-ion-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\x04\0#persis\
-t-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07request\x09\x08\
-response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durable-function-inv\
-ocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-function-invocation\x01\
-\x18\x03\0!golem:durability/durability@1.2.0\x05N\x01B\x04\x04\0\x05error\x03\x01\
-\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\x04\
-\0\x13wasi:io/error@0.2.0\x05O\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\
-\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\
-\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\
-\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.0\x05P\x01B(\x02\x03\x02\x01\x02\
-\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01i\x01\
-\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\
-\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\
-\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]\
-input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\
-\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.s\
-kip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04\
-self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\
-\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\
-\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\
-\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04\
-self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output\
--stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]outpu\
-t-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]out\
-put-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroe\
-s-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[meth\
-od]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\
-\x04\0\x15wasi:io/streams@0.2.0\x05Q\x01B+\x02\x03\x02\x01\x05\x04\0\x0cinput-st\
-ream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x01s\x04\0\x0e\
-container-name\x03\0\x04\x01s\x04\0\x0bobject-name\x03\0\x06\x01w\x04\0\x09times\
-tamp\x03\0\x08\x01w\x04\0\x0bobject-size\x03\0\x0a\x01s\x04\0\x05error\x03\0\x0c\
-\x01r\x02\x04name\x05\x0acreated-at\x09\x04\0\x12container-metadata\x03\0\x0e\x01\
-r\x04\x04name\x07\x09container\x05\x0acreated-at\x09\x04size\x0b\x04\0\x0fobject\
--metadata\x03\0\x10\x01r\x02\x09container\x05\x06object\x07\x04\0\x09object-id\x03\
-\0\x12\x04\0\x0eoutgoing-value\x03\x01\x04\0\x0eincoming-value\x03\x01\x04\0\x19\
-incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync-body\x03\0\
-\x17\x01i\x14\x01@\0\0\x19\x04\0)[static]outgoing-value.new-outgoing-value\x01\x1a\
-\x01h\x14\x01i\x03\x01j\x01\x1c\0\x01@\x01\x04self\x1b\0\x1d\x04\00[method]outgo\
-ing-value.outgoing-value-write-body\x01\x1e\x01h\x15\x01j\x01\x18\x01\x0d\x01@\x01\
-\x04self\x1f\0\x20\x04\02[method]incoming-value.incoming-value-consume-sync\x01!\
-\x01i\x16\x01j\x01\"\x01\x0d\x01@\x01\x04self\x1f\0#\x04\03[method]incoming-valu\
-e.incoming-value-consume-async\x01$\x01@\x01\x04self\x1f\0w\x04\0\x1b[method]inc\
-oming-value.size\x01%\x04\0\x14wasi:blobstore/types\x05R\x01B;\x02\x03\x02\x01\x05\
-\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\
-\x02\x03\x02\x01\x08\x04\0\x12container-metadata\x03\0\x04\x02\x03\x02\x01\x09\x04\
-\0\x05error\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x0eincoming-value\x03\0\x08\x02\x03\
-\x02\x01\x0b\x04\0\x0fobject-metadata\x03\0\x0a\x02\x03\x02\x01\x0c\x04\0\x0bobj\
-ect-name\x03\0\x0c\x02\x03\x02\x01\x0d\x04\0\x0eoutgoing-value\x03\0\x0e\x04\0\x09\
-container\x03\x01\x04\0\x13stream-object-names\x03\x01\x01h\x10\x01j\x01s\x01\x07\
-\x01@\x01\x04self\x12\0\x13\x04\0\x16[method]container.name\x01\x14\x01j\x01\x05\
-\x01\x07\x01@\x01\x04self\x12\0\x15\x04\0\x16[method]container.info\x01\x16\x01i\
-\x09\x01j\x01\x17\x01\x07\x01@\x04\x04self\x12\x04name\x0d\x05startw\x03endw\0\x18\
-\x04\0\x1a[method]container.get-data\x01\x19\x01h\x0f\x01j\0\x01\x07\x01@\x03\x04\
-self\x12\x04name\x0d\x04data\x1a\0\x1b\x04\0\x1c[method]container.write-data\x01\
-\x1c\x01i\x11\x01j\x01\x1d\x01\x07\x01@\x01\x04self\x12\0\x1e\x04\0\x1e[method]c\
-ontainer.list-objects\x01\x1f\x01@\x02\x04self\x12\x04name\x0d\0\x1b\x04\0\x1f[m\
-ethod]container.delete-object\x01\x20\x01p\x0d\x01@\x02\x04self\x12\x05names!\0\x1b\
-\x04\0\x20[method]container.delete-objects\x01\"\x01j\x01\x7f\x01\x07\x01@\x02\x04\
-self\x12\x04name\x0d\0#\x04\0\x1c[method]container.has-object\x01$\x01j\x01\x0b\x01\
-\x07\x01@\x02\x04self\x12\x04name\x0d\0%\x04\0\x1d[method]container.object-info\x01\
-&\x01@\x01\x04self\x12\0\x1b\x04\0\x17[method]container.clear\x01'\x01h\x11\x01o\
-\x02!\x7f\x01j\x01)\x01\x07\x01@\x02\x04self(\x03lenw\0*\x04\04[method]stream-ob\
-ject-names.read-stream-object-names\x01+\x01o\x02w\x7f\x01j\x01,\x01\x07\x01@\x02\
-\x04self(\x03numw\0-\x04\04[method]stream-object-names.skip-stream-object-names\x01\
-.\x04\0\x18wasi:blobstore/container\x05S\x01B\x16\x02\x03\x02\x01\x0f\x04\0\x09c\
-ontainer\x03\0\0\x02\x03\x02\x01\x09\x04\0\x05error\x03\0\x02\x02\x03\x02\x01\x10\
-\x04\0\x0econtainer-name\x03\0\x04\x02\x03\x02\x01\x11\x04\0\x09object-id\x03\0\x06\
-\x01i\x01\x01j\x01\x08\x01\x03\x01@\x01\x04name\x05\0\x09\x04\0\x10create-contai\
-ner\x01\x0a\x04\0\x0dget-container\x01\x0a\x01j\0\x01\x03\x01@\x01\x04name\x05\0\
-\x0b\x04\0\x10delete-container\x01\x0c\x01j\x01\x7f\x01\x03\x01@\x01\x04name\x05\
-\0\x0d\x04\0\x10container-exists\x01\x0e\x01@\x02\x03src\x07\x04dest\x07\0\x0b\x04\
-\0\x0bcopy-object\x01\x0f\x04\0\x0bmove-object\x01\x0f\x04\0\x18wasi:blobstore/b\
-lobstore\x05T\x01B\x0a\x01o\x02ss\x01p\0\x01@\0\0\x01\x04\0\x0fget-environment\x01\
-\x02\x01ps\x01@\0\0\x03\x04\0\x0dget-arguments\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0b\
-initial-cwd\x01\x06\x04\0\x1awasi:cli/environment@0.2.0\x05U\x01B\x03\x01j\0\0\x01\
-@\x01\x06status\0\x01\0\x04\0\x04exit\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05V\x01\
-B\x05\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\
-\0\x0aget-stderr\x01\x03\x04\0\x15wasi:cli/stderr@0.2.0\x05W\x01B\x05\x02\x03\x02\
-\x01\x05\x04\0\x0cinput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\
-\x03\x04\0\x14wasi:cli/stdin@0.2.0\x05X\x01B\x05\x02\x03\x02\x01\x06\x04\0\x0dou\
-tput-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15w\
-asi:cli/stdout@0.2.0\x05Y\x01B\x01\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi\
-:cli/terminal-input@0.2.0\x05Z\x01B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1e\
-wasi:cli/terminal-output@0.2.0\x05[\x01B\x06\x02\x03\x02\x01\x1a\x04\0\x0ftermin\
-al-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\
-\x04\x04\0\x1ewasi:cli/terminal-stderr@0.2.0\x05\\\x01B\x06\x02\x03\x02\x01\x1c\x04\
-\0\x0eterminal-input\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-termina\
-l-stdin\x01\x04\x04\0\x1dwasi:cli/terminal-stdin@0.2.0\x05]\x01B\x06\x02\x03\x02\
-\x01\x1a\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13\
-get-terminal-stdout\x01\x04\x04\0\x1ewasi:cli/terminal-stdout@0.2.0\x05^\x01B\x0f\
-\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01\
-w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\
-\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-\
-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\
-\0!wasi:clocks/monotonic-clock@0.2.0\x05_\x01B\x05\x01r\x02\x07secondsw\x0bnanos\
-econdsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0ares\
-olution\x01\x02\x04\0\x1cwasi:clocks/wall-clock@0.2.0\x05`\x01Br\x02\x03\x02\x01\
-\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\
-\0\x02\x02\x03\x02\x01!\x04\0\x05error\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08date\
-time\x03\0\x06\x01w\x04\0\x08filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-dev\
-ice\x10character-device\x09directory\x04fifo\x0dsymbolic-link\x0cregular-file\x06\
-socket\x04\0\x0fdescriptor-type\x03\0\x0a\x01n\x06\x04read\x05write\x13file-inte\
-grity-sync\x13data-integrity-sync\x14requested-write-sync\x10mutate-directory\x04\
-\0\x10descriptor-flags\x03\0\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\
-\0\x0e\x01n\x04\x06create\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-fl\
-ags\x03\0\x10\x01w\x04\0\x0alink-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0a\
-link-count\x13\x04size\x09\x15data-access-timestamp\x14\x1bdata-modification-tim\
-estamp\x14\x17status-change-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01\
-q\x03\x09no-change\0\0\x03now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\
-\0\x17\x01r\x02\x04type\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06\
-access\x0bwould-block\x07already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05\
-exist\x0efile-too-large\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07\
-invalid\x02io\x0cis-directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-\
-too-long\x09no-device\x08no-entry\x07no-lock\x13insufficient-memory\x12insuffici\
-ent-space\x0dnot-directory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-\
-tty\x0eno-such-device\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinval\
-id-seek\x0etext-file-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\
-\x06normal\x0asequential\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06\
-advice\x03\0\x1d\x01r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\
-\x1f\x04\0\x0adescriptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01\
-i\x01\x01j\x01$\x01\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descri\
-ptor.read-via-stream\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\
-\x09\0(\x04\0#[method]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0\
-$[method]descriptor.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06o\
-ffset\x09\x06length\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\
-\x01@\x01\x04self#\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\
-\x1c\x01@\x01\x04self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\
-\x01\x1c\x01@\x01\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\
-\x04self#\x04size\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04s\
-elf#\x15data-access-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c\
-[method]descriptor.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\
-\x04self#\x06length\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01\
-j\x01\x09\x01\x1c\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method\
-]descriptor.write\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![meth\
-od]descriptor.read-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\
-\x04self#\x04paths\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\
-\x16\x01\x1c\x01@\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\
-\x04self#\x0apath-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\
-\x01@\x05\x04self#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bda\
-ta-modification-timestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01\
-@\x05\x04self#\x0eold-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-path\
-s\0+\x04\0\x1a[method]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\
-\x04self#\x0apath-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\
-\x1a[method]descriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\
-\0\xc6\0\x04\0\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.r\
-emove-directory-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new\
--paths\0+\x04\0\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-pa\
-ths\x08new-paths\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]de\
-scriptor.unlink-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]des\
-criptor.is-same-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\
-\x20[method]descriptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04\
-paths\0\xcb\0\x04\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01\
-j\x01\xcf\0\x01\x1c\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry\
--stream.read-directory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\
-\x04\0\x15filesystem-error-code\x01T\x04\0\x1bwasi:filesystem/types@0.2.0\x05a\x01\
-B\x07\x02\x03\x02\x01$\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\
-\x01@\0\0\x04\x04\0\x0fget-directories\x01\x05\x04\0\x1ewasi:filesystem/preopens\
-@0.2.0\x05b\x01B\xc0\x01\x02\x03\x02\x01&\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
-\x05\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\
-\0\x04\x02\x03\x02\x01\x02\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x03\x04\0\
-\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06\
-delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\
-\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\
-\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11\
-DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\
-\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0af\
-ield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-\
-timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-u\
-navailable\0\0\x19destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\
-\x12connection-refused\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\
-\x17connection-read-timeout\0\0\x18connection-write-timeout\0\0\x18connection-li\
-mit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-al\
-ert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-require\
-d\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18\
-HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-he\
-ader-section-size\x01\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-t\
-railer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-res\
-ponse-incomplete\0\0!HTTP-response-header-section-size\x01\x15\0\x19HTTP-respons\
-e-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trai\
-ler-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-respo\
-nse-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-\
-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dlo\
-op-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0a\
-error-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutabl\
-e\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\
-\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\
-\0\x08trailers\x03\0\"\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing-reque\
-st\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11response-outparam\x03\x01\x01\
-{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incoming-response\x03\x01\x04\0\x0dincomi\
-ng-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-response\x03\x01\
-\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\x01i\"\
-\x01@\0\01\x04\0\x13[constructor]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\
-\x01@\x01\x07entries4\05\x04\0\x18[static]fields.from-list\x016\x01h\"\x01p!\x01\
-@\x02\x04self7\x04name\x1f\08\x04\0\x12[method]fields.get\x019\x01@\x02\x04self7\
-\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04s\
-elf7\x04name\x1f\x05value8\0;\x04\0\x12[method]fields.set\x01<\x01@\x02\x04self7\
-\x04name\x1f\0;\x04\0\x15[method]fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\
-\x05value!\0;\x04\0\x15[method]fields.append\x01>\x01@\x01\x04self7\04\x04\0\x16\
-[method]fields.entries\x01?\x01@\x01\x04self7\01\x04\0\x14[method]fields.clone\x01\
-@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f[method]incoming-request.method\x01\
-B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]incoming-request.path-with-query\x01\
-C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\0\x1f[method]incoming-request.sche\
-me\x01E\x04\0\"[method]incoming-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\
-\0\0\xc6\0\x04\0\x20[method]incoming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\
-\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[method]incoming-request.consume\x01J\x01\
-i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\
-\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]ou\
-tgoing-request.body\x01P\x01@\x01\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-\
-request.method\x01Q\x01j\0\0\x01@\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#\
-[method]outgoing-request.set-method\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([met\
-hod]outgoing-request.path-with-query\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-qu\
-ery\x0e\0\xd2\0\x04\0,[method]outgoing-request.set-path-with-query\x01U\x01@\x01\
-\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgoing-request.scheme\x01V\x01@\x02\x04\
-self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[method]outgoing-request.set-scheme\x01\
-W\x04\0\"[method]outgoing-request.authority\x01T\x01@\x02\x04self\xcd\0\x09autho\
-rity\x0e\0\xd2\0\x04\0&[method]outgoing-request.set-authority\x01X\x01@\x01\x04s\
-elf\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\
-\0\x04\0\x1c[constructor]request-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\
-\0\0\xdd\0\x04\0'[method]request-options.connect-timeout\x01^\x01@\x02\x04self\xdc\
-\0\x08duration\xdd\0\0\xd2\0\x04\0+[method]request-options.set-connect-timeout\x01\
-_\x04\0*[method]request-options.first-byte-timeout\x01^\x04\0.[method]request-op\
-tions.set-first-byte-timeout\x01_\x04\0-[method]request-options.between-bytes-ti\
-meout\x01^\x04\01[method]request-options.set-between-bytes-timeout\x01_\x01i(\x01\
-i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d\
-[static]response-outparam.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[met\
-hod]incoming-response.status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]i\
-ncoming-response.headers\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incom\
-ing-response.consume\x01g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\
-\0\xea\0\x04\0\x1c[method]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\
-\0\xec\0\x04\0\x1c[static]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04s\
-elf\xee\0\0\xef\0\x04\0![method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01\
-j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\
-\0\x1b[method]future-trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e\
-[constructor]outgoing-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[metho\
-d]outgoing-response.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\
-\0\x04\0)[method]outgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\
-\xc6\0\x04\0![method]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\
-\0\x04\0\x1e[method]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01\
-@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01\
-j\0\x01\x1b\x01@\x02\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]\
-outgoing-body.finish\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[m\
-ethod]future-incoming-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\
-\x01j\x01\x86\x01\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[metho\
-d]future-incoming-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\
-\x01\0\x8b\x01\x04\0\x0fhttp-error-code\x01\x8c\x01\x04\0\x15wasi:http/types@0.2\
-.0\x05c\x01B\x0f\x02\x03\x02\x01(\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\
-)\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01*\x04\0\x18future-incoming-r\
-esponse\x03\0\x04\x02\x03\x02\x01+\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\
-\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\
-\x0c\x04\0\x06handle\x01\x0d\x04\0\x20wasi:http/outgoing-handler@0.2.0\x05d\x01B\
-\x04\x01m\x06\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x05le\
-vel\x03\0\0\x01@\x03\x05level\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\
-\x02\x04\0\x14wasi:logging/logging\x05e\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\
-\x19get-insecure-random-bytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\
-\x01\x02\x04\0\x1awasi:random/insecure@0.2.0\x05f\x01B\x03\x01o\x02ww\x01@\0\0\0\
-\x04\0\x0dinsecure-seed\x01\x01\x04\0\x1fwasi:random/insecure-seed@0.2.0\x05g\x01\
-B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\
-\0\x0eget-random-u64\x01\x02\x04\0\x18wasi:random/random@0.2.0\x05h\x01B\x11\x04\
-\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0dnot-supported\x10i\
-nvalid-argument\x0dout-of-memory\x07timeout\x14concurrency-conflict\x0fnot-in-pr\
-ogress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14address-not-bindab\
-le\x0eaddress-in-use\x12remote-unreachable\x12connection-refused\x10connection-r\
-eset\x12connection-aborted\x12datagram-too-large\x11name-unresolvable\x1atempora\
-ry-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01\
-m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0c\
-ipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\
-\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04p\
-ort{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09\
-flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01\
-q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x04\
-\0\x1awasi:sockets/network@0.2.0\x05i\x01B\x05\x02\x03\x02\x012\x04\0\x07network\
-\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x04\0#wasi:sock\
-ets/instance-network@0.2.0\x05j\x01B\x16\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\
-\0\0\x02\x03\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\x014\x04\0\x0aerror\
--code\x03\0\x04\x02\x03\x02\x015\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-\
-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\
-\0\x0b\x04\03[method]resolve-address-stream.resolve-next-address\x01\x0c\x01i\x01\
-\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stream.subscribe\x01\x0e\
-\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\
-\0\x11resolve-addresses\x01\x12\x04\0!wasi:sockets/ip-name-lookup@0.2.0\x05k\x01\
+okup@0.2.0\x05C\x02\x03\0!\x11ip-socket-address\x02\x03\0!\x11ip-address-family\x01\
 BT\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0d\
 output-stream\x03\0\x02\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x04\x02\x03\x02\
-\x01&\x04\0\x08duration\x03\0\x06\x02\x03\x02\x012\x04\0\x07network\x03\0\x08\x02\
-\x03\x02\x014\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x017\x04\0\x11ip-socket-\
-address\x03\0\x0c\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\
+\x01&\x04\0\x08duration\x03\0\x06\x02\x03\x02\x01?\x04\0\x07network\x03\0\x08\x02\
+\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x0a\x02\x03\x02\x01D\x04\0\x11ip-socket-\
+address\x03\0\x0c\x02\x03\x02\x01E\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\
 \x07receive\x04send\x04both\x04\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\
 \x03\x01\x01h\x12\x01h\x09\x01j\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0d\
 local-address\x0d\0\x15\x04\0\x1d[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04\
@@ -51026,45 +56065,608 @@ d]tcp-socket.set-hop-limit\x012\x01j\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&
 -buffer-size\x01&\x04\0#[method]tcp-socket.send-buffer-size\x014\x04\0'[method]t\
 cp-socket.set-send-buffer-size\x01&\x01i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[m\
 ethod]tcp-socket.subscribe\x016\x01@\x02\x04self\x13\x0dshutdown-type\x11\0\x15\x04\
-\0\x1b[method]tcp-socket.shutdown\x017\x04\0\x16wasi:sockets/tcp@0.2.0\x05l\x01B\
-\x0c\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-c\
-ode\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01\
-:\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddres\
-s-family\x05\0\x09\x04\0\x11create-tcp-socket\x01\x0a\x04\0$wasi:sockets/tcp-cre\
-ate-socket@0.2.0\x05m\x01BD\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x02\x03\
-\x02\x012\x04\0\x07network\x03\0\x02\x02\x03\x02\x014\x04\0\x0aerror-code\x03\0\x04\
-\x02\x03\x02\x017\x04\0\x11ip-socket-address\x03\0\x06\x02\x03\x02\x018\x04\0\x11\
-ip-address-family\x03\0\x08\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\
-\0\x11incoming-datagram\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-addres\
-s\x0d\x04\0\x11outgoing-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18\
-incoming-datagram-stream\x03\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\
-\x01h\x03\x01j\0\x01\x05\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\
-\0\x15\x04\0\x1d[method]udp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\
-\x04\0\x1e[method]udp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\
-\x01j\x01\x1a\x01\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19\
-[method]udp-socket.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\
-\x04\0\x20[method]udp-socket.local-address\x01\x1e\x04\0![method]udp-socket.remo\
-te-address\x01\x1e\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-socket.address-f\
-amily\x01\x1f\x01j\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-soc\
-ket.unicast-hop-limit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\0([method]ud\
-p-socket.set-unicast-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\
-\0&[method]udp-socket.receive-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\
-\x04\0*[method]udp-socket.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.\
-send-buffer-size\x01$\x04\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\
-\x01@\x01\x04self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01\
-p\x0c\x01j\x01)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incom\
-ing-datagram-stream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-dat\
-agram-stream.subscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing\
--datagram-stream.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\
-\0%[method]outgoing-datagram-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method\
-]outgoing-datagram-stream.subscribe\x011\x04\0\x16wasi:sockets/udp@0.2.0\x05n\x01\
-B\x0c\x02\x03\x02\x012\x04\0\x07network\x03\0\0\x02\x03\x02\x014\x04\0\x0aerror-\
-code\x03\0\x02\x02\x03\x02\x018\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\
-\x01=\x04\0\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0ead\
-dress-family\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x04\0$wasi:sockets/udp\
--create-socket@0.2.0\x05o\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0c\
-durable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
-0.220.0\x10wit-bindgen-rust\x060.36.0";
+\0\x1b[method]tcp-socket.shutdown\x017\x03\0\x16wasi:sockets/tcp@0.2.0\x05F\x02\x03\
+\0$\x0atcp-socket\x01B\x0c\x02\x03\x02\x01?\x04\0\x07network\x03\0\0\x02\x03\x02\
+\x01A\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01E\x04\0\x11ip-address-family\x03\
+\0\x04\x02\x03\x02\x01G\x04\0\x0atcp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\
+\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-tcp-socket\x01\x0a\x03\0$w\
+asi:sockets/tcp-create-socket@0.2.0\x05H\x01BD\x02\x03\x02\x01\x03\x04\0\x08poll\
+able\x03\0\0\x02\x03\x02\x01?\x04\0\x07network\x03\0\x02\x02\x03\x02\x01A\x04\0\x0a\
+error-code\x03\0\x04\x02\x03\x02\x01D\x04\0\x11ip-socket-address\x03\0\x06\x02\x03\
+\x02\x01E\x04\0\x11ip-address-family\x03\0\x08\x01p}\x01r\x02\x04data\x0a\x0erem\
+ote-address\x07\x04\0\x11incoming-datagram\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\
+\x0eremote-address\x0d\x04\0\x11outgoing-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\
+\x01\x04\0\x18incoming-datagram-stream\x03\x01\x04\0\x18outgoing-datagram-stream\
+\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\x05\x01@\x03\x04self\x13\x07network\x14\x0d\
+local-address\x07\0\x15\x04\0\x1d[method]udp-socket.start-bind\x01\x16\x01@\x01\x04\
+self\x13\0\x15\x04\0\x1e[method]udp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\
+\x01o\x02\x18\x19\x01j\x01\x1a\x01\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\
+\0\x1b\x04\0\x19[method]udp-socket.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04\
+self\x13\0\x1d\x04\0\x20[method]udp-socket.local-address\x01\x1e\x04\0![method]u\
+dp-socket.remote-address\x01\x1e\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-so\
+cket.address-family\x01\x1f\x01j\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[\
+method]udp-socket.unicast-hop-limit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\
+\0([method]udp-socket.set-unicast-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04\
+self\x13\0#\x04\0&[method]udp-socket.receive-buffer-size\x01$\x01@\x02\x04self\x13\
+\x05valuew\0\x15\x04\0*[method]udp-socket.set-receive-buffer-size\x01%\x04\0#[me\
+thod]udp-socket.send-buffer-size\x01$\x04\0'[method]udp-socket.set-send-buffer-s\
+ize\x01%\x01i\x01\x01@\x01\x04self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01\
+'\x01h\x11\x01p\x0c\x01j\x01)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0\
+([method]incoming-datagram-stream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[metho\
+d]incoming-datagram-stream.subscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[m\
+ethod]outgoing-datagram-stream.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09dat\
+agrams/\0#\x04\0%[method]outgoing-datagram-stream.send\x010\x01@\x01\x04self-\0&\
+\x04\0*[method]outgoing-datagram-stream.subscribe\x011\x03\0\x16wasi:sockets/udp\
+@0.2.0\x05I\x02\x03\0&\x0audp-socket\x01B\x0c\x02\x03\x02\x01?\x04\0\x07network\x03\
+\0\0\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01E\x04\0\x11ip\
+-address-family\x03\0\x04\x02\x03\x02\x01J\x04\0\x0audp-socket\x03\0\x06\x01i\x07\
+\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11create-udp-s\
+ocket\x01\x0a\x03\0$wasi:sockets/udp-create-socket@0.2.0\x05K\x01B@\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0b\
+resource-id\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
+\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\
+\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\
+\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09lis\
+t-type\x01\x03\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-ty\
+pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
+-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
+-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
+prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01\
+p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\
+\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\
+\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0b\
+flags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption\
+-value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
+prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
+s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
+rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\
+\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\
+\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0e\
+protocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-er\
+ror\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
+nvoke-result\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]was\
+m-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
+function-params*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01\
+@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rp\
+c.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\
+\0'[method]wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\
+\02\x04\0&[method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\
+\x04\0\x20[method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0d\
+extract-value\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15g\
+olem:rpc/types@0.1.1\x05L\x02\x03\0(\x03uri\x01Bg\x02\x03\x02\x01M\x04\0\x03uri\x03\
+\0\0\x02\x03\x02\x01&\x04\0\x08duration\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\
+\x04\x01w\x04\0\x11component-version\x03\0\x06\x01r\x02\x09high-bitsw\x08low-bit\
+sw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01\
+r\x02\x0ccomponent-id\x0b\x0bworker-names\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09\
+worker-id\x0d\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01r\x01\x05values\x04\
+\0\x0aaccount-id\x03\0\x10\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x03\x09m\
+ax-delay\x03\x0amultiplieru\x11max-jitter-factor\x12\x04\0\x0cretry-policy\x03\0\
+\x13\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\
+\0\0\x04\0\x11persistence-level\x03\0\x15\x01m\x02\x09automatic\x0esnapshot-base\
+d\x04\0\x0bupdate-mode\x03\0\x17\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\
+\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x19\x01m\x04\x05\
+equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1b\
+\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06\
+exited\x04\0\x0dworker-status\x03\0\x1d\x01r\x02\x0acomparator\x1c\x05values\x04\
+\0\x12worker-name-filter\x03\0\x1f\x01r\x02\x0acomparator\x1a\x05value\x1e\x04\0\
+\x14worker-status-filter\x03\0!\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x15wo\
+rker-version-filter\x03\0#\x01r\x02\x0acomparator\x1a\x05valuew\x04\0\x18worker-\
+created-at-filter\x03\0%\x01r\x03\x04names\x0acomparator\x1c\x05values\x04\0\x11\
+worker-env-filter\x03\0'\x01q\x05\x04name\x01\x20\0\x06status\x01\"\0\x07version\
+\x01$\0\x0acreated-at\x01&\0\x03env\x01(\0\x04\0\x16worker-property-filter\x03\0\
+)\x01p*\x01r\x01\x07filters+\x04\0\x11worker-all-filter\x03\0,\x01p-\x01r\x01\x07\
+filters.\x04\0\x11worker-any-filter\x03\0/\x01ps\x01o\x02ss\x01p2\x01r\x06\x09wo\
+rker-id\x0d\x04args1\x03env3\x06status\x1e\x11component-versionw\x0bretry-countw\
+\x04\0\x0fworker-metadata\x03\04\x04\0\x0bget-workers\x03\x01\x01k0\x01i6\x01@\x03\
+\x0ccomponent-id\x0b\x06filter7\x07precise\x7f\08\x04\0\x18[constructor]get-work\
+ers\x019\x01h6\x01p5\x01k;\x01@\x01\x04self:\0<\x04\0\x1c[method]get-workers.get\
+-next\x01=\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01>\x01p}\x01@\x01\x0apromise-i\
+d\x0f\0?\x04\0\x0dawait-promise\x01@\x01@\x02\x0apromise-id\x0f\x04data?\0\x7f\x04\
+\0\x10complete-promise\x01A\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-pro\
+mise\x01B\x01@\0\0\x05\x04\0\x0fget-oplog-index\x01C\x01@\x01\x09oplog-idx\x05\x01\
+\0\x04\0\x0fset-oplog-index\x01D\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-comm\
+it\x01E\x04\0\x14mark-begin-operation\x01C\x01@\x01\x05begin\x05\x01\0\x04\0\x12\
+mark-end-operation\x01F\x01@\0\0\x14\x04\0\x10get-retry-policy\x01G\x01@\x01\x10\
+new-retry-policy\x14\x01\0\x04\0\x10set-retry-policy\x01H\x01@\0\0\x16\x04\0\x1b\
+get-oplog-persistence-level\x01I\x01@\x01\x15new-persistence-level\x16\x01\0\x04\
+\0\x1bset-oplog-persistence-level\x01J\x01@\0\0\x7f\x04\0\x14get-idempotence-mod\
+e\x01K\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01L\x01@\0\
+\0\x09\x04\0\x18generate-idempotency-key\x01M\x01@\x03\x09worker-id\x0d\x0etarge\
+t-version\x07\x04mode\x18\x01\0\x04\0\x0dupdate-worker\x01N\x01@\0\05\x04\0\x11g\
+et-self-metadata\x01O\x01k5\x01@\x01\x09worker-id\x0d\0\xd0\0\x04\0\x13get-worke\
+r-metadata\x01Q\x03\0\x14golem:api/host@1.1.0\x05N\x02\x03\0(\x09wit-value\x02\x03\
+\0)\x0aaccount-id\x02\x03\0)\x11component-version\x02\x03\0)\x0boplog-index\x02\x03\
+\0)\x0cretry-policy\x02\x03\0)\x04uuid\x02\x03\0)\x09worker-id\x01Be\x02\x03\x02\
+\x01\"\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01O\x04\0\x09wit-value\x03\0\x02\x02\
+\x03\x02\x01P\x04\0\x0aaccount-id\x03\0\x04\x02\x03\x02\x01Q\x04\0\x11component-\
+version\x03\0\x06\x02\x03\x02\x01R\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\
+S\x04\0\x0cretry-policy\x03\0\x0a\x02\x03\x02\x01T\x04\0\x04uuid\x03\0\x0c\x02\x03\
+\x02\x01U\x04\0\x09worker-id\x03\0\x0e\x01k\x09\x01q\x05\x0aread-local\0\0\x0bwr\
+ite-local\0\0\x0bread-remote\0\0\x0cwrite-remote\0\0\x14write-remote-batched\x01\
+\x10\0\x04\0\x15wrapped-function-type\x03\0\x11\x01o\x02ss\x01p\x13\x01r\x04\x0f\
+installation-id\x0d\x04names\x07versions\x0aparameters\x14\x04\0\x1fplugin-insta\
+llation-description\x03\0\x15\x01ps\x01k\x0f\x01p\x16\x01r\x0a\x09timestamp\x01\x09\
+worker-id\x0f\x11component-version\x07\x04args\x17\x03env\x14\x0aaccount-id\x05\x06\
+parent\x18\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-ac\
+tive-plugins\x19\x04\0\x11create-parameters\x03\0\x1a\x01r\x05\x09timestamp\x01\x0d\
+function-names\x07request\x03\x08response\x03\x15wrapped-function-type\x12\x04\0\
+$imported-function-invoked-parameters\x03\0\x1c\x01p\x03\x01r\x04\x09timestamp\x01\
+\x0dfunction-names\x07request\x1e\x0fidempotency-keys\x04\0$exported-function-in\
+voked-parameters\x03\0\x1f\x01r\x03\x09timestamp\x01\x08response\x03\x0dconsumed\
+-fuelx\x04\0&exported-function-completed-parameters\x03\0!\x01r\x02\x09timestamp\
+\x01\x05errors\x04\0\x10error-parameters\x03\0#\x01r\x03\x09timestamp\x01\x05sta\
+rt\x09\x03end\x09\x04\0\x0fjump-parameters\x03\0%\x01r\x02\x09timestamp\x01\x0cr\
+etry-policy\x0b\x04\0\x1echange-retry-policy-parameters\x03\0'\x01r\x02\x09times\
+tamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\0)\x01r\x02\
+\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-parameters\x03\0+\
+\x01k\x1e\x01r\x03\x0fidempotency-keys\x0dfunction-names\x05input-\x04\0'exporte\
+d-function-invocation-parameters\x03\0.\x01q\x02\x11exported-function\x01/\0\x0d\
+manual-update\x01\x07\0\x04\0\x11worker-invocation\x03\00\x01r\x02\x09timestamp\x01\
+\x0ainvocation1\x04\0$pending-worker-invocation-parameters\x03\02\x01p}\x01q\x02\
+\x0bauto-update\0\0\x0esnapshot-based\x014\0\x04\0\x12update-description\x03\05\x01\
+r\x03\x09timestamp\x01\x0etarget-version\x07\x12update-description6\x04\0\x19pen\
+ding-update-parameters\x03\07\x01r\x04\x09timestamp\x01\x0etarget-version\x07\x12\
+new-component-sizew\x12new-active-plugins\x19\x04\0\x1csuccessful-update-paramet\
+ers\x03\09\x01ks\x01r\x03\x09timestamp\x01\x0etarget-version\x07\x07details;\x04\
+\0\x18failed-update-parameters\x03\0<\x01r\x02\x09timestamp\x01\x05deltaw\x04\0\x16\
+grow-memory-parameters\x03\0>\x01w\x04\0\x12worker-resource-id\x03\0@\x01r\x02\x09\
+timestamp\x01\x0bresource-id\xc1\0\x04\0\x1acreate-resource-parameters\x03\0B\x01\
+r\x02\x09timestamp\x01\x0bresource-id\xc1\0\x04\0\x18drop-resource-parameters\x03\
+\0D\x01r\x04\x09timestamp\x01\x0bresource-id\xc1\0\x0dresource-names\x0fresource\
+-params\x1e\x04\0\x1cdescribe-resource-parameters\x03\0F\x01m\x08\x06stdout\x06s\
+tderr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\x03\
+\0H\x01r\x04\x09timestamp\x01\x05level\xc9\0\x07contexts\x07messages\x04\0\x0elo\
+g-parameters\x03\0J\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1aactivate-pl\
+ugin-parameters\x03\0L\x01r\x02\x09timestamp\x01\x06plugin\x16\x04\0\x1cdeactiva\
+te-plugin-parameters\x03\0N\x01q\x1b\x06create\x01\x1b\0\x19imported-function-in\
+voked\x01\x1d\0\x19exported-function-invoked\x01\x20\0\x1bexported-function-comp\
+leted\x01\"\0\x07suspend\x01\x01\0\x05error\x01$\0\x05no-op\x01\x01\0\x04jump\x01\
+&\0\x0binterrupted\x01\x01\0\x06exited\x01\x01\0\x13change-retry-policy\x01(\0\x13\
+begin-atomic-region\x01\x01\0\x11end-atomic-region\x01*\0\x12begin-remote-write\x01\
+\x01\0\x10end-remote-write\x01,\0\x19pending-worker-invocation\x013\0\x0epending\
+-update\x018\0\x11successful-update\x01:\0\x0dfailed-update\x01=\0\x0bgrow-memor\
+y\x01?\0\x0fcreate-resource\x01\xc3\0\0\x0ddrop-resource\x01\xc5\0\0\x11describe\
+-resource\x01\xc7\0\0\x03log\x01\xcb\0\0\x07restart\x01\x01\0\x0factivate-plugin\
+\x01\xcd\0\0\x11deactivate-plugin\x01\xcf\0\0\x04\0\x0boplog-entry\x03\0P\x04\0\x09\
+get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\x01iR\x01@\x02\x09worker-id\x0f\x05\
+start\x09\0\xd4\0\x04\0\x16[constructor]get-oplog\x01U\x01hR\x01p\xd1\0\x01k\xd7\
+\0\x01@\x01\x04self\xd6\0\0\xd8\0\x04\0\x1a[method]get-oplog.get-next\x01Y\x01iS\
+\x01@\x02\x09worker-id\x0f\x04texts\0\xda\0\x04\0\x19[constructor]search-oplog\x01\
+[\x01hS\x01o\x02\x09\xd1\0\x01p\xdd\0\x01k\xde\0\x01@\x01\x04self\xdc\0\0\xdf\0\x04\
+\0\x1d[method]search-oplog.get-next\x01`\x03\0\x15golem:api/oplog@1.1.0\x05V\x02\
+\x03\0)\x11persistence-level\x02\x03\0*\x0boplog-index\x02\x03\0*\x15wrapped-fun\
+ction-type\x02\x03\0(\x0evalue-and-type\x01B\x20\x02\x03\x02\x01W\x04\0\x11persi\
+stence-level\x03\0\0\x02\x03\x02\x01X\x04\0\x0boplog-index\x03\0\x02\x02\x03\x02\
+\x01Y\x04\0\x15wrapped-function-type\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08dateti\
+me\x03\0\x06\x02\x03\x02\x01Z\x04\0\x0evalue-and-type\x03\0\x08\x04\0\x15durable\
+-function-type\x03\0\x05\x01r\x02\x07is-live\x7f\x11persistence-level\x01\x04\0\x17\
+durable-execution-state\x03\0\x0b\x01m\x02\x02v1\x02v2\x04\0\x13oplog-entry-vers\
+ion\x03\0\x0d\x01p}\x01r\x05\x09timestamp\x07\x0dfunction-names\x08response\x0f\x0d\
+function-type\x0a\x0dentry-version\x0e\x04\0%persisted-durable-function-invocati\
+on\x03\0\x10\x01@\x02\x05ifaces\x08functions\x01\0\x04\0\x15observe-function-cal\
+l\x01\x12\x01@\x01\x0dfunction-type\x0a\0\x03\x04\0\x16begin-durable-function\x01\
+\x13\x01@\x02\x0dfunction-type\x0a\x0bbegin-index\x03\x01\0\x04\0\x14end-durable\
+-function\x01\x14\x01@\0\0\x0c\x04\0\x1fcurrent-durable-execution-state\x01\x15\x01\
+@\x04\x0dfunction-names\x07request\x0f\x08response\x0f\x0dfunction-type\x0a\x01\0\
+\x04\0#persist-durable-function-invocation\x01\x16\x01@\x04\x0dfunction-names\x07\
+request\x09\x08response\x09\x0dfunction-type\x0a\x01\0\x04\0)persist-typed-durab\
+le-function-invocation\x01\x17\x01@\0\0\x11\x04\0*read-persisted-durable-functio\
+n-invocation\x01\x18\x03\0!golem:durability/durability@1.2.0\x05[\x01B\x04\x04\0\
+\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug\
+-string\x01\x02\x04\0\x13wasi:io/error@0.2.0\x05\\\x01B\x0a\x04\0\x08pollable\x03\
+\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01\
+@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01\
+@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x04\0\x12wasi:io/poll@0.2.0\x05]\x01\
+B(\x02\x03\x02\x01\x02\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x03\x04\0\x08polla\
+ble\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\
+\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-s\
+tream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\
+\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.bloc\
+king-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19\
+[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\
+\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\
+\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\
+\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[met\
+hod]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-f\
+lush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\
+\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\
+\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\
+\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stre\
+am.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03le\
+nw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stre\
+am.blocking-splice\x01\x18\x04\0\x15wasi:io/streams@0.2.0\x05^\x01B+\x02\x03\x02\
+\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-strea\
+m\x03\0\x02\x01s\x04\0\x0econtainer-name\x03\0\x04\x01s\x04\0\x0bobject-name\x03\
+\0\x06\x01w\x04\0\x09timestamp\x03\0\x08\x01w\x04\0\x0bobject-size\x03\0\x0a\x01\
+s\x04\0\x05error\x03\0\x0c\x01r\x02\x04name\x05\x0acreated-at\x09\x04\0\x12conta\
+iner-metadata\x03\0\x0e\x01r\x04\x04name\x07\x09container\x05\x0acreated-at\x09\x04\
+size\x0b\x04\0\x0fobject-metadata\x03\0\x10\x01r\x02\x09container\x05\x06object\x07\
+\x04\0\x09object-id\x03\0\x12\x04\0\x0eoutgoing-value\x03\x01\x04\0\x0eincoming-\
+value\x03\x01\x04\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incomi\
+ng-value-sync-body\x03\0\x17\x01i\x14\x01@\0\0\x19\x04\0)[static]outgoing-value.\
+new-outgoing-value\x01\x1a\x01h\x14\x01i\x03\x01j\x01\x1c\0\x01@\x01\x04self\x1b\
+\0\x1d\x04\00[method]outgoing-value.outgoing-value-write-body\x01\x1e\x01h\x15\x01\
+j\x01\x18\x01\x0d\x01@\x01\x04self\x1f\0\x20\x04\02[method]incoming-value.incomi\
+ng-value-consume-sync\x01!\x01i\x16\x01j\x01\"\x01\x0d\x01@\x01\x04self\x1f\0#\x04\
+\03[method]incoming-value.incoming-value-consume-async\x01$\x01@\x01\x04self\x1f\
+\0w\x04\0\x1b[method]incoming-value.size\x01%\x04\0\x14wasi:blobstore/types\x05_\
+\x01B;\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\
+\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x12container-metadata\x03\
+\0\x04\x02\x03\x02\x01\x09\x04\0\x05error\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x0e\
+incoming-value\x03\0\x08\x02\x03\x02\x01\x0b\x04\0\x0fobject-metadata\x03\0\x0a\x02\
+\x03\x02\x01\x0c\x04\0\x0bobject-name\x03\0\x0c\x02\x03\x02\x01\x0d\x04\0\x0eout\
+going-value\x03\0\x0e\x04\0\x09container\x03\x01\x04\0\x13stream-object-names\x03\
+\x01\x01h\x10\x01j\x01s\x01\x07\x01@\x01\x04self\x12\0\x13\x04\0\x16[method]cont\
+ainer.name\x01\x14\x01j\x01\x05\x01\x07\x01@\x01\x04self\x12\0\x15\x04\0\x16[met\
+hod]container.info\x01\x16\x01i\x09\x01j\x01\x17\x01\x07\x01@\x04\x04self\x12\x04\
+name\x0d\x05startw\x03endw\0\x18\x04\0\x1a[method]container.get-data\x01\x19\x01\
+h\x0f\x01j\0\x01\x07\x01@\x03\x04self\x12\x04name\x0d\x04data\x1a\0\x1b\x04\0\x1c\
+[method]container.write-data\x01\x1c\x01i\x11\x01j\x01\x1d\x01\x07\x01@\x01\x04s\
+elf\x12\0\x1e\x04\0\x1e[method]container.list-objects\x01\x1f\x01@\x02\x04self\x12\
+\x04name\x0d\0\x1b\x04\0\x1f[method]container.delete-object\x01\x20\x01p\x0d\x01\
+@\x02\x04self\x12\x05names!\0\x1b\x04\0\x20[method]container.delete-objects\x01\"\
+\x01j\x01\x7f\x01\x07\x01@\x02\x04self\x12\x04name\x0d\0#\x04\0\x1c[method]conta\
+iner.has-object\x01$\x01j\x01\x0b\x01\x07\x01@\x02\x04self\x12\x04name\x0d\0%\x04\
+\0\x1d[method]container.object-info\x01&\x01@\x01\x04self\x12\0\x1b\x04\0\x17[me\
+thod]container.clear\x01'\x01h\x11\x01o\x02!\x7f\x01j\x01)\x01\x07\x01@\x02\x04s\
+elf(\x03lenw\0*\x04\04[method]stream-object-names.read-stream-object-names\x01+\x01\
+o\x02w\x7f\x01j\x01,\x01\x07\x01@\x02\x04self(\x03numw\0-\x04\04[method]stream-o\
+bject-names.skip-stream-object-names\x01.\x04\0\x18wasi:blobstore/container\x05`\
+\x01B\x16\x02\x03\x02\x01\x0f\x04\0\x09container\x03\0\0\x02\x03\x02\x01\x09\x04\
+\0\x05error\x03\0\x02\x02\x03\x02\x01\x10\x04\0\x0econtainer-name\x03\0\x04\x02\x03\
+\x02\x01\x11\x04\0\x09object-id\x03\0\x06\x01i\x01\x01j\x01\x08\x01\x03\x01@\x01\
+\x04name\x05\0\x09\x04\0\x10create-container\x01\x0a\x04\0\x0dget-container\x01\x0a\
+\x01j\0\x01\x03\x01@\x01\x04name\x05\0\x0b\x04\0\x10delete-container\x01\x0c\x01\
+j\x01\x7f\x01\x03\x01@\x01\x04name\x05\0\x0d\x04\0\x10container-exists\x01\x0e\x01\
+@\x02\x03src\x07\x04dest\x07\0\x0b\x04\0\x0bcopy-object\x01\x0f\x04\0\x0bmove-ob\
+ject\x01\x0f\x04\0\x18wasi:blobstore/blobstore\x05a\x01B\x0a\x01o\x02ss\x01p\0\x01\
+@\0\0\x01\x04\0\x0fget-environment\x01\x02\x01ps\x01@\0\0\x03\x04\0\x0dget-argum\
+ents\x01\x04\x01ks\x01@\0\0\x05\x04\0\x0binitial-cwd\x01\x06\x04\0\x1awasi:cli/e\
+nvironment@0.2.0\x05b\x01B\x03\x01j\0\0\x01@\x01\x06status\0\x01\0\x04\0\x04exit\
+\x01\x01\x04\0\x13wasi:cli/exit@0.2.0\x05c\x01B\x05\x02\x03\x02\x01\x06\x04\0\x0d\
+output-stream\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x0aget-stderr\x01\x03\x04\0\x15\
+wasi:cli/stderr@0.2.0\x05d\x01B\x05\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\
+\0\0\x01i\x01\x01@\0\0\x02\x04\0\x09get-stdin\x01\x03\x04\0\x14wasi:cli/stdin@0.\
+2.0\x05e\x01B\x05\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\0\x01i\x01\x01\
+@\0\0\x02\x04\0\x0aget-stdout\x01\x03\x04\0\x15wasi:cli/stdout@0.2.0\x05f\x01B\x01\
+\x04\0\x0eterminal-input\x03\x01\x04\0\x1dwasi:cli/terminal-input@0.2.0\x05g\x01\
+B\x01\x04\0\x0fterminal-output\x03\x01\x04\0\x1ewasi:cli/terminal-output@0.2.0\x05\
+h\x01B\x06\x02\x03\x02\x01\x1a\x04\0\x0fterminal-output\x03\0\0\x01i\x01\x01k\x02\
+\x01@\0\0\x03\x04\0\x13get-terminal-stderr\x01\x04\x04\0\x1ewasi:cli/terminal-st\
+derr@0.2.0\x05i\x01B\x06\x02\x03\x02\x01\x1c\x04\0\x0eterminal-input\x03\0\0\x01\
+i\x01\x01k\x02\x01@\0\0\x03\x04\0\x12get-terminal-stdin\x01\x04\x04\0\x1dwasi:cl\
+i/terminal-stdin@0.2.0\x05j\x01B\x06\x02\x03\x02\x01\x1a\x04\0\x0fterminal-outpu\
+t\x03\0\0\x01i\x01\x01k\x02\x01@\0\0\x03\x04\0\x13get-terminal-stdout\x01\x04\x04\
+\0\x1ewasi:cli/terminal-stdout@0.2.0\x05k\x01B\x0f\x02\x03\x02\x01\x03\x04\0\x08\
+pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\
+\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\
+\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04w\
+hen\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x04\0!wasi:clocks/monotonic-cl\
+ock@0.2.0\x05l\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\
+\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x04\0\x1cwasi\
+:clocks/wall-clock@0.2.0\x05m\x01Br\x02\x03\x02\x01\x05\x04\0\x0cinput-stream\x03\
+\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x02\x03\x02\x01!\x04\0\
+\x05error\x03\0\x04\x02\x03\x02\x01\"\x04\0\x08datetime\x03\0\x06\x01w\x04\0\x08\
+filesize\x03\0\x08\x01m\x08\x07unknown\x0cblock-device\x10character-device\x09di\
+rectory\x04fifo\x0dsymbolic-link\x0cregular-file\x06socket\x04\0\x0fdescriptor-t\
+ype\x03\0\x0a\x01n\x06\x04read\x05write\x13file-integrity-sync\x13data-integrity\
+-sync\x14requested-write-sync\x10mutate-directory\x04\0\x10descriptor-flags\x03\0\
+\x0c\x01n\x01\x0esymlink-follow\x04\0\x0apath-flags\x03\0\x0e\x01n\x04\x06create\
+\x09directory\x09exclusive\x08truncate\x04\0\x0aopen-flags\x03\0\x10\x01w\x04\0\x0a\
+link-count\x03\0\x12\x01k\x07\x01r\x06\x04type\x0b\x0alink-count\x13\x04size\x09\
+\x15data-access-timestamp\x14\x1bdata-modification-timestamp\x14\x17status-chang\
+e-timestamp\x14\x04\0\x0fdescriptor-stat\x03\0\x15\x01q\x03\x09no-change\0\0\x03\
+now\0\0\x09timestamp\x01\x07\0\x04\0\x0dnew-timestamp\x03\0\x17\x01r\x02\x04type\
+\x0b\x04names\x04\0\x0fdirectory-entry\x03\0\x19\x01m%\x06access\x0bwould-block\x07\
+already\x0ebad-descriptor\x04busy\x08deadlock\x05quota\x05exist\x0efile-too-larg\
+e\x15illegal-byte-sequence\x0bin-progress\x0binterrupted\x07invalid\x02io\x0cis-\
+directory\x04loop\x0etoo-many-links\x0cmessage-size\x0dname-too-long\x09no-devic\
+e\x08no-entry\x07no-lock\x13insufficient-memory\x12insufficient-space\x0dnot-dir\
+ectory\x09not-empty\x0fnot-recoverable\x0bunsupported\x06no-tty\x0eno-such-devic\
+e\x08overflow\x0dnot-permitted\x04pipe\x09read-only\x0cinvalid-seek\x0etext-file\
+-busy\x0ccross-device\x04\0\x0aerror-code\x03\0\x1b\x01m\x06\x06normal\x0asequen\
+tial\x06random\x09will-need\x09dont-need\x08no-reuse\x04\0\x06advice\x03\0\x1d\x01\
+r\x02\x05lowerw\x05upperw\x04\0\x13metadata-hash-value\x03\0\x1f\x04\0\x0adescri\
+ptor\x03\x01\x04\0\x16directory-entry-stream\x03\x01\x01h!\x01i\x01\x01j\x01$\x01\
+\x1c\x01@\x02\x04self#\x06offset\x09\0%\x04\0\"[method]descriptor.read-via-strea\
+m\x01&\x01i\x03\x01j\x01'\x01\x1c\x01@\x02\x04self#\x06offset\x09\0(\x04\0#[meth\
+od]descriptor.write-via-stream\x01)\x01@\x01\x04self#\0(\x04\0$[method]descripto\
+r.append-via-stream\x01*\x01j\0\x01\x1c\x01@\x04\x04self#\x06offset\x09\x06lengt\
+h\x09\x06advice\x1e\0+\x04\0\x19[method]descriptor.advise\x01,\x01@\x01\x04self#\
+\0+\x04\0\x1c[method]descriptor.sync-data\x01-\x01j\x01\x0d\x01\x1c\x01@\x01\x04\
+self#\0.\x04\0\x1c[method]descriptor.get-flags\x01/\x01j\x01\x0b\x01\x1c\x01@\x01\
+\x04self#\00\x04\0\x1b[method]descriptor.get-type\x011\x01@\x02\x04self#\x04size\
+\x09\0+\x04\0\x1b[method]descriptor.set-size\x012\x01@\x03\x04self#\x15data-acce\
+ss-timestamp\x18\x1bdata-modification-timestamp\x18\0+\x04\0\x1c[method]descript\
+or.set-times\x013\x01p}\x01o\x024\x7f\x01j\x015\x01\x1c\x01@\x03\x04self#\x06len\
+gth\x09\x06offset\x09\06\x04\0\x17[method]descriptor.read\x017\x01j\x01\x09\x01\x1c\
+\x01@\x03\x04self#\x06buffer4\x06offset\x09\08\x04\0\x18[method]descriptor.write\
+\x019\x01i\"\x01j\x01:\x01\x1c\x01@\x01\x04self#\0;\x04\0![method]descriptor.rea\
+d-directory\x01<\x04\0\x17[method]descriptor.sync\x01-\x01@\x02\x04self#\x04path\
+s\0+\x04\0&[method]descriptor.create-directory-at\x01=\x01j\x01\x16\x01\x1c\x01@\
+\x01\x04self#\0>\x04\0\x17[method]descriptor.stat\x01?\x01@\x03\x04self#\x0apath\
+-flags\x0f\x04paths\0>\x04\0\x1a[method]descriptor.stat-at\x01@\x01@\x05\x04self\
+#\x0apath-flags\x0f\x04paths\x15data-access-timestamp\x18\x1bdata-modification-t\
+imestamp\x18\0+\x04\0\x1f[method]descriptor.set-times-at\x01A\x01@\x05\x04self#\x0e\
+old-path-flags\x0f\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\x1a[met\
+hod]descriptor.link-at\x01B\x01i!\x01j\x01\xc3\0\x01\x1c\x01@\x05\x04self#\x0apa\
+th-flags\x0f\x04paths\x0aopen-flags\x11\x05flags\x0d\0\xc4\0\x04\0\x1a[method]de\
+scriptor.open-at\x01E\x01j\x01s\x01\x1c\x01@\x02\x04self#\x04paths\0\xc6\0\x04\0\
+\x1e[method]descriptor.readlink-at\x01G\x04\0&[method]descriptor.remove-director\
+y-at\x01=\x01@\x04\x04self#\x08old-paths\x0enew-descriptor#\x08new-paths\0+\x04\0\
+\x1c[method]descriptor.rename-at\x01H\x01@\x03\x04self#\x08old-paths\x08new-path\
+s\0+\x04\0\x1d[method]descriptor.symlink-at\x01I\x04\0![method]descriptor.unlink\
+-file-at\x01=\x01@\x02\x04self#\x05other#\0\x7f\x04\0![method]descriptor.is-same\
+-object\x01J\x01j\x01\x20\x01\x1c\x01@\x01\x04self#\0\xcb\0\x04\0\x20[method]des\
+criptor.metadata-hash\x01L\x01@\x03\x04self#\x0apath-flags\x0f\x04paths\0\xcb\0\x04\
+\0#[method]descriptor.metadata-hash-at\x01M\x01h\"\x01k\x1a\x01j\x01\xcf\0\x01\x1c\
+\x01@\x01\x04self\xce\0\0\xd0\0\x04\03[method]directory-entry-stream.read-direct\
+ory-entry\x01Q\x01h\x05\x01k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15filesyst\
+em-error-code\x01T\x04\0\x1bwasi:filesystem/types@0.2.0\x05n\x01B\x07\x02\x03\x02\
+\x01$\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\x04\x04\
+\0\x0fget-directories\x01\x05\x04\0\x1ewasi:filesystem/preopens@0.2.0\x05o\x01B\xc0\
+\x01\x02\x03\x02\x01&\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x05\x04\0\x0cinp\
+ut-stream\x03\0\x02\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x04\x02\x03\
+\x02\x01\x02\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\
+\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07c\
+onnect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06met\
+hod\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\
+\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-pay\
+load\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-\
+alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\
+\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09\
+DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19\
+destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-ref\
+used\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\x17connection-re\
+ad-timeout\0\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12\
+TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\
+\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-reques\
+t-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-inv\
+alid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\
+\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\
+\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HT\
+TP-response-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\
+\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\
+\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\
+\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTT\
+P-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configur\
+ation-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\
+\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\
+\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\
+\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10\
+incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-opti\
+ons\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\
+\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-t\
+railers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\
+\x04\0\x18future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructo\
+r]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\
+\x18[static]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\
+\0\x12[method]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[meth\
+od]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\
+\0\x12[method]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]\
+fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]f\
+ields.append\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\
+\x01\x04self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\
+\0\x0b\x04\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\
+\x04\0([method]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\
+\0\0\xc4\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming\
+-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]in\
+coming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\
+\x04\0\x20[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\
+\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01\
+@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\
+\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\
+\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-meth\
+od\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-qu\
+ery\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]out\
+going-request.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[\
+method]outgoing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\
+\0\x04\0#[method]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-reques\
+t.authority\x01T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]o\
+utgoing-request.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[meth\
+od]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]requ\
+est-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]req\
+uest-options.connect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\
+\0\x04\0+[method]request-options.set-connect-timeout\x01_\x04\0*[method]request-\
+options.first-byte-timeout\x01^\x04\0.[method]request-options.set-first-byte-tim\
+eout\x01_\x04\0-[method]request-options.between-bytes-timeout\x01^\x04\01[method\
+]request-options.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\
+\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outpa\
+ram.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.\
+status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.heade\
+rs\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01\
+g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[metho\
+d]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[stati\
+c]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0!\
+[method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01\
+j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-\
+trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoi\
+ng-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response\
+.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]o\
+utgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![meth\
+od]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[metho\
+d]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\
+\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\
+\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\
+\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incomin\
+g-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\
+\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming\
+-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\
+\0\x0fhttp-error-code\x01\x8c\x01\x04\0\x15wasi:http/types@0.2.0\x05p\x01B\x0f\x02\
+\x03\x02\x01(\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01)\x04\0\x0freques\
+t-options\x03\0\x02\x02\x03\x02\x01*\x04\0\x18future-incoming-response\x03\0\x04\
+\x02\x03\x02\x01+\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\
+\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06hand\
+le\x01\x0d\x04\0\x20wasi:http/outgoing-handler@0.2.0\x05q\x01B\x04\x04\0\x05erro\
+r\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x13[method]error.trace\x01\x02\x04\
+\0'wasi:keyvalue/wasi-keyvalue-error@0.1.0\x05r\x01B,\x02\x03\x02\x01\x05\x04\0\x0c\
+input-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x02\x03\
+\x02\x01.\x04\0\x05error\x03\0\x04\x04\0\x06bucket\x03\x01\x01s\x04\0\x03key\x03\
+\0\x07\x04\0\x0eoutgoing-value\x03\x01\x04\0\x19outgoing-value-body-async\x03\0\x03\
+\x01p}\x04\0\x18outgoing-value-body-sync\x03\0\x0b\x04\0\x0eincoming-value\x03\x01\
+\x04\0\x19incoming-value-async-body\x03\0\x01\x01p}\x04\0\x18incoming-value-sync\
+-body\x03\0\x0f\x01i\x06\x01i\x05\x01j\x01\x11\x01\x12\x01@\x01\x04names\0\x13\x04\
+\0\x1a[static]bucket.open-bucket\x01\x14\x01i\x09\x01@\0\0\x15\x04\0)[static]out\
+going-value.new-outgoing-value\x01\x16\x01h\x09\x01i\x0a\x01j\x01\x18\x01\x12\x01\
+@\x01\x04self\x17\0\x19\x04\06[method]outgoing-value.outgoing-value-write-body-a\
+sync\x01\x1a\x01j\0\x01\x12\x01@\x02\x04self\x17\x05value\x0c\0\x1b\x04\05[metho\
+d]outgoing-value.outgoing-value-write-body-sync\x01\x1c\x01h\x0d\x01j\x01\x10\x01\
+\x12\x01@\x01\x04self\x1d\0\x1e\x04\02[method]incoming-value.incoming-value-cons\
+ume-sync\x01\x1f\x01i\x0e\x01j\x01\x20\x01\x12\x01@\x01\x04self\x1d\0!\x04\03[me\
+thod]incoming-value.incoming-value-consume-async\x01\"\x01j\x01w\x01\x12\x01@\x01\
+\x04self\x1d\0#\x04\0*[method]incoming-value.incoming-value-size\x01$\x04\0\x19w\
+asi:keyvalue/types@0.1.0\x05s\x01B\x0e\x02\x03\x02\x010\x04\0\x06bucket\x03\0\0\x02\
+\x03\x02\x011\x04\0\x05error\x03\0\x02\x02\x03\x02\x012\x04\0\x03key\x03\0\x04\x01\
+h\x01\x01i\x03\x01j\x01w\x01\x07\x01@\x03\x06bucket\x06\x03key\x05\x05deltaw\0\x08\
+\x04\0\x09increment\x01\x09\x01j\x01\x7f\x01\x07\x01@\x04\x06bucket\x06\x03key\x05\
+\x03oldw\x03neww\0\x0a\x04\0\x10compare-and-swap\x01\x0b\x04\0\x1awasi:keyvalue/\
+atomic@0.1.0\x05t\x01BF\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x02\x03\x02\
+\x012\x04\0\x03key\x03\0\x02\x02\x03\x02\x014\x04\0\x0eincoming-value\x03\0\x04\x02\
+\x03\x02\x015\x04\0\x0eoutgoing-value\x03\0\x06\x02\x03\x02\x011\x04\0\x05error\x03\
+\0\x08\x04\0\x11future-get-result\x03\x01\x04\0\x14future-exists-result\x03\x01\x04\
+\0\x0dfuture-result\x03\x01\x04\0\x18future-get-or-set-result\x03\x01\x04\0\x07v\
+acancy\x03\x01\x01i\x05\x01i\x0e\x01q\x02\x08occupied\x01\x0f\0\x06vacant\x01\x10\
+\0\x04\0\x10get-or-set-entry\x03\0\x11\x01h\x0a\x01k\x0f\x01i\x09\x01j\x01\x14\x01\
+\x15\x01k\x16\x01@\x01\x04self\x13\0\x17\x04\0/[method]future-get-result.future-\
+get-result-get\x01\x18\x01i\x01\x01@\x01\x04self\x13\0\x19\x04\05[method]future-\
+get-result.listen-to-future-get-result\x01\x1a\x01h\x0b\x01j\x01\x7f\x01\x15\x01\
+k\x1c\x01@\x01\x04self\x1b\0\x1d\x04\05[method]future-exists-result.future-exist\
+s-result-get\x01\x1e\x01@\x01\x04self\x1b\0\x19\x04\0;[method]future-exists-resu\
+lt.listen-to-future-exists-result\x01\x1f\x01h\x0c\x01j\0\x01\x15\x01k!\x01@\x01\
+\x04self\x20\0\"\x04\0'[method]future-result.future-result-get\x01#\x01@\x01\x04\
+self\x20\0\x19\x04\0-[method]future-result.listen-to-future-result\x01$\x01h\x0d\
+\x01j\x01\x12\x01\x15\x01k&\x01@\x01\x04self%\0'\x04\0=[method]future-get-or-set\
+-result.future-get-or-set-result-get\x01(\x01@\x01\x04self%\0\x19\x04\0C[method]\
+future-get-or-set-result.listen-to-future-get-or-set-result\x01)\x01h\x0e\x01ky\x01\
+i\x07\x01@\x02\x04self*\x06TTL-ms+\0,\x04\0\x1c[method]vacancy.vacancy-fill\x01-\
+\x01i\x0a\x01@\x01\x01k\x03\0.\x04\0\x03get\x01/\x01i\x0b\x01@\x01\x01k\x03\00\x04\
+\0\x06exists\x011\x01h\x07\x01i\x0c\x01@\x03\x01k\x03\x01v2\x06TTL-ms+\03\x04\0\x03\
+set\x014\x01i\x0d\x01@\x01\x01k\x03\05\x04\0\x0aget-or-set\x016\x01@\x01\x01k\x03\
+\03\x04\0\x06delete\x017\x04\0\x19wasi:keyvalue/cache@0.1.0\x05u\x01B\x1a\x02\x03\
+\x02\x010\x04\0\x06bucket\x03\0\0\x02\x03\x02\x011\x04\0\x05error\x03\0\x02\x02\x03\
+\x02\x014\x04\0\x0eincoming-value\x03\0\x04\x02\x03\x02\x012\x04\0\x03key\x03\0\x06\
+\x02\x03\x02\x015\x04\0\x0eoutgoing-value\x03\0\x08\x01h\x01\x01i\x05\x01k\x0b\x01\
+i\x03\x01j\x01\x0c\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x0e\x04\0\x03get\x01\
+\x0f\x01h\x09\x01j\0\x01\x0d\x01@\x03\x06bucket\x0a\x03key\x07\x0eoutgoing-value\
+\x10\0\x11\x04\0\x03set\x01\x12\x01@\x02\x06bucket\x0a\x03key\x07\0\x11\x04\0\x06\
+delete\x01\x13\x01j\x01\x7f\x01\x0d\x01@\x02\x06bucket\x0a\x03key\x07\0\x14\x04\0\
+\x06exists\x01\x15\x04\0\x1cwasi:keyvalue/eventual@0.1.0\x05v\x01B\x1e\x02\x03\x02\
+\x010\x04\0\x06bucket\x03\0\0\x02\x03\x02\x011\x04\0\x05error\x03\0\x02\x02\x03\x02\
+\x012\x04\0\x03key\x03\0\x04\x02\x03\x02\x014\x04\0\x0eincoming-value\x03\0\x06\x02\
+\x03\x02\x015\x04\0\x0eoutgoing-value\x03\0\x08\x01h\x01\x01p\x05\x01i\x07\x01k\x0c\
+\x01p\x0d\x01i\x03\x01j\x01\x0e\x01\x0f\x01@\x02\x06bucket\x0a\x04keys\x0b\0\x10\
+\x04\0\x08get-many\x01\x11\x01j\x01\x0b\x01\x0f\x01@\x01\x06bucket\x0a\0\x12\x04\
+\0\x04keys\x01\x13\x01h\x09\x01o\x02\x05\x14\x01p\x15\x01j\0\x01\x0f\x01@\x02\x06\
+bucket\x0a\x0akey-values\x16\0\x17\x04\0\x08set-many\x01\x18\x01@\x02\x06bucket\x0a\
+\x04keys\x0b\0\x17\x04\0\x0bdelete-many\x01\x19\x04\0\"wasi:keyvalue/eventual-ba\
+tch@0.1.0\x05w\x01B\x0c\x02\x03\x02\x010\x04\0\x06bucket\x03\0\0\x02\x03\x02\x01\
+2\x04\0\x03key\x03\0\x02\x02\x03\x02\x014\x04\0\x0eincoming-value\x03\0\x04\x01i\
+\x01\x01h\x05\x01@\x03\x06bucket\x06\x03key\x03\x0eincoming-value\x07\x01\0\x04\0\
+\x06on-set\x01\x08\x01@\x02\x06bucket\x06\x03key\x03\x01\0\x04\0\x09on-delete\x01\
+\x09\x04\0\x20wasi:keyvalue/handle-watch@0.1.0\x05x\x01B\x04\x01m\x06\x05trace\x05\
+debug\x04info\x04warn\x05error\x08critical\x04\0\x05level\x03\0\0\x01@\x03\x05le\
+vel\x01\x07contexts\x07messages\x01\0\x04\0\x03log\x01\x02\x04\0\x14wasi:logging\
+/logging\x05y\x01B\x05\x01p}\x01@\x01\x03lenw\0\0\x04\0\x19get-insecure-random-b\
+ytes\x01\x01\x01@\0\0w\x04\0\x17get-insecure-random-u64\x01\x02\x04\0\x1awasi:ra\
+ndom/insecure@0.2.0\x05z\x01B\x03\x01o\x02ww\x01@\0\0\0\x04\0\x0dinsecure-seed\x01\
+\x01\x04\0\x1fwasi:random/insecure-seed@0.2.0\x05{\x01B\x05\x01p}\x01@\x01\x03le\
+nw\0\0\x04\0\x10get-random-bytes\x01\x01\x01@\0\0w\x04\0\x0eget-random-u64\x01\x02\
+\x04\0\x18wasi:random/random@0.2.0\x05|\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\
+\x07unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memo\
+ry\x07timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinval\
+id-state\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote\
+-unreachable\x12connection-refused\x10connection-reset\x12connection-aborted\x12\
+datagram-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermane\
+nt-resolver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\
+\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01\
+o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\
+\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13\
+ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08\
+scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04i\
+pv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x04\0\x1awasi:sockets/network\
+@0.2.0\x05}\x01B\x05\x02\x03\x02\x01?\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\
+\x02\x04\0\x10instance-network\x01\x03\x04\0#wasi:sockets/instance-network@0.2.0\
+\x05~\x01B\x16\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01?\x04\
+\0\x07network\x03\0\x02\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\
+\x01B\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\
+\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]reso\
+lve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\
+\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\
+\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\
+\x12\x04\0!wasi:sockets/ip-name-lookup@0.2.0\x05\x7f\x01BT\x02\x03\x02\x01\x05\x04\
+\0\x0cinput-stream\x03\0\0\x02\x03\x02\x01\x06\x04\0\x0doutput-stream\x03\0\x02\x02\
+\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x04\x02\x03\x02\x01&\x04\0\x08duration\x03\
+\0\x06\x02\x03\x02\x01?\x04\0\x07network\x03\0\x08\x02\x03\x02\x01A\x04\0\x0aerr\
+or-code\x03\0\x0a\x02\x03\x02\x01D\x04\0\x11ip-socket-address\x03\0\x0c\x02\x03\x02\
+\x01E\x04\0\x11ip-address-family\x03\0\x0e\x01m\x03\x07receive\x04send\x04both\x04\
+\0\x0dshutdown-type\x03\0\x10\x04\0\x0atcp-socket\x03\x01\x01h\x12\x01h\x09\x01j\
+\0\x01\x0b\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x0d\0\x15\x04\0\x1d\
+[method]tcp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[metho\
+d]tcp-socket.finish-bind\x01\x17\x01@\x03\x04self\x13\x07network\x14\x0eremote-a\
+ddress\x0d\0\x15\x04\0\x20[method]tcp-socket.start-connect\x01\x18\x01i\x01\x01i\
+\x03\x01o\x02\x19\x1a\x01j\x01\x1b\x01\x0b\x01@\x01\x04self\x13\0\x1c\x04\0![met\
+hod]tcp-socket.finish-connect\x01\x1d\x04\0\x1f[method]tcp-socket.start-listen\x01\
+\x17\x04\0\x20[method]tcp-socket.finish-listen\x01\x17\x01i\x12\x01o\x03\x1e\x19\
+\x1a\x01j\x01\x1f\x01\x0b\x01@\x01\x04self\x13\0\x20\x04\0\x19[method]tcp-socket\
+.accept\x01!\x01j\x01\x0d\x01\x0b\x01@\x01\x04self\x13\0\"\x04\0\x20[method]tcp-\
+socket.local-address\x01#\x04\0![method]tcp-socket.remote-address\x01#\x01@\x01\x04\
+self\x13\0\x7f\x04\0\x1f[method]tcp-socket.is-listening\x01$\x01@\x01\x04self\x13\
+\0\x0f\x04\0![method]tcp-socket.address-family\x01%\x01@\x02\x04self\x13\x05valu\
+ew\0\x15\x04\0*[method]tcp-socket.set-listen-backlog-size\x01&\x01j\x01\x7f\x01\x0b\
+\x01@\x01\x04self\x13\0'\x04\0%[method]tcp-socket.keep-alive-enabled\x01(\x01@\x02\
+\x04self\x13\x05value\x7f\0\x15\x04\0)[method]tcp-socket.set-keep-alive-enabled\x01\
+)\x01j\x01\x07\x01\x0b\x01@\x01\x04self\x13\0*\x04\0'[method]tcp-socket.keep-ali\
+ve-idle-time\x01+\x01@\x02\x04self\x13\x05value\x07\0\x15\x04\0+[method]tcp-sock\
+et.set-keep-alive-idle-time\x01,\x04\0&[method]tcp-socket.keep-alive-interval\x01\
++\x04\0*[method]tcp-socket.set-keep-alive-interval\x01,\x01j\x01y\x01\x0b\x01@\x01\
+\x04self\x13\0-\x04\0#[method]tcp-socket.keep-alive-count\x01.\x01@\x02\x04self\x13\
+\x05valuey\0\x15\x04\0'[method]tcp-socket.set-keep-alive-count\x01/\x01j\x01}\x01\
+\x0b\x01@\x01\x04self\x13\00\x04\0\x1c[method]tcp-socket.hop-limit\x011\x01@\x02\
+\x04self\x13\x05value}\0\x15\x04\0\x20[method]tcp-socket.set-hop-limit\x012\x01j\
+\x01w\x01\x0b\x01@\x01\x04self\x13\03\x04\0&[method]tcp-socket.receive-buffer-si\
+ze\x014\x04\0*[method]tcp-socket.set-receive-buffer-size\x01&\x04\0#[method]tcp-\
+socket.send-buffer-size\x014\x04\0'[method]tcp-socket.set-send-buffer-size\x01&\x01\
+i\x05\x01@\x01\x04self\x13\05\x04\0\x1c[method]tcp-socket.subscribe\x016\x01@\x02\
+\x04self\x13\x0dshutdown-type\x11\0\x15\x04\0\x1b[method]tcp-socket.shutdown\x01\
+7\x04\0\x16wasi:sockets/tcp@0.2.0\x05\x80\x01\x01B\x0c\x02\x03\x02\x01?\x04\0\x07\
+network\x03\0\0\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x02\x02\x03\x02\x01E\x04\
+\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01G\x04\0\x0atcp-socket\x03\0\x06\
+\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-family\x05\0\x09\x04\0\x11cre\
+ate-tcp-socket\x01\x0a\x04\0$wasi:sockets/tcp-create-socket@0.2.0\x05\x81\x01\x01\
+BD\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01?\x04\0\x07netwo\
+rk\x03\0\x02\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01D\x04\
+\0\x11ip-socket-address\x03\0\x06\x02\x03\x02\x01E\x04\0\x11ip-address-family\x03\
+\0\x08\x01p}\x01r\x02\x04data\x0a\x0eremote-address\x07\x04\0\x11incoming-datagr\
+am\x03\0\x0b\x01k\x07\x01r\x02\x04data\x0a\x0eremote-address\x0d\x04\0\x11outgoi\
+ng-datagram\x03\0\x0e\x04\0\x0audp-socket\x03\x01\x04\0\x18incoming-datagram-str\
+eam\x03\x01\x04\0\x18outgoing-datagram-stream\x03\x01\x01h\x10\x01h\x03\x01j\0\x01\
+\x05\x01@\x03\x04self\x13\x07network\x14\x0dlocal-address\x07\0\x15\x04\0\x1d[me\
+thod]udp-socket.start-bind\x01\x16\x01@\x01\x04self\x13\0\x15\x04\0\x1e[method]u\
+dp-socket.finish-bind\x01\x17\x01i\x11\x01i\x12\x01o\x02\x18\x19\x01j\x01\x1a\x01\
+\x05\x01@\x02\x04self\x13\x0eremote-address\x0d\0\x1b\x04\0\x19[method]udp-socke\
+t.stream\x01\x1c\x01j\x01\x07\x01\x05\x01@\x01\x04self\x13\0\x1d\x04\0\x20[metho\
+d]udp-socket.local-address\x01\x1e\x04\0![method]udp-socket.remote-address\x01\x1e\
+\x01@\x01\x04self\x13\0\x09\x04\0![method]udp-socket.address-family\x01\x1f\x01j\
+\x01}\x01\x05\x01@\x01\x04self\x13\0\x20\x04\0$[method]udp-socket.unicast-hop-li\
+mit\x01!\x01@\x02\x04self\x13\x05value}\0\x15\x04\0([method]udp-socket.set-unica\
+st-hop-limit\x01\"\x01j\x01w\x01\x05\x01@\x01\x04self\x13\0#\x04\0&[method]udp-s\
+ocket.receive-buffer-size\x01$\x01@\x02\x04self\x13\x05valuew\0\x15\x04\0*[metho\
+d]udp-socket.set-receive-buffer-size\x01%\x04\0#[method]udp-socket.send-buffer-s\
+ize\x01$\x04\0'[method]udp-socket.set-send-buffer-size\x01%\x01i\x01\x01@\x01\x04\
+self\x13\0&\x04\0\x1c[method]udp-socket.subscribe\x01'\x01h\x11\x01p\x0c\x01j\x01\
+)\x01\x05\x01@\x02\x04self(\x0bmax-resultsw\0*\x04\0([method]incoming-datagram-s\
+tream.receive\x01+\x01@\x01\x04self(\0&\x04\0*[method]incoming-datagram-stream.s\
+ubscribe\x01,\x01h\x12\x01@\x01\x04self-\0#\x04\0+[method]outgoing-datagram-stre\
+am.check-send\x01.\x01p\x0f\x01@\x02\x04self-\x09datagrams/\0#\x04\0%[method]out\
+going-datagram-stream.send\x010\x01@\x01\x04self-\0&\x04\0*[method]outgoing-data\
+gram-stream.subscribe\x011\x04\0\x16wasi:sockets/udp@0.2.0\x05\x82\x01\x01B\x0c\x02\
+\x03\x02\x01?\x04\0\x07network\x03\0\0\x02\x03\x02\x01A\x04\0\x0aerror-code\x03\0\
+\x02\x02\x03\x02\x01E\x04\0\x11ip-address-family\x03\0\x04\x02\x03\x02\x01J\x04\0\
+\x0audp-socket\x03\0\x06\x01i\x07\x01j\x01\x08\x01\x03\x01@\x01\x0eaddress-famil\
+y\x05\0\x09\x04\0\x11create-udp-socket\x01\x0a\x04\0$wasi:sockets/udp-create-soc\
+ket@0.2.0\x05\x83\x01\x04\0\x17golem:wasi/durable-wasi\x04\0\x0b\x12\x01\0\x0cdu\
+rable-wasi\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070\
+.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

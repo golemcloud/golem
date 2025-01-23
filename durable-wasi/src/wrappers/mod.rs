@@ -28,6 +28,7 @@ mod clock;
 mod filesystem;
 mod http;
 mod io;
+mod keyvalue;
 mod logging;
 mod random;
 mod sockets;
@@ -195,6 +196,20 @@ impl From<&Error> for SerializableError {
 impl From<SerializableError> for Error {
     fn from(value: SerializableError) -> Self {
         Error::new(WrappedError::message(&value.to_string()))
+    }
+}
+
+impl From<&crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error> for SerializableError {
+    fn from(value: &crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error) -> Self {
+        SerializableError::Generic { message: value.trace() }
+    }
+}
+
+impl From<SerializableError> for crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error {
+    fn from(value: SerializableError) -> Self {
+        crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error::new(
+            crate::wrappers::keyvalue::wasi_keyvalue_error::WrappedError::message(value.to_string())
+        )
     }
 }
 

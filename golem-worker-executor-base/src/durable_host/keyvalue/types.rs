@@ -34,13 +34,11 @@ impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
         &mut self,
         name: String,
     ) -> anyhow::Result<Result<Resource<BucketEntry>, Resource<Error>>> {
-        self.observe_function_call("keyvalue::types::bucket", "open");
         let bucket = self.as_wasi_view().table().push(BucketEntry::new(name))?;
         Ok(Ok(bucket))
     }
 
     async fn drop(&mut self, rep: Resource<BucketEntry>) -> anyhow::Result<()> {
-        self.observe_function_call("keyvalue::types::bucket", "drop");
         self.as_wasi_view().table().delete::<BucketEntry>(rep)?;
         Ok(())
     }

@@ -73,6 +73,28 @@ world durable-wasi {
     import wasi:io/streams@0.2.0;
     export wasi:io/streams@0.2.0;
 
+    // Key-Value
+    import wasi:keyvalue/atomic@0.1.0;
+    export wasi:keyvalue/atomic@0.1.0;
+
+    import wasi:keyvalue/cache@0.1.0;
+    export wasi:keyvalue/cache@0.1.0;
+
+    import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+    export wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+
+    import wasi:keyvalue/eventual@0.1.0;
+    export wasi:keyvalue/eventual@0.1.0;
+
+    import wasi:keyvalue/eventual-batch@0.1.0;
+    export wasi:keyvalue/eventual-batch@0.1.0;
+
+    import wasi:keyvalue/handle-watch@0.1.0;
+    export wasi:keyvalue/handle-watch@0.1.0;
+
+    import wasi:keyvalue/types@0.1.0;
+    export wasi:keyvalue/types@0.1.0;
+
     // Logging
     import wasi:logging/logging;
     export wasi:logging/logging;
