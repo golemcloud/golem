@@ -27,8 +27,8 @@ use crate::wrappers::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
 use crate::wrappers::http::{
-    continue_http_request, end_http_request, HttpRequestCloseOwner, OPEN_FUNCTION_TABLE,
-    OPEN_HTTP_REQUESTS,
+    continue_http_request, continue_http_request_borrowed, end_http_request_borrowed,
+    HttpRequestCloseOwner, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
 };
 use crate::wrappers::io::error::WrappedError;
 use crate::wrappers::io::poll::WrappedPollable;
@@ -366,14 +366,12 @@ impl Drop for WrappedResponseOutparam {
 
 pub struct WrappedIncomingResponse {
     state: RefCell<WrappedIncomingResponseState>,
-    headers: RefCell<Option<crate::bindings::wasi::http::types::Headers>>,
 }
 
 impl WrappedIncomingResponse {
     pub fn proxied(response: crate::bindings::wasi::http::types::IncomingResponse) -> Self {
         WrappedIncomingResponse {
             state: RefCell::new(WrappedIncomingResponseState::Proxy { response }),
-            headers: RefCell::new(None),
         }
     }
 
@@ -383,7 +381,6 @@ impl WrappedIncomingResponse {
                 serializable_response_headers,
                 handle: None,
             }),
-            headers: RefCell::new(None),
         }
     }
 
@@ -423,25 +420,22 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
 
     fn headers(&self) -> Headers {
         observe_function_call("http::types::incoming_response", "headers");
-        let mut headers = self.headers.borrow_mut();
-        let headers = headers.get_or_insert_with(|| {
-            let state = self.state.borrow();
-            match &*state {
-                WrappedIncomingResponseState::Proxy { response } => response.headers(),
-                WrappedIncomingResponseState::Replayed {
-                    serializable_response_headers,
-                    ..
-                } => {
-                    let entries = serializable_response_headers
-                        .headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<Vec<_>>();
-                    crate::bindings::wasi::http::types::Fields::from_list(&entries).unwrap()
-                }
+        let state = self.state.borrow();
+        let headers = match &*state {
+            WrappedIncomingResponseState::Proxy { response } => response.headers(),
+            WrappedIncomingResponseState::Replayed {
+                serializable_response_headers,
+                ..
+            } => {
+                let entries = serializable_response_headers
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>();
+                crate::bindings::wasi::http::types::Fields::from_list(&entries).unwrap()
             }
-        });
-        Headers::new(WrappedFields::proxied(headers.clone()))
+        };
+        Headers::new(WrappedFields::proxied(headers))
     }
 
     fn consume(&self) -> Result<IncomingBody, ()> {
@@ -480,20 +474,32 @@ impl Drop for WrappedIncomingResponse {
         match &*self.state.borrow() {
             WrappedIncomingResponseState::Proxy { response } => {
                 let handle = response.handle();
-                OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                     if let Some(state) = open_http_requests.get(&handle) {
                         if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                            end_http_request(handle);
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    handle,
+                                )
+                            });
                         }
                     }
                 });
             }
             WrappedIncomingResponseState::Replayed { handle, .. } => {
                 if let Some(handle) = handle {
-                    OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+                    OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                         if let Some(state) = open_http_requests.get(handle) {
                             if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                                end_http_request(*handle);
+                                OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                    end_http_request_borrowed(
+                                        open_http_requests,
+                                        open_function_table,
+                                        *handle,
+                                    )
+                                });
                             }
                         }
                     });
@@ -590,7 +596,13 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingBody for WrappedI
                     let handle = body.handle();
                     if let Some(state) = open_http_requests.get(&handle) {
                         if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            end_http_request(handle);
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    handle,
+                                )
+                            });
                         }
                     }
                 });
@@ -607,7 +619,13 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingBody for WrappedI
                 OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                     if let Some(state) = open_http_requests.get(&handle) {
                         if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            end_http_request(handle);
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    handle,
+                                )
+                            });
                         }
                     }
                 });
@@ -638,7 +656,13 @@ impl Drop for WrappedIncomingBody {
                     let handle = body.handle();
                     if let Some(state) = open_http_requests.get(&handle) {
                         if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            end_http_request(handle);
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    handle,
+                                )
+                            });
                         }
                     }
                 });
@@ -650,7 +674,13 @@ impl Drop for WrappedIncomingBody {
                 OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                     if let Some(state) = open_http_requests.get(handle) {
                         if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            end_http_request(*handle);
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    *handle,
+                                )
+                            });
                         }
                     }
                 });
@@ -838,8 +868,8 @@ impl crate::bindings::exports::wasi::http::types::GuestOutgoingResponse
 
     fn headers(&self) -> Headers {
         observe_function_call("http::types::outgoing_response", "headers");
-        let headers = self.response.as_ref().unwrap().headers();
-        Headers::new(WrappedFields::proxied(headers))
+        let response = self.response.as_ref().unwrap();
+        Headers::new(WrappedFields::proxied(response.headers()))
     }
 
     fn body(&self) -> Result<OutgoingBody, ()> {
@@ -930,7 +960,7 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
                 PersistenceLevel::PersistNothing
             )
         {
-            OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+            OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                 OPEN_FUNCTION_TABLE.with_borrow(|open_function_table| {
                     let request_state = open_http_requests.get(&handle).unwrap_or_else(|| {
                         panic!("No matching HTTP request is associated with resource handle")
@@ -986,7 +1016,8 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
                     }
 
                     if let Some(incoming_response_handle) = incoming_response_handle {
-                            continue_http_request(
+                            continue_http_request_borrowed(
+                                open_http_requests,
                                 handle,
                                 incoming_response_handle,
                                 HttpRequestCloseOwner::IncomingResponseDrop,
@@ -1041,7 +1072,9 @@ impl Drop for WrappedFutureIncomingResponse {
             let handle = self.response.handle();
             if let Some(state) = open_http_requests.get(&handle) {
                 if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
-                    end_http_request(handle);
+                    OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                        end_http_request_borrowed(open_http_requests, open_function_table, handle)
+                    });
                 }
             }
         });

@@ -425,6 +425,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
             {
+                if self.state.config.debug_worker_output {
+                    info!(level=?level, context=%context, "Worker output: {}", message);
+                }
+
                 // Stdout and stderr writes are persistent and overwritten by sending the data to the event
                 // service instead of the real output stream
 

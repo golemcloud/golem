@@ -1632,6 +1632,7 @@ async fn long_running_poll_loop_works_as_expected(
     let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)

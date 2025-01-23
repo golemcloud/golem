@@ -23,7 +23,7 @@ use crate::bindings::golem::durability::durability::{
 use crate::durability::Durability;
 use crate::wrappers::http::serialized::SerializableHttpRequest;
 use crate::wrappers::http::{
-    end_http_request, HttpRequestCloseOwner, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
+    end_http_request_borrowed, HttpRequestCloseOwner, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
 };
 use crate::wrappers::io::error::WrappedError;
 use crate::wrappers::io::poll::WrappedPollable;
@@ -342,20 +342,32 @@ impl Drop for WrappedInputStream {
         match self {
             WrappedInputStream::Proxied { .. } => {}
             WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                     if let Some(state) = open_http_requests.get(&input_stream.handle()) {
                         if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                            end_http_request(input_stream.handle());
+                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                                end_http_request_borrowed(
+                                    open_http_requests,
+                                    open_function_table,
+                                    input_stream.handle(),
+                                )
+                            })
                         }
                     }
                 })
             }
             WrappedInputStream::ReplayedIncomingHttpBodyStream {
                 handle: Some(handle),
-            } => OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+            } => OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
                 if let Some(state) = open_http_requests.get(handle) {
                     if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                        end_http_request(*handle);
+                        OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                            end_http_request_borrowed(
+                                open_http_requests,
+                                open_function_table,
+                                *handle,
+                            )
+                        })
                     }
                 }
             }),
@@ -448,10 +460,12 @@ impl crate::bindings::exports::wasi::io::streams::Guest for crate::Component {
 
 fn end_http_request_if_closed<T>(handle: u32, result: &Result<T, StreamError>) {
     if matches!(result, Err(StreamError::Closed)) {
-        OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
+        OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
             if let Some(state) = open_http_requests.get(&handle) {
                 if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                    end_http_request(handle);
+                    OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
+                        end_http_request_borrowed(open_http_requests, open_function_table, handle)
+                    })
                 }
             }
         })
