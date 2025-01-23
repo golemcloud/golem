@@ -27,23 +27,22 @@ use poem::web::cookie::CookieJar;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::vec;
 use url::Url;
 use crate::gateway_request::http_request::router;
 use super::http_request::router::PathParamExtractor;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 
-// https://github.com/golemcloud/golem/issues/1069
-#[derive(Clone, Debug)]
-pub enum GatewayRequestDetails {
-    Http(HttpRequestDetails),
-}
-
-// A structure that holds the incoming request details
-// along with parameters that are required by the route in API definition
-// Any extra query parameter values in the incoming request will not be available
-// in query or path values. If we need to retrieve them at any stage, the original
-// api_input_path is still available.
+/// A structure that holds the incoming request details
+/// along with parameters that are required by the route in API definition
+///
+/// TODO: track consumption of the body using types,
+/// something like
+///   struct ConsumedBody(poem::Request);
+///   struct IntactBody(poem::Request);
+///
+///   struct HttpRequestDetails<BodyState>
 #[derive(Debug)]
 pub struct HttpRequestDetails {
     pub underlying: poem::Request,
@@ -53,6 +52,16 @@ pub struct HttpRequestDetails {
 }
 
 impl HttpRequestDetails {
+    pub fn empty() -> Self {
+        Self {
+            underlying: poem::Request::default(),
+            path_param_extractors: vec![],
+            query_info: vec![],
+            request_custom_params: None
+        }
+    }
+
+
     pub async fn inject_auth_details(
         &mut self,
         session_id: &SessionId,

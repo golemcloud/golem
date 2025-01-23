@@ -80,7 +80,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     pub async fn execute(
         &self,
-        http_request_details: &poem::Request,
+        http_request_details: &HttpRequestDetails,
         middlewares: Option<HttpMiddlewares>,
         binding: ResolvedBinding<Namespace>,
     ) -> poem::Response {
@@ -205,15 +205,16 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_http_handler_binding(
         &self,
-        request_details: &mut poem::Request,
+        request_details: &mut HttpRequestDetails,
         http_handler_binding: &ResolvedHttpHandlerBinding<Namespace>,
     ) -> HttpHandlerBindingResult {
+        let inner_request = request_details.underlying;
         let incoming_http_request = {
             use golem_common::virtual_exports::http_incoming_handler as hic;
 
             let headers = {
                 let mut acc = Vec::new();
-                for (header_name, header_value) in request_details.headers().iter() {
+                for (header_name, header_value) in inner_request.headers().iter() {
                     let header_bytes: Vec<u8> = header_value.as_bytes().into();
                     acc.push((
                         header_name.clone().to_string(),
@@ -223,7 +224,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 hic::HttpFields(acc)
             };
 
-            let body_bytes = request_details
+            let body_bytes = inner_request
                 .take_body()
                 .into_bytes()
                 .await
@@ -234,10 +235,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 trailers: None,
             };
 
-            let authority = authority_from_request(request_details)
+            let authority = authority_from_request(&inner_request)
                 .map_err(|e| HttpHandlerBindingError::BadRequest(e))?;
 
-            let path_and_query = path_and_query_from_request(request_details)
+            let path_and_query = path_and_query_from_request(&inner_request)
                 .map_err(|e| HttpHandlerBindingError::BadRequest(e))?;
 
             hic::IncomingHttpRequest {
@@ -307,7 +308,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn handle_http_auth_call_binding(
         &self,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
-        http_request: &poem::Request,
+        http_request: &HttpRequestDetails,
     ) -> poem::Response
     where
         AuthCallBackResult: ToHttpResponse,
