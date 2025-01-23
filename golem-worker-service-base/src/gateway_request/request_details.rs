@@ -15,15 +15,23 @@
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
+use crate::gateway_binding::RibInputTypeMismatch;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
+use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
 use golem_common::SafeDisplay;
 use http::uri::Scheme;
 use http::{HeaderMap, Method};
+use poem::web::cookie::CookieJar;
+use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
+use crate::gateway_request::http_request::router;
+use super::http_request::router::PathParamExtractor;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 
 // https://github.com/golemcloud/golem/issues/1069
 #[derive(Clone, Debug)]
@@ -36,17 +44,11 @@ pub enum GatewayRequestDetails {
 // Any extra query parameter values in the incoming request will not be available
 // in query or path values. If we need to retrieve them at any stage, the original
 // api_input_path is still available.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct HttpRequestDetails {
-    pub scheme: Scheme,
-    pub host: ApiSiteString,
-    pub request_method: Method,
-    pub api_input_path: ApiInputPath,
-    pub request_path_params: RequestPathValues,
-    pub request_body_value: RequestBody,
-    pub request_query_params: RequestQueryValues,
-    pub request_headers: RequestHeaderValues,
-    pub http_middlewares: Option<HttpMiddlewares>,
+    pub underlying: poem::Request,
+    pub path_param_extractors: Vec<PathParamExtractor>,
+    pub query_info: Vec<QueryInfo>,
     pub request_custom_params: Option<HashMap<String, Value>>,
 }
 
@@ -70,25 +72,117 @@ impl HttpRequestDetails {
         Ok(())
     }
 
-    pub fn as_json(&self) -> Value {
-        let typed_path_values = self.request_path_params.clone().0;
-        let typed_query_values = self.request_query_params.clone().0;
+    pub fn request_path_values(&self) -> RequestPathValues {
+        let path: Vec<&str> = RouterPattern::split(self.underlying.uri().path()).collect();
+
+        let path_param_values = self.path_param_extractors
+            .iter()
+            .map(|param| match param {
+                router::PathParamExtractor::Single { var_info, index } => {
+                    (var_info.clone(), path[*index].to_string())
+                }
+                router::PathParamExtractor::AllFollowing { var_info, index } => {
+                    let value = path[*index..].join("/");
+                    (var_info.clone(), value)
+                }
+            })
+            .collect();
+
+        RequestPathValues::from(&path_param_values)
+    }
+
+    pub fn request_query_values(&self) -> Result<RequestQueryValues, String> {
+        let query_key_values = self.underlying.uri().query().map(query_components_from_str).unwrap_or_default();
+
+        RequestQueryValues::from(&query_key_values, &self.query_info)
+            .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
+    }
+
+    pub fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
+        RequestHeaderValues::from(self.underlying.headers())
+            .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
+    }
+
+    /// consumes the body of the underlying request
+    pub async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
+        let body = self.underlying.take_body();
+
+        let json_request_body: Value = if body.is_empty() {
+            Value::Null
+        } else {
+            match body.into_json().await {
+                Ok(json_request_body) => json_request_body,
+                Err(err) => {
+                    tracing::error!("Failed reading http request body as json: {}", err);
+                    Err(format!("Request body parse error: {err}"))?
+                }
+            }
+        };
+
+        Ok(RequestBodyValue(json_request_body))
+    }
+
+    // pub fn as_json(&self) -> Value {
+    //     let typed_path_values = self.request_path_params.clone().0;
+    //     let typed_query_values = self.request_query_params.clone().0;
+
+    //     let mut path_values = serde_json::Map::new();
+
+    //     for field in typed_path_values.fields.iter() {
+    //         path_values.insert(field.name.clone(), field.value.clone());
+    //     }
+
+    //     for field in typed_query_values.fields.iter() {
+    //         path_values.insert(field.name.clone(), field.value.clone());
+    //     }
+
+    //     let merged_request_path_and_query = Value::Object(path_values);
+
+    //     let mut header_records = serde_json::Map::new();
+
+    //     for field in self.request_headers.0.fields.iter() {
+    //         header_records.insert(field.name.clone(), field.value.clone());
+    //     }
+
+    //     let header_value = Value::Object(header_records);
+
+    //     let mut basic = serde_json::Map::from_iter(vec![
+    //         ("path".to_string(), merged_request_path_and_query),
+    //         ("body".to_string(), self.request_body_value.0.clone()),
+    //         ("headers".to_string(), header_value),
+    //     ]);
+
+    //     let custom = self.request_custom_params.clone().unwrap_or_default();
+
+    //     for (key, value) in custom.iter() {
+    //         basic.insert(key.clone(), value.clone());
+    //     }
+
+    //     Value::Object(basic)
+    // }
+
+    /// will consume the underlying request body
+    pub async fn as_value(&mut self) -> Result<Value, String> {
+        let typed_path_values = self.request_path_values();
+        let typed_query_values = self.request_query_values()?;
+        let typed_header_values = self.request_header_values()?;
+        let typed_body_value: RequestBodyValue = self.request_body_value().await?;
 
         let mut path_values = serde_json::Map::new();
 
-        for field in typed_path_values.fields.iter() {
-            path_values.insert(field.name.clone(), field.value.clone());
+        for field in typed_path_values.0.fields.into_iter() {
+            path_values.insert(field.name, field.value);
         }
 
-        for field in typed_query_values.fields.iter() {
-            path_values.insert(field.name.clone(), field.value.clone());
+        for field in typed_query_values.0.fields.into_iter() {
+            path_values.insert(field.name, field.value);
         }
 
         let merged_request_path_and_query = Value::Object(path_values);
 
         let mut header_records = serde_json::Map::new();
 
-        for field in self.request_headers.0.fields.iter() {
+        for field in typed_header_values.0.fields.iter() {
             header_records.insert(field.name.clone(), field.value.clone());
         }
 
@@ -96,7 +190,7 @@ impl HttpRequestDetails {
 
         let mut basic = serde_json::Map::from_iter(vec![
             ("path".to_string(), merged_request_path_and_query),
-            ("body".to_string(), self.request_body_value.0.clone()),
+            ("body".to_string(), typed_body_value.0),
             ("headers".to_string(), header_value),
         ]);
 
@@ -106,145 +200,165 @@ impl HttpRequestDetails {
             basic.insert(key.clone(), value.clone());
         }
 
-        Value::Object(basic)
+        Ok(Value::Object(basic))
     }
 
-    pub fn url(&self) -> Result<Url, String> {
-        let url_str = format!(
-            "{}://{}{}",
-            &self.scheme,
-            &self.host,
-            &self.api_input_path.to_string()
-        );
+    /// will consume the underlying request body
+    async fn resolve_rib_input_value(
+        &mut self,
+        required_types: &RibInputTypeInfo,
+    ) -> Result<RibInput, RibInputTypeMismatch> {
 
-        Url::parse(&url_str).map_err(|err| err.to_string())
-    }
+        let request_type_info = required_types.types.get("request");
 
-    pub fn empty() -> HttpRequestDetails {
-        HttpRequestDetails {
-            scheme: Scheme::HTTP,
-            host: ApiSiteString("".to_string()),
-            request_method: Method::GET,
-            api_input_path: ApiInputPath {
-                base_path: "".to_string(),
-                query_path: None,
-            },
-            request_path_params: RequestPathValues(JsonKeyValues::default()),
-            request_body_value: RequestBody(Value::Null),
-            request_query_params: RequestQueryValues(JsonKeyValues::default()),
-            request_headers: RequestHeaderValues(JsonKeyValues::default()),
-            http_middlewares: None,
-            request_custom_params: None,
-        }
-    }
+        let rib_input_with_request_content = &self.as_value().await.map_err(|e|
+            RibInputTypeMismatch(format!("Could not retrieve request details: {e}"))
+        )?;
 
-    pub fn get_api_input_path(&self) -> String {
-        self.api_input_path.to_string()
-    }
+        match request_type_info {
+            Some(request_type) => {
+                tracing::debug!("received: {:?}", rib_input_with_request_content);
+                let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
+                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+                let input = input.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
 
-    pub fn get_access_token_from_cookie(&self) -> Option<String> {
-        self.request_headers
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == "Cookie" || field.name == "cookie")
-            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-            .and_then(|cookie_header| {
-                let parts: Vec<&str> = cookie_header.split(';').collect();
-                let access_token_part = parts.iter().find(|part| part.contains("access_token"));
-                access_token_part.and_then(|part| {
-                    let token_parts: Vec<&str> = part.split('=').collect();
-                    if token_parts.len() == 2 {
-                        Some(token_parts[1].to_string())
-                    } else {
-                        None
-                    }
+                let mut rib_input_map = HashMap::new();
+                rib_input_map.insert("request".to_string(), input);
+                Ok(RibInput {
+                    input: rib_input_map,
                 })
-            })
-    }
-
-    pub fn get_id_token_from_cookie(&self) -> Option<String> {
-        self.request_headers
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == "Cookie" || field.name == "cookie")
-            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
-            .and_then(|cookie_header| {
-                let parts: Vec<&str> = cookie_header.split(';').collect();
-                let id_token_part = parts.iter().find(|part| part.contains("id_token"));
-                id_token_part.and_then(|part| {
-                    let token_parts: Vec<&str> = part.split('=').collect();
-                    if token_parts.len() == 2 {
-                        Some(token_parts[1].to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
-    }
-
-    pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
-        let mut hash_map = HashMap::new();
-
-        for json_key_value in &self.request_headers.0.fields {
-            let field_name = &json_key_value.name;
-
-            if field_name == "cookie" || field_name == "Cookie" {
-                if let Some(cookie_header) = json_key_value.value.as_str() {
-                    let parts: Vec<&str> = cookie_header.split(';').collect();
-                    for part in parts {
-                        let key_value: Vec<&str> = part.split('=').collect();
-                        if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-                            hash_map.insert(key.trim(), value.trim());
-                        }
-                    }
-                }
             }
+            None => Ok(RibInput::default()),
         }
-
-        hash_map
     }
 
-    pub fn get_accept_content_type_header(&self) -> Option<String> {
-        self.request_headers
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == http::header::ACCEPT.to_string())
-            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+
+    // pub fn empty() -> HttpRequestDetails {
+    //     HttpRequestDetails {
+    //         scheme: Scheme::HTTP,
+    //         host: ApiSiteString("".to_string()),
+    //         request_method: Method::GET,
+    //         api_input_path: ApiInputPath {
+    //             base_path: "".to_string(),
+    //             query_path: None,
+    //         },
+    //         request_path_params: RequestPathValues(JsonKeyValues::default()),
+    //         request_body_value: RequestBody(Value::Null),
+    //         request_query_params: RequestQueryValues(JsonKeyValues::default()),
+    //         request_headers: RequestHeaderValues(JsonKeyValues::default()),
+    //         http_middlewares: None,
+    //         request_custom_params: None,
+    //     }
+    // }
+
+    // pub fn get_api_input_path(&self) -> String {
+    //     self.api_input_path.to_string()
+    // }
+
+    // pub fn get_access_token_from_cookie(&self) -> Option<String> {
+    //     self.request_headers
+    //         .0
+    //         .fields
+    //         .iter()
+    //         .find(|field| field.name == "Cookie" || field.name == "cookie")
+    //         .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+    //         .and_then(|cookie_header| {
+    //             let parts: Vec<&str> = cookie_header.split(';').collect();
+    //             let access_token_part = parts.iter().find(|part| part.contains("access_token"));
+    //             access_token_part.and_then(|part| {
+    //                 let token_parts: Vec<&str> = part.split('=').collect();
+    //                 if token_parts.len() == 2 {
+    //                     Some(token_parts[1].to_string())
+    //                 } else {
+    //                     None
+    //                 }
+    //             })
+    //         })
+    // }
+
+    // pub fn get_id_token_from_cookie(&self) -> Option<String> {
+    //     self.request_headers
+    //         .0
+    //         .fields
+    //         .iter()
+    //         .find(|field| field.name == "Cookie" || field.name == "cookie")
+    //         .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+    //         .and_then(|cookie_header| {
+    //             let parts: Vec<&str> = cookie_header.split(';').collect();
+    //             let id_token_part = parts.iter().find(|part| part.contains("id_token"));
+    //             id_token_part.and_then(|part| {
+    //                 let token_parts: Vec<&str> = part.split('=').collect();
+    //                 if token_parts.len() == 2 {
+    //                     Some(token_parts[1].to_string())
+    //                 } else {
+    //                     None
+    //                 }
+    //             })
+    //         })
+    // }
+
+    pub fn get_cookie_jar(&self) -> &CookieJar {
+        self.underlying.cookie()
     }
 
-    pub fn from_input_http_request(
-        scheme: &Scheme,
-        host: &ApiSiteString,
-        method: Method,
-        api_input_path: &ApiInputPath,
-        path_params: &HashMap<VarInfo, String>,
-        query_variable_values: &HashMap<String, String>,
-        query_variable_names: &[QueryInfo],
-        request_body: &Value,
-        all_headers: HeaderMap,
-        http_middlewares: &Option<HttpMiddlewares>,
-    ) -> Result<Self, Vec<String>> {
-        let request_body = RequestBody::from(request_body)?;
-        let path_params = RequestPathValues::from(path_params);
-        let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
-        let header_params = RequestHeaderValues::from(&all_headers)?;
+    // pub fn get_accept_content_type_header(&self) -> Option<String> {
+    //     self.request_headers
+    //         .0
+    //         .fields
+    //         .iter()
+    //         .find(|field| field.name == http::header::ACCEPT.to_string())
+    //         .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+    // }
 
-        Ok(Self {
-            scheme: scheme.clone(),
-            host: host.clone(),
-            request_method: method,
-            api_input_path: api_input_path.clone(),
-            request_path_params: path_params,
-            request_body_value: request_body,
-            request_query_params: query_params,
-            request_headers: header_params,
-            http_middlewares: http_middlewares.clone(),
-            request_custom_params: None,
-        })
+    // pub fn from_input_http_request(
+    //     scheme: &Scheme,
+    //     host: &ApiSiteString,
+    //     method: Method,
+    //     api_input_path: &ApiInputPath,
+    //     path_params: &HashMap<VarInfo, String>,
+    //     query_variable_values: &HashMap<String, String>,
+    //     query_variable_names: &[QueryInfo],
+    //     request_body: &Value,
+    //     all_headers: HeaderMap,
+    //     http_middlewares: &Option<HttpMiddlewares>,
+    // ) -> Result<Self, Vec<String>> {
+    //     let request_body = RequestBody::from(request_body)?;
+    //     let path_params = RequestPathValues::from(path_params);
+    //     let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
+    //     let header_params = RequestHeaderValues::from(&all_headers)?;
+
+    //     Ok(Self {
+    //         scheme: scheme.clone(),
+    //         host: host.clone(),
+    //         request_method: method,
+    //         api_input_path: api_input_path.clone(),
+    //         request_path_params: path_params,
+    //         request_body_value: request_body,
+    //         request_query_params: query_params,
+    //         request_headers: header_params,
+    //         http_middlewares: http_middlewares.clone(),
+    //         request_custom_params: None,
+    //     })
+    // }
+}
+
+fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
+    let mut query_components: HashMap<String, String> = HashMap::new();
+    let query_parts = query_path.split('&').map(|x| x.trim());
+
+    for part in query_parts {
+        let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
+
+        if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+            query_components.insert(key.to_string(), value.to_string());
+        }
     }
+
+    query_components
 }
 
 #[derive(Clone, Debug, Default)]
@@ -323,13 +437,7 @@ impl RequestHeaderValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct RequestBody(pub Value);
-
-impl RequestBody {
-    fn from(request_body: &Value) -> Result<RequestBody, Vec<String>> {
-        Ok(RequestBody(request_body.clone()))
-    }
-}
+pub struct RequestBodyValue(pub Value);
 
 #[derive(Clone, Debug, Default)]
 pub struct JsonKeyValues {

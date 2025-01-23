@@ -50,6 +50,7 @@ pub struct HttpHandlerBindingSuccess {
 pub enum HttpHandlerBindingError {
     InternalError(String),
     WorkerRequestExecutorError(WorkerRequestExecutorError),
+    BadRequest(String)
 }
 
 pub struct DefaultHttpHandlerBindingHandler<Namespace> {

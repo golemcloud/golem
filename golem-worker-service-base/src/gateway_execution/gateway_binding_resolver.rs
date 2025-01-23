@@ -30,10 +30,13 @@ use golem_service_base::model::VersionedComponentId;
 use http::StatusCode;
 use openidconnect::{CsrfToken, Nonce};
 use poem::Body;
+use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 
 #[derive(Debug)]
 pub enum ErrorOrRedirect {
@@ -127,7 +130,7 @@ pub struct WorkerDetail {
 }
 
 impl WorkerDetail {
-    pub fn as_json(&self) -> Value {
+    fn as_json(&self) -> Value {
         let mut worker_detail_content = HashMap::new();
         worker_detail_content.insert(
             "component_id".to_string(),
@@ -149,6 +152,34 @@ impl WorkerDetail {
         let map = serde_json::Map::from_iter(worker_detail_content);
 
         Value::Object(map)
+    }
+
+    pub fn resolve_rib_input_value(
+        &self,
+        required_types: &RibInputTypeInfo,
+    ) -> Result<RibInput, RibInputTypeMismatch> {
+        let request_type_info = required_types.types.get("worker");
+
+        match request_type_info {
+            Some(worker_details_type) => {
+                let rib_input_with_request_content = &self.as_json();
+                let request_value =
+                    TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
+                        .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
+                let request_value = request_value.try_into().map_err(|err| {
+                    RibInputTypeMismatch(format!(
+                        "Internal error converting between value representations: {err}"
+                    ))
+                })?;
+
+                let mut rib_input_map = HashMap::new();
+                rib_input_map.insert("worker".to_string(), request_value);
+                Ok(RibInput {
+                    input: rib_input_map,
+                })
+            }
+            None => Ok(RibInput::default()),
+        }
     }
 }
 

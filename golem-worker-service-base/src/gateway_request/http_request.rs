@@ -34,7 +34,7 @@ pub struct InputHttpRequest {
 }
 
 #[derive(Debug)]
-pub struct ErrorResponse(Response);
+pub struct ErrorResponse(pub Response);
 
 impl From<ErrorResponse> for Response {
     fn from(value: ErrorResponse) -> Self {

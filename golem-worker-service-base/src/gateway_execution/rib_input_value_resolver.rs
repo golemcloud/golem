@@ -78,32 +78,32 @@ impl RibInputValueResolver for HttpRequestDetails {
     }
 }
 
-impl RibInputValueResolver for WorkerDetail {
-    fn resolve_rib_input_value(
-        &self,
-        required_types: &RibInputTypeInfo,
-    ) -> Result<RibInput, RibInputTypeMismatch> {
-        let request_type_info = required_types.types.get("worker");
+// impl RibInputValueResolver for WorkerDetail {
+//     fn resolve_rib_input_value(
+//         &self,
+//         required_types: &RibInputTypeInfo,
+//     ) -> Result<RibInput, RibInputTypeMismatch> {
+//         let request_type_info = required_types.types.get("worker");
 
-        match request_type_info {
-            Some(worker_details_type) => {
-                let rib_input_with_request_content = &self.as_json();
-                let request_value =
-                    TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
-                        .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
-                let request_value = request_value.try_into().map_err(|err| {
-                    RibInputTypeMismatch(format!(
-                        "Internal error converting between value representations: {err}"
-                    ))
-                })?;
+//         match request_type_info {
+//             Some(worker_details_type) => {
+//                 let rib_input_with_request_content = &self.as_json();
+//                 let request_value =
+//                     TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
+//                         .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
+//                 let request_value = request_value.try_into().map_err(|err| {
+//                     RibInputTypeMismatch(format!(
+//                         "Internal error converting between value representations: {err}"
+//                     ))
+//                 })?;
 
-                let mut rib_input_map = HashMap::new();
-                rib_input_map.insert("worker".to_string(), request_value);
-                Ok(RibInput {
-                    input: rib_input_map,
-                })
-            }
-            None => Ok(RibInput::default()),
-        }
-    }
-}
+//                 let mut rib_input_map = HashMap::new();
+//                 rib_input_map.insert("worker".to_string(), request_value);
+//                 Ok(RibInput {
+//                     input: rib_input_map,
+//                 })
+//             }
+//             None => Ok(RibInput::default()),
+//         }
+//     }
+// }

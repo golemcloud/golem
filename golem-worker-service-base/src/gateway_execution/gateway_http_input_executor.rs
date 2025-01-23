@@ -22,10 +22,11 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 };
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingError;
 use crate::gateway_execution::to_response::ToHttpResponse;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpMiddlewares;
-use crate::gateway_request::http_request::InputHttpRequest;
+use crate::gateway_request::http_request::{ErrorResponse, InputHttpRequest};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
@@ -34,11 +35,12 @@ use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
 use poem_openapi::error::AuthorizationError;
-use rib::{RibInput, RibResult};
+use rib::{RibInput, RibInputTypeInfo, RibResult};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
 
-use super::http_handler_binding_handler::HttpHandlerBindingHandler;
+use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -123,7 +125,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
 
             ResolvedBinding::HttpHandler(http_handler_binding) => {
-                let mut response = self.handle_http_handler_binding(&mut request_details, http_handler_binding).await;
+                let result = self.handle_http_handler_binding(&mut request_details, http_handler_binding).await;
+                let mut response = result.to_response(request_details, &self.gateway_session_store).await;
 
                 if let Some(middlewares) = middlewares {
                     let result = middlewares.process_middleware_out(&mut response).await;
@@ -147,26 +150,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 .await
             }
         }
-    }
-
-    async fn resolve_rib_inputs(
-        &self,
-        request_details: &HttpRequestDetails,
-        resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
-    ) -> Result<(RibInput, RibInput), poem::Response> {
-        let rib_input_from_request_details = request_details
-            .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
-
-        let rib_input_from_worker_details = resolved_worker_binding
-            .worker_detail
-            .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
-
-        Ok((
-            rib_input_from_request_details,
-            rib_input_from_worker_details,
-        ))
     }
 
     async fn get_rib_result(
@@ -199,9 +182,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> poem::Response {
-        match self
-            .resolve_rib_inputs(request_details, resolved_binding)
-            .await
+        match resolve_rib_inputs(request_details, resolved_binding).await
         {
             Ok((rib_input_from_request_details, rib_input_from_worker_details)) => {
                 match self
@@ -224,39 +205,46 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_http_handler_binding(
         &self,
-        request_details: &mut HttpRequestDetails,
+        request_details: &mut poem::Request,
         http_handler_binding: &ResolvedHttpHandlerBinding<Namespace>,
-    ) -> poem::Response {
+    ) -> HttpHandlerBindingResult {
         let incoming_http_request = {
             use golem_common::virtual_exports::http_incoming_handler as hic;
 
             let headers = {
                 let mut acc = Vec::new();
-                for header in request_details.request_headers.0.fields.iter() {
+                for (header_name, header_value) in request_details.headers().iter() {
+                    let header_bytes: Vec<u8> = header_value.as_bytes().into();
                     acc.push((
-                        header.name.clone(),
-                        Bytes::from(header.value.to_string().into_bytes()),
+                        header_name.clone().to_string(),
+                        Bytes::from(header_bytes),
                     ));
                 }
                 hic::HttpFields(acc)
             };
 
+            let body_bytes = request_details
+                .take_body()
+                .into_bytes()
+                .await
+                .map_err(|e| HttpHandlerBindingError::BadRequest(format!("Failed reading request body: ${e}")))?;
+
             let body = hic::HttpBodyAndTrailers {
-                content: hic::HttpBodyContent(Bytes::from(
-                    request_details
-                        .request_body_value
-                        .0
-                        .to_string()
-                        .into_bytes(),
-                )),
+                content: hic::HttpBodyContent(Bytes::from(body_bytes)),
                 trailers: None,
             };
 
+            let authority = authority_from_request(request_details)
+                .map_err(|e| HttpHandlerBindingError::BadRequest(e))?;
+
+            let path_and_query = path_and_query_from_request(request_details)
+                .map_err(|e| HttpHandlerBindingError::BadRequest(e))?;
+
             hic::IncomingHttpRequest {
-                scheme: request_details.scheme.clone().into(),
-                authority: request_details.host.to_string(),
-                path_with_query: request_details.get_api_input_path(),
-                method: hic::HttpMethod::from_http_method(request_details.request_method.clone()),
+                scheme: request_details.scheme().clone().into(),
+                authority,
+                path_and_query,
+                method: hic::HttpMethod::from_http_method(request_details.method().into()),
                 headers,
                 body: Some(body),
             }
@@ -277,19 +265,19 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         result
-            .to_response(&request_details, &self.gateway_session_store)
-            .await
+
+        // result
+        //     .to_response(&request_details, &self.gateway_session_store)
+        //     .await
     }
 
     async fn handle_file_server_binding(
         &self,
         session_store: &GatewaySessionStore,
-        request_details: &mut HttpRequestDetails,
+        request_details: &poem::Request,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> poem::Response {
-        match self
-            .resolve_rib_inputs(request_details, resolved_binding)
-            .await
+        match resolve_rib_inputs(request_details, resolved_binding).await
         {
             Ok((request_rib_input, worker_rib_input)) => {
                 match self
@@ -319,7 +307,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn handle_http_auth_call_binding(
         &self,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
-        http_request: &HttpRequestDetails,
+        http_request: &poem::Request,
     ) -> poem::Response
     where
         AuthCallBackResult: ToHttpResponse,
@@ -328,7 +316,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         let authorisation_result = self
             .auth_call_back_binding_handler
             .handle_auth_call_back(
-                &http_request.url().unwrap(),
+                &url::Url::from(http_request.uri().clone()),
                 security_scheme_with_metadata,
                 &self.gateway_session_store,
                 &self.identity_provider,
@@ -401,4 +389,61 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(response) => response.into(),
         }
     }
+}
+
+async fn resolve_rib_inputs<Namespace>(
+    request_details: &poem::Request,
+    resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
+) -> Result<(RibInput, RibInput), poem::Response> {
+    let rib_input_from_request_details = request_details
+        .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+        .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
+
+    let rib_input_from_worker_details = resolved_worker_binding
+        .worker_detail
+        .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+        .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
+
+    Ok((
+        rib_input_from_request_details,
+        rib_input_from_worker_details,
+    ))
+}
+
+fn resolve_request_rip_input(
+    request: &poem::Request,
+    required_types: &RibInputTypeInfo,
+) -> Result<RibInput, poem::Response> {
+
+    let request_type_info = required_types.types.get("request");
+
+    let rib_input_with_request_content = &self.as_json();
+
+    match request_type_info {
+        Some(request_type) => {
+            tracing::debug!("received: {:?}", rib_input_with_request_content);
+            let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
+                    .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+            let input = input.try_into().map_err(|err| {
+                RibInputTypeMismatch(format!(
+                    "Internal error converting between value representations: {err}"
+                ))
+            })?;
+
+            let mut rib_input_map = HashMap::new();
+            rib_input_map.insert("request".to_string(), input);
+            Ok(RibInput {
+                input: rib_input_map,
+            })
+        }
+        None => Ok(RibInput::default()),
+    }
+}
+
+fn authority_from_request(request: &poem::Request) -> Result<String, String> {
+    request.header(http::header::HOST).map(|h| h.to_string()).ok_or("No host header provided".to_string())
+}
+
+fn path_and_query_from_request(request: &poem::Request) -> Result<String, String> {
+    request.uri().path_and_query().map(|paq| paq.to_string()).ok_or("No path and query provided".to_string())
 }

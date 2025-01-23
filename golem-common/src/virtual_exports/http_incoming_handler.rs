@@ -52,7 +52,7 @@ use std::sync::LazyLock;
 //   method: method,
 //   scheme: scheme,
 //   authority: string,
-//   path-with-query: string,
+//   path-and-query: string,
 //   headers: fields,
 //   body-and-trailers: option<body-and-trailers>
 // }
@@ -547,7 +547,7 @@ pub struct IncomingHttpRequest {
     pub method: HttpMethod,
     pub scheme: HttpScheme,
     pub authority: String,
-    pub path_with_query: String,
+    pub path_and_query: String,
     pub headers: HttpFields,
     pub body: Option<HttpBodyAndTrailers>,
 }
@@ -571,7 +571,7 @@ impl IncomingHttpRequest {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
-                    name: "path-with-query".to_string(),
+                    name: "path-and-query".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -611,7 +611,7 @@ impl IncomingHttpRequest {
             inner,
             "not a string"
         )?;
-        let path_with_query = extract!(
+        let path_and_query = extract!(
             record_values[3].clone(),
             Value::String(inner),
             inner,
@@ -632,7 +632,7 @@ impl IncomingHttpRequest {
             method,
             scheme,
             authority,
-            path_with_query,
+            path_and_query,
             headers,
             body,
         })
@@ -643,7 +643,7 @@ impl IncomingHttpRequest {
             self.method.to_value(),
             self.scheme.to_value(),
             Value::String(self.authority),
-            Value::String(self.path_with_query),
+            Value::String(self.path_and_query),
             self.headers.to_value(),
             Value::Option(self.body.map(|b| Box::new(b.to_value()))),
         ])
