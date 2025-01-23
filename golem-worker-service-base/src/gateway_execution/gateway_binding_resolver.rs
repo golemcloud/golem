@@ -100,9 +100,8 @@ impl GatewayBindingResolverError {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct ResolvedGatewayBinding<Namespace> {
-    pub request_details: GatewayRequestDetails,
+    pub request_details: HttpRequestDetails,
     pub resolved_binding: ResolvedBinding<Namespace>,
 }
 
@@ -291,9 +290,11 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
     //     ))
     // })?;
 
+    let mut http_request_details = HttpRequestDetails::from_request(request, path_params.clone(), query_params.clone());
+
     if let Some(middlewares) = middlewares {
         let middleware_result = internal::redirect_or_continue(
-            &mut input,
+            &mut http_request_details,
             middlewares,
             &gateway_session_store,
             &identity_provider,
@@ -548,6 +549,7 @@ mod internal {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .await
                 .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
             let worker_name = rib::interpret_pure(
@@ -578,6 +580,7 @@ mod internal {
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
                 let resolve_rib_input = http_request_details
                     .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .await
                     .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
                 let idempotency_key_value = rib::interpret_pure(
@@ -626,6 +629,7 @@ mod internal {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .await
                 .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
             let worker_name = rib::interpret_pure(
@@ -656,6 +660,7 @@ mod internal {
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
                 let resolve_rib_input = http_request_details
                     .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .await
                     .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
                 let idempotency_key_value = rib::interpret_pure(

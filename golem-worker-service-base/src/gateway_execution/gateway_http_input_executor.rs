@@ -186,7 +186,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> GatewayHttpResult<RibResult> {
         let (rib_input_from_request_details, rib_input_from_worker_details) =
-            resolve_rib_inputs(request_details, resolved_binding).await?;
+            resolve_response_mapping_rib_inputs(request_details, resolved_binding).await?;
 
         self
             .get_rib_result(
@@ -270,7 +270,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
-        let (request_rib_input, worker_rib_input) = resolve_rib_inputs(request_details, resolved_binding).await?;
+        let (request_rib_input, worker_rib_input) = resolve_response_mapping_rib_inputs(request_details, resolved_binding).await?;
 
         let worker_response = self
             .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
@@ -377,7 +377,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     }
 }
 
-async fn resolve_rib_inputs<Namespace>(
+async fn resolve_response_mapping_rib_inputs<Namespace>(
     request_details: &mut HttpRequestDetails,
     resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
 ) -> GatewayHttpResult<(RibInput, RibInput)> {

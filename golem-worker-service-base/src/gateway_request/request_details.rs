@@ -62,6 +62,19 @@ impl HttpRequestDetails {
         }
     }
 
+    pub fn from_request(
+        request: poem::Request,
+        path_param_extractors: Vec<PathParamExtractor>,
+        query_info: Vec<QueryInfo>
+    ) -> Self {
+        Self {
+            underlying: request,
+            path_param_extractors: path_param_extractors,
+            query_info: query_info,
+            request_custom_params: None
+        }
+    }
+
     pub fn api_site_string(&self) -> Result<ApiSiteString, String> {
         let host_header = self.underlying.header(http::header::HOST).map(|h| h.to_string())
             .ok_or("No host header provided".to_string())?;
