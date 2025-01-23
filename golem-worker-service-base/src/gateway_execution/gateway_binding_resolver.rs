@@ -35,16 +35,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-// Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
-// which will resolve the gateway binding equired for that request.
-#[async_trait]
-pub trait GatewayBindingResolver<Namespace, ApiDefinition> {
-    async fn resolve_gateway_binding(
-        &self,
-        api_definitions: Vec<ApiDefinition>,
-    ) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect>;
-}
-
 #[derive(Debug)]
 pub enum ErrorOrRedirect {
     Error(GatewayBindingResolverError),
@@ -205,163 +195,274 @@ pub struct ResolvedHttpHandlerBinding<Namespace> {
     pub namespace: Namespace,
 }
 
-pub struct DefaultGatewayBindingResolver {
+pub async fn resolve_http_gateway_binding<Namespace: Clone>(
+    gateway_session_store: &GatewaySessionStore,
+    identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
+    compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
     input: InputHttpRequest,
-    gateway_session_store: GatewaySessionStore,
-    identity_provider: Arc<dyn IdentityProvider + Sync + Send>,
-}
+) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect> {
+    let compiled_routes = compiled_api_definitions
+        .iter()
+        .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
+        .collect::<Vec<_>>();
 
-impl DefaultGatewayBindingResolver {
-    pub fn new(
-        input: InputHttpRequest,
-        gateway_session_store: &GatewaySessionStore,
-        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
-    ) -> Self {
-        DefaultGatewayBindingResolver {
-            input,
-            gateway_session_store: Arc::clone(gateway_session_store),
-            identity_provider: Arc::clone(identity_provider),
-        }
-    }
-}
+    let router = router::build(compiled_routes);
 
-#[async_trait]
-impl<Namespace: Clone + Send + Sync + 'static>
-    GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>>
-    for DefaultGatewayBindingResolver
-{
-    async fn resolve_gateway_binding(
-        &self,
-        compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
-    ) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect> {
-        let compiled_routes = compiled_api_definitions
+    let path: Vec<&str> = RouterPattern::split(&input.api_input_path.base_path).collect();
+    let request_query_variables = input
+        .api_input_path
+        .query_components()
+        .unwrap_or_default();
+    let request_body = &input.req_body;
+    let headers = &input.headers;
+
+    let router::RouteEntry {
+        path_params,
+        query_params,
+        namespace,
+        binding,
+        middlewares,
+    } = router
+        .check_path(&input.req_method, &path)
+        .ok_or(ErrorOrRedirect::route_not_found())?;
+
+    let zipped_path_params: HashMap<VarInfo, String> = {
+        path_params
             .iter()
-            .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
-            .collect::<Vec<_>>();
+            .map(|param| match param {
+                router::PathParamExtractor::Single { var_info, index } => {
+                    (var_info.clone(), path[*index].to_string())
+                }
+                router::PathParamExtractor::AllFollowing { var_info, index } => {
+                    let value = path[*index..].join("/");
+                    (var_info.clone(), value)
+                }
+            })
+            .collect()
+    };
 
-        let api_request = self;
-        let router = router::build(compiled_routes);
+    let mut http_request_details = HttpRequestDetails::from_input_http_request(
+        &input.scheme,
+        &input.host,
+        input.req_method.clone(),
+        &input.api_input_path,
+        &zipped_path_params,
+        &request_query_variables,
+        query_params,
+        request_body,
+        headers.clone(),
+        middlewares,
+    )
+    .map_err(|err| {
+        ErrorOrRedirect::internal(format!(
+            "Failed to fetch input request details {}",
+            err.join(", ")
+        ))
+    })?;
 
-        let path: Vec<&str> =
-            RouterPattern::split(&api_request.input.api_input_path.base_path).collect();
-        let request_query_variables = self
-            .input
-            .api_input_path
-            .query_components()
-            .unwrap_or_default();
-        let request_body = &self.input.req_body;
-        let headers = &self.input.headers;
-
-        let router::RouteEntry {
-            path_params,
-            query_params,
-            namespace,
-            binding,
+    if let Some(middlewares) = middlewares {
+        let middleware_result = internal::redirect_or_continue(
+            &mut http_request_details,
             middlewares,
-        } = router
-            .check_path(&api_request.input.req_method, &path)
-            .ok_or(ErrorOrRedirect::route_not_found())?;
-
-        let zipped_path_params: HashMap<VarInfo, String> = {
-            path_params
-                .iter()
-                .map(|param| match param {
-                    router::PathParamExtractor::Single { var_info, index } => {
-                        (var_info.clone(), path[*index].to_string())
-                    }
-                    router::PathParamExtractor::AllFollowing { var_info, index } => {
-                        let value = path[*index..].join("/");
-                        (var_info.clone(), value)
-                    }
-                })
-                .collect()
-        };
-
-        let mut http_request_details = HttpRequestDetails::from_input_http_request(
-            &self.input.scheme,
-            &self.input.host,
-            self.input.req_method.clone(),
-            &self.input.api_input_path,
-            &zipped_path_params,
-            &request_query_variables,
-            query_params,
-            request_body,
-            headers.clone(),
-            middlewares,
+            &gateway_session_store,
+            &identity_provider,
         )
+        .await
         .map_err(|err| {
-            ErrorOrRedirect::internal(format!(
-                "Failed to fetch input request details {}",
-                err.join(", ")
-            ))
+            ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
         })?;
 
-        if let Some(middlewares) = middlewares {
-            let middleware_result = internal::redirect_or_continue(
-                &mut http_request_details,
-                middlewares,
-                &self.gateway_session_store,
-                &self.identity_provider,
+        if let MiddlewareSuccess::Redirect(response) = middleware_result {
+            return Err(ErrorOrRedirect::Redirect(response));
+        }
+    }
+
+    match binding {
+        GatewayBindingCompiled::FileServer(worker_binding) => {
+            internal::get_resolved_worker_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
             )
             .await
-            .map_err(|err| {
-                ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
-            })?;
-
-            if let MiddlewareSuccess::Redirect(response) = middleware_result {
-                return Err(ErrorOrRedirect::Redirect(response));
-            }
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: GatewayRequestDetails::Http(http_request_details),
+                resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+            })
         }
-
-        match binding {
-            GatewayBindingCompiled::FileServer(worker_binding) => {
-                internal::get_resolved_worker_binding(
-                    worker_binding,
-                    &http_request_details,
-                    namespace,
-                    headers,
-                )
-                .await
-                .map(|resolved_binding| ResolvedGatewayBinding {
-                    request_details: GatewayRequestDetails::Http(http_request_details),
-                    resolved_binding: ResolvedBinding::FileServer(resolved_binding),
-                })
-            }
-            GatewayBindingCompiled::Worker(worker_binding) => {
-                internal::get_resolved_worker_binding(
-                    worker_binding,
-                    &http_request_details,
-                    namespace,
-                    headers,
-                )
-                .await
-                .map(|resolved_binding| ResolvedGatewayBinding {
-                    request_details: GatewayRequestDetails::Http(http_request_details),
-                    resolved_binding: ResolvedBinding::Worker(resolved_binding),
-                })
-            }
-            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-                internal::get_resolved_http_handler_binding(
-                    http_handler_binding,
-                    &http_request_details,
-                    namespace,
-                    headers,
-                )
-                .await
-                .map(|resolved_binding| ResolvedGatewayBinding {
-                    request_details: GatewayRequestDetails::Http(http_request_details),
-                    resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
-                })
-            }
-            GatewayBindingCompiled::Static(static_binding) => {
-                Ok(ResolvedGatewayBinding::from_static_binding(
-                    &GatewayRequestDetails::Http(http_request_details),
-                    static_binding,
-                ))
-            }
+        GatewayBindingCompiled::Worker(worker_binding) => {
+            internal::get_resolved_worker_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: GatewayRequestDetails::Http(http_request_details),
+                resolved_binding: ResolvedBinding::Worker(resolved_binding),
+            })
+        }
+        GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+            internal::get_resolved_http_handler_binding(
+                http_handler_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: GatewayRequestDetails::Http(http_request_details),
+                resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
+            })
+        }
+        GatewayBindingCompiled::Static(static_binding) => {
+            Ok(ResolvedGatewayBinding::from_static_binding(
+                &GatewayRequestDetails::Http(http_request_details),
+                static_binding,
+            ))
         }
     }
 }
+
+// #[async_trait]
+// impl<Namespace: Clone + Send + Sync + 'static>
+//     GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>>
+//     for DefaultGatewayBindingResolver
+// {
+//     async fn resolve_gateway_binding(
+//         &self,
+//         compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
+//     ) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect> {
+//         let compiled_routes = compiled_api_definitions
+//             .iter()
+//             .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
+//             .collect::<Vec<_>>();
+
+//         let api_request = self;
+//         let router = router::build(compiled_routes);
+
+//         let path: Vec<&str> =
+//             RouterPattern::split(&api_request.input.api_input_path.base_path).collect();
+//         let request_query_variables = self
+//             .input
+//             .api_input_path
+//             .query_components()
+//             .unwrap_or_default();
+//         let request_body = &self.input.req_body;
+//         let headers = &self.input.headers;
+
+//         let router::RouteEntry {
+//             path_params,
+//             query_params,
+//             namespace,
+//             binding,
+//             middlewares,
+//         } = router
+//             .check_path(&api_request.input.req_method, &path)
+//             .ok_or(ErrorOrRedirect::route_not_found())?;
+
+//         let zipped_path_params: HashMap<VarInfo, String> = {
+//             path_params
+//                 .iter()
+//                 .map(|param| match param {
+//                     router::PathParamExtractor::Single { var_info, index } => {
+//                         (var_info.clone(), path[*index].to_string())
+//                     }
+//                     router::PathParamExtractor::AllFollowing { var_info, index } => {
+//                         let value = path[*index..].join("/");
+//                         (var_info.clone(), value)
+//                     }
+//                 })
+//                 .collect()
+//         };
+
+//         let mut http_request_details = HttpRequestDetails::from_input_http_request(
+//             &self.input.scheme,
+//             &self.input.host,
+//             self.input.req_method.clone(),
+//             &self.input.api_input_path,
+//             &zipped_path_params,
+//             &request_query_variables,
+//             query_params,
+//             request_body,
+//             headers.clone(),
+//             middlewares,
+//         )
+//         .map_err(|err| {
+//             ErrorOrRedirect::internal(format!(
+//                 "Failed to fetch input request details {}",
+//                 err.join(", ")
+//             ))
+//         })?;
+
+//         if let Some(middlewares) = middlewares {
+//             let middleware_result = internal::redirect_or_continue(
+//                 &mut http_request_details,
+//                 middlewares,
+//                 &self.gateway_session_store,
+//                 &self.identity_provider,
+//             )
+//             .await
+//             .map_err(|err| {
+//                 ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
+//             })?;
+
+//             if let MiddlewareSuccess::Redirect(response) = middleware_result {
+//                 return Err(ErrorOrRedirect::Redirect(response));
+//             }
+//         }
+
+//         match binding {
+//             GatewayBindingCompiled::FileServer(worker_binding) => {
+//                 internal::get_resolved_worker_binding(
+//                     worker_binding,
+//                     &http_request_details,
+//                     namespace,
+//                     headers,
+//                 )
+//                 .await
+//                 .map(|resolved_binding| ResolvedGatewayBinding {
+//                     request_details: GatewayRequestDetails::Http(http_request_details),
+//                     resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+//                 })
+//             }
+//             GatewayBindingCompiled::Worker(worker_binding) => {
+//                 internal::get_resolved_worker_binding(
+//                     worker_binding,
+//                     &http_request_details,
+//                     namespace,
+//                     headers,
+//                 )
+//                 .await
+//                 .map(|resolved_binding| ResolvedGatewayBinding {
+//                     request_details: GatewayRequestDetails::Http(http_request_details),
+//                     resolved_binding: ResolvedBinding::Worker(resolved_binding),
+//                 })
+//             }
+//             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+//                 internal::get_resolved_http_handler_binding(
+//                     http_handler_binding,
+//                     &http_request_details,
+//                     namespace,
+//                     headers,
+//                 )
+//                 .await
+//                 .map(|resolved_binding| ResolvedGatewayBinding {
+//                     request_details: GatewayRequestDetails::Http(http_request_details),
+//                     resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
+//                 })
+//             }
+//             GatewayBindingCompiled::Static(static_binding) => {
+//                 Ok(ResolvedGatewayBinding::from_static_binding(
+//                     &GatewayRequestDetails::Http(http_request_details),
+//                     static_binding,
+//                 ))
+//             }
+//         }
+//     }
+// }
 
 mod internal {
     use crate::gateway_binding::{

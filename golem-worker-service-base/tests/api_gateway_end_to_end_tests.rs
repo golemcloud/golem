@@ -1619,7 +1619,7 @@ mod internal {
     use rib::RibResult;
 
     use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-        ApiDefinitionLookupError, ApiDefinitionsLookup,
+        ApiDefinitionLookupError, HttpApiDefinitionsLookup,
     };
     use golem_worker_service_base::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
@@ -1628,6 +1628,7 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,
@@ -1640,13 +1641,8 @@ mod internal {
     }
 
     #[async_trait]
-    impl ApiDefinitionsLookup<InputHttpRequest> for TestApiDefinitionLookup {
-        type ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>;
-
-        async fn get(
-            &self,
-            _input: &InputHttpRequest,
-        ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError> {
+    impl HttpApiDefinitionsLookup<DefaultNamespace> for TestApiDefinitionLookup {
+        async fn get(&self, _input: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError> {
             Ok(vec![self.api_definition.clone()])
         }
     }

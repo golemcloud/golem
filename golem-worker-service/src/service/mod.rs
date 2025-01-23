@@ -35,7 +35,7 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::{GatewaySessionStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-    ApiDefinitionsLookup, HttpApiDefinitionLookup,
+    HttpApiDefinitionsLookup, DefaultHttpApiDefinitionLookup,
 };
 use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 use golem_worker_service_base::repo::api_definition;
@@ -81,13 +81,7 @@ pub struct Services {
         Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
-    pub http_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<
-                InputHttpRequest,
-                ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>,
-            > + Sync
-            + Send,
-    >,
+    pub http_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<DefaultNamespace> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
     pub gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
@@ -293,7 +287,7 @@ impl Services {
         ));
 
         let http_definition_lookup_service =
-            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
+            Arc::new(DefaultHttpApiDefinitionLookup::new(deployment_service.clone()));
 
         Ok(Services {
             worker_service,

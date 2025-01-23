@@ -16,23 +16,19 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
-use crate::gateway_request::http_request::InputHttpRequest;
 use crate::service::gateway::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
 use golem_common::model::HasAccountId;
 use tracing::error;
+use crate::gateway_api_deployment::ApiSiteString;
 
 // To lookup the set of API Definitions based on an incoming input.
 // The input can be HttpRequest or GrpcRequest and so forth, and ApiDefinition
 // depends on what is the input. There cannot be multiple types of ApiDefinition
 // for a given input type.
 #[async_trait]
-pub trait ApiDefinitionsLookup<Input> {
-    type ApiDefinition;
-    async fn get(
-        &self,
-        input: &Input,
-    ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError>;
+pub trait HttpApiDefinitionsLookup<Namespace> {
+    async fn get(&self, host: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError>;
 }
 
 pub struct ApiDefinitionLookupError(pub String);
@@ -43,11 +39,11 @@ impl Display for ApiDefinitionLookupError {
     }
 }
 
-pub struct HttpApiDefinitionLookup<AuthCtx, Namespace> {
+pub struct DefaultHttpApiDefinitionLookup<AuthCtx, Namespace> {
     deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
 }
 
-impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
+impl<AuthCtx, Namespace> DefaultHttpApiDefinitionLookup<AuthCtx, Namespace> {
     pub fn new(
         deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
     ) -> Self {
@@ -56,18 +52,10 @@ impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace: HasAccountId + Send + Sync> ApiDefinitionsLookup<InputHttpRequest>
-    for HttpApiDefinitionLookup<AuthCtx, Namespace>
+impl<AuthCtx, Namespace: HasAccountId + Send + Sync> HttpApiDefinitionsLookup<Namespace>
+    for DefaultHttpApiDefinitionLookup<AuthCtx, Namespace>
 {
-    type ApiDefinition = CompiledHttpApiDefinition<Namespace>;
-
-    async fn get(
-        &self,
-        input_http_request: &InputHttpRequest,
-    ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError> {
-        // HOST should exist in Http Request
-        let host = &input_http_request.host;
-
+    async fn get(&self, host: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
         let http_api_defs = self
             .deployment_service
             .get_definitions_by_site(host)

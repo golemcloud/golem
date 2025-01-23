@@ -14,11 +14,9 @@
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_binding::{
-    DefaultGatewayBindingResolver, ErrorOrRedirect, GatewayBindingResolver, GatewayRequestDetails,
-    HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputValueResolver,
-    StaticBinding,
+    resolve_http_gateway_binding, ErrorOrRedirect, GatewayRequestDetails, HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputValueResolver, StaticBinding
 };
-use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
     AuthCallBackBindingHandler, AuthCallBackResult,
 };
@@ -49,13 +47,7 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
     pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
-    pub api_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<
-                InputHttpRequest,
-                ApiDefinition = CompiledHttpApiDefinition<Namespace>,
-            > + Sync
-            + Send,
-    >,
+    pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
 }
@@ -66,13 +58,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
-        api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<
-                    InputHttpRequest,
-                    ApiDefinition = CompiledHttpApiDefinition<Namespace>,
-                > + Sync
-                + Send,
-        >,
+        api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Self {
@@ -319,7 +305,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Ok(input_http_request) => {
                 let possible_api_definitions = match self
                     .api_definition_lookup_service
-                    .get(&input_http_request)
+                    .get(&input_http_request.host)
                     .await
                 {
                     Ok(api_defs) => api_defs,
@@ -334,14 +320,12 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     }
                 };
 
-                let resolver = DefaultGatewayBindingResolver::new(
-                    input_http_request,
-                    &self.gateway_session_store,
-                    &self.identity_provider,
-                );
-
-                match resolver
-                    .resolve_gateway_binding(possible_api_definitions)
+                match resolve_http_gateway_binding(
+                        &self.gateway_session_store,
+                        &self.identity_provider,
+                        possible_api_definitions,
+                        input_http_request,
+                )
                     .await
                 {
                     Ok(resolved_gateway_binding) => {
