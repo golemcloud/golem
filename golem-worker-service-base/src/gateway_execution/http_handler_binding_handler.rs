@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::HasAccountId;
 use golem_common::virtual_exports;
+use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::TypeAnnotatedValueConstructors;
 use http::StatusCode;
@@ -35,7 +36,7 @@ pub trait HttpHandlerBindingHandler<Namespace> {
         &self,
         namespace: &Namespace,
         worker_detail: &WorkerDetail,
-        request_details: &HttpRequestDetails,
+        incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult;
 }
 
@@ -73,49 +74,14 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
         &self,
         namespace: &Namespace,
         worker_detail: &WorkerDetail,
-        request_details: &HttpRequestDetails,
+        incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult {
         let component_id = worker_detail.component_id.component_id.clone();
-
-        let http_request_function_param = {
-            use golem_common::virtual_exports::http_incoming_handler as hic;
-
-            let headers = {
-                let mut acc = Vec::new();
-                for header in request_details.request_headers.0.fields.iter() {
-                    acc.push((
-                        header.name.clone(),
-                        Bytes::from(header.value.to_string().into_bytes()),
-                    ));
-                }
-                hic::HttpFields(acc)
-            };
-
-            let body = hic::HttpBodyAndTrailers {
-                content: hic::HttpBodyContent(Bytes::from(
-                    request_details
-                        .request_body_value
-                        .0
-                        .to_string()
-                        .into_bytes(),
-                )),
-                trailers: None,
-            };
-
-            hic::IncomingHttpRequest {
-                scheme: request_details.scheme.clone().into(),
-                authority: request_details.host.to_string(),
-                path_with_query: request_details.get_api_input_path(),
-                method: hic::HttpMethod::from_http_method(request_details.request_method.clone()),
-                headers,
-                body: Some(body),
-            }
-        };
 
         let typ: golem_wasm_ast::analysis::protobuf::Type = (&golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest::analysed_type()).into();
 
         let type_annotated_param =
-            TypeAnnotatedValue::create(&http_request_function_param.to_value(), typ).map_err(
+            TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(
                 |e| {
                     HttpHandlerBindingError::InternalError(format!(
                         "Failed converting request into wasm rpc: {:?}",
@@ -136,7 +102,6 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
 
         let response = self.worker_request_executor.execute(resolved_request).await;
 
-        // log outcome
         match response {
             Ok(_) => {
                 tracing::debug!("http_handler received successful response from worker invocation")

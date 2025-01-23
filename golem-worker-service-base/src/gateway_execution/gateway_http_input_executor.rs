@@ -14,7 +14,7 @@
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_binding::{
-    resolve_http_gateway_binding, ErrorOrRedirect, GatewayRequestDetails, HttpRequestDetails, ResolvedBinding, ResolvedWorkerBinding, RibInputValueResolver, StaticBinding
+    resolve_http_gateway_binding, ErrorOrRedirect, GatewayRequestDetails, HttpRequestDetails, ResolvedBinding, ResolvedHttpHandlerBinding, ResolvedWorkerBinding, RibInputValueResolver, StaticBinding
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -28,6 +28,7 @@ use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
@@ -120,23 +121,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
 
             ResolvedBinding::HttpHandler(http_handler_binding) => {
-                let result = self
-                    .http_handler_binding_handler
-                    .handle_http_handler_binding(
-                        &http_handler_binding.namespace,
-                        &http_handler_binding.worker_detail,
-                        &request_details,
-                    )
-                    .await;
-
-                match result {
-                    Ok(_) => tracing::debug!("http handler binding successful"),
-                    Err(ref e) => tracing::warn!("http handler binding failed: {e:?}"),
-                }
-
-                let mut response = result
-                    .to_response(&request_details, &self.gateway_session_store)
-                    .await;
+                let mut response = self.handle_http_handler_binding(&mut request_details, http_handler_binding).await;
 
                 if let Some(middleware) = middleware_opt {
                     let result = middleware.process_middleware_out(&mut response).await;
@@ -233,6 +218,65 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             }
             Err(err_response) => err_response,
         }
+    }
+
+    async fn handle_http_handler_binding(
+        &self,
+        request_details: &mut HttpRequestDetails,
+        http_handler_binding: &ResolvedHttpHandlerBinding<Namespace>,
+    ) -> poem::Response {
+        let incoming_http_request = {
+            use golem_common::virtual_exports::http_incoming_handler as hic;
+
+            let headers = {
+                let mut acc = Vec::new();
+                for header in request_details.request_headers.0.fields.iter() {
+                    acc.push((
+                        header.name.clone(),
+                        Bytes::from(header.value.to_string().into_bytes()),
+                    ));
+                }
+                hic::HttpFields(acc)
+            };
+
+            let body = hic::HttpBodyAndTrailers {
+                content: hic::HttpBodyContent(Bytes::from(
+                    request_details
+                        .request_body_value
+                        .0
+                        .to_string()
+                        .into_bytes(),
+                )),
+                trailers: None,
+            };
+
+            hic::IncomingHttpRequest {
+                scheme: request_details.scheme.clone().into(),
+                authority: request_details.host.to_string(),
+                path_with_query: request_details.get_api_input_path(),
+                method: hic::HttpMethod::from_http_method(request_details.request_method.clone()),
+                headers,
+                body: Some(body),
+            }
+        };
+
+        let result = self
+            .http_handler_binding_handler
+            .handle_http_handler_binding(
+                &http_handler_binding.namespace,
+                &http_handler_binding.worker_detail,
+                incoming_http_request,
+            )
+            .await;
+
+        match result {
+            Ok(_) => tracing::debug!("http handler binding successful"),
+            Err(ref e) => tracing::warn!("http handler binding failed: {e:?}"),
+        }
+
+        result
+            .to_response(&request_details, &self.gateway_session_store)
+            .await
     }
 
     async fn handle_file_server_binding(
