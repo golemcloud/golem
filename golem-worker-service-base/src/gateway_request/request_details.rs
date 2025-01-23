@@ -15,9 +15,9 @@
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_binding::RibInputTypeMismatch;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_execution::router::RouterPattern;
+use crate::gateway_execution::RibInputTypeMismatch;
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::ApiInputPath;
 use golem_common::SafeDisplay;
@@ -27,6 +27,7 @@ use poem::web::cookie::CookieJar;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::vec;
 use url::Url;
 use crate::gateway_request::http_request::router;
@@ -61,6 +62,11 @@ impl HttpRequestDetails {
         }
     }
 
+    pub fn api_site_string(&self) -> Result<ApiSiteString, String> {
+        let host_header = self.underlying.header(http::header::HOST).map(|h| h.to_string())
+            .ok_or("No host header provided".to_string())?;
+        Ok(ApiSiteString(host_header))
+    }
 
     pub async fn inject_auth_details(
         &mut self,
@@ -81,7 +87,11 @@ impl HttpRequestDetails {
         Ok(())
     }
 
-    pub fn request_path_values(&self) -> RequestPathValues {
+    pub fn url(&self) -> Result<url::Url, String> {
+        url::Url::parse(&self.underlying.uri().to_string()).map_err(|e| format!("Failed parsing url: {e}"))
+    }
+
+    fn request_path_values(&self) -> RequestPathValues {
         let path: Vec<&str> = RouterPattern::split(self.underlying.uri().path()).collect();
 
         let path_param_values = self.path_param_extractors
@@ -100,20 +110,20 @@ impl HttpRequestDetails {
         RequestPathValues::from(&path_param_values)
     }
 
-    pub fn request_query_values(&self) -> Result<RequestQueryValues, String> {
+    fn request_query_values(&self) -> Result<RequestQueryValues, String> {
         let query_key_values = self.underlying.uri().query().map(query_components_from_str).unwrap_or_default();
 
         RequestQueryValues::from(&query_key_values, &self.query_info)
             .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
     }
 
-    pub fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
+    fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
         RequestHeaderValues::from(self.underlying.headers())
             .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
     /// consumes the body of the underlying request
-    pub async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
+    async fn request_body_value(&mut self) -> Result<RequestBodyValue, String> {
         let body = self.underlying.take_body();
 
         let json_request_body: Value = if body.is_empty() {
@@ -171,7 +181,7 @@ impl HttpRequestDetails {
     // }
 
     /// will consume the underlying request body
-    pub async fn as_value(&mut self) -> Result<Value, String> {
+    async fn as_value(&mut self) -> Result<Value, String> {
         let typed_path_values = self.request_path_values();
         let typed_query_values = self.request_query_values()?;
         let typed_header_values = self.request_header_values()?;
@@ -213,7 +223,7 @@ impl HttpRequestDetails {
     }
 
     /// will consume the underlying request body
-    async fn resolve_rib_input_value(
+    pub async fn resolve_rib_input_value(
         &mut self,
         required_types: &RibInputTypeInfo,
     ) -> Result<RibInput, RibInputTypeMismatch> {

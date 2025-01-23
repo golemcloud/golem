@@ -226,11 +226,11 @@ pub struct ResolvedHttpHandlerBinding<Namespace> {
     pub namespace: Namespace,
 }
 
-pub async fn resolve_http_gateway_binding<Namespace: Clone>(
+pub async fn resolve_gateway_binding<Namespace: Clone>(
     gateway_session_store: &GatewaySessionStore,
     identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
     compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
-    input: InputHttpRequest,
+    request: poem::Request,
 ) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect> {
     let compiled_routes = compiled_api_definitions
         .iter()
@@ -239,13 +239,13 @@ pub async fn resolve_http_gateway_binding<Namespace: Clone>(
 
     let router = router::build(compiled_routes);
 
-    let path: Vec<&str> = RouterPattern::split(&input.api_input_path.base_path).collect();
-    let request_query_variables = input
-        .api_input_path
-        .query_components()
-        .unwrap_or_default();
-    let request_body = &input.req_body;
-    let headers = &input.headers;
+    let path: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
+    // let request_query_variables = input
+    //     .api_input_path
+    //     .query_components()
+    //     .unwrap_or_default();
+    // let request_body = &input.req_body;
+    // let headers = &input.headers;
 
     let router::RouteEntry {
         path_params,
@@ -254,7 +254,7 @@ pub async fn resolve_http_gateway_binding<Namespace: Clone>(
         binding,
         middlewares,
     } = router
-        .check_path(&input.req_method, &path)
+        .check_path(&request.method(), &path)
         .ok_or(ErrorOrRedirect::route_not_found())?;
 
     let zipped_path_params: HashMap<VarInfo, String> = {
@@ -272,28 +272,28 @@ pub async fn resolve_http_gateway_binding<Namespace: Clone>(
             .collect()
     };
 
-    let mut http_request_details = HttpRequestDetails::from_input_http_request(
-        &input.scheme,
-        &input.host,
-        input.req_method.clone(),
-        &input.api_input_path,
-        &zipped_path_params,
-        &request_query_variables,
-        query_params,
-        request_body,
-        headers.clone(),
-        middlewares,
-    )
-    .map_err(|err| {
-        ErrorOrRedirect::internal(format!(
-            "Failed to fetch input request details {}",
-            err.join(", ")
-        ))
-    })?;
+    // let mut http_request_details = HttpRequestDetails::from_input_http_request(
+    //     &input.scheme,
+    //     &input.host,
+    //     input.req_method.clone(),
+    //     &input.api_input_path,
+    //     &zipped_path_params,
+    //     &request_query_variables,
+    //     query_params,
+    //     request_body,
+    //     headers.clone(),
+    //     middlewares,
+    // )
+    // .map_err(|err| {
+    //     ErrorOrRedirect::internal(format!(
+    //         "Failed to fetch input request details {}",
+    //         err.join(", ")
+    //     ))
+    // })?;
 
     if let Some(middlewares) = middlewares {
         let middleware_result = internal::redirect_or_continue(
-            &mut http_request_details,
+            &mut input,
             middlewares,
             &gateway_session_store,
             &identity_provider,

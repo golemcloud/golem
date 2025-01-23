@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Display;
+
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub mod api_definition_lookup;
@@ -24,7 +27,6 @@ pub mod gateway_session;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
 pub mod http_handler_binding_handler;
-pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
@@ -39,4 +41,19 @@ pub struct GatewayResolvedWorkerRequest<Namespace> {
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub namespace: Namespace,
+}
+
+#[derive(Debug)]
+pub struct RibInputTypeMismatch(pub String);
+
+impl Display for RibInputTypeMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Rib input type mismatch: {}", self.0)
+    }
+}
+
+impl SafeDisplay for RibInputTypeMismatch {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
 }
