@@ -15,15 +15,18 @@
 use crate::bindings::exports::wasi::keyvalue::atomic::{BucketBorrow, Error, Key};
 use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::keyvalue::atomic::{compare_and_swap, increment};
+use crate::wrappers::keyvalue::types::WrappedBucket;
 
 impl crate::bindings::exports::wasi::keyvalue::atomic::Guest for crate::Component {
     fn increment(bucket: BucketBorrow<'_>, key: Key, delta: u64) -> Result<u64, Error> {
         observe_function_call("keyvalue::atomic", "increment");
+        let bucket = &bucket.get::<WrappedBucket>().bucket;
         Ok(increment(bucket, &key, delta)?)
     }
 
     fn compare_and_swap(bucket: BucketBorrow<'_>, key: Key, old: u64, new: u64) -> Result<bool, Error> {
         observe_function_call("keyvalue::atomic", "compare_and_swap");
+        let bucket = &bucket.get::<WrappedBucket>().bucket;
         Ok(compare_and_swap(bucket, &key, old, new)?)
     }
 }

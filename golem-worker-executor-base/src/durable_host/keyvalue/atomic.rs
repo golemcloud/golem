@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::wasi::keyvalue::atomic::{Bucket, Error, Host, Key};
 use crate::workerctx::WorkerCtx;
 

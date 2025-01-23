@@ -16,10 +16,9 @@ use crate::bindings::exports::wasi::keyvalue::eventual::{
     BucketBorrow, Error, IncomingValue, Key, OutgoingValueBorrow,
 };
 use crate::bindings::golem::durability::durability::DurableFunctionType;
-use crate::bindings::wasi::keyvalue::eventual::get;
-use crate::bindings::wasi::keyvalue::types::IncomingValueSyncBody;
+use crate::bindings::wasi::keyvalue::eventual::{delete, exists, get, set};
 use crate::durability::Durability;
-use crate::wrappers::keyvalue::types::{WrappedBucket, WrappedIncomingValue};
+use crate::wrappers::keyvalue::types::{WrappedBucket, WrappedIncomingValue, WrappedOutgoingValue};
 use crate::wrappers::keyvalue::wasi_keyvalue_error::WrappedError;
 use crate::wrappers::SerializableError;
 
@@ -38,24 +37,28 @@ impl crate::bindings::exports::wasi::keyvalue::eventual::Guest for crate::Compon
             let result = get(bucket, &key);
             let (serializable_result, result) = match result {
                 Ok(None) => (Ok(None), Ok(None)),
-                Ok(Some(incoming_value)) => {
-                    match incoming_value.incoming_value_consume_sync() {
-                        Ok(body) => (Ok(Some(body.clone())), Ok(Some(body))),
-                        Err(err) => (Err((&err).into()), Err(err.into()))
-                    }
-                }
+                Ok(Some(incoming_value)) => match incoming_value.incoming_value_consume_sync() {
+                    Ok(body) => (Ok(Some(body.clone())), Ok(Some(body))),
+                    Err(err) => (Err((&err).into()), Err(err.into())),
+                },
                 Err(err) => (Err((&err).into()), Err(err.into())),
             };
             let _ = durability.persist_serializable((bucket_name, key), serializable_result);
             result
         } else {
             let data = durability.replay_serializable();
-            data.map_err(|err| Error::new(WrappedError { trace: err.to_string() } ))
+            data.map_err(|err| {
+                Error::new(WrappedError::Message {
+                    message: err.to_string(),
+                })
+            })
         };
 
         match result {
             Ok(None) => Ok(None),
-            Ok(Some(data)) => Ok(Some(IncomingValue::new(WrappedIncomingValue { data }))),
+            Ok(Some(data)) => Ok(Some(IncomingValue::new(WrappedIncomingValue::buffered(
+                data,
+            )))),
             Err(err) => Err(err),
         }
     }
@@ -71,24 +74,51 @@ impl crate::bindings::exports::wasi::keyvalue::eventual::Guest for crate::Compon
             DurableFunctionType::WriteRemote,
         );
 
-        let result = if durability.is_live() {
-            let input = (bucket.clone(), key.clone(), outgoing_value.len() as u64);
-            let result = self
-                .state
-                .key_value_service
-                .set(account_id, bucket, key, outgoing_value)
-                .await;
-            durability.persist(self, input, result).await
+        if durability.is_live() {
+            let wrapped_bucket = bucket.get::<WrappedBucket>();
+            let outgoing_value = &outgoing_value.get::<WrappedOutgoingValue>().outgoing_value;
+
+            let input = (wrapped_bucket.name.clone(), key.clone(), 0u64); // NOTE: we don't know the outgoing value length here - in the original implementation it was always buffered
+            let result =
+                set(&wrapped_bucket.bucket, &key, &outgoing_value).map_err(|err| Error::from(err));
+            durability.persist(input, result)
         } else {
-            durability.replay(self).await
-        };
+            durability.replay()
+        }
     }
 
     fn delete(bucket: BucketBorrow<'_>, key: Key) -> Result<(), Error> {
-        todo!()
+        let durability = Durability::<(), SerializableError>::new(
+            "golem keyvalue::eventual",
+            "delete",
+            DurableFunctionType::WriteRemote,
+        );
+
+        if durability.is_live() {
+            let wrapped_bucket = bucket.get::<WrappedBucket>();
+            let input = (wrapped_bucket.name.clone(), key.clone());
+            let result = delete(&wrapped_bucket.bucket, &key).map_err(|err| Error::from(err));
+            durability.persist(input, result)
+        } else {
+            durability.replay()
+        }
     }
 
     fn exists(bucket: BucketBorrow<'_>, key: Key) -> Result<bool, Error> {
-        todo!()
+        let durability = Durability::<bool, SerializableError>::new(
+            "golem keyvalue::eventual",
+            "exists",
+            DurableFunctionType::ReadRemote,
+        );
+
+        if durability.is_live() {
+            let wrapped_bucket = bucket.get::<WrappedBucket>();
+
+            let input = (wrapped_bucket.name.clone(), key.clone());
+            let result = exists(&wrapped_bucket.bucket, &key).map_err(|err| Error::from(err));
+            durability.persist(input, result)
+        } else {
+            durability.replay()
+        }
     }
 }

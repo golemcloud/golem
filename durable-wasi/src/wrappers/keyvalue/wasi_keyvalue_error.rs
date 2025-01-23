@@ -16,14 +16,21 @@ use crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Error;
 use crate::bindings::golem::durability::durability::observe_function_call;
 
 pub enum WrappedError {
-    Proxied { error: crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error },
-    Message { message: String }
+    Proxied {
+        error: crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error,
+    },
+    Message {
+        message: String,
+    },
 }
 
 impl crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::GuestError for WrappedError {
     fn trace(&self) -> String {
         observe_function_call("keyvalue::wasi_cloud_error", "trace");
-        self.error.trace()
+        match self {
+            WrappedError::Proxied { error } => error.trace(),
+            WrappedError::Message { message } => message.clone(),
+        }
     }
 }
 
@@ -37,8 +44,8 @@ impl crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Guest for cr
     type Error = WrappedError;
 }
 
-impl From<&crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error> for Error {
+impl From<crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error> for Error {
     fn from(value: crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error) -> Self {
-        Error::new(WrappedError { error: value })
+        Error::new(WrappedError::Proxied { error: value })
     }
 }

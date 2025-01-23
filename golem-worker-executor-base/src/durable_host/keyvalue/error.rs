@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::wasi::keyvalue::wasi_keyvalue_error::{Error, Host, HostError};
 use crate::workerctx::WorkerCtx;
 

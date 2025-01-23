@@ -41,24 +41,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Vec<Option<Vec<u8>>>, SerializableError>::new(
-            self,
-            "golem keyvalue::eventual_batch",
-            "get_many",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let input = (bucket.clone(), keys.clone());
-            let result = self
-                .state
-                .key_value_service
-                .get_many(account_id, bucket, keys)
-                .await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
+        let result = self
+            .state
+            .key_value_service
+            .get_many(account_id, bucket, keys)
+            .await;
 
         match result {
             Ok(values) => {
@@ -149,31 +136,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "golem keyvalue::eventual_batch",
-            "set_many",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
-        let result = if durability.is_live() {
-            let input: (String, Vec<(String, u64)>) = (
-                bucket.clone(),
-                key_values
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.len() as u64))
-                    .collect(),
-            );
-            let result = self
-                .state
-                .key_value_service
-                .set_many(account_id, bucket, key_values)
-                .await;
-            durability.persist(self, input, result).await
-        } else {
-            durability.replay(self).await
-        };
+        let result = self
+            .state
+            .key_value_service
+            .set_many(account_id, bucket, key_values)
+            .await;
 
         match result {
             Ok(()) => Ok(Ok(())),

@@ -16,6 +16,7 @@ use crate::bindings;
 use crate::bindings::exports::wasi::clocks::wall_clock;
 use crate::bindings::exports::wasi::io::error::{Error, GuestError};
 use crate::bindings::exports::wasi::io::streams::StreamError;
+use crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::GuestError as KeyValueGuestError;
 use crate::bindings::exports::wasi::sockets::ip_name_lookup::{ErrorCode, IpAddress};
 use crate::wrappers::io::error::WrappedError;
 use bincode::{Decode, Encode};
@@ -201,14 +202,32 @@ impl From<SerializableError> for Error {
 
 impl From<&crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error> for SerializableError {
     fn from(value: &crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error) -> Self {
-        SerializableError::Generic { message: value.trace() }
+        SerializableError::Generic {
+            message: value.trace(),
+        }
     }
 }
 
-impl From<SerializableError> for crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error {
+impl From<&crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Error>
+    for SerializableError
+{
+    fn from(value: &crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Error) -> Self {
+        SerializableError::Generic {
+            message: value
+                .get::<crate::wrappers::keyvalue::wasi_keyvalue_error::WrappedError>()
+                .trace(),
+        }
+    }
+}
+
+impl From<SerializableError>
+    for crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Error
+{
     fn from(value: SerializableError) -> Self {
-        crate::bindings::wasi::keyvalue::wasi_keyvalue_error::Error::new(
-            crate::wrappers::keyvalue::wasi_keyvalue_error::WrappedError::message(value.to_string())
+        crate::bindings::exports::wasi::keyvalue::wasi_keyvalue_error::Error::new(
+            crate::wrappers::keyvalue::wasi_keyvalue_error::WrappedError::Message {
+                message: value.to_string(),
+            },
         )
     }
 }

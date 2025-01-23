@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::exports::wasi::keyvalue::cache::{Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry, Key, OutgoingValue, OutgoingValueBorrow, Pollable, Vacancy};
+use crate::bindings::exports::wasi::keyvalue::cache::{
+    Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry,
+    Key, OutgoingValue, OutgoingValueBorrow, Pollable, Vacancy,
+};
 use crate::bindings::exports::wasi::keyvalue::types::IncomingValue;
 use crate::bindings::golem::durability::durability::observe_function_call;
 use crate::bindings::wasi::keyvalue::cache::{delete, exists, get, get_or_set, set};
 use crate::wrappers::io::poll::WrappedPollable;
+use crate::wrappers::keyvalue::types::{WrappedIncomingValue, WrappedOutgoingValue};
 
 pub struct WrappedFutureExistsResult {
     future_exists_result: crate::bindings::wasi::keyvalue::cache::FutureExistsResult,
 }
 
 impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureExistsResult
-for WrappedFutureExistsResult
+    for WrappedFutureExistsResult
 {
     fn future_exists_result_get(&self) -> Option<Result<bool, Error>> {
         observe_function_call("keyvalue::cache::future_exists", "future_exists_result_get");
@@ -43,10 +47,7 @@ for WrappedFutureExistsResult
 
 impl Drop for WrappedFutureExistsResult {
     fn drop(&mut self) {
-        observe_function_call(
-            "keyvalue::cache::future_exists",
-            "drop",
-        );
+        observe_function_call("keyvalue::cache::future_exists", "drop");
     }
 }
 
@@ -72,7 +73,9 @@ pub struct WrappedFutureGetOrSetResult {
     future_get_or_set_result: crate::bindings::wasi::keyvalue::cache::FutureGetOrSetResult,
 }
 
-impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetOrSetResult for WrappedFutureGetOrSetResult {
+impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetOrSetResult
+    for WrappedFutureGetOrSetResult
+{
     fn future_get_or_set_result_get(&self) -> Option<Result<GetOrSetEntry, Error>> {
         observe_function_call(
             "keyvalue::cache::future_get_or_set",
@@ -81,11 +84,17 @@ impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetOrSetResult 
         let result = self.future_get_or_set_result.future_get_or_set_result_get();
         match result {
             None => None,
-            Some(Ok(crate::bindings::wasi::keyvalue::cache::GetOrSetEntry::Occupied(incoming_value))) =>
-                Some(Ok(GetOrSetEntry::Occupied(IncomingValue::new(WrappedIncomingValue { incoming_value })))),
-            Some(Ok(crate::bindings::wasi::keyvalue::cache::GetOrSetEntry::Vacant(vacancy))) =>
-                Some(Ok(GetOrSetEntry::Vacant(Vacancy::new(WrappedVacancy { vacancy }))))
-            Some(Err(err)) => Some(Err(err.into()))
+            Some(Ok(crate::bindings::wasi::keyvalue::cache::GetOrSetEntry::Occupied(
+                incoming_value,
+            ))) => Some(Ok(GetOrSetEntry::Occupied(IncomingValue::new(
+                WrappedIncomingValue::proxied(incoming_value),
+            )))),
+            Some(Ok(crate::bindings::wasi::keyvalue::cache::GetOrSetEntry::Vacant(vacancy))) => {
+                Some(Ok(GetOrSetEntry::Vacant(Vacancy::new(WrappedVacancy {
+                    vacancy,
+                }))))
+            }
+            Some(Err(err)) => Some(Err(err.into())),
         }
     }
 
@@ -94,33 +103,36 @@ impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetOrSetResult 
             "keyvalue::cache::future_get_or_set",
             "listen_to_future_get_or_set_result",
         );
-        let pollable = self.future_get_or_set_result.listen_to_future_get_or_set_result();
+        let pollable = self
+            .future_get_or_set_result
+            .listen_to_future_get_or_set_result();
         Pollable::new(WrappedPollable::Proxy(pollable))
     }
 }
 
 impl Drop for WrappedFutureGetOrSetResult {
     fn drop(&mut self) {
-        observe_function_call(
-            "keyvalue::cache::future_get_or_set",
-            "drop",
-        );
+        observe_function_call("keyvalue::cache::future_get_or_set", "drop");
     }
 }
 
 pub struct WrappedFutureGetResult {
-    future_get_result: crate::bindings::wasi::keyvalue::cache::FutureGetResult
+    future_get_result: crate::bindings::wasi::keyvalue::cache::FutureGetResult,
 }
 
-impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetResult for WrappedFutureGetResult {
+impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureGetResult
+    for WrappedFutureGetResult
+{
     fn future_get_result_get(&self) -> Option<Result<Option<IncomingValue>, Error>> {
         observe_function_call("keyvalue::cache::future_get", "future_get_result_get");
         let result = self.future_get_result.future_get_result_get();
         match result {
             None => None,
-            Some(Err(er)) => Some(Err(err.into())),
+            Some(Err(err)) => Some(Err(err.into())),
             Some(Ok(None)) => Some(Ok(None)),
-            Some(Ok(Some(incoming_value))) => Some(Ok(Some(IncomingValue::new(WrappedIncomingValue { incoming_value }))))
+            Some(Ok(Some(incoming_value))) => Some(Ok(Some(IncomingValue::new(
+                WrappedIncomingValue::proxied(incoming_value),
+            )))),
         }
     }
 
@@ -138,7 +150,7 @@ impl Drop for WrappedFutureGetResult {
 }
 
 pub struct WrappedFutureResult {
-    future_result: crate::bindings::wasi::keyvalue::cache::FutureResult
+    future_result: crate::bindings::wasi::keyvalue::cache::FutureResult,
 }
 
 impl crate::bindings::exports::wasi::keyvalue::cache::GuestFutureResult for WrappedFutureResult {
@@ -176,21 +188,25 @@ impl crate::bindings::exports::wasi::keyvalue::cache::Guest for crate::Component
 
     fn exists(k: Key) -> FutureExistsResult {
         observe_function_call("keyvalue::cache", "exists");
-        let future_exist_result = exists(&k);
-        FutureExistsResult::new(WrappedFutureExistsResult { future_exists_result })
+        let future_exists_result = exists(&k);
+        FutureExistsResult::new(WrappedFutureExistsResult {
+            future_exists_result,
+        })
     }
 
     fn set(k: Key, v: OutgoingValueBorrow<'_>, ttl_ms: Option<u32>) -> FutureResult {
         observe_function_call("keyvalue::cache", "set");
-        let v= &v.get::<WrappedOutgoingValue>().outgoing_value;
-        let future_result = set(k, v, ttl_ms);
+        let v = &v.get::<WrappedOutgoingValue>().outgoing_value;
+        let future_result = set(&k, v, ttl_ms);
         FutureResult::new(WrappedFutureResult { future_result })
     }
 
     fn get_or_set(k: Key) -> FutureGetOrSetResult {
         observe_function_call("keyvalue::cache", "get_or_set");
         let future_get_or_set_result = get_or_set(&k);
-        FutureGetOrSetResult::new(WrappedFutureGetOrSetResult { future_get_or_set_result })
+        FutureGetOrSetResult::new(WrappedFutureGetOrSetResult {
+            future_get_or_set_result,
+        })
     }
 
     fn delete(k: Key) -> FutureResult {

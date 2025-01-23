@@ -89,9 +89,6 @@ world durable-wasi {
     import wasi:keyvalue/eventual-batch@0.1.0;
     export wasi:keyvalue/eventual-batch@0.1.0;
 
-    import wasi:keyvalue/handle-watch@0.1.0;
-    export wasi:keyvalue/handle-watch@0.1.0;
-
     import wasi:keyvalue/types@0.1.0;
     export wasi:keyvalue/types@0.1.0;
 

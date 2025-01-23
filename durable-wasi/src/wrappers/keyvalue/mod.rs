@@ -16,6 +16,5 @@ mod atomic;
 mod caching;
 mod eventual;
 mod eventual_batch;
-mod handle_watch;
 pub mod types;
 pub mod wasi_keyvalue_error;
