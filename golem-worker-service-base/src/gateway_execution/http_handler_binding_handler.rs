@@ -14,10 +14,8 @@
 
 use crate::gateway_binding::{HttpRequestDetails, WorkerDetail};
 use crate::gateway_execution::GatewayResolvedWorkerRequest;
-use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::TryStreamExt;
 use golem_common::model::HasAccountId;
 use golem_common::virtual_exports;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
