@@ -274,7 +274,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     async fn handle_file_server_binding(
         &self,
         session_store: &GatewaySessionStore,
-        request_details: &poem::Request,
+        request_details: &mut HttpRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> poem::Response {
         match resolve_rib_inputs(request_details, resolved_binding).await
@@ -392,7 +392,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 }
 
 async fn resolve_rib_inputs<Namespace>(
-    request_details: &poem::Request,
+    request_details: &mut HttpRequestDetails,
     resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
 ) -> Result<(RibInput, RibInput), poem::Response> {
     let rib_input_from_request_details = request_details
@@ -408,36 +408,6 @@ async fn resolve_rib_inputs<Namespace>(
         rib_input_from_request_details,
         rib_input_from_worker_details,
     ))
-}
-
-fn resolve_request_rip_input(
-    request: &poem::Request,
-    required_types: &RibInputTypeInfo,
-) -> Result<RibInput, poem::Response> {
-
-    let request_type_info = required_types.types.get("request");
-
-    let rib_input_with_request_content = &self.as_json();
-
-    match request_type_info {
-        Some(request_type) => {
-            tracing::debug!("received: {:?}", rib_input_with_request_content);
-            let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
-                    .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
-            let input = input.try_into().map_err(|err| {
-                RibInputTypeMismatch(format!(
-                    "Internal error converting between value representations: {err}"
-                ))
-            })?;
-
-            let mut rib_input_map = HashMap::new();
-            rib_input_map.insert("request".to_string(), input);
-            Ok(RibInput {
-                input: rib_input_map,
-            })
-        }
-        None => Ok(RibInput::default()),
-    }
 }
 
 fn authority_from_request(request: &poem::Request) -> Result<String, String> {
