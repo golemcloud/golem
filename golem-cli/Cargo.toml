@@ -5,7 +5,6 @@ edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
-readme = "README.md"
 description = "Command line interface for Golem."
 autotests = false
 
@@ -26,7 +25,9 @@ harness = false
 golem-client = { path = "../golem-client", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0", default-features = false }
 golem-rib = { path = "../golem-rib", version = "=0.0.0", default-features = false }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["analysis"] }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "analysis",
+] }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
 
