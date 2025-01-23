@@ -23,16 +23,42 @@ use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
 use wasmtime_wasi_http::bindings::http::types::ErrorCode;
 
-pub fn input_to_hyper_request(
-    inputs: &[Value],
-) -> Result<hyper::Request<BoxBody<Bytes, hyper::Error>>, GolemError> {
+pub type SchemeAndRequest = (
+    wasmtime_wasi_http::bindings::wasi::http::types::Scheme,
+    hyper::Request<BoxBody<Bytes, hyper::Error>>,
+);
+
+pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, GolemError> {
     let request = IncomingHttpRequest::from_function_input(inputs).map_err(|e| {
         GolemError::invalid_request(format!("Failed contructing incoming request: {e}"))
     })?;
 
-    let mut builder = hyper::Request::builder()
-        .uri(request.uri)
-        .method(request.method);
+    let wasmtime_scheme = match request.scheme {
+        HttpScheme::HTTP => wasmtime_wasi_http::bindings::wasi::http::types::Scheme::Http,
+        HttpScheme::HTTPS => wasmtime_wasi_http::bindings::wasi::http::types::Scheme::Https,
+        HttpScheme::Custom(ref custom) => {
+            wasmtime_wasi_http::bindings::wasi::http::types::Scheme::Other(custom.clone())
+        }
+    };
+
+    let converted_scheme = match request.scheme {
+        HttpScheme::HTTP => http::uri::Scheme::HTTP,
+        HttpScheme::HTTPS => http::uri::Scheme::HTTPS,
+        HttpScheme::Custom(custom) => custom.as_str().try_into().map_err(|e| {
+            GolemError::invalid_request(format!("Not a valid scheme: {custom} ({e})"))
+        })?,
+    };
+
+    let uri = http::Uri::builder()
+        .scheme(converted_scheme)
+        .authority(request.authority)
+        .path_and_query(request.path_with_query)
+        .build()
+        .map_err(|e| {
+            GolemError::invalid_request(format!("Failed to construct a valid url: {e}"))
+        })?;
+
+    let mut builder = hyper::Request::builder().uri(uri).method(request.method);
 
     for (name, value) in request.headers.0 {
         let converted = http::HeaderValue::from_bytes(&value)
@@ -69,9 +95,11 @@ pub fn input_to_hyper_request(
         BoxBody::new(http_body_util::Empty::new().map_err(hyper_error_from_infallible))
     };
 
-    builder
+    let hyper_request = builder
         .body(body)
-        .map_err(|e| GolemError::invalid_request(format!("Failed to attach body {e}")))
+        .map_err(|e| GolemError::invalid_request(format!("Failed to attach body {e}")))?;
+
+    Ok((wasmtime_scheme, hyper_request))
 }
 
 pub async fn http_response_to_output(

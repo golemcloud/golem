@@ -28,6 +28,8 @@ use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
 
+use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingResult};
+
 #[async_trait]
 pub trait ToHttpResponse {
     async fn to_response(
@@ -63,6 +65,29 @@ impl ToHttpResponse for FileServerBindingResult {
                 .body(Body::from_string(
                     format!("Error while processing rib result: {}", e).to_string(),
                 )),
+        }
+    }
+}
+
+#[async_trait]
+impl ToHttpResponse for HttpHandlerBindingResult {
+    async fn to_response(
+        self,
+        _request_details: &HttpRequestDetails,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        match self {
+            Ok(inner) => inner.response,
+            Err(HttpHandlerBindingError::InternalError(e)) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", e).to_string())),
+            Err(HttpHandlerBindingError::WorkerRequestExecutorError(e)) => {
+                poem::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from_string(
+                        format!("Error calling worker executor {}", e).to_string(),
+                    ))
+            }
         }
     }
 }

@@ -4386,6 +4386,7 @@ dependencies = [
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 1.2.0",
+ "http-body-util",
  "humantime-serde",
  "hyper 1.5.2",
  "lazy_static 1.5.0",

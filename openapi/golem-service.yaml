@@ -4062,6 +4062,7 @@ components:
       enum:
       - default
       - file-server
+      - http-handler
       - cors-preflight
     GetFilesResponse:
       type: object
