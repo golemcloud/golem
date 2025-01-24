@@ -46,6 +46,7 @@ pub fn custom_request_route(services: &Services) -> Route {
         services.worker_to_http_service.clone(),
         services.http_definition_lookup_service.clone(),
         services.fileserver_binding_handler.clone(),
+        services.http_handler_binding_handler.clone(),
         services.gateway_session_store.clone(),
     );
 
