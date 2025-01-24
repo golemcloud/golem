@@ -102,6 +102,13 @@ impl ExternalOperations<DebugContext> for DebugContext {
             .await
     }
 
+    async fn resume_replay(
+        store: &mut (impl AsContextMut<Data = DebugContext> + Send),
+        instance: &Instance,
+    ) -> Result<RetryDecision, GolemError> {
+        DurableWorkerCtx::<DebugContext>::resume_replay(store, instance).await
+    }
+
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &Instance,
