@@ -15,12 +15,13 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use create_component_request::Data;
+use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response, create_plugin_response,
-    get_component_metadata_response, get_components_response, install_plugin_response,
-    update_component_request, update_component_response, CreateComponentRequest,
-    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
-    GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
+    download_component_response, get_component_metadata_response, get_components_response,
+    install_plugin_response, update_component_request, update_component_response,
+    CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader,
+    CreatePluginRequest, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
 };
 use std::collections::HashMap;
@@ -42,7 +43,9 @@ use golem_api_grpc::proto::golem::component::v1::component_service_client::Compo
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
-use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, PluginInstallationId};
+use golem_common::model::{
+    ComponentId, ComponentType, ComponentVersion, InitialComponentFile, PluginInstallationId,
+};
 
 pub mod docker;
 pub mod filesystem;
@@ -58,24 +61,20 @@ pub trait ComponentService {
     async fn get_or_add_component(
         &self,
         local_path: &Path,
+        name: &str,
         component_type: ComponentType,
+        files: &[InitialComponentFile],
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        unverified: bool,
+        compose_with_durable_wasi: bool,
     ) -> ComponentId {
         let mut retries = 5;
         loop {
-            let mut file_name: String = local_path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            if component_type == ComponentType::Ephemeral {
-                file_name = format!("{}-ephemeral", file_name);
-            }
-
             let mut client = self.client().await;
             let response = client
                 .get_components(GetComponentsRequest {
                     project_id: None,
-                    component_name: Some(file_name.to_string()),
+                    component_name: Some(name.to_string()),
                 })
                 .await
                 .expect("Failed to call get-components")
@@ -106,24 +105,30 @@ pub trait ComponentService {
                         }
                         _ => {
                             match self
-                                .add_component_with_name(local_path, &file_name, component_type)
+                                .add_component(
+                                    local_path,
+                                    name,
+                                    component_type,
+                                    files,
+                                    dynamic_linking,
+                                    unverified,
+                                    compose_with_durable_wasi,
+                                )
                                 .await
                             {
                                 Ok(component_id) => break component_id,
                                 Err(AddComponentError::AlreadyExists) => {
                                     if retries > 0 {
-                                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
+                                        info!("Component with name {name} got created in parallel, retrying get_or_add_component");
                                         retries -= 1;
                                         sleep(Duration::from_secs(1)).await;
                                         continue;
                                     } else {
-                                        panic!("Component with name {file_name} already exists in golem-component-service");
+                                        panic!("Component with name {name} already exists in golem-component-service");
                                     }
                                 }
                                 Err(AddComponentError::Other(message)) => {
-                                    panic!(
-                                        "Failed to add component with name {file_name}: {message}"
-                                    );
+                                    panic!("Failed to add component with name {name}: {message}");
                                 }
                             }
                         }
@@ -134,16 +139,6 @@ pub trait ComponentService {
                 }
             }
         }
-    }
-
-    // Forward to get_or_add_component. This method is only used in tests for adding a 'broken' component using the
-    // filesystem component service, which will skip verification here.
-    async fn get_or_add_component_unverified(
-        &self,
-        local_path: &Path,
-        component_type: ComponentType,
-    ) -> ComponentId {
-        self.get_or_add_component(local_path, component_type).await
     }
 
     async fn add_component_with_id(
@@ -160,30 +155,12 @@ pub trait ComponentService {
     async fn add_component(
         &self,
         local_path: &Path,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        let file_name = local_path.file_name().unwrap().to_string_lossy();
-        self.add_component_with_name(local_path, &file_name, component_type)
-            .await
-    }
-
-    async fn add_component_with_name(
-        &self,
-        local_path: &Path,
-        name: &str,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        self.add_component_with_files(local_path, name, component_type, &[], &HashMap::new())
-            .await
-    }
-
-    async fn add_component_with_files(
-        &self,
-        local_path: &Path,
         name: &str,
         component_type: ComponentType,
         files: &[InitialComponentFile],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        _unverified: bool,
+        _compose_with_durable_wasi: bool,
     ) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
@@ -450,6 +427,38 @@ pub trait ComponentService {
                 "Failed to install plugin in golem-component-service: {error:?}"
             )),
         }
+    }
+
+    async fn get_component_size(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> crate::Result<Option<u64>> {
+        let mut client = self.client().await;
+        let response = client
+            .download_component(
+                golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
+                    component_id: Some(component_id.clone().into()),
+                    version: Some(component_version),
+                },
+            )
+            .await?
+            .into_inner();
+
+        let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
+        let bytes = chunks
+            .into_iter()
+            .map(|chunk| match chunk.result {
+                None => Err(anyhow!("Empty response")),
+                Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
+                Some(download_component_response::Result::Error(error)) => {
+                    Err(anyhow!("Failed to download component: {error:?}"))
+                }
+            })
+            .collect::<crate::Result<Vec<Vec<u8>>>>()?;
+
+        let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
+        Ok(Some(bytes.len() as u64))
     }
 
     fn private_host(&self) -> String;

@@ -37,8 +37,8 @@ async fn counter_resource_test_1(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
+    let caller_component_id = executor.component(CALLER_COMPONENT_NAME).store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -80,8 +80,8 @@ async fn counter_resource_test_1_with_restart(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
+    let caller_component_id = executor.component(CALLER_COMPONENT_NAME).store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -127,8 +127,8 @@ async fn context_inheritance(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+    let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
+    let caller_component_id = executor.component(CALLER_COMPONENT_NAME).store().await;
 
     let mut env = HashMap::new();
     env.insert(

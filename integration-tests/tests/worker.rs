@@ -49,7 +49,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[tracing::instrument]
 #[timeout(120000)]
 async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("environment-service").await;
+    let component_id = deps.component("environment-service").await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "dynamic-worker-creation-1".to_string(),
@@ -116,7 +116,7 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn dynamic_worker_creation_without_name(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("environment-service").await;
+    let component_id = deps.component("environment-service").await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
@@ -724,7 +724,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
 #[tracing::instrument]
 #[timeout(120000)]
 async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").await;
     let worker_id = deps.start_worker(&component_id, "shopping-cart-1").await;
 
     let _ = deps
@@ -819,8 +819,8 @@ async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let registry_component_id = deps.store_component("auction_registry_composed").await;
-    let auction_component_id = deps.store_component("auction").await;
+    let registry_component_id = deps.component("auction_registry_composed").await;
+    let auction_component_id = deps.component("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -882,7 +882,7 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").await;
 
     let workers_count = 150;
     let mut worker_ids = HashSet::new();
@@ -1153,7 +1153,7 @@ async fn auto_update_on_idle_via_host_function(
     let target_version = deps.update_component(&component_id, "update-test-v2").await;
     info!("Updated component to version {target_version}");
 
-    let runtime_svc = deps.store_component("runtime-service").await;
+    let runtime_svc = deps.component("runtime-service").await;
     let runtime_svc_worker = WorkerId {
         component_id: runtime_svc,
         worker_name: "runtime-service".to_string(),
@@ -1197,7 +1197,7 @@ async fn auto_update_on_idle_via_host_function(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("runtime-service").await;
+    let component_id = deps.component("runtime-service").await;
 
     let worker_id = WorkerId {
         component_id,
@@ -1257,7 +1257,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").await;
 
     let worker_id = WorkerId {
         component_id,

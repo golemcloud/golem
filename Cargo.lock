@@ -4259,6 +4259,7 @@ dependencies = [
  "cli-table",
  "colored",
  "console-subscriber",
+ "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-durability",
@@ -4387,9 +4388,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f062db47adb60c9d63f1297272159b6bafaa6671efe4e0498b0eb0c0db6d501"
+checksum = "882347766e1c8ec3dae9a4e9a1739316cad4321e7e85be295fc581eb2eef069a"
 
 [[package]]
 name = "golem-worker-executor"

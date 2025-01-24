@@ -58,15 +58,17 @@ impl crate::bindings::exports::wasi::clocks::monotonic_clock::Guest for crate::C
     }
 
     fn subscribe_duration(when: Duration) -> crate::bindings::exports::wasi::io::poll::Pollable {
-        let durability = Durability::<Instant, SerializableError>::new(
+        let mut durability = Durability::<Instant, SerializableError>::new(
             "monotonic_clock",
             "now", // TODO: fix in 2.0 - should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
-            DurableFunctionType::WriteRemote, // Making it WriteRemote because it is externally observable - so we want to always commit immediately
+            DurableFunctionType::ReadLocal,
         );
 
         let now = {
             if durability.is_live() {
                 let result = now();
+
+                durability.enabled_forced_commit();
                 durability.persist_infallible((), result)
             } else {
                 durability.replay_infallible()

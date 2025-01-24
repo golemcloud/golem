@@ -36,7 +36,7 @@ async fn javascript_example_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-3").await;
+    let component_id = executor.component("js-3").store().await;
     let worker_id = executor.start_worker(&component_id, "js-3").await;
 
     let result_fetch_get = executor
@@ -65,7 +65,7 @@ async fn javascript_example_4(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-4").await;
+    let component_id = executor.component("js-4").store().await;
     let worker_id = executor.start_worker(&component_id, "js-4").await;
 
     let result = executor
@@ -88,7 +88,7 @@ async fn python_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("python-1").await;
+    let component_id = executor.component("python-1").store().await;
     let worker_id = executor.start_worker(&component_id, "python-1").await;
 
     let _ = executor
@@ -121,7 +121,7 @@ async fn swift_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("swift-1").await;
+    let component_id = executor.component("swift-1").store().await;
     let worker_id = executor.start_worker(&component_id, "swift-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;

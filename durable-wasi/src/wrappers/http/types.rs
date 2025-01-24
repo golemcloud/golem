@@ -38,6 +38,7 @@ use golem_common::serialization::{serialize, try_deserialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::transmute;
+use std::rc::Rc;
 
 impl From<crate::bindings::wasi::http::types::HeaderError> for HeaderError {
     fn from(value: crate::bindings::wasi::http::types::HeaderError) -> Self {
@@ -51,14 +52,31 @@ impl From<crate::bindings::wasi::http::types::ErrorCode> for ErrorCode {
     }
 }
 
+pub enum FieldsParent {
+    None,
+    IncomingResponse(Rc<crate::bindings::wasi::http::types::IncomingResponse>),
+}
+
 pub struct WrappedFields {
     fields: Option<crate::bindings::wasi::http::types::Fields>,
+    parent: FieldsParent,
 }
 
 impl WrappedFields {
     pub fn proxied(fields: crate::bindings::wasi::http::types::Fields) -> Self {
         WrappedFields {
             fields: Some(fields),
+            parent: FieldsParent::None,
+        }
+    }
+
+    pub fn proxied_incoming_response_headers(
+        fields: crate::bindings::wasi::http::types::Fields,
+        incoming_response: Rc<crate::bindings::wasi::http::types::IncomingResponse>,
+    ) -> Self {
+        WrappedFields {
+            fields: Some(fields),
+            parent: FieldsParent::IncomingResponse(incoming_response),
         }
     }
 
@@ -371,7 +389,9 @@ pub struct WrappedIncomingResponse {
 impl WrappedIncomingResponse {
     pub fn proxied(response: crate::bindings::wasi::http::types::IncomingResponse) -> Self {
         WrappedIncomingResponse {
-            state: RefCell::new(WrappedIncomingResponseState::Proxy { response }),
+            state: RefCell::new(WrappedIncomingResponseState::Proxy {
+                response: Rc::new(response),
+            }),
         }
     }
 
@@ -396,7 +416,7 @@ impl WrappedIncomingResponse {
 
 enum WrappedIncomingResponseState {
     Proxy {
-        response: crate::bindings::wasi::http::types::IncomingResponse,
+        response: Rc<crate::bindings::wasi::http::types::IncomingResponse>,
     },
     Replayed {
         serializable_response_headers: SerializableResponseHeaders,
@@ -421,8 +441,14 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
     fn headers(&self) -> Headers {
         observe_function_call("http::types::incoming_response", "headers");
         let state = self.state.borrow();
-        let headers = match &*state {
-            WrappedIncomingResponseState::Proxy { response } => response.headers(),
+        match &*state {
+            WrappedIncomingResponseState::Proxy { response } => {
+                let headers = response.headers();
+                Headers::new(WrappedFields::proxied_incoming_response_headers(
+                    headers,
+                    response.clone(),
+                ))
+            }
             WrappedIncomingResponseState::Replayed {
                 serializable_response_headers,
                 ..
@@ -432,10 +458,11 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect::<Vec<_>>();
-                crate::bindings::wasi::http::types::Fields::from_list(&entries).unwrap()
+                let headers =
+                    crate::bindings::wasi::http::types::Fields::from_list(&entries).unwrap();
+                Headers::new(WrappedFields::proxied(headers))
             }
-        };
-        Headers::new(WrappedFields::proxied(headers))
+        }
     }
 
     fn consume(&self) -> Result<IncomingBody, ()> {
@@ -451,11 +478,14 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
                 Ok(IncomingBody::new(WrappedIncomingBody::proxied(body)))
             }
             WrappedIncomingResponseState::Replayed { handle, .. } => {
-                let body = IncomingBody::new(WrappedIncomingBody::replayed());
+                let mut body = IncomingBody::new(WrappedIncomingBody::replayed());
+                let body_handle = body.handle();
+                body.get_mut::<WrappedIncomingBody>()
+                    .assign_replayed_handle(body_handle);
                 if let Some(handle) = handle {
                     continue_http_request(
                         *handle,
-                        body.handle(),
+                        body_handle,
                         HttpRequestCloseOwner::IncomingBodyDropOrFinish,
                     );
                 } else {

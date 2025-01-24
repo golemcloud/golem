@@ -83,7 +83,7 @@ impl crate::bindings::exports::wasi::http::outgoing_handler::Guest for crate::Co
                 });
             }
             Err(_) => {
-                end_durable_function(DurableFunctionType::WriteRemoteBatched(None), begin_index);
+                end_durable_function(DurableFunctionType::WriteRemoteBatched(None), begin_index, false);
             }
         };
 

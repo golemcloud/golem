@@ -33,6 +33,7 @@ pub struct Durability<SOk, SErr> {
     function_type: DurableFunctionType,
     begin_index: OplogIndex,
     durable_execution_state: DurableExecutionState,
+    forced_commit: bool,
     _sok: PhantomData<SOk>,
     _serr: PhantomData<SErr>,
 }
@@ -54,9 +55,14 @@ impl<SOk, SErr> Durability<SOk, SErr> {
             function_type,
             begin_index,
             durable_execution_state,
+            forced_commit: false,
             _sok: PhantomData,
             _serr: PhantomData,
         }
+    }
+
+    pub fn enabled_forced_commit(&mut self) {
+        self.forced_commit = true;
     }
 
     pub fn is_live(&self) -> bool {
@@ -121,7 +127,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
                 &serialized_result,
                 self.function_type,
             );
-            end_durable_function(self.function_type, self.begin_index);
+            end_durable_function(self.function_type, self.begin_index, self.forced_commit);
         }
     }
     //
@@ -153,7 +159,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         let function_name = self.function_name();
         Self::validate_oplog_entry(&oplog_entry, &function_name);
 
-        end_durable_function(self.function_type, self.begin_index);
+        end_durable_function(self.function_type, self.begin_index, false);
 
         (oplog_entry.response.into(), oplog_entry.entry_version)
     }

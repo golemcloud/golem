@@ -364,7 +364,7 @@ mod tests {
 
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
             info!("Storing component");
-            let component_id = self.store_component("option-service").await;
+            let component_id = self.component("option-service").await;
             info!("ComponentId: {}", component_id);
 
             let mut worker_ids = Vec::new();

@@ -68,7 +68,7 @@ pub fn end_http_request_borrowed(
     if let Some(state) = open_http_requests.remove(&current_handle) {
         match open_function_table.get(&state.root_handle) {
             Some(begin_index) => {
-                end_durable_function(DurableFunctionType::WriteRemoteBatched(None), *begin_index);
+                end_durable_function(DurableFunctionType::WriteRemoteBatched(None), *begin_index, false);
                 open_function_table.remove(&state.root_handle);
                 open_http_requests.remove(&current_handle);
             }
