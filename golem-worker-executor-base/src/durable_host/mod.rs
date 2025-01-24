@@ -1211,6 +1211,182 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         calculate_last_known_status(this, owned_worker_id, metadata).await
     }
 
+    async fn resume_replay(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        instance: &Instance,
+    ) -> Result<RetryDecision, GolemError> {
+        let mut number_of_replayed_functions = 0;
+
+        let resume_result = loop {
+            let cont = store.as_context().data().durable_ctx().state.is_replay();
+
+            if cont {
+                let oplog_entry = store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .get_oplog_entry_exported_function_invoked()
+                    .await;
+                match oplog_entry {
+                    Err(error) => break Err(error),
+                    Ok(None) => break Ok(RetryDecision::None),
+                    Ok(Some((function_name, function_input, idempotency_key))) => {
+                        debug!("Replaying function {function_name}");
+                        let span = span!(Level::INFO, "replaying", function = function_name);
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .set_current_idempotency_key(idempotency_key)
+                            .await;
+
+                        let full_function_name = function_name.to_string();
+                        let invoke_result = invoke_worker(
+                            full_function_name.clone(),
+                            function_input.clone(),
+                            store,
+                            instance,
+                        )
+                        .instrument(span)
+                        .await;
+
+                        match invoke_result {
+                            Ok(InvokeResult::Succeeded {
+                                output,
+                                consumed_fuel,
+                            }) => {
+                                let component_metadata =
+                                    store.as_context().data().component_metadata();
+
+                                match exports::function_by_name(
+                                    &component_metadata.exports,
+                                    &full_function_name,
+                                ) {
+                                    Ok(value) => {
+                                        if let Some(value) = value {
+                                            let result =
+                                                interpret_function_results(output, value.results)
+                                                    .map_err(|e| GolemError::ValueMismatch {
+                                                    details: e.join(", "),
+                                                })?;
+                                            if let Err(err) = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_success(
+                                                    &full_function_name,
+                                                    &function_input,
+                                                    consumed_fuel,
+                                                    result,
+                                                )
+                                                .await
+                                            {
+                                                break Err(err);
+                                            }
+                                        } else {
+                                            let trap_type = TrapType::Error(
+                                                WorkerError::InvalidRequest(format!(
+                                                    "Function {full_function_name} not found"
+                                                )),
+                                            );
+
+                                            let _ = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_failure(&trap_type)
+                                                .await;
+
+                                            break Err(GolemError::invalid_request(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let trap_type =
+                                            TrapType::Error(WorkerError::InvalidRequest(format!(
+                                                "Function {full_function_name} not found: {err}"
+                                            )));
+
+                                        let _ = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
+
+                                        break Err(GolemError::invalid_request(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
+                                    }
+                                }
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
+                            _ => {
+                                let trap_type = match invoke_result {
+                                    Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                                    Err(error) => {
+                                        Some(TrapType::from_error::<Ctx>(&anyhow!(error)))
+                                    }
+                                };
+                                let decision = match trap_type {
+                                    Some(trap_type) => {
+                                        let decision = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
+
+                                        if decision == RetryDecision::None {
+                                            // Cannot retry so we need to fail
+                                            match trap_type {
+                                                TrapType::Interrupt(interrupt_kind) => {
+                                                    if interrupt_kind == InterruptKind::Interrupt {
+                                                        break Err(GolemError::runtime(
+                                                            "Interrupted via the Golem API",
+                                                        ));
+                                                    } else {
+                                                        break Err(GolemError::runtime("The worker could not finish replaying a function {function_name}"));
+                                                    }
+                                                }
+                                                TrapType::Exit => {
+                                                    break Err(GolemError::runtime(
+                                                        "Process exited",
+                                                    ))
+                                                }
+                                                TrapType::Error(error) => {
+                                                    let stderr = store
+                                                        .as_context()
+                                                        .data()
+                                                        .get_public_state()
+                                                        .event_service()
+                                                        .get_last_invocation_errors();
+                                                    break Err(GolemError::runtime(
+                                                        error.to_string(&stderr),
+                                                    ));
+                                                }
+                                            }
+                                        }
+
+                                        decision
+                                    }
+                                    None => RetryDecision::None,
+                                };
+
+                                break Ok(decision);
+                            }
+                        }
+                    }
+                }
+            } else {
+                break Ok(RetryDecision::None);
+            }
+        };
+
+        record_number_of_replayed_functions(number_of_replayed_functions);
+
+        resume_result
+    }
+
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &Instance,
@@ -1218,8 +1394,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<RetryDecision, GolemError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
-        let mut count = 0;
-
         store.as_context_mut().data_mut().set_running();
 
         if store
@@ -1262,177 +1436,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .get_out_of_deleted_region()
                 .await;
 
-            let result = loop {
-                let cont = store.as_context().data().durable_ctx().state.is_replay();
+            let result = Self::resume_replay(store, instance).await;
 
-                if cont {
-                    let oplog_entry = store
-                        .as_context_mut()
-                        .data_mut()
-                        .durable_ctx_mut()
-                        .state
-                        .replay_state
-                        .get_oplog_entry_exported_function_invoked()
-                        .await;
-                    match oplog_entry {
-                        Err(error) => break Err(error),
-                        Ok(None) => break Ok(RetryDecision::None),
-                        Ok(Some((function_name, function_input, idempotency_key))) => {
-                            debug!("Replaying function {function_name}");
-                            let span = span!(Level::INFO, "replaying", function = function_name);
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .set_current_idempotency_key(idempotency_key)
-                                .await;
-
-                            let full_function_name = function_name.to_string();
-                            let invoke_result = invoke_worker(
-                                full_function_name.clone(),
-                                function_input.clone(),
-                                store,
-                                instance,
-                            )
-                            .instrument(span)
-                            .await;
-
-                            match invoke_result {
-                                Ok(InvokeResult::Succeeded {
-                                    output,
-                                    consumed_fuel,
-                                }) => {
-                                    let component_metadata =
-                                        store.as_context().data().component_metadata();
-
-                                    match exports::function_by_name(
-                                        &component_metadata.exports,
-                                        &full_function_name,
-                                    ) {
-                                        Ok(value) => {
-                                            if let Some(value) = value {
-                                                let result = interpret_function_results(
-                                                    output,
-                                                    value.results,
-                                                )
-                                                .map_err(|e| GolemError::ValueMismatch {
-                                                    details: e.join(", "),
-                                                })?;
-                                                if let Err(err) = store
-                                                    .as_context_mut()
-                                                    .data_mut()
-                                                    .on_invocation_success(
-                                                        &full_function_name,
-                                                        &function_input,
-                                                        consumed_fuel,
-                                                        result,
-                                                    )
-                                                    .await
-                                                {
-                                                    break Err(err);
-                                                }
-                                            } else {
-                                                let trap_type = TrapType::Error(
-                                                    WorkerError::InvalidRequest(format!(
-                                                        "Function {full_function_name} not found"
-                                                    )),
-                                                );
-
-                                                let _ = store
-                                                    .as_context_mut()
-                                                    .data_mut()
-                                                    .on_invocation_failure(&trap_type)
-                                                    .await;
-
-                                                break Err(GolemError::invalid_request(format!(
-                                                    "Function {full_function_name} not found"
-                                                )));
-                                            }
-                                        }
-                                        Err(err) => {
-                                            let trap_type = TrapType::Error(
-                                                WorkerError::InvalidRequest(format!(
-                                                    "Function {full_function_name} not found: {err}"
-                                                )),
-                                            );
-
-                                            let _ = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_failure(&trap_type)
-                                                .await;
-
-                                            break Err(GolemError::invalid_request(format!(
-                                                "Function {full_function_name} not found: {err}"
-                                            )));
-                                        }
-                                    }
-                                    count += 1;
-                                    continue;
-                                }
-                                _ => {
-                                    let trap_type = match invoke_result {
-                                        Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-                                        Err(error) => {
-                                            Some(TrapType::from_error::<Ctx>(&anyhow!(error)))
-                                        }
-                                    };
-                                    let decision = match trap_type {
-                                        Some(trap_type) => {
-                                            let decision = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_failure(&trap_type)
-                                                .await;
-
-                                            if decision == RetryDecision::None {
-                                                // Cannot retry so we need to fail
-                                                match trap_type {
-                                                    TrapType::Interrupt(interrupt_kind) => {
-                                                        if interrupt_kind
-                                                            == InterruptKind::Interrupt
-                                                        {
-                                                            break Err(GolemError::runtime(
-                                                                "Interrupted via the Golem API",
-                                                            ));
-                                                        } else {
-                                                            break Err(GolemError::runtime("The worker could not finish replaying a function {function_name}"));
-                                                        }
-                                                    }
-                                                    TrapType::Exit => {
-                                                        break Err(GolemError::runtime(
-                                                            "Process exited",
-                                                        ))
-                                                    }
-                                                    TrapType::Error(error) => {
-                                                        let stderr = store
-                                                            .as_context()
-                                                            .data()
-                                                            .get_public_state()
-                                                            .event_service()
-                                                            .get_last_invocation_errors();
-                                                        break Err(GolemError::runtime(
-                                                            error.to_string(&stderr),
-                                                        ));
-                                                    }
-                                                }
-                                            }
-
-                                            decision
-                                        }
-                                        None => RetryDecision::None,
-                                    };
-
-                                    break Ok(decision);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    break Ok(RetryDecision::None);
-                }
-            };
             record_resume_worker(start.elapsed());
-            record_number_of_replayed_functions(count);
 
             let final_decision = Self::finalize_pending_update(&result, instance, store).await;
 

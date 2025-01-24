@@ -23,6 +23,7 @@ pub mod gateway_http_input_executor;
 pub mod gateway_session;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
+pub mod http_handler_binding_handler;
 pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;

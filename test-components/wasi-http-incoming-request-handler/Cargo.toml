@@ -1,0 +1,25 @@
+[package]
+name = "wasi-http-incoming-request-handler"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+
+[package.metadata.component]
+package = "golem:handler"
+proxy = true
+
+[package.metadata.component.target.dependencies]
+"wasi:cli" = { path = "wit/deps/cli" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:filesystem" = { path = "wit/deps/filesystem" }
+"wasi:http" = { path = "wit/deps/http" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:random" = { path = "wit/deps/random" }
+"wasi:sockets" = { path = "wit/deps/sockets" }

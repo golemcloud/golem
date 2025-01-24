@@ -118,6 +118,7 @@ pub enum ResolvedBinding<Namespace> {
     Static(StaticBinding),
     Worker(ResolvedWorkerBinding<Namespace>),
     FileServer(ResolvedWorkerBinding<Namespace>),
+    HttpHandler(ResolvedHttpHandlerBinding<Namespace>),
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +199,12 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedHttpHandlerBinding<Namespace> {
+    pub worker_detail: WorkerDetail,
+    pub namespace: Namespace,
+}
+
 pub struct DefaultGatewayBindingResolver {
     input: InputHttpRequest,
     gateway_session_store: GatewaySessionStore,
@@ -273,6 +280,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
         let mut http_request_details = HttpRequestDetails::from_input_http_request(
             &self.input.scheme,
             &self.input.host,
+            self.input.req_method.clone(),
             &self.input.api_input_path,
             &zipped_path_params,
             &request_query_variables,
@@ -306,28 +314,45 @@ impl<Namespace: Clone + Send + Sync + 'static>
         }
 
         match binding {
-            GatewayBindingCompiled::FileServer(worker_binding) => internal::get_resolved_binding(
-                worker_binding,
-                &http_request_details,
-                namespace,
-                headers,
-            )
-            .await
-            .map(|resolved_binding| ResolvedGatewayBinding {
-                request_details: GatewayRequestDetails::Http(http_request_details),
-                resolved_binding: ResolvedBinding::FileServer(resolved_binding),
-            }),
-            GatewayBindingCompiled::Worker(worker_binding) => internal::get_resolved_binding(
-                worker_binding,
-                &http_request_details,
-                namespace,
-                headers,
-            )
-            .await
-            .map(|resolved_binding| ResolvedGatewayBinding {
-                request_details: GatewayRequestDetails::Http(http_request_details),
-                resolved_binding: ResolvedBinding::Worker(resolved_binding),
-            }),
+            GatewayBindingCompiled::FileServer(worker_binding) => {
+                internal::get_resolved_worker_binding(
+                    worker_binding,
+                    &http_request_details,
+                    namespace,
+                    headers,
+                )
+                .await
+                .map(|resolved_binding| ResolvedGatewayBinding {
+                    request_details: GatewayRequestDetails::Http(http_request_details),
+                    resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+                })
+            }
+            GatewayBindingCompiled::Worker(worker_binding) => {
+                internal::get_resolved_worker_binding(
+                    worker_binding,
+                    &http_request_details,
+                    namespace,
+                    headers,
+                )
+                .await
+                .map(|resolved_binding| ResolvedGatewayBinding {
+                    request_details: GatewayRequestDetails::Http(http_request_details),
+                    resolved_binding: ResolvedBinding::Worker(resolved_binding),
+                })
+            }
+            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+                internal::get_resolved_http_handler_binding(
+                    http_handler_binding,
+                    &http_request_details,
+                    namespace,
+                    headers,
+                )
+                .await
+                .map(|resolved_binding| ResolvedGatewayBinding {
+                    request_details: GatewayRequestDetails::Http(http_request_details),
+                    resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
+                })
+            }
             GatewayBindingCompiled::Static(static_binding) => {
                 Ok(ResolvedGatewayBinding::from_static_binding(
                     &GatewayRequestDetails::Http(http_request_details),
@@ -340,8 +365,8 @@ impl<Namespace: Clone + Send + Sync + 'static>
 
 mod internal {
     use crate::gateway_binding::{
-        ErrorOrRedirect, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver,
-        WorkerBindingCompiled, WorkerDetail,
+        ErrorOrRedirect, HttpHandlerBindingCompiled, HttpRequestDetails, ResolvedWorkerBinding,
+        RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
     };
     use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
@@ -349,6 +374,8 @@ mod internal {
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
     use std::sync::Arc;
+
+    use super::ResolvedHttpHandlerBinding;
 
     pub async fn redirect_or_continue(
         input: &mut HttpRequestDetails,
@@ -380,7 +407,7 @@ mod internal {
         }
     }
 
-    pub async fn get_resolved_binding<Namespace: Clone>(
+    pub async fn get_resolved_worker_binding<Namespace: Clone>(
         binding: &WorkerBindingCompiled,
         http_request_details: &HttpRequestDetails,
         namespace: &Namespace,
@@ -452,6 +479,83 @@ mod internal {
         let resolved_binding = ResolvedWorkerBinding {
             worker_detail,
             compiled_response_mapping: binding.response_compiled.clone(),
+            namespace: namespace.clone(),
+        };
+
+        Ok(resolved_binding)
+    }
+
+    pub async fn get_resolved_http_handler_binding<Namespace: Clone>(
+        binding: &HttpHandlerBindingCompiled,
+        http_request_details: &HttpRequestDetails,
+        namespace: &Namespace,
+        headers: &HeaderMap,
+    ) -> Result<ResolvedHttpHandlerBinding<Namespace>, ErrorOrRedirect> {
+        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+            let resolve_rib_input = http_request_details
+                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+
+            let worker_name = rib::interpret_pure(
+                &worker_name_compiled.compiled_worker_name,
+                &resolve_rib_input,
+            )
+            .await
+            .map_err(|err| {
+                ErrorOrRedirect::internal(format!(
+                    "Failed to evaluate worker name rib expression. {}",
+                    err
+                ))
+            })?
+            .get_literal()
+            .ok_or(ErrorOrRedirect::internal(
+                "Worker name is not a Rib expression that resolves to String".to_string(),
+            ))?
+            .as_string();
+
+            Some(worker_name)
+        } else {
+            None
+        };
+
+        let component_id = &binding.component_id;
+
+        let idempotency_key =
+            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+                let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input,
+                )
+                .await
+                .map_err(|err| ErrorOrRedirect::internal(err.to_string()))?;
+
+                let idempotency_key = idempotency_key_value
+                    .get_literal()
+                    .ok_or(ErrorOrRedirect::internal(
+                        "Idempotency Key is not a string".to_string(),
+                    ))?
+                    .as_string();
+
+                Some(IdempotencyKey::new(idempotency_key))
+            } else {
+                headers
+                    .get("idempotency-key")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|value| IdempotencyKey::new(value.to_string()))
+            };
+
+        let worker_detail = WorkerDetail {
+            component_id: component_id.clone(),
+            worker_name: worker_name_opt,
+            idempotency_key,
+        };
+
+        let resolved_binding = ResolvedHttpHandlerBinding {
+            worker_detail,
             namespace: namespace.clone(),
         };
 

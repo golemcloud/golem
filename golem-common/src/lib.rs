@@ -56,6 +56,8 @@ pub mod tracing;
 
 pub mod uri;
 
+pub mod virtual_exports;
+
 #[cfg(test)]
 test_r::enable!();
 

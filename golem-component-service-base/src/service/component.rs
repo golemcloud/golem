@@ -667,8 +667,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         );
 
         let transformed_data = self.apply_transformations(&component, data.clone()).await?;
-        let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
+        let mut transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
             .map_err(ComponentError::ComponentProcessingError)?;
+        transformed_metadata.dynamic_linking = component.metadata.dynamic_linking.clone();
 
         tokio::try_join!(
             self.upload_user_component(&component, data),
@@ -763,8 +764,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         debug!("Result component: {component:?}");
 
         let transformed_data = self.apply_transformations(&component, data.clone()).await?;
-        let transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
+        let mut transformed_metadata = ComponentMetadata::analyse_component(&transformed_data)
             .map_err(ComponentError::ComponentProcessingError)?;
+        transformed_metadata.dynamic_linking = metadata.dynamic_linking.clone();
 
         tokio::try_join!(
             self.upload_user_component(&component, data),

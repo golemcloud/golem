@@ -22,6 +22,7 @@ pub mod model;
 pub mod preview2;
 pub mod services;
 pub mod storage;
+pub mod virtual_export_compat;
 pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
