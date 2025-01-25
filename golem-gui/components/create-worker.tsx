@@ -58,6 +58,12 @@ const CreateWorker = ({compId, version, onSuccess}:{compId?:string, version?:str
   const [error, setError] = useState("");
   const { components } = useComponents(compId, version);
 
+  const componentsMap = components?.reduce<Record<string, Component>>((obj, component: Component)=>{
+
+    obj[component.versionedComponentId.componentId] = component;
+    return obj;
+  }, {})
+
   const addEnvVar = () => {
     append({ key: "", value: "" });
   };
@@ -108,12 +114,12 @@ const removeArgumentVar = (index: number) => {
             rules={{required: 'Component is required!'}}
             render={({ field }) => (
               <Select {...field} size="small">
-                {components?.map((component: Component) => (
+                {Object.values(componentsMap)?.map((component: Component) => (
                   <MenuItem
                     key={component.versionedComponentId.componentId}
                     value={component.versionedComponentId.componentId}
                   >
-                    {component.componentName}
+                    {component.componentName} {" "} v{component.versionedComponentId.version}
                   </MenuItem>
                 ))}
               </Select>
