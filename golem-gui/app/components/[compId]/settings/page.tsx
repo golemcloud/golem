@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import DangerZone from "@/components/settings";
 import ComponentInfo from "@/components/component-info-card";
 import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
@@ -22,38 +22,37 @@ const WorkerSettings = () => {
   const { components, error, isLoading } = useComponents(compId);
   const [version, setVersion] = useState<number | null>(null);
   const searchParams = useSearchParams();
-  const activeTabFromQuery = Number(searchParams.get("activeTab")) || 0;
+  const defaultTab =  searchParams.get("activeTab");
+  const [activeTab, setActiveTab] = useState(defaultTab ? Number(defaultTab) : 0);
 
-  const [activeTab, setActiveTab] = useState(activeTabFromQuery);
+  const component = useMemo(
+    () => components?.[version ?? components?.length - 1],
+    [components, version]
+  );
 
-  const component = components?.[version ?? components?.length - 1];
-  const versionedComponentId = component?.versionedComponentId || {};
-  useEffect(() => {
-    setVersion(component?.versionedComponentId?.version ?? null);
-  }, [component]);
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setActiveTab(newValue);
-  };
-
-  //Delete all api is not there. deleting one by one is costly. so not performing deleting all.
-  const actions = [
-    {
-      title: "Delete All Workers",
-      description:
-        "This will permanently delete all workers associated with this component.",
-      buttonText: "Delete All Workers",
-      onClick: () => toast.success("All workers deleted successfully"),
+  const handleTabChange = useCallback(
+    (event: React.SyntheticEvent, newValue: number) => {
+      setActiveTab(newValue);
     },
-  ];
+    []
+  );
 
-  useEffect(() => {
-    setActiveTab(activeTabFromQuery);
-  }, [activeTabFromQuery]);
+  const actions = useMemo(() => {
+    return [
+      {
+        title: "Delete All Workers",
+        description:
+          "This will permanently delete all workers associated with this component.",
+        buttonText: "Delete All Workers",
+        onClick: () => toast.success("All workers deleted successfully"),
+      },
+    ];
+  }, []);
 
   return (
     <>
       <Box sx={{ display: { xs: "block", md: "none" } }}>
-        <SecondaryHeader onClick={() => {}} variant="components" />
+        <SecondaryHeader variant="components" />
       </Box>
       {error ||
         (!isLoading && !component && (
@@ -124,7 +123,7 @@ const WorkerSettings = () => {
                             setVersion(Number(value));
                           },
                         }))}
-                        prefix={version || version == 0 ? `v${version}` : ""}
+                        prefix={version || version == 0 ? `v${version}` : component ? `v${component.versionedComponentId.version}`: ''}
                       />
                       <Button2
                         variant="primary"
@@ -141,8 +140,8 @@ const WorkerSettings = () => {
                   <Divider className="bg-border my-1" />
                   {component ? (
                     <ComponentInfo
-                      componentId={versionedComponentId.componentId}
-                      version={versionedComponentId.version}
+                      componentId={component.versionedComponentId?.componentId}
+                      version={component.versionedComponentId?.version}
                       name={component.componentName}
                       size={component.componentSize}
                       createdAt={component.createdAt}
@@ -177,5 +176,6 @@ const WorkerSettings = () => {
     </>
   );
 };
+
 
 export default WorkerSettings;

@@ -141,7 +141,7 @@ export default function TryItOut({
     }
 
     // If there is a body, add the data using the -d flag
-    if (body) {
+    if (body && method.toUpperCase() !== "GET" ) {
       curlCommand += ` -d '${JSON.stringify(body)}'`;
     }
 
@@ -152,7 +152,7 @@ export default function TryItOut({
   }
 
   const transformPath = (path: string, pathParams: Record<string, string>): string => {
-    return path.replace(/{([^}]+)}/g, (_, key) => pathParams[key] || `{${key}}`);
+    return path.replace(/{([^}]+)}/g, (_, key) => pathParams[key] || ``).replace(/\/+/g, '/').replace(/\/$/, '');
   };
   const handleSubmit = async (data: FormData) => {
     if (!deployment) {
