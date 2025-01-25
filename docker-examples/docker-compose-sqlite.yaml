@@ -91,6 +91,11 @@ services:
       - "${WORKER_SERVICE_GRPC_PORT}:${WORKER_SERVICE_GRPC_PORT}"
     volumes:
       - golem_db:/app/golem_db
+    depends_on:
+      - redis
+      - golem-worker-executor
+      - golem-component-service
+      - golem-shard-manager
 
   golem-component-compilation-service:
     image: golemservices/golem-component-compilation-service:latest
@@ -143,7 +148,6 @@ services:
       - GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT}
       - GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__COMPILED_COMPONENT_SERVICE__TYPE="Enabled"
-
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
     volumes:
       - worker_executor_store:/worker_executor_store
@@ -151,6 +155,8 @@ services:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
     depends_on:
       - redis
+      - golem-shard-manager
+      - golem-component-service
 
 volumes:
   redis_data:
