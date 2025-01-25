@@ -21,6 +21,7 @@ type SidebarProps = {
   variant: string;
   version?: string;
   apiTab?: string;
+  type?: string;
 };
 
 type NavigationLinks = {
@@ -29,11 +30,15 @@ type NavigationLinks = {
   icon: React.ReactNode;
 };
 
-const Sidebar = ({ id, navigationLinks, variant, apiTab }: SidebarProps) => {
+const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) => {
   const pathname = usePathname();
   const router = useRouter();
   const params = useSearchParams();
   const version = params.get("version");
+
+  if(type === "Ephemeral"){
+    navigationLinks = navigationLinks.filter((link) => link.name !== "Workers");
+  }
   
 
   return (

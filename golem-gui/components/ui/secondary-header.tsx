@@ -57,8 +57,6 @@ export default function SecondaryHeader({
   const params = useSearchParams();
   const version = params.get("version");
 
-  console.log(apiId);
-
   const [open, setOpen] = useState<string | null>(null);
 
   // const tab = useMemo(() => {

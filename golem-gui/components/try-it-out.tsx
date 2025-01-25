@@ -1,5 +1,5 @@
 "use client";
-import DynamicForm from "@/app/components/[compId]/workers/[id]/form-generator";
+import DynamicForm from "@/app/components/[compId]/workers/@workers/[id]/form-generator";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
 import { AnalysedType_TypeRecord } from "@/types/golem-data-types";
