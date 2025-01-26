@@ -21,17 +21,24 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { AlertDialogDemo } from "./confirmation-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import useComponents from "@/lib/hooks/use-component";
 
 const ApiDetails = ({
   route,
   version,
   noRedirect,
+  isDraft,
 }: {
   route: ApiRoute;
   version: string;
   noRedirect?: boolean;
+  isDraft?: boolean;
 }) => {
   const { apiId } = useCustomParam();
+  const { components, error, isLoading } = useComponents(
+    route?.binding?.componentId?.componentId,
+    "latest"
+  );
 
   const router = useRouter();
   const { deleteRoute } = useApiDefinitions(apiId);
@@ -154,7 +161,7 @@ const ApiDetails = ({
         >
           <Tab label="View" />
           <Tab label="Edit" />
-          <Tab label="Try-it-out" />
+          <Tab label="Try-it-out" disabled={isDraft} />
         </Tabs>
 
         {/* Sections */}
@@ -168,17 +175,20 @@ const ApiDetails = ({
               Component
             </Typography>
           </Grid>
-          <Link
-            href={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
-          >
-            <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
-              <Typography variant="body2" fontFamily="monospace">
-                {route?.binding?.componentId?.componentId}
-                {"/"}
-                {route?.binding?.componentId?.version}
-              </Typography>
-            </Grid>
-          </Link>
+          <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
+            <Link
+              href={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
+            >
+              {!isLoading && (
+                <Typography variant="caption" fontFamily="monospace">
+                  {components?.[0]?.componentName ??
+                    route?.binding?.componentId?.componentId}
+                  {"/"}
+                  {route?.binding?.componentId?.version}
+                </Typography>
+              )}
+            </Link>
+          </Grid>
 
           <Grid size={12}>
             <Divider className="bg-border my-2" />

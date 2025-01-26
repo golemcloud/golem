@@ -2,7 +2,10 @@
 import DynamicForm from "@/app/components/[compId]/workers/@workers/[id]/form-generator";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
-import { AnalysedType_TypeRecord } from "@/types/golem-data-types";
+import {
+  AnalysedType,
+  AnalysedType_TypeRecord,
+} from "@/types/golem-data-types";
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 import React, { useMemo, useState } from "react";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
@@ -43,76 +46,32 @@ export default function TryItOut({
 
     const responseInput = route?.binding?.responseMappingInput?.types?.request;
 
+    const addFieldIfUsed = (
+      fields: Parameter[],
+      fieldName: string,
+      source: AnalysedType
+    ) => {
+      const field =
+        source.type === "Record" &&
+        source.fields?.find((f: Parameter) => f.name === fieldName);
+
+      if (
+        field &&
+        !fields.find((_field: Parameter) => _field.name == field.name)
+      ) {
+        fields.push(field);
+      }
+    };
+
     if (responseInput && meta?.typ?.type === "Record" && meta?.typ?.fields) {
-      const bodyFields =
-        (responseInput.type === "Record" &&
-          responseInput.fields?.filter((field) => field.name === "body")) ||
-        [];
-
-      if (bodyFields.length > 0) {
-        meta.typ.fields.push(bodyFields[0]);
-      } else {
-        meta.typ.fields.push({
-          name: "body",
-          typ: {
-            type: "Record",
-            fields: [],
-          } as AnalysedType_TypeRecord,
-        });
-      }
-
-      const pathFields =
-        (responseInput.type === "Record" &&
-          responseInput.fields?.filter((field) => field.name === "path")) ||
-        [];
-
-      if (pathFields.length > 0) {
-        meta.typ.fields.push(pathFields[0]);
-      } else {
-        meta.typ.fields.push({
-          name: "path",
-          typ: {
-            type: "Record",
-            fields: [],
-          } as AnalysedType_TypeRecord,
-        });
-      }
+      addFieldIfUsed(meta.typ.fields, "body", responseInput);
+      addFieldIfUsed(meta.typ.fields, "path", responseInput);
     }
 
     const workerInput = route?.binding?.workerNameInput?.types?.request;
     if (workerInput && meta?.typ?.type === "Record" && meta?.typ?.fields) {
-      const bodyFields =
-        (workerInput.type === "Record" &&
-          workerInput.fields?.filter((field) => field.name === "body")) ||
-        [];
-      if (bodyFields.length > 0) {
-        meta.typ.fields.push(bodyFields[0]);
-      } else {
-        meta.typ.fields.push({
-          name: "body",
-          typ: {
-            type: "Record",
-            fields: [],
-          } as AnalysedType_TypeRecord,
-        });
-      }
-
-      const pathFields =
-        (workerInput.type === "Record" &&
-          workerInput.fields?.filter((field) => field.name === "path")) ||
-        [];
-
-      if (pathFields.length > 0) {
-        meta.typ.fields.push(pathFields[0]);
-      } else {
-        meta.typ.fields.push({
-          name: "path",
-          typ: {
-            type: "Record",
-            fields: [],
-          } as AnalysedType_TypeRecord,
-        });
-      }
+      addFieldIfUsed(meta.typ.fields, "body", workerInput);
+      addFieldIfUsed(meta.typ.fields, "path", workerInput);
     }
 
     return [meta];
@@ -122,7 +81,7 @@ export default function TryItOut({
     method: string,
     url: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    body: any = null
+    body?: Record<string, unknown>
   ) {
     let curlCommand = `curl -X ${method.toUpperCase()} "${url}"`;
 
@@ -151,28 +110,35 @@ export default function TryItOut({
     return curlCommand;
   }
 
-  const transformPath = (path: string, pathParams: Record<string, string>): string => {
-    return path.replace(/{([^}]+)}/g, (_, key) => pathParams[key] || `{${key}}`);
+  const transformPath = (
+    path: string,
+    pathParams: Record<string, string>
+  ): string => {
+    return path.replace(
+      /{([^}]+)}/g,
+      (_, key) => pathParams[key] || `{${key}}`
+    );
   };
-  const handleSubmit = async (data: FormData) => {
+  const handleSubmit = (data: FormData) => {
     if (!deployment) {
-      return alert('Select deployment');
+       alert("Select deployment");
+       return
     }
 
-    try{
-      const tansformedPath = transformPath(route.path, data?.request?.path)
-      const curl = await copyCurlToClipboard(
-        route.method,
-        `https://${deployment.site.subdomain}.${deployment.site.host}${tansformedPath}`,
-        data?.request?.body
-      );
-      setCurl(curl);
-      toast.success("Curl request has been copied to the clipboard.")
-    }catch(err){
-      console.error("somthing went wrong!", err);
-      toast.error("Something went wrong while creating curl");
-    } 
-    
+    const tansformedPath = transformPath(route.path, data?.request?.path);
+    copyCurlToClipboard(
+      route.method,
+      `https://${deployment.site.subdomain}.${deployment.site.host}${tansformedPath}`,
+      data?.request?.body
+    )
+      .then((curl) => {
+        setCurl(curl);
+        toast.success("Curl request has been copied to the clipboard.");
+      })
+      .catch((err) => {
+        console.error("somthing went wrong!", err);
+        toast.error("Something went wrong while creating curl");
+      });
   };
 
   if (isLoading) {
@@ -191,7 +157,11 @@ export default function TryItOut({
             <Typography color="red">Experimental</Typography>
           </Stack>
 
-          <DynamicForm config={routeMeta} onSubmit={handleSubmit}  invokeLabel={"Copy Curl"}/>
+          <DynamicForm
+            config={routeMeta}
+            onSubmit={handleSubmit}
+            invokeLabel={"Copy Curl"}
+          />
           <Typography>Select Host</Typography>
           <Select
             variant="outlined"
