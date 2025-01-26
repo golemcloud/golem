@@ -25,12 +25,12 @@ export function ComponentVersionFilter({
   };
 
   const versions = useMemo(() => {
-    return components.map((component: Component) => {
+    return components?.map((component: Component) => {
       return {
         label: `V${component.versionedComponentId.version}`,
         value: `${component.versionedComponentId.version}`,
       };
-    });
+    }) || [];
   }, [components]);
 
   const tab = useMemo(() => {
@@ -52,13 +52,13 @@ export function ComponentVersionFilter({
       <div className="w-12">
         {showFilter && (
           <div className="max-w-5">
-            {component && (
+            {versions.length>0 && (
               <MultiSelect
                 selectMode="single"
                 buttonType={{ variant: "success", size: "icon_sm" }}
                 options={versions}
                 onValueChange={handleChange}
-                defaultValue={[`${component?.versionedComponentId?.version}`]}
+                defaultValue={[`${versions[versions.length-1]?.value ?? 0}`]}
                 className="min-w-15"
                 variant="inverted"
                 animation={2}
