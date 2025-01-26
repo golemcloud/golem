@@ -43,11 +43,14 @@ type secondaryHeaderProps = {
   variant: string;
   id?: string;
   apiTab?: string;
+  hideNew?: boolean;
 };
 
+// TODO: NEED TO SEPEARTE THE API AND COMPONENT
 export default function SecondaryHeader({
   variant,
   apiTab,
+  hideNew
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
@@ -56,8 +59,6 @@ export default function SecondaryHeader({
   const { apiId } = useCustomParam();
   const params = useSearchParams();
   const version = params.get("version");
-
-  console.log(apiId);
 
   const [open, setOpen] = useState<string | null>(null);
 
@@ -228,8 +229,8 @@ export default function SecondaryHeader({
         {pathname === `/components/${compId}/overview` && (
           <Box className="flex items-center justify-between w-full">
             <ComponentVersionFilter showFilter={true} />
-            <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
-              <Button2
+           <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
+           {!hideNew &&<Button2
                 variant="primary"
                 startIcon={<AddIcon />}
                 size="md"
@@ -239,7 +240,7 @@ export default function SecondaryHeader({
                 }}
               >
                 New
-              </Button2>
+              </Button2>}
 
               <Box className="border border-border rounded-md cursor-pointer dark:hover:bg-[#333] hover:bg-slate-100 py-1 px-2">
                 {Dropdown(workloads)}

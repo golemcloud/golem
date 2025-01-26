@@ -92,7 +92,7 @@ export function AvailableFunctions({
     return metaExports.flatMap((expo: ComponentExport) =>
       "functions" in expo
         ? expo.functions?.map(
-            (fun: WorkerFunction) => `${expo.name}.${fun.name}`
+            (fun: WorkerFunction) => `${expo.name}.{${fun.name}}`
           )
         : expo.name
     );

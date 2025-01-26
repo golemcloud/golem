@@ -17,8 +17,10 @@ import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export function InvokeForm({
   invoke,
+  isEmpheral,
 }: {
   invoke: { fun?: WorkerFunction; instanceName?: string | null };
+  isEmpheral?: boolean
 }) {
   const { result, error, invokeFunction } = useWorkerInvocation(invoke);
   const paramsConfig = useMemo(() => {
@@ -26,7 +28,7 @@ export function InvokeForm({
   }, [invoke]);
 
   const onSubmit = async (data: unknown) => {
-    invokeFunction(data);
+    invokeFunction(data, isEmpheral);
   };
 
   return (
@@ -69,7 +71,7 @@ export function InvokeForm({
   );
 }
 
-export default function InvokePage({ worker }: { worker: Worker }) {
+export default function InvokePage({ worker }: { worker?: Worker }) {
   const { compId } = useCustomParam();
   const { components, isLoading } = useComponents(
     compId,
@@ -161,7 +163,7 @@ export default function InvokePage({ worker }: { worker: Worker }) {
           <Divider className="my-2 bg-border" />
           <Box mt={4}>
             {invoke ? (
-              <InvokeForm invoke={invoke} />
+              <InvokeForm invoke={invoke} isEmpheral={latestComponent.componentType === "Ephemeral"}/>
             ) : (
               <Typography variant="body1" color="textSecondary">
                 Select a function to invoke.

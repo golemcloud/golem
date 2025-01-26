@@ -33,7 +33,7 @@ const RouteDetails = ({defaultRouteId, defaultVersion, noRedirect}:{defaultRoute
   }
 
   return (
-    apiDefinition && route ? <ApiDetails route={route} version={apiDefinition?.version} noRedirect={noRedirect}/>: <>No route found!</>
+    apiDefinition && route ? <ApiDetails route={route} version={apiDefinition?.version} noRedirect={noRedirect} isDraft={apiDefinition?.draft}/>: <>No route found!</>
   );
 };
 

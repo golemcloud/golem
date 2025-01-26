@@ -21,17 +21,25 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { TabsContent, TabsTrigger, TabsList, Tabs } from "./ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import useComponents from "@/lib/hooks/use-component";
+
 
 const ApiDetails = ({
   route,
   version,
   noRedirect,
+  isDraft,
 }: {
   route: ApiRoute;
   version: string;
   noRedirect?: boolean;
+  isDraft?: boolean;
 }) => {
   const { apiId } = useCustomParam();
+  const { components, error, isLoading } = useComponents(
+    route?.binding?.componentId?.componentId,
+    "latest"
+  );
 
   const router = useRouter();
   const { deleteRoute } = useApiDefinitions(apiId);
@@ -120,7 +128,6 @@ const ApiDetails = ({
             />
           </Box>
         </Box>
-
         <Grid container spacing={2}>
           {/* Component */}
           <Grid size={12}>
@@ -131,15 +138,20 @@ const ApiDetails = ({
               Component
             </Typography>
           </Grid>
-          <Link
-            href={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
-          >
-            <Typography variant="body2" fontFamily="monospace">
-              {route?.binding?.componentId?.componentId}
-              {"/"}
-              {route?.binding?.componentId?.version}
-            </Typography>
-          </Link>
+          <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
+            <Link
+              href={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
+            >
+              {!isLoading && (
+                <Typography variant="caption" fontFamily="monospace">
+                  {components?.[0]?.componentName ??
+                    route?.binding?.componentId?.componentId}
+                  {"/"}
+                  {route?.binding?.componentId?.version}
+                </Typography>
+              )}
+            </Link>
+          </Grid>
           <Grid size={12}>
             <Divider className="bg-border my-2" />
           </Grid>

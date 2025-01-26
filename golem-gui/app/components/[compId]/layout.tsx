@@ -8,11 +8,10 @@ import ArticleIcon from '@mui/icons-material/Article';
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";
-
-
+import useComponents from "@/lib/hooks/use-component";
 
 export default function ComponentsLayout({
-  children,
+  children
 }: {
   children: React.ReactNode;
 }) {
@@ -20,6 +19,8 @@ export default function ComponentsLayout({
    const { compId } = useCustomParam();
    const params = useSearchParams();
    const version = params?.get("version");
+   const component = useComponents(compId!, version);
+   const type = component?.components[0]?.componentType;
 
    const navigationLinks = useMemo(()=>[
     { name: "Overview", href: `/components/${compId}/overview${version? `?version=${version}`: ''}`, icon: <Home fontSize="small" /> },
@@ -31,7 +32,7 @@ export default function ComponentsLayout({
 
   return (
     <div style={{ display: "flex"}}>
-      <Sidebar id={compId!} navigationLinks={navigationLinks} variant="components" />
+      <Sidebar id={compId!} navigationLinks={navigationLinks} variant="components" type={type}/>
       <div className="flex-1">
         {children}
       </div>
