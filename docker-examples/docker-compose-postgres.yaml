@@ -43,6 +43,7 @@ services:
   golem-shard-manager:
     image: golemservices/golem-shard-manager:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -58,6 +59,7 @@ services:
   golem-component-service:
     image: golemservices/golem-component-service:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -91,6 +93,7 @@ services:
   golem-worker-service:
     image: golemservices/golem-worker-service:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
@@ -133,6 +136,7 @@ services:
   golem-component-compilation-service:
     image: golemservices/golem-component-compilation-service:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
@@ -155,6 +159,7 @@ services:
   golem-worker-executor:
     image: golemservices/golem-worker-executor:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
