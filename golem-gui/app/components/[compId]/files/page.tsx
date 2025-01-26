@@ -22,18 +22,18 @@ const FileComponent = () => {
       <Box sx={{ display: { xs: "block", md: "none" } }}>
         <SecondaryHeader onClick={() => {}} variant="components" />
       </Box>
-      {error && <ErrorBoundary message={error}/>}
-    <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
-      <div className="mx-auto max-w-2xl lg:max-w-none py-4">
-        <Paper
-          elevation={3}
-          sx={{
-            backgroundColor: "#1c1c1c",
-            borderRadius: "8px",
-            overflow: "hidden",
-            height: "80%",
-          }}
-        >
+      {error && <ErrorBoundary message={error} />}
+      <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
+        <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+          <Paper
+            elevation={3}
+            sx={{
+              backgroundColor: "#1c1c1c",
+              borderRadius: "8px",
+              overflow: "hidden",
+              height: "80%",
+            }}
+          >
             <Grid
               container
               sx={{
