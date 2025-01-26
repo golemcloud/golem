@@ -9,6 +9,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  Box,
 } from "@mui/material";
 import useComponents from "@/lib/hooks/use-component";
 import { useSearchParams } from "next/navigation";
@@ -48,9 +49,10 @@ const Overview = () => {
       <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl lg:max-w-none py-4">
           {!isLoading && (
-            <Grid container spacing={4}>
+            <Grid container spacing={1}>
               {/* Exports Section */}
-              <Grid size={{ xs: 12, md: 4 }}>
+              <Grid size={{ xs: 12,lg:4 }}>
+                <Box className=" px-2 md:px-6 lg:px-8 xl:px-0 mt-3">
                 <Paper
                   sx={{ bgcolor: "#1E1E1E", minHeight: 550 }}
                   className="border"
@@ -67,10 +69,11 @@ const Overview = () => {
                     ))}
                   </List>
                 </Paper>
+                </Box>
               </Grid>
 
               {/* Worker Status */}
-              <Grid size={{ xs: 12, md: 8 }}>
+              <Grid size={{ xs: 12,lg:8 }}>
                 {exports.length > 0 ? (
                   <InvokePage />
                 ) : (
