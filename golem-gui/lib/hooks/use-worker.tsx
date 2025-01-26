@@ -86,10 +86,10 @@ export function useWorkerInvocation(invoke: {
   }, [invoke]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invokeFunction = async (data: any) => {
+  const invokeFunction = async (data: any, isEmpheral?:boolean) => {
     try {
       const payload = transform(invoke?.fun?.parameters || [], data);
-      let endpoint = `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=`;
+      let endpoint = isEmpheral ? `${ROUTE_PATH}/${compId}/invoke-and-await?function=`: `${ROUTE_PATH}/${compId}/workers/${workerName}/invoke-and-await?function=`;
       endpoint =
         instanceName && functionName
           ? `${endpoint}${instanceName}.{${functionName}}`

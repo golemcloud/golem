@@ -1,13 +1,88 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
+import {
+  Grid2 as Grid,
+  Paper,
+  Typography,
+  Divider,
+  List,
+  ListItem,
+  ListItemText,
+} from "@mui/material";
+import useComponents from "@/lib/hooks/use-component";
+import { useSearchParams } from "next/navigation";
+import { ComponentExport, WorkerFunction } from "@/types/api";
+import SecondaryHeader from "@/components/ui/secondary-header";
+import ErrorBoundary from "@/components/erro-boundary";
+import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import InvokePage from "../../workers/@workers/[id]/invoke";
 
 const Overview = () => {
+  const { compId } = useCustomParam();
+  const params = useSearchParams();
+  const version = params?.get("version");
+
+  const { components, isLoading, error } = useComponents(
+    compId,
+    version ?? "latest"
+  );
+  const [latestComponent] = components;
+
+  const exports = useMemo(() => {
+    const metaExports = (latestComponent?.metadata?.exports ||
+      []) as ComponentExport[];
+    return metaExports.flatMap((expo: ComponentExport) =>
+      "functions" in expo
+        ? expo.functions?.map(
+            (fun: WorkerFunction) => `${expo.name}.${fun.name}`
+          )
+        : expo.name
+    );
+  }, [latestComponent?.metadata?.exports]);
+
   return (
     <>
-    <div className="bg-greeen h-1/2">
-      <h1>Hi this is Eph component</h1>
-    </div>
+      <SecondaryHeader variant="components" hideNew={true} />
+      {error && <ErrorBoundary message={error} />}
+      <div className="mx-auto max-w-7xl px-2 md:px-6 lg:px-8">
+        <div className="mx-auto max-w-2xl lg:max-w-none py-4">
+          {!isLoading && (
+            <Grid container spacing={4}>
+              {/* Exports Section */}
+              <Grid size={{ xs: 12, md: 4 }}>
+                <Paper
+                  sx={{ bgcolor: "#1E1E1E", minHeight: 550 }}
+                  className="border"
+                >
+                  <Typography variant="h6" className="m-5">
+                    Exports
+                  </Typography>
+                  <Divider className="my-1 bg-border" />
+                  <List className="px-7">
+                    {exports.slice(0, 13).map((item, index) => (
+                      <ListItem key={index} divider className="border-border">
+                        <ListItemText primary={item} />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Paper>
+              </Grid>
+
+              {/* Worker Status */}
+              <Grid size={{ xs: 12, md: 8 }}>
+                {exports.length > 0 ? (
+                  <InvokePage />
+                ) : (
+                  <Typography className="mt-5 ml-5">
+                    No Invocations found
+                  </Typography>
+                )}
+              </Grid>
+            </Grid>
+          )}
+        </div>
+      </div>
     </>
   );
 };
