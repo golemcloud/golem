@@ -76,7 +76,7 @@ function useComponents(componentId?: string, version?: string | number | null) {
         ? [componentData?.data]
         : []
       : componentData?.data || []
-  ) as Component[];
+  )?.sort((comp1:Component, comp2:Component)=> comp1.versionedComponentId.version-comp2.versionedComponentId.version) as Component[];
 
   const getComponent = (
     id?: string,
