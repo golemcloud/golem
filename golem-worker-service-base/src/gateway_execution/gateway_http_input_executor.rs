@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, IdempotencyKeyCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedBinding, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, IdempotencyKeyCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedBinding, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -419,18 +419,6 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
 {
     async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
-
-        //         let host_header = self.underlying.header(http::header::HOST).map(|h| h.to_string())
-        //     .ok_or("No host header provided".to_string())?;
-        // Ok(ApiSiteString(host_header))
-
-        // let api_site_string = match request.api_site_string() {
-        //     Ok(ass) => ass,
-        //     Err(e) => {
-        //         return poem::Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from_string(e))
-        //     },
-        // };
-
         let authority = authority_from_request(&request)?;
 
         let possible_api_definitions = self
@@ -451,17 +439,22 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
         };
 
-        let resolved_gateway_binding = if let Some(resolved_gateway_binding) = resolve_gateway_binding(possible_api_definitions, &request).await {
-            resolved_gateway_binding
+        let resolved_route_entry = if let Some(resolved_route_entry) = resolve_gateway_binding(possible_api_definitions, &request).await {
+            resolved_route_entry
         } else {
             return poem::Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from_string("Route not found".to_string()))
         };
 
-        let rich_request = RichRequest(request);
+        let SplitResolvedRouteEntryResult {
+            namespace,
+            binding,
+            middlewares,
+            rich_request
+        } = split_resolved_route_entry(request, resolved_route_entry);
 
-        match resolved_gateway_binding.route_entry.binding {
+        match binding {
             GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
                 cors_preflight
                     .clone()
@@ -482,6 +475,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             GatewayBindingCompiled::Worker(resolved_worker_binding) => {
                 let result = self
                     .handle_worker_binding(
+                        &namespace,
                         &mut rich_request,
                         &resolved_worker_binding,
                     )
@@ -503,7 +497,11 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
 
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-                let result = self.handle_http_handler_binding(&mut rich_request, &http_handler_binding).await;
+                let result = self.handle_http_handler_binding(
+                    &namespace,
+                    &mut rich_request,
+                    &http_handler_binding
+                ).await;
                 let mut response = result.to_response(&rich_request, &self.gateway_session_store).await;
 
                 if let Some(middlewares) = middlewares {
@@ -521,6 +519,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 
             GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
                 let result = self.handle_file_server_binding(
+                    &namespace,
                     &mut rich_request,
                     &resolved_file_server_binding,
                 )
@@ -558,25 +557,25 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     }
 }
 
-async fn resolve_response_mapping_rib_inputs<Namespace>(
-    request_details: &mut HttpRequestDetails,
-    resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
-) -> GatewayHttpResult<(RibInput, RibInput)> {
-    let rib_input_from_request_details = request_details
-        .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-        .await
-        .map_err(GatewayHttpError::RibInputTypeMismatch)?;
+// async fn resolve_response_mapping_rib_inputs<Namespace>(
+//     request_details: &mut HttpRequestDetails,
+//     resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
+// ) -> GatewayHttpResult<(RibInput, RibInput)> {
+//     let rib_input_from_request_details = request_details
+//         .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+//         .await
+//         .map_err(GatewayHttpError::RibInputTypeMismatch)?;
 
-    let rib_input_from_worker_details = resolved_worker_binding
-        .worker_detail
-        .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-        .map_err(GatewayHttpError::RibInputTypeMismatch)?;
+//     let rib_input_from_worker_details = resolved_worker_binding
+//         .worker_detail
+//         .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+//         .map_err(GatewayHttpError::RibInputTypeMismatch)?;
 
-    Ok((
-        rib_input_from_request_details,
-        rib_input_from_worker_details,
-    ))
-}
+//     Ok((
+//         rib_input_from_request_details,
+//         rib_input_from_worker_details,
+//     ))
+// }
 
 async fn resolve_rib_input(
     input: &serde_json::Map<String, Value>,
@@ -613,6 +612,34 @@ fn path_and_query_from_request(request: &poem::Request) -> GatewayHttpResult<Str
         .ok_or(GatewayHttpError::BadRequest("No path and query provided".to_string()))
 }
 
+struct SplitResolvedRouteEntryResult<Namespace> {
+    pub namespace: Namespace,
+    pub binding: GatewayBindingCompiled,
+    pub middlewares: Option<HttpMiddlewares>,
+    pub rich_request: RichRequest
+}
+
+fn split_resolved_route_entry<Namespace>(
+    request: poem::Request,
+    entry: ResolvedRouteEntry<Namespace>
+) -> SplitResolvedRouteEntryResult<Namespace> {
+    // helper function to save a few clones
+
+    let namespace = entry.route_entry.namespace;
+    let binding = entry.route_entry.binding;
+    let middlewares = entry.route_entry.middlewares;
+
+    let rich_request = RichRequest {
+        underlying: request,
+        path_segments: entry.path_segments,
+        path_param_extractors: entry.route_entry.path_params,
+        query_info: entry.route_entry.query_params,
+        request_custom_params: None
+    };
+
+    SplitResolvedRouteEntryResult { namespace, binding, middlewares, rich_request }
+}
+
 struct RichRequest {
     pub underlying: poem::Request,
     pub path_segments: Vec<String>,
@@ -622,7 +649,6 @@ struct RichRequest {
 }
 
 impl RichRequest {
-
     pub fn url(&self) -> Result<url::Url, String> {
         url::Url::parse(&self.underlying.uri().to_string()).map_err(|e| format!("Failed parsing url: {e}"))
     }
@@ -743,7 +769,7 @@ impl RichRequest {
         Ok(Value::Object(basic))
     }
 
-    async fn as_wasi_http_input(&self) -> Result<golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest, String> {
+    async fn as_wasi_http_input(&mut self) -> Result<golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest, String> {
         use golem_common::virtual_exports::http_incoming_handler as hic;
 
         let headers = {
@@ -762,7 +788,7 @@ impl RichRequest {
             .take_body()
             .into_bytes()
             .await
-            .map_err(|e| GatewayHttpError::BadRequest(format!("Failed reading request body: ${e}")))?;
+            .map_err(|e| format!("Failed reading request body: ${e}"))?;
 
         let body = hic::HttpBodyAndTrailers {
             content: hic::HttpBodyContent(Bytes::from(body_bytes)),
