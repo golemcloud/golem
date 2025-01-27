@@ -4,6 +4,7 @@ import { ComponentProps } from "react"
 
 type Props = {
   commands: Command[]
+  language?: string
 } & Omit<ComponentProps<typeof Pre>, "children">
 
 type Command = {
@@ -11,7 +12,7 @@ type Command = {
   command: string
 }
 
-export const MultiPlatformCommand = ({ commands: command, ...props }: Props) => {
+export const MultiPlatformCommand = ({ commands: command, language, ...props }: Props) => {
   const labels = command.map(c => c.label)
 
   // Mimicking the shiki theme
@@ -39,7 +40,12 @@ export const MultiPlatformCommand = ({ commands: command, ...props }: Props) => 
     <Tabs items={labels}>
       {commands.map((cmd, i) => (
         <Tabs.Tab key={i}>
-          <Pre {...props} hasCopyCode={true} data-language="bash" data-theme="default">
+          <Pre
+            {...props}
+            hasCopyCode={true}
+            data-language={language ? language : "bash"}
+            data-theme="default"
+          >
             <Code data-language="bash">{cmd}</Code>
           </Pre>
         </Tabs.Tab>

@@ -39,6 +39,7 @@
     "type": "separator",
     "title": "References"
   },
+  "app-manifest": "Application Manifest",
   "rest-api": "REST API",
   "rib": "Rib",
   "golem-host-functions": "Golem Host Functions",
