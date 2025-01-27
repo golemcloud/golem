@@ -24,7 +24,12 @@ impl crate::bindings::exports::wasi::keyvalue::atomic::Guest for crate::Componen
         Ok(increment(bucket, &key, delta)?)
     }
 
-    fn compare_and_swap(bucket: BucketBorrow<'_>, key: Key, old: u64, new: u64) -> Result<bool, Error> {
+    fn compare_and_swap(
+        bucket: BucketBorrow<'_>,
+        key: Key,
+        old: u64,
+        new: u64,
+    ) -> Result<bool, Error> {
         observe_function_call("keyvalue::atomic", "compare_and_swap");
         let bucket = &bucket.get::<WrappedBucket>().bucket;
         Ok(compare_and_swap(bucket, &key, old, new)?)

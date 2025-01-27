@@ -26,10 +26,7 @@ use crate::durability::Durability;
 use crate::wrappers::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
-use crate::wrappers::http::{
-    continue_http_request, continue_http_request_borrowed, end_http_request_borrowed,
-    HttpRequestCloseOwner, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
-};
+use crate::wrappers::http::HttpRequestState;
 use crate::wrappers::io::error::WrappedError;
 use crate::wrappers::io::poll::WrappedPollable;
 use crate::wrappers::io::streams::{WrappedInputStream, WrappedOutputStream};
@@ -180,7 +177,9 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingRequest for Wrapp
     fn consume(&self) -> Result<IncomingBody, ()> {
         observe_function_call("http::types::incoming_request", "consume");
         let body = self.request.consume()?;
-        Ok(IncomingBody::new(WrappedIncomingBody::proxied(body)))
+        Ok(IncomingBody::new(
+            WrappedIncomingBody::proxied_request_body(body),
+        ))
     }
 }
 
@@ -387,29 +386,27 @@ pub struct WrappedIncomingResponse {
 }
 
 impl WrappedIncomingResponse {
-    pub fn proxied(response: crate::bindings::wasi::http::types::IncomingResponse) -> Self {
+    pub fn proxied(
+        response: crate::bindings::wasi::http::types::IncomingResponse,
+        request_state: HttpRequestState,
+    ) -> Self {
         WrappedIncomingResponse {
             state: RefCell::new(WrappedIncomingResponseState::Proxy {
                 response: Rc::new(response),
+                request_state: Some(request_state),
             }),
         }
     }
 
-    pub fn replayed(serializable_response_headers: SerializableResponseHeaders) -> Self {
+    pub fn replayed(
+        serializable_response_headers: SerializableResponseHeaders,
+        request_state: HttpRequestState,
+    ) -> Self {
         WrappedIncomingResponse {
             state: RefCell::new(WrappedIncomingResponseState::Replayed {
                 serializable_response_headers,
-                handle: None,
+                request_state: Some(request_state),
             }),
-        }
-    }
-
-    pub fn assign_replayed_handle(&mut self, replayed_handle: u32) {
-        match &mut *self.state.borrow_mut() {
-            WrappedIncomingResponseState::Replayed { handle, .. } => {
-                *handle = Some(replayed_handle);
-            }
-            _ => panic!("assign_replayed_handle called on non-replayed WrappedIncomingResponse"),
         }
     }
 }
@@ -417,10 +414,11 @@ impl WrappedIncomingResponse {
 enum WrappedIncomingResponseState {
     Proxy {
         response: Rc<crate::bindings::wasi::http::types::IncomingResponse>,
+        request_state: Option<HttpRequestState>,
     },
     Replayed {
         serializable_response_headers: SerializableResponseHeaders,
-        handle: Option<u32>,
+        request_state: Option<HttpRequestState>,
     },
 }
 
@@ -430,7 +428,7 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
     fn status(&self) -> StatusCode {
         observe_function_call("http::types::incoming_response", "status");
         match &*self.state.borrow() {
-            WrappedIncomingResponseState::Proxy { response } => response.status(),
+            WrappedIncomingResponseState::Proxy { response, .. } => response.status(),
             WrappedIncomingResponseState::Replayed {
                 serializable_response_headers,
                 ..
@@ -442,7 +440,7 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
         observe_function_call("http::types::incoming_response", "headers");
         let state = self.state.borrow();
         match &*state {
-            WrappedIncomingResponseState::Proxy { response } => {
+            WrappedIncomingResponseState::Proxy { response, .. } => {
                 let headers = response.headers();
                 Headers::new(WrappedFields::proxied_incoming_response_headers(
                     headers,
@@ -467,30 +465,22 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
 
     fn consume(&self) -> Result<IncomingBody, ()> {
         observe_function_call("http::types::incoming_response", "consume");
-        match &*self.state.borrow() {
-            WrappedIncomingResponseState::Proxy { response } => {
+        match &mut *self.state.borrow_mut() {
+            WrappedIncomingResponseState::Proxy {
+                response,
+                ref mut request_state,
+            } => {
                 let body = response.consume()?;
-                continue_http_request(
-                    response.handle(),
-                    body.handle(),
-                    HttpRequestCloseOwner::IncomingBodyDropOrFinish,
-                );
-                Ok(IncomingBody::new(WrappedIncomingBody::proxied(body)))
+                Ok(IncomingBody::new(
+                    WrappedIncomingBody::proxied_response_body(body, request_state.take().unwrap()),
+                ))
             }
-            WrappedIncomingResponseState::Replayed { handle, .. } => {
-                let mut body = IncomingBody::new(WrappedIncomingBody::replayed());
-                let body_handle = body.handle();
-                body.get_mut::<WrappedIncomingBody>()
-                    .assign_replayed_handle(body_handle);
-                if let Some(handle) = handle {
-                    continue_http_request(
-                        *handle,
-                        body_handle,
-                        HttpRequestCloseOwner::IncomingBodyDropOrFinish,
-                    );
-                } else {
-                    panic!("IncomingResponse::consume called before replay handle was assigned");
-                }
+            WrappedIncomingResponseState::Replayed {
+                ref mut request_state,
+                ..
+            } => {
+                let body =
+                    IncomingBody::new(WrappedIncomingBody::replayed(request_state.take().unwrap()));
                 Ok(body)
             }
         }
@@ -500,71 +490,40 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingResponse
 impl Drop for WrappedIncomingResponse {
     fn drop(&mut self) {
         observe_function_call("http::types::incoming_response", "drop");
-
-        match &*self.state.borrow() {
-            WrappedIncomingResponseState::Proxy { response } => {
-                let handle = response.handle();
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    if let Some(state) = open_http_requests.get(&handle) {
-                        if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    handle,
-                                )
-                            });
-                        }
-                    }
-                });
-            }
-            WrappedIncomingResponseState::Replayed { handle, .. } => {
-                if let Some(handle) = handle {
-                    OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                        if let Some(state) = open_http_requests.get(handle) {
-                            if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                                OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                    end_http_request_borrowed(
-                                        open_http_requests,
-                                        open_function_table,
-                                        *handle,
-                                    )
-                                });
-                            }
-                        }
-                    });
-                } else {
-                    panic!("IncomingResponse dropped before replay handle was assigned");
-                }
-            }
-        }
     }
 }
 
 pub enum WrappedIncomingBody {
-    Proxied {
+    ProxiedResponse {
+        body: Option<crate::bindings::wasi::http::types::IncomingBody>,
+        request_state: Option<Rc<HttpRequestState>>,
+    },
+    ProxiedRequest {
         body: Option<crate::bindings::wasi::http::types::IncomingBody>,
     },
     Replayed {
-        handle: Option<u32>,
+        request_state: Option<Rc<HttpRequestState>>,
     },
 }
 
 impl WrappedIncomingBody {
-    pub fn proxied(body: crate::bindings::wasi::http::types::IncomingBody) -> Self {
-        WrappedIncomingBody::Proxied { body: Some(body) }
+    pub fn proxied_response_body(
+        body: crate::bindings::wasi::http::types::IncomingBody,
+        request_state: HttpRequestState,
+    ) -> Self {
+        WrappedIncomingBody::ProxiedResponse {
+            body: Some(body),
+            request_state: Some(Rc::new(request_state)),
+        }
     }
 
-    pub fn replayed() -> Self {
-        WrappedIncomingBody::Replayed { handle: None }
+    pub fn proxied_request_body(body: crate::bindings::wasi::http::types::IncomingBody) -> Self {
+        WrappedIncomingBody::ProxiedRequest { body: Some(body) }
     }
 
-    pub fn assign_replayed_handle(&mut self, replayed_handle: u32) {
-        match self {
-            Self::Replayed { handle } => {
-                *handle = Some(replayed_handle);
-            }
-            _ => panic!("assign_replayed_handle called on non-replayed WrappedIncomingBody"),
+    pub fn replayed(request_state: HttpRequestState) -> Self {
+        WrappedIncomingBody::Replayed {
+            request_state: Some(Rc::new(request_state)),
         }
     }
 }
@@ -574,42 +533,36 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingBody for WrappedI
         observe_function_call("http::types::incoming_body", "stream");
 
         match self {
-            Self::Proxied { body: Some(body) } => {
+            Self::ProxiedResponse {
+                body: Some(body),
+                request_state,
+            } => {
                 let stream = body.stream()?;
 
-                continue_http_request(
-                    body.handle(),
-                    stream.handle(),
-                    HttpRequestCloseOwner::InputStreamClosed,
-                );
-
-                Ok(InputStream::new(
-                    WrappedInputStream::incoming_http_body_stream(stream),
-                ))
+                if let Some(request_state) = request_state.clone() {
+                    Ok(InputStream::new(
+                        WrappedInputStream::incoming_http_body_stream(stream, request_state),
+                    ))
+                } else {
+                    Err(())
+                }
             }
-            Self::Proxied { body: None } => {
-                panic!("IncomingBody::stream called after it was finished")
+            Self::ProxiedResponse { body: None, .. } => Err(()),
+            Self::ProxiedRequest { body: Some(body) } => {
+                let stream = body.stream()?;
+                Ok(InputStream::new(WrappedInputStream::proxied(stream)))
             }
-            Self::Replayed {
-                handle: Some(handle),
-            } => {
-                let mut stream =
-                    InputStream::new(WrappedInputStream::replayed_incoming_http_body_stream());
-                let stream_handle = stream.handle();
-                stream
-                    .get_mut::<WrappedInputStream>()
-                    .assign_replay_stream_handle(stream_handle);
+            Self::ProxiedRequest { body: None } => Err(()),
+            Self::Replayed { request_state } => {
+                if let Some(request_state) = request_state.clone() {
+                    let stream = InputStream::new(
+                        WrappedInputStream::replayed_incoming_http_body_stream(request_state),
+                    );
 
-                continue_http_request(
-                    *handle,
-                    stream_handle,
-                    HttpRequestCloseOwner::InputStreamClosed,
-                );
-
-                Ok(stream)
-            }
-            Self::Replayed { handle: None } => {
-                panic!("IncomingBody::stream called before replay handle was assigned")
+                    Ok(stream)
+                } else {
+                    Err(())
+                }
             }
         }
     }
@@ -620,57 +573,36 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingBody for WrappedI
         let mut this = this.into_inner::<WrappedIncomingBody>();
 
         match this {
-            Self::Proxied { ref mut body } => {
+            Self::ProxiedResponse {
+                ref mut body,
+                ref mut request_state,
+            } => {
                 let body = body.take().unwrap();
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    let handle = body.handle();
-                    if let Some(state) = open_http_requests.get(&handle) {
-                        if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    handle,
-                                )
-                            });
-                        }
-                    }
-                });
-
-                // TODO: should call continue_http_request here?
+                let request_state =
+                    Rc::into_inner(request_state.take().expect("finish called multiple times"))
+                        .expect("stream was not closed before calling finish");
 
                 let future_trailers =
                     crate::bindings::wasi::http::types::IncomingBody::finish(body);
-                FutureTrailers::new(WrappedFutureTrailers::proxied(future_trailers))
+                FutureTrailers::new(WrappedFutureTrailers::proxied_response(
+                    future_trailers,
+                    request_state,
+                ))
+            }
+            Self::ProxiedRequest { ref mut body } => {
+                let body = body.take().unwrap();
+                let future_trailers =
+                    crate::bindings::wasi::http::types::IncomingBody::finish(body);
+                FutureTrailers::new(WrappedFutureTrailers::proxied_request(future_trailers))
             }
             Self::Replayed {
-                handle: Some(handle),
+                ref mut request_state,
             } => {
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    if let Some(state) = open_http_requests.get(&handle) {
-                        if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    handle,
-                                )
-                            });
-                        }
-                    }
-                });
+                let request_state =
+                    Rc::into_inner(request_state.take().expect("finish called multiple times"))
+                        .expect("stream was not closed before calling finish");
 
-                // TODO: should call continue_http_request here?
-
-                let mut trailers = FutureTrailers::new(WrappedFutureTrailers::replayed());
-                let trailers_handle = trailers.handle();
-                trailers
-                    .get_mut::<WrappedFutureTrailers>()
-                    .assign_replayed_handle(trailers_handle);
-                trailers
-            }
-            Self::Replayed { handle: None } => {
-                panic!("IncomingBody::finish called before replay handle was assigned")
+                FutureTrailers::new(WrappedFutureTrailers::replayed(request_state))
             }
         }
     }
@@ -679,85 +611,46 @@ impl crate::bindings::exports::wasi::http::types::GuestIncomingBody for WrappedI
 impl Drop for WrappedIncomingBody {
     fn drop(&mut self) {
         observe_function_call("http::types::incoming_body", "drop");
-
-        match self {
-            Self::Proxied { body: Some(body) } => {
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    let handle = body.handle();
-                    if let Some(state) = open_http_requests.get(&handle) {
-                        if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    handle,
-                                )
-                            });
-                        }
-                    }
-                });
-            }
-            Self::Proxied { body: None } => {}
-            Self::Replayed {
-                handle: Some(handle),
-            } => {
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    if let Some(state) = open_http_requests.get(handle) {
-                        if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    *handle,
-                                )
-                            });
-                        }
-                    }
-                });
-            }
-            Self::Replayed { handle: None } => {
-                panic!("IncomingBody dropped before replay handle was assigned");
-            }
-        }
     }
 }
 
 pub enum WrappedFutureTrailers {
-    Proxied {
+    ProxiedResponse {
+        trailers: crate::bindings::wasi::http::types::FutureTrailers,
+        request_state: HttpRequestState,
+    },
+    ProxiedRequest {
         trailers: crate::bindings::wasi::http::types::FutureTrailers,
     },
     Replayed {
-        handle: Option<u32>,
+        request_state: HttpRequestState,
     },
 }
 
 impl WrappedFutureTrailers {
-    pub fn proxied(trailers: crate::bindings::wasi::http::types::FutureTrailers) -> Self {
-        WrappedFutureTrailers::Proxied { trailers }
-    }
-
-    pub fn replayed() -> Self {
-        WrappedFutureTrailers::Replayed { handle: None }
-    }
-
-    pub fn assign_replayed_handle(&mut self, replayed_handle: u32) {
-        match self {
-            Self::Replayed { handle } => {
-                *handle = Some(replayed_handle);
-            }
-            _ => panic!("assign_replayed_handle called on non-replayed WrappedFutureTrailers"),
+    pub fn proxied_response(
+        trailers: crate::bindings::wasi::http::types::FutureTrailers,
+        request_state: HttpRequestState,
+    ) -> Self {
+        WrappedFutureTrailers::ProxiedResponse {
+            trailers,
+            request_state,
         }
     }
 
-    fn handle(&self) -> u32 {
+    pub fn proxied_request(trailers: crate::bindings::wasi::http::types::FutureTrailers) -> Self {
+        WrappedFutureTrailers::ProxiedRequest { trailers }
+    }
+
+    pub fn replayed(request_state: HttpRequestState) -> Self {
+        WrappedFutureTrailers::Replayed { request_state }
+    }
+
+    fn request_state(&self) -> Option<&HttpRequestState> {
         match self {
-            WrappedFutureTrailers::Proxied { trailers } => trailers.handle(),
-            WrappedFutureTrailers::Replayed {
-                handle: Some(handle),
-            } => *handle,
-            WrappedFutureTrailers::Replayed { handle: None } => {
-                panic!("FutureTrailers handle accessed before it was assigned")
-            }
+            WrappedFutureTrailers::ProxiedResponse { request_state, .. } => Some(request_state),
+            WrappedFutureTrailers::Replayed { request_state } => Some(request_state),
+            _ => None,
         }
     }
 }
@@ -766,7 +659,11 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureTrailers for Wrappe
     fn subscribe(&self) -> Pollable {
         observe_function_call("http::types::future_trailers", "subscribe");
         match self {
-            WrappedFutureTrailers::Proxied { trailers } => {
+            WrappedFutureTrailers::ProxiedResponse { trailers, .. } => {
+                let pollable = trailers.subscribe();
+                Pollable::new(WrappedPollable::Proxy(pollable))
+            }
+            WrappedFutureTrailers::ProxiedRequest { trailers } => {
                 let pollable = trailers.subscribe();
                 Pollable::new(WrappedPollable::Proxy(pollable))
             }
@@ -777,83 +674,97 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureTrailers for Wrappe
     fn get(&self) -> Option<Result<Result<Option<Trailers>, ErrorCode>, ()>> {
         observe_function_call("http::types::future_trailers", "get");
 
-        OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
-            OPEN_FUNCTION_TABLE.with_borrow(|open_function_table| {
-                let handle = self.handle();
-                let request_state = open_http_requests.get(&handle).unwrap_or_else(|| {
-                    panic!("No matching HTTP request is associated with resource handle");
-                });
-                let begin_idx = open_function_table.get(&request_state.root_handle).unwrap_or_else(|| {
-                    panic!("No matching BeginRemoteWrite index was found for the open HTTP request");
-                });
-                let request = request_state.request.clone();
+        if let Some(request_state) = self.request_state() {
+            let request = request_state.request.clone();
 
-                let durability = Durability::<
-                    Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
-                    SerializableError,
-                >::new(
-                    "golem http::types::future_trailers",
-                    "get",
-                    DurableFunctionType::WriteRemoteBatched(Some(*begin_idx)),
-                );
+            let durability = Durability::<
+                Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
+                SerializableError,
+            >::new(
+                "golem http::types::future_trailers",
+                "get",
+                DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+            );
 
-                if durability.is_live() {
-                    match self {
-                        WrappedFutureTrailers::Proxied { trailers } => {
-                            let result = trailers.get();
-                            let (to_serialize, result) = match result {
-                                Some(Ok(Ok(None))) => (Some(Ok(Ok(None))), Some(Ok(Ok(None)))),
-                                Some(Ok(Ok(Some(trailers)))) => {
-                                    let mut serialized_trailers = HashMap::new();
+            if durability.is_live() {
+                match self {
+                    WrappedFutureTrailers::ProxiedResponse { trailers, .. }
+                    | WrappedFutureTrailers::ProxiedRequest { trailers, .. } => {
+                        let result = trailers.get();
+                        let (to_serialize, result) = match result {
+                            Some(Ok(Ok(None))) => (Some(Ok(Ok(None))), Some(Ok(Ok(None)))),
+                            Some(Ok(Ok(Some(trailers)))) => {
+                                let mut serialized_trailers = HashMap::new();
 
-                                    for (key, value) in trailers.entries() {
-                                        serialized_trailers.insert(key, value);
-                                    }
-
-                                    let trailers = Fields::new(WrappedFields::proxied(trailers));
-                                    (
-                                        Some(Ok(Ok(Some(serialized_trailers)))),
-                                        Some(Ok(Ok(Some(trailers))))
-                                    )
+                                for (key, value) in trailers.entries() {
+                                    serialized_trailers.insert(key, value);
                                 }
-                                Some(Ok(Err(error_code))) => (Some(Ok(Err((&error_code).into()))), Some(Ok(Err(error_code.into())))),
-                                Some(Err(_)) => (Some(Err(())), Some(Err(()))),
-                                None => (None, None),
-                            };
-                            durability.persist_serializable(request, Ok(to_serialize));
-                            result
-                        }
-                        WrappedFutureTrailers::Replayed { .. } => {
-                            panic!("FutureTrailers is in replay mode during live call")
-                        }
-                    }
-                } else {
-                    let serialized = durability.replay_serializable();
-                    match serialized {
-                        Ok(Some(Ok(Ok(None)))) => Some(Ok(Ok(None))),
-                        Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
-                            let fields = crate::bindings::wasi::http::types::Fields::new();
-                            for (key, value) in serialized_trailers {
-                                fields.append(&key, &value).unwrap();
-                            }
 
-                            let fields = Trailers::new(WrappedFields::proxied(fields));
-                            Some(Ok(Ok(Some(fields))))
-                        }
-                        Ok(Some(Ok(Err(error_code)))) => {
-                            let error_code: crate::bindings::wasi::http::types::ErrorCode = error_code.into();
-                            let error_code = unsafe { transmute(error_code) };
-                            Some(Ok(Err(error_code)))
-                        },
-                        Ok(Some(Err(_))) => Some(Err(())),
-                        Ok(None) => None,
-                        Err(error) => {
-                            panic!("Error replaying FutureTrailers::get: {error}");
-                        }
+                                let trailers = Fields::new(WrappedFields::proxied(trailers));
+                                (
+                                    Some(Ok(Ok(Some(serialized_trailers)))),
+                                    Some(Ok(Ok(Some(trailers)))),
+                                )
+                            }
+                            Some(Ok(Err(error_code))) => (
+                                Some(Ok(Err((&error_code).into()))),
+                                Some(Ok(Err(error_code.into()))),
+                            ),
+                            Some(Err(_)) => (Some(Err(())), Some(Err(()))),
+                            None => (None, None),
+                        };
+                        durability.persist_serializable(request, Ok(to_serialize));
+                        result
+                    }
+                    WrappedFutureTrailers::Replayed { .. } => {
+                        panic!("FutureTrailers is in replay mode during live call")
                     }
                 }
-            })
-        })
+            } else {
+                let serialized = durability.replay_serializable();
+                match serialized {
+                    Ok(Some(Ok(Ok(None)))) => Some(Ok(Ok(None))),
+                    Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
+                        let fields = crate::bindings::wasi::http::types::Fields::new();
+                        for (key, value) in serialized_trailers {
+                            fields.append(&key, &value).unwrap();
+                        }
+
+                        let fields = Trailers::new(WrappedFields::proxied(fields));
+                        Some(Ok(Ok(Some(fields))))
+                    }
+                    Ok(Some(Ok(Err(error_code)))) => {
+                        let error_code: crate::bindings::wasi::http::types::ErrorCode =
+                            error_code.into();
+                        let error_code = unsafe { transmute(error_code) };
+                        Some(Ok(Err(error_code)))
+                    }
+                    Ok(Some(Err(_))) => Some(Err(())),
+                    Ok(None) => None,
+                    Err(error) => {
+                        panic!("Error replaying FutureTrailers::get: {error}");
+                    }
+                }
+            }
+        } else {
+            match self {
+                WrappedFutureTrailers::ProxiedResponse { trailers, .. }
+                | WrappedFutureTrailers::ProxiedRequest { trailers, .. } => {
+                    let result = trailers.get();
+                    match result {
+                        Some(Ok(Ok(None))) => Some(Ok(Ok(None))),
+                        Some(Ok(Ok(Some(trailers)))) => {
+                            let trailers = Fields::new(WrappedFields::proxied(trailers));
+                            Some(Ok(Ok(Some(trailers))))
+                        }
+                        Some(Ok(Err(error_code))) => Some(Ok(Err(error_code.into()))),
+                        Some(Err(_)) => Some(Err(())),
+                        None => None,
+                    }
+                }
+                _ => panic!("Invalid FutureTrailers state"),
+            }
+        }
     }
 }
 
@@ -956,6 +867,19 @@ impl Drop for WrappedOutgoingBody {
 
 pub struct WrappedFutureIncomingResponse {
     pub response: crate::bindings::wasi::http::types::FutureIncomingResponse,
+    pub request_state: RefCell<Option<HttpRequestState>>,
+}
+
+impl WrappedFutureIncomingResponse {
+    pub fn new(
+        response: crate::bindings::wasi::http::types::FutureIncomingResponse,
+        request_state: HttpRequestState,
+    ) -> Self {
+        WrappedFutureIncomingResponse {
+            response,
+            request_state: RefCell::new(Some(request_state)),
+        }
+    }
 }
 
 impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
@@ -982,7 +906,7 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
 
-        let handle = self.response.handle();
+        let request_state = &mut *self.request_state.borrow_mut();
         let durable_execution_state = current_durable_execution_state();
         if durable_execution_state.is_live
             || matches!(
@@ -990,73 +914,64 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
                 PersistenceLevel::PersistNothing
             )
         {
-            OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                OPEN_FUNCTION_TABLE.with_borrow(|open_function_table| {
-                    let request_state = open_http_requests.get(&handle).unwrap_or_else(|| {
-                        panic!("No matching HTTP request is associated with resource handle")
-                    });
+            let begin_index = request_state.as_ref().unwrap().begin_index;
 
-                    let begin_idx = *open_function_table
-                        .get(&request_state.root_handle)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "No matching BeginRemoteWrite index was found for the open HTTP request"
-                            )
-                        });
+            let request = request_state.as_ref().unwrap().request.clone();
+            let response = self.response.get();
 
-                    let request = request_state.request.clone();
-                    let response = self.response.get();
-                    let mut incoming_response_handle = None;
-
-                    let (serializable_response, wrapped_response) = match response {
-                        None => (SerializableResponse::Pending, None),
-                        Some(Ok(Ok(incoming_response))) => {
-                            let mut result = SerializableResponseHeaders { status: incoming_response.status(), headers: HashMap::new() };
-                            let headers = incoming_response.headers();
-                            for (key, value) in headers.entries() {
-                                result.headers.insert(key, value);
-                            }
-
-                            incoming_response_handle = Some(incoming_response.handle());
-
-                            (SerializableResponse::HeadersReceived(result), Some(Ok(Ok(IncomingResponse::new(WrappedIncomingResponse::proxied(incoming_response))))))
-                        }
-                        Some(Err(_)) => (SerializableResponse::InternalError(None), Some(Err(()))),
-                        Some(Ok(Err(ref error_code))) => {
-                            let serializable_error_code: SerializableErrorCode = error_code.clone().into();
-                            let error_code: ErrorCode = error_code.clone().into();
-                            (SerializableResponse::HttpError(serializable_error_code), Some(Ok(Err(error_code))))
-                        }
+            let (serializable_response, wrapped_response) = match response {
+                None => (SerializableResponse::Pending, None),
+                Some(Ok(Ok(incoming_response))) => {
+                    let mut result = SerializableResponseHeaders {
+                        status: incoming_response.status(),
+                        headers: HashMap::new(),
                     };
-
-                    if !matches!(durable_execution_state.persistence_level, PersistenceLevel::PersistNothing) {
-                        let serialized_request = serialize(&request).unwrap_or_else(|err| {
-                            panic!("failed to serialize input ({request:?}) for persisting durable function invocation: {err}")
-                        }).to_vec();
-                        let serialized_response = serialize(&serializable_response).unwrap_or_else(|err| {
-                            panic!("failed to serialize result ({serializable_response:?}) for persisting durable function invocation: {err}")
-                        }).to_vec();
-
-                        persist_durable_function_invocation(
-                            "http::types::future_incoming_response::get",
-                            &serialized_request,
-                            &serialized_response,
-                            DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                        );
+                    let headers = incoming_response.headers();
+                    for (key, value) in headers.entries() {
+                        result.headers.insert(key, value);
                     }
 
-                    if let Some(incoming_response_handle) = incoming_response_handle {
-                            continue_http_request_borrowed(
-                                open_http_requests,
-                                handle,
-                                incoming_response_handle,
-                                HttpRequestCloseOwner::IncomingResponseDrop,
-                            );
-                    }
+                    (
+                        SerializableResponse::HeadersReceived(result),
+                        Some(Ok(Ok(IncomingResponse::new(
+                            WrappedIncomingResponse::proxied(
+                                incoming_response,
+                                request_state.take().unwrap(),
+                            ),
+                        )))),
+                    )
+                }
+                Some(Err(_)) => (SerializableResponse::InternalError(None), Some(Err(()))),
+                Some(Ok(Err(ref error_code))) => {
+                    let serializable_error_code: SerializableErrorCode = error_code.clone().into();
+                    let error_code: ErrorCode = error_code.clone().into();
+                    (
+                        SerializableResponse::HttpError(serializable_error_code),
+                        Some(Ok(Err(error_code))),
+                    )
+                }
+            };
 
-                    wrapped_response
-                })
-            })
+            if !matches!(
+                durable_execution_state.persistence_level,
+                PersistenceLevel::PersistNothing
+            ) {
+                let serialized_request = serialize(&request).unwrap_or_else(|err| {
+                        panic!("failed to serialize input ({request:?}) for persisting durable function invocation: {err}")
+                    }).to_vec();
+                let serialized_response = serialize(&serializable_response).unwrap_or_else(|err| {
+                        panic!("failed to serialize result ({serializable_response:?}) for persisting durable function invocation: {err}")
+                    }).to_vec();
+
+                persist_durable_function_invocation(
+                    "http::types::future_incoming_response::get",
+                    &serialized_request,
+                    &serialized_response,
+                    DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+                );
+            }
+
+            wrapped_response
         } else {
             let oplog_entry = read_persisted_durable_function_invocation();
 
@@ -1067,20 +982,11 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
             match serialized_response {
                 SerializableResponse::Pending => None,
                 SerializableResponse::HeadersReceived(serializable_response_headers) => {
-                    let mut incoming_response = IncomingResponse::new(
-                        WrappedIncomingResponse::replayed(serializable_response_headers),
-                    );
-
-                    let incoming_response_handle = incoming_response.handle();
-                    incoming_response
-                        .get_mut::<WrappedIncomingResponse>()
-                        .assign_replayed_handle(incoming_response_handle);
-
-                    continue_http_request(
-                        handle,
-                        incoming_response_handle,
-                        HttpRequestCloseOwner::IncomingResponseDrop,
-                    );
+                    let incoming_response =
+                        IncomingResponse::new(WrappedIncomingResponse::replayed(
+                            serializable_response_headers,
+                            request_state.take().unwrap(),
+                        ));
 
                     Some(Ok(Ok(incoming_response)))
                 }
@@ -1097,17 +1003,6 @@ impl crate::bindings::exports::wasi::http::types::GuestFutureIncomingResponse
 impl Drop for WrappedFutureIncomingResponse {
     fn drop(&mut self) {
         observe_function_call("http::types::future_incoming_response", "drop");
-
-        OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-            let handle = self.response.handle();
-            if let Some(state) = open_http_requests.get(&handle) {
-                if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
-                    OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                        end_http_request_borrowed(open_http_requests, open_function_table, handle)
-                    });
-                }
-            }
-        });
     }
 }
 

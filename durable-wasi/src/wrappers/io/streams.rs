@@ -17,19 +17,15 @@ use crate::bindings::exports::wasi::io::poll::GuestPollable;
 use crate::bindings::exports::wasi::io::streams::{
     GuestInputStream, InputStreamBorrow, Pollable, StreamError,
 };
-use crate::bindings::golem::durability::durability::{
-    observe_function_call, DurableFunctionType, OplogIndex,
-};
+use crate::bindings::golem::durability::durability::{observe_function_call, DurableFunctionType};
 use crate::durability::Durability;
-use crate::wrappers::http::serialized::SerializableHttpRequest;
-use crate::wrappers::http::{
-    end_http_request_borrowed, HttpRequestCloseOwner, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
-};
+use crate::wrappers::http::HttpRequestState;
 use crate::wrappers::io::error::WrappedError;
 use crate::wrappers::io::poll::WrappedPollable;
 use crate::wrappers::SerializableStreamError;
 use std::cell::RefCell;
 use std::cmp::min;
+use std::rc::Rc;
 
 impl From<crate::bindings::wasi::io::streams::StreamError> for StreamError {
     fn from(value: crate::bindings::wasi::io::streams::StreamError) -> Self {
@@ -43,9 +39,10 @@ pub enum WrappedInputStream {
     },
     ProxiedIncomingHttpBodyStream {
         input_stream: crate::bindings::wasi::io::streams::InputStream,
+        request_state: RefCell<Option<Rc<HttpRequestState>>>,
     },
     ReplayedIncomingHttpBodyStream {
-        handle: Option<u32>,
+        request_state: RefCell<Option<Rc<HttpRequestState>>>,
     },
     Buffered {
         data: RefCell<Vec<u8>>,
@@ -59,25 +56,23 @@ impl WrappedInputStream {
 
     pub fn incoming_http_body_stream(
         input_stream: crate::bindings::wasi::io::streams::InputStream,
+        request_state: Rc<HttpRequestState>,
     ) -> Self {
-        WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream }
+        WrappedInputStream::ProxiedIncomingHttpBodyStream {
+            input_stream,
+            request_state: RefCell::new(Some(request_state)),
+        }
     }
 
-    pub fn replayed_incoming_http_body_stream() -> Self {
-        WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None }
+    pub fn replayed_incoming_http_body_stream(request_state: Rc<HttpRequestState>) -> Self {
+        WrappedInputStream::ReplayedIncomingHttpBodyStream {
+            request_state: RefCell::new(Some(request_state)),
+        }
     }
 
     pub fn buffered(data: Vec<u8>) -> Self {
         WrappedInputStream::Buffered {
             data: RefCell::new(data),
-        }
-    }
-
-    pub fn assign_replay_stream_handle(&mut self, handle: u32) {
-        if let WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: ref mut h } = self {
-            *h = Some(handle);
-        } else {
-            panic!("Unexpected call to assign_replay_stream_handle");
         }
     }
 }
@@ -89,49 +84,53 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
                 observe_function_call("io::streams::input_stream", "read");
                 Ok(input_stream.read(len)?)
             }
-            WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                let begin_idx = get_http_request_begin_idx(input_stream.handle());
-                let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "read",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ProxiedIncomingHttpBodyStream {
+                input_stream,
+                request_state,
+            } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let begin_idx = request_state.begin_index;
+                    let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "read",
+                        DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                    );
 
-                assert!(durability.is_live());
+                    assert!(durability.is_live());
 
-                let request = get_http_stream_request(input_stream.handle());
-                let result = input_stream.read(len).map_err(|e| e.into());
-                let result = durability.persist(request, result);
+                    let request = request_state.request.clone();
+                    let result = input_stream.read(len).map_err(|e| e.into());
+                    durability.persist(request, result)
+                } else {
+                    panic!("read called on closed incoming HTTP body stream")
+                };
 
-                end_http_request_if_closed(input_stream.handle(), &result);
-
+                end_http_request_if_closed(request_state, &result);
                 result
             }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream {
-                handle: Some(handle),
-            } => {
-                let begin_idx = get_http_request_begin_idx(*handle);
-                let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "read",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ReplayedIncomingHttpBodyStream { request_state } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "read",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                if durability.is_live() {
-                    let error = Error::new(WrappedError::message(
-                        "Body stream was interrupted due to a restart",
-                    ));
-                    Err(StreamError::LastOperationFailed(error))
+                    if durability.is_live() {
+                        let error = Error::new(WrappedError::message(
+                            "Body stream was interrupted due to a restart",
+                        ));
+                        Err(StreamError::LastOperationFailed(error))
+                    } else {
+                        durability.replay()
+                    }
                 } else {
-                    let result = durability.replay();
-
-                    end_http_request_if_closed(*handle, &result);
-
-                    result
-                }
-            }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
-                panic!("No handle associated with replayed incoming HTTP body stream")
+                    panic!("read called on closed incoming HTTP body stream")
+                };
+                end_http_request_if_closed(request_state, &result);
+                result
             }
             WrappedInputStream::Buffered { data } => {
                 let mut data = data.borrow_mut();
@@ -148,49 +147,53 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
                 observe_function_call("io::streams::input_stream", "blocking_read");
                 Ok(input_stream.blocking_read(len)?)
             }
-            WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                let begin_idx = get_http_request_begin_idx(input_stream.handle());
-                let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "blocking_read",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ProxiedIncomingHttpBodyStream {
+                input_stream,
+                request_state,
+            } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "blocking_read",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                assert!(durability.is_live());
+                    assert!(durability.is_live());
 
-                let request = get_http_stream_request(input_stream.handle());
-                let result = input_stream.blocking_read(len).map_err(|e| e.into());
-                let result = durability.persist(request, result);
+                    let request = request_state.request.clone();
+                    let result = input_stream.blocking_read(len).map_err(|e| e.into());
+                    durability.persist(request, result)
+                } else {
+                    panic!("blocking_read called on closed incoming HTTP body stream")
+                };
 
-                end_http_request_if_closed(input_stream.handle(), &result);
-
+                end_http_request_if_closed(request_state, &result);
                 result
             }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream {
-                handle: Some(handle),
-            } => {
-                let begin_idx = get_http_request_begin_idx(*handle);
-                let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "blocking_read",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ReplayedIncomingHttpBodyStream { request_state } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "blocking_read",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                if durability.is_live() {
-                    let error = Error::new(WrappedError::message(
-                        "Body stream was interrupted due to a restart",
-                    ));
-                    Err(StreamError::LastOperationFailed(error))
+                    if durability.is_live() {
+                        let error = Error::new(WrappedError::message(
+                            "Body stream was interrupted due to a restart",
+                        ));
+                        Err(StreamError::LastOperationFailed(error))
+                    } else {
+                        durability.replay()
+                    }
                 } else {
-                    let result = durability.replay();
+                    panic!("blocking_read called on closed incoming HTTP body stream")
+                };
 
-                    end_http_request_if_closed(*handle, &result);
-
-                    result
-                }
-            }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
-                panic!("No handle associated with replayed incoming HTTP body stream")
+                end_http_request_if_closed(request_state, &result);
+                result
             }
             WrappedInputStream::Buffered { data } => {
                 let mut data = data.borrow_mut();
@@ -207,49 +210,53 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
                 observe_function_call("io::streams::input_stream", "skip");
                 Ok(input_stream.skip(len)?)
             }
-            WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                let begin_idx = get_http_request_begin_idx(input_stream.handle());
-                let durability = Durability::<u64, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "skip",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ProxiedIncomingHttpBodyStream {
+                input_stream,
+                request_state,
+            } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<u64, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "skip",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                assert!(durability.is_live());
+                    assert!(durability.is_live());
 
-                let request = get_http_stream_request(input_stream.handle());
-                let result = input_stream.skip(len).map_err(|e| e.into());
-                let result = durability.persist(request, result);
+                    let request = request_state.request.clone();
+                    let result = input_stream.skip(len).map_err(|e| e.into());
+                    durability.persist(request, result)
+                } else {
+                    panic!("skip called on closed incoming HTTP body stream")
+                };
 
-                end_http_request_if_closed(input_stream.handle(), &result);
-
+                end_http_request_if_closed(request_state, &result);
                 result
             }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream {
-                handle: Some(handle),
-            } => {
-                let begin_idx = get_http_request_begin_idx(*handle);
-                let durability = Durability::<u64, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "skip",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ReplayedIncomingHttpBodyStream { request_state } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<u64, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "skip",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                if durability.is_live() {
-                    let error = Error::new(WrappedError::message(
-                        "Body stream was interrupted due to a restart",
-                    ));
-                    Err(StreamError::LastOperationFailed(error))
+                    if durability.is_live() {
+                        let error = Error::new(WrappedError::message(
+                            "Body stream was interrupted due to a restart",
+                        ));
+                        Err(StreamError::LastOperationFailed(error))
+                    } else {
+                        durability.replay()
+                    }
                 } else {
-                    let result = durability.replay();
+                    panic!("skip called on closed incoming HTTP body stream")
+                };
 
-                    end_http_request_if_closed(*handle, &result);
-
-                    result
-                }
-            }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
-                panic!("No handle associated with replayed incoming HTTP body stream")
+                end_http_request_if_closed(request_state, &result);
+                result
             }
             WrappedInputStream::Buffered { data } => {
                 let mut data = data.borrow_mut();
@@ -266,49 +273,54 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
                 observe_function_call("io::streams::input_stream", "blocking_skip");
                 Ok(input_stream.blocking_skip(len)?)
             }
-            WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                let begin_idx = get_http_request_begin_idx(input_stream.handle());
-                let durability = Durability::<u64, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "blocking_skip",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ProxiedIncomingHttpBodyStream {
+                input_stream,
+                request_state,
+            } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<u64, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "blocking_skip",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                assert!(durability.is_live());
+                    assert!(durability.is_live());
 
-                let request = get_http_stream_request(input_stream.handle());
-                let result = input_stream.blocking_skip(len).map_err(|e| e.into());
-                let result = durability.persist(request, result);
+                    let request = request_state.request.clone();
+                    let result = input_stream.blocking_skip(len).map_err(|e| e.into());
+                    durability.persist(request, result)
+                } else {
+                    panic!("blocking_skip called on closed incoming HTTP body stream")
+                };
 
-                end_http_request_if_closed(input_stream.handle(), &result);
+                end_http_request_if_closed(request_state, &result);
 
                 result
             }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream {
-                handle: Some(handle),
-            } => {
-                let begin_idx = get_http_request_begin_idx(*handle);
-                let durability = Durability::<u64, SerializableStreamError>::new(
-                    "http::types::incoming_body_stream",
-                    "blocking_skip",
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                );
+            WrappedInputStream::ReplayedIncomingHttpBodyStream { request_state } => {
+                let request_state = &mut *request_state.borrow_mut();
+                let result = if let Some(request_state) = request_state {
+                    let durability = Durability::<u64, SerializableStreamError>::new(
+                        "http::types::incoming_body_stream",
+                        "blocking_skip",
+                        DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
+                    );
 
-                if durability.is_live() {
-                    let error = Error::new(WrappedError::message(
-                        "Body stream was interrupted due to a restart",
-                    ));
-                    Err(StreamError::LastOperationFailed(error))
+                    if durability.is_live() {
+                        let error = Error::new(WrappedError::message(
+                            "Body stream was interrupted due to a restart",
+                        ));
+                        Err(StreamError::LastOperationFailed(error))
+                    } else {
+                        durability.replay()
+                    }
                 } else {
-                    let result = durability.replay();
+                    panic!("blocking_skip called on closed incoming HTTP body stream")
+                };
 
-                    end_http_request_if_closed(*handle, &result);
-
-                    result
-                }
-            }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {
-                panic!("No handle associated with replayed incoming HTTP body stream")
+                end_http_request_if_closed(request_state, &result);
+                result
             }
             WrappedInputStream::Buffered { data } => {
                 let mut data = data.borrow_mut();
@@ -323,7 +335,7 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
         observe_function_call("io::streams::input_stream", "subscribe");
         match self {
             WrappedInputStream::Proxied { input_stream }
-            | WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
+            | WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream, .. } => {
                 let pollable = input_stream.subscribe();
                 Pollable::new(WrappedPollable::Proxy(pollable))
             }
@@ -338,42 +350,6 @@ impl crate::bindings::exports::wasi::io::streams::GuestInputStream for WrappedIn
 impl Drop for WrappedInputStream {
     fn drop(&mut self) {
         observe_function_call("io::streams::input_stream", "drop");
-
-        match self {
-            WrappedInputStream::Proxied { .. } => {}
-            WrappedInputStream::ProxiedIncomingHttpBodyStream { input_stream } => {
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    if let Some(state) = open_http_requests.get(&input_stream.handle()) {
-                        if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                            OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                                end_http_request_borrowed(
-                                    open_http_requests,
-                                    open_function_table,
-                                    input_stream.handle(),
-                                )
-                            })
-                        }
-                    }
-                })
-            }
-            WrappedInputStream::ReplayedIncomingHttpBodyStream {
-                handle: Some(handle),
-            } => OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                if let Some(state) = open_http_requests.get(handle) {
-                    if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                        OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                            end_http_request_borrowed(
-                                open_http_requests,
-                                open_function_table,
-                                *handle,
-                            )
-                        })
-                    }
-                }
-            }),
-            WrappedInputStream::ReplayedIncomingHttpBodyStream { handle: None } => {}
-            WrappedInputStream::Buffered { .. } => {}
-        }
     }
 }
 
@@ -458,39 +434,11 @@ impl crate::bindings::exports::wasi::io::streams::Guest for crate::Component {
     type OutputStream = WrappedOutputStream;
 }
 
-fn end_http_request_if_closed<T>(handle: u32, result: &Result<T, StreamError>) {
+fn end_http_request_if_closed<T>(
+    request_state: &mut Option<Rc<HttpRequestState>>,
+    result: &Result<T, StreamError>,
+) {
     if matches!(result, Err(StreamError::Closed)) {
-        OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-            if let Some(state) = open_http_requests.get(&handle) {
-                if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                    OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                        end_http_request_borrowed(open_http_requests, open_function_table, handle)
-                    })
-                }
-            }
-        })
+        request_state.take();
     }
-}
-
-fn get_http_request_begin_idx(handle: u32) -> OplogIndex {
-    OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
-        let request_state = open_http_requests
-            .get(&handle)
-            .expect("No matching HTTP request is associated with resource handle");
-        OPEN_FUNCTION_TABLE.with_borrow(|open_function_table| {
-            let begin_idx = open_function_table
-                .get(&request_state.root_handle)
-                .expect("No matching BeginRemoteWrite index was found for the open HTTP request");
-            *begin_idx
-        })
-    })
-}
-
-fn get_http_stream_request(handle: u32) -> SerializableHttpRequest {
-    OPEN_HTTP_REQUESTS.with_borrow(|open_http_requests| {
-        let request_state = open_http_requests
-            .get(&handle)
-            .expect("No matching HTTP request is associated with resource handle");
-        request_state.request.clone()
-    })
 }

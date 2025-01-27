@@ -416,7 +416,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn emit_log_event(&self, event: WorkerEvent) {
+    async fn emit_log_event(&mut self, event: WorkerEvent) {
         if let Some(entry) = event.as_oplog_entry() {
             if let OplogEntry::Log {
                 level,
@@ -426,7 +426,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } = &entry
             {
                 if self.state.config.debug_worker_output {
-                    info!(level=?level, context=%context, "Worker output: {}", message);
+                    self.state.debug_output.push_str(message);
+                    let lines = self.state.debug_output.split("\n").collect::<Vec<_>>();
+                    if lines.len() > 1 {
+                        for idx in 0..=lines.len() - 1 {
+                            info!(level=?level, context=%context, "Worker output: {}", lines[idx]);
+                        }
+                        self.state.debug_output = lines[lines.len() - 1].to_string();
+                    }
                 }
 
                 // Stdout and stderr writes are persistent and overwritten by sending the data to the event
@@ -1793,6 +1800,8 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
+
+    debug_output: String,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {
@@ -1853,6 +1862,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             component_metadata,
             total_linear_memory_size,
             replay_state,
+            debug_output: String::new(),
         }
     }
 

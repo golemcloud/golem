@@ -24,9 +24,7 @@ use crate::wrappers::http::serialized::SerializableHttpRequest;
 use crate::wrappers::http::types::{
     WrappedFields, WrappedFutureIncomingResponse, WrappedOutgoingRequest, WrappedRequestOptions,
 };
-use crate::wrappers::http::{
-    HttpRequestCloseOwner, HttpRequestState, OPEN_FUNCTION_TABLE, OPEN_HTTP_REQUESTS,
-};
+use crate::wrappers::http::HttpRequestState;
 use std::collections::HashMap;
 
 impl crate::bindings::exports::wasi::http::outgoing_handler::Guest for crate::Component {
@@ -57,39 +55,27 @@ impl crate::bindings::exports::wasi::http::outgoing_handler::Guest for crate::Co
             options.map(|options| options.into_inner::<WrappedRequestOptions>().take_inner());
         let result = handle(request, options);
 
-        match &result {
-            Ok(future_incoming_response) => {
-                // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
-                // For that we need to store begin_index and associate it with the response handle.
-                let request = SerializableHttpRequest {
-                    uri,
-                    method,
-                    headers,
-                };
-
-                let handle = future_incoming_response.handle();
-                OPEN_FUNCTION_TABLE.with_borrow_mut(|open_function_table| {
-                    open_function_table.insert(handle, begin_index);
-                });
-                OPEN_HTTP_REQUESTS.with_borrow_mut(|open_http_requests| {
-                    open_http_requests.insert(
-                        handle,
-                        HttpRequestState {
-                            close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
-                            root_handle: handle,
-                            request,
-                        },
-                    );
-                });
-            }
-            Err(_) => {
-                end_durable_function(DurableFunctionType::WriteRemoteBatched(None), begin_index, false);
-            }
-        };
+        if result.is_err() {
+            end_durable_function(
+                DurableFunctionType::WriteRemoteBatched(None),
+                begin_index,
+                false,
+            );
+        }
 
         let response = result?;
-        Ok(FutureIncomingResponse::new(WrappedFutureIncomingResponse {
-            response,
-        }))
+        Ok(FutureIncomingResponse::new(
+            WrappedFutureIncomingResponse::new(
+                response,
+                HttpRequestState {
+                    request: SerializableHttpRequest {
+                        uri,
+                        method,
+                        headers,
+                    },
+                    begin_index,
+                },
+            ),
+        ))
     }
 }

@@ -125,7 +125,7 @@ impl Guest for Component {
         }
         mark_end_operation(begin);
 
-        let incoming_response = get_incoming_response(&future_response);
+        let incoming_response = get_incoming_response(&future_response); // <- this panics because the root handle is no longer in the map
         let body = read_body(&incoming_response);
 
         println!(
