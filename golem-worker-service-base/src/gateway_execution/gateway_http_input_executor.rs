@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, ErrorOrRedirect, HttpRequestDetails, ResolvedBinding, ResolvedHttpHandlerBinding, ResolvedWorkerBinding, StaticBinding
+    resolve_gateway_binding, ErrorOrRedirect, GatewayBindingCompiled, HttpRequestDetails, ResolvedBinding, ResolvedHttpHandlerBinding, ResolvedWorkerBinding, StaticBinding
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -354,33 +354,108 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
         };
 
-        match resolve_gateway_binding(
-            &self.gateway_session_store,
-            &self.identity_provider,
-            possible_api_definitions,
-            request,
-        )
-            .await
-        {
-            Ok(resolved_gateway_binding) => {
-                let response: poem::Response = self
-                    .execute(&request, resolved_gateway_binding.resolved_binding)
+        let resolved_gateway_binding = if let Some(resolved_gateway_binding) = resolve_gateway_binding(possible_api_definitions, &request).await {
+            resolved_gateway_binding
+        } else {
+            return poem::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from_string("Route not found".to_string()))
+        };
+
+        match resolved_gateway_binding.route_entry.binding {
+            GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+                cors_preflight
+                    .clone()
+                    .to_response(http_request_details, &self.gateway_session_store)
+                    .await
+            }
+
+            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
+                let result = self.handle_http_auth_call_binding(
+                    &auth_call_back.security_scheme_with_metadata,
+                    http_request_details,
+                )
+                .await;
+
+                result.to_response(http_request_details, &self.gateway_session_store).await
+            }
+
+            GatewayBindingCompiled::Worker(resolved_worker_binding) => {
+                let result = self
+                    .handle_worker_binding(
+                        http_request_details,
+                        resolved_worker_binding,
+                    )
                     .await;
 
-                response
+                let mut response = result.to_response(http_request_details, &self.gateway_session_store).await;
+
+                if let Some(middlewares) = middlewares {
+                    let result = middlewares.process_middleware_out(&mut response).await;
+                    match result {
+                        Ok(_) => response,
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                } else {
+                    response
+                }
             }
 
-            Err(ErrorOrRedirect::Error(error)) => {
-                error!(
-                    "Failed to resolve the API definition; error: {}",
-                    error.to_safe_string()
-                );
+            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+                let result = self.handle_http_handler_binding(http_request_details, http_handler_binding).await;
+                let mut response = result.to_response(http_request_details, &self.gateway_session_store).await;
 
-                error.to_http_response()
+                if let Some(middlewares) = middlewares {
+                    let result = middlewares.process_middleware_out(&mut response).await;
+                    match result {
+                        Ok(_) => response,
+                        Err(err) => {
+                            err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                } else {
+                    response
+                }
             }
 
-            Err(ErrorOrRedirect::Redirect(response)) => response,
+            GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
+                let result = self.handle_file_server_binding(
+                    http_request_details,
+                    resolved_file_server_binding,
+                )
+                .await;
+
+                result.to_response(http_request_details, &self.gateway_session_store).await
+            }
         }
+
+        // match resolved_gateway_binding.
+
+    //     match resolve_gateway_binding(possible_api_definitions, request)
+    //         .await
+    //     {
+    //         Ok(resolved_gateway_binding) => {
+    //             let response: poem::Response = self
+    //                 .execute(&request, resolved_gateway_binding.resolved_binding)
+    //                 .await;
+
+    //             response
+    //         }
+
+    //         Err(ErrorOrRedirect::Error(error)) => {
+    //             error!(
+    //                 "Failed to resolve the API definition; error: {}",
+    //                 error.to_safe_string()
+    //             );
+
+    //             error.to_http_response()
+    //         }
+
+    //         Err(ErrorOrRedirect::Redirect(response)) => response,
+    //     }
+    // }
     }
 }
 
