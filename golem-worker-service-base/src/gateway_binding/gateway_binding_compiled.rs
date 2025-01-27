@@ -20,7 +20,6 @@ use crate::gateway_binding::{
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as ProtoGatewayBindingType;
 use golem_common::model::GatewayBindingType;
 use rib::RibOutputTypeInfo;
-use std::ops::Deref;
 
 use super::http_handler_binding::HttpHandlerBindingCompiled;
 use super::HttpHandlerBinding;
@@ -128,7 +127,9 @@ impl TryFrom<GatewayBindingCompiled>
                         worker_functions_in_response: None,
                         binding_type: Some(binding_type as i32),
                         static_binding: Some(
-                            golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(static_binding)?,
+                            golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
+                                static_binding,
+                            )?,
                         ),
                         response_rib_output: None,
                     },

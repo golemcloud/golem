@@ -12,36 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
-use crate::gateway_binding::{
-    GatewayBindingCompiled, HttpHandlerBindingCompiled, StaticBinding, WorkerBindingCompiled
-};
-use crate::gateway_binding::{ResponseMappingCompiled};
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-use crate::gateway_request::http_request::router::{PathParamExtractor, RouteEntry};
-use crate::gateway_request::http_request::{router};
-use crate::gateway_security::{IdentityProvider, OpenIdClient};
-use async_trait::async_trait;
-use golem_common::model::IdempotencyKey;
-use golem_common::SafeDisplay;
-use golem_service_base::model::VersionedComponentId;
-use http::StatusCode;
-use openidconnect::{CsrfToken, Nonce};
-use poem::Body;
-use rib::{RibInput, RibInputTypeInfo};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::sync::Arc;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use crate::gateway_request::http_request::router;
+use crate::gateway_request::http_request::router::RouteEntry;
 
 pub struct ResolvedRouteEntry<Namespace> {
     pub path_segments: Vec<String>,
-    pub route_entry: RouteEntry<Namespace>
+    pub route_entry: RouteEntry<Namespace>,
 }
 
 pub async fn resolve_gateway_binding<Namespace: Clone>(
@@ -57,11 +35,10 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
 
     let path_segments: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
 
-    let route_entry = router
-        .check_path(&request.method(), &path_segments)?;
+    let route_entry = router.check_path(request.method(), &path_segments)?;
 
     Some(ResolvedRouteEntry {
         path_segments: path_segments.into_iter().map(|s| s.to_string()).collect(),
-        route_entry: route_entry.clone()
+        route_entry: route_entry.clone(),
     })
 }

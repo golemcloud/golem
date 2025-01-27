@@ -33,7 +33,6 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 use std::result::Result;
 use std::time::SystemTime;
 

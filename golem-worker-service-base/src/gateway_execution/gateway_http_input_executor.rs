@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
+use super::file_server_binding_handler::FileServerBindingSuccess;
+use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
+use super::request::{
+    authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
+};
+use super::to_response::GatewayHttpResult;
+use super::WorkerDetail;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
+    IdempotencyKeyCompiled, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled,
+    WorkerNameCompiled,
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -23,35 +31,24 @@ use crate::gateway_execution::auth_call_back_binding_handler::{
 };
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingError;
 use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-use crate::gateway_request::http_request::router::PathParamExtractor;
-use crate::gateway_request::http_request::{ErrorResponse};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
-use bytes::Bytes;
-use golem_service_base::model::VersionedComponentId;
 use golem_common::model::IdempotencyKey;
-use golem_common::SafeDisplay;
+use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
-use serde_json::Value;
-use http::{request, StatusCode};
+use http::StatusCode;
 use poem::Body;
-use poem_openapi::error::AuthorizationError;
 use rib::{RibInput, RibInputTypeInfo, RibResult};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
-use super::file_server_binding_handler::{FileServerBindingResult, FileServerBindingSuccess};
-use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
-use super::request::{authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult};
-use super::to_response::GatewayHttpResult;
-use super::WorkerDetail;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -103,13 +100,15 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             rib_input.insert("request".to_string(), request_value);
         }
 
-        let worker_detail = self.get_worker_detail(
-            request,
-            &rib_input,
-            &binding.worker_name_compiled,
-            &binding.idempotency_key_compiled,
-            &binding.component_id
-        ).await;
+        let worker_detail = self
+            .get_worker_detail(
+                request,
+                &rib_input,
+                &binding.worker_name_compiled,
+                &binding.idempotency_key_compiled,
+                &binding.component_id,
+            )
+            .await;
 
         // phase 2. we have both the request and the worker details available
         {
@@ -117,15 +116,14 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             rib_input.insert("worker".to_string(), worker_value);
         }
 
-        self
-            .get_response_script_result(
-                namespace,
-                &binding.response_compiled,
-                &rib_input,
-                &worker_detail
-            )
-            .await
-            .map_err(GatewayHttpError::EvaluationError)
+        self.get_response_script_result(
+            namespace,
+            &binding.response_compiled,
+            &rib_input,
+            &worker_detail,
+        )
+        .await
+        .map_err(GatewayHttpError::EvaluationError)
     }
 
     async fn handle_http_handler_binding(
@@ -141,23 +139,21 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             rib_input.insert("request".to_string(), request_value);
         }
 
-        let worker_detail = self.get_worker_detail(
-            request,
-            &rib_input,
-            &binding.worker_name_compiled,
-            &binding.idempotency_key_compiled,
-            &binding.component_id
-        ).await;
+        let worker_detail = self
+            .get_worker_detail(
+                request,
+                &rib_input,
+                &binding.worker_name_compiled,
+                &binding.idempotency_key_compiled,
+                &binding.component_id,
+            )
+            .await;
 
         let incoming_http_request = request.as_wasi_http_input().await.unwrap();
 
         let result = self
             .http_handler_binding_handler
-            .handle_http_handler_binding(
-                namespace,
-                &worker_detail,
-                incoming_http_request,
-            )
+            .handle_http_handler_binding(namespace, &worker_detail, incoming_http_request)
             .await;
 
         match result {
@@ -182,13 +178,15 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             rib_input.insert("request".to_string(), request_value);
         }
 
-        let worker_detail = self.get_worker_detail(
-            request,
-            &rib_input,
-            &binding.worker_name_compiled,
-            &binding.idempotency_key_compiled,
-            &binding.component_id
-        ).await;
+        let worker_detail = self
+            .get_worker_detail(
+                request,
+                &rib_input,
+                &binding.worker_name_compiled,
+                &binding.idempotency_key_compiled,
+                &binding.component_id,
+            )
+            .await;
 
         // phase 2. we have both the request and the worker details available
         {
@@ -201,17 +199,13 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 namespace,
                 &binding.response_compiled,
                 &rib_input,
-                &worker_detail
+                &worker_detail,
             )
             .await
             .map_err(GatewayHttpError::EvaluationError)?;
 
         self.file_server_binding_handler
-            .handle_file_server_binding_result(
-                &namespace,
-                &worker_detail,
-                response_script_result,
-            )
+            .handle_file_server_binding_result(namespace, &worker_detail, response_script_result)
             .await
             .map_err(GatewayHttpError::FileServerBindingError)
     }
@@ -221,7 +215,8 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         request: &RichRequest,
     ) -> GatewayHttpResult<AuthCallBackResult> {
-        let url = request.url()
+        let url = request
+            .url()
             .map_err(|e| GatewayHttpError::BadRequest(format!("Failed getting url: {e}")))?;
 
         let authorisation_result = self
@@ -242,35 +237,33 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         script: &WorkerNameCompiled,
         request_value: &serde_json::Map<String, Value>,
     ) -> String {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input_type_info).await.unwrap();
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input_type_info)
+            .await
+            .unwrap();
 
-        rib::interpret_pure(
-            &script.compiled_worker_name,
-            &rib_input,
-        )
-        .await
-        .unwrap()
-        .get_literal()
-        .unwrap()
-        .as_string()
+        rib::interpret_pure(&script.compiled_worker_name, &rib_input)
+            .await
+            .unwrap()
+            .get_literal()
+            .unwrap()
+            .as_string()
     }
 
     async fn evaluate_idempotency_key_rib_script(
         &self,
         script: &IdempotencyKeyCompiled,
-        request_value: &serde_json::Map<String, Value>
+        request_value: &serde_json::Map<String, Value>,
     ) -> IdempotencyKey {
-        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input).await.unwrap();
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
+            .await
+            .unwrap();
 
-        let value = rib::interpret_pure(
-            &script.compiled_idempotency_key,
-            &rib_input,
-        )
-        .await
-        .unwrap()
-        .get_literal()
-        .unwrap()
-        .as_string();
+        let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
+            .await
+            .unwrap()
+            .get_literal()
+            .unwrap()
+            .as_string();
 
         IdempotencyKey::new(value)
     }
@@ -281,10 +274,12 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         request_value: &serde_json::Map<String, Value>,
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
-        component_id: &VersionedComponentId
+        component_id: &VersionedComponentId,
     ) -> WorkerDetail {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
-            let result = self.evaluate_worker_name_rib_script(worker_name_compiled, request_value).await;
+            let result = self
+                .evaluate_worker_name_rib_script(worker_name_compiled, request_value)
+                .await;
             Some(result)
         } else {
             None
@@ -294,10 +289,13 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         // if that is not available we fall back to our custom header.
         // If neither are available, the worker-executor will later generate an idempotency key.
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
-            let result = self.evaluate_idempotency_key_rib_script(idempotency_key_compiled, request_value).await;
+            let result = self
+                .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request_value)
+                .await;
             Some(result)
         } else {
-            request.underlying
+            request
+                .underlying
                 .headers()
                 .get("idempotency-key")
                 .and_then(|h| h.to_str().ok())
@@ -307,7 +305,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         WorkerDetail {
             component_id: component_id.clone(),
             worker_name,
-            idempotency_key
+            idempotency_key,
         }
     }
 
@@ -316,16 +314,16 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         namespace: &Namespace,
         compiled_response_mapping: &ResponseMappingCompiled,
         request_value: &serde_json::Map<String, Value>,
-        worker_detail: &WorkerDetail
+        worker_detail: &WorkerDetail,
     ) -> Result<RibResult, EvaluationError> {
-        let rib_input = resolve_rib_input(&request_value, &compiled_response_mapping.rib_input).await.unwrap();
+        let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input)
+            .await
+            .unwrap();
 
         self.evaluator
             .evaluate(
                 worker_detail.worker_name.as_deref(),
-                &worker_detail
-                    .component_id
-                    .component_id,
+                &worker_detail.component_id.component_id,
                 &worker_detail.idempotency_key,
                 &compiled_response_mapping.response_mapping_compiled,
                 &rib_input,
@@ -341,36 +339,47 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     ) -> Result<RichRequest, poem::Response> {
         if let Some(middlewares) = middlewares {
             let input_middleware_result = middlewares
-                .process_middleware_in(&request, &self.gateway_session_store, &self.identity_provider)
+                .process_middleware_in(
+                    &request,
+                    &self.gateway_session_store,
+                    &self.identity_provider,
+                )
                 .await;
 
             let input_middleware_result = match input_middleware_result {
-                Ok(MiddlewareSuccess::PassThrough { session_id: session_id_opt }) => {
+                Ok(MiddlewareSuccess::PassThrough {
+                    session_id: session_id_opt,
+                }) => {
                     if let Some(session_id) = session_id_opt.as_ref() {
-                        let result = request.add_auth_details(session_id, &self.gateway_session_store).await;
+                        let result = request
+                            .add_auth_details(session_id, &self.gateway_session_store)
+                            .await;
 
                         if let Err(err_response) = result {
                             Err(MiddlewareError::InternalError(err_response))
                         } else {
-                            Ok(MiddlewareSuccess::PassThrough { session_id: session_id_opt })
+                            Ok(MiddlewareSuccess::PassThrough {
+                                session_id: session_id_opt,
+                            })
                         }
                     } else {
-                        Ok(MiddlewareSuccess::PassThrough { session_id: session_id_opt })
+                        Ok(MiddlewareSuccess::PassThrough {
+                            session_id: session_id_opt,
+                        })
                     }
                 }
-                other => other
+                other => other,
             };
 
             match input_middleware_result {
                 Ok(MiddlewareSuccess::Redirect(response)) => Err(response)?,
                 Ok(MiddlewareSuccess::PassThrough { .. }) => Ok(request),
                 Err(err) => {
-                    let response = err
-                        .to_response_from_safe_display(|error| match error {
-                            MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                            MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-                        });
-                        Err(response)?
+                    let response = err.to_response_from_safe_display(|error| match error {
+                        MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                        MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                    });
+                    Err(response)?
                 }
             }
         } else {
@@ -411,22 +420,27 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
         };
 
-        let resolved_route_entry = if let Some(resolved_route_entry) = resolve_gateway_binding(possible_api_definitions, &request).await {
+        let resolved_route_entry = if let Some(resolved_route_entry) =
+            resolve_gateway_binding(possible_api_definitions, &request).await
+        {
             resolved_route_entry
         } else {
             return poem::Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from_string("Route not found".to_string()))
+                .body(Body::from_string("Route not found".to_string()));
         };
 
         let SplitResolvedRouteEntryResult {
             namespace,
             binding,
             middlewares,
-            rich_request
+            rich_request,
         } = split_resolved_route_entry(request, resolved_route_entry);
 
-        let mut rich_request = match self.maybe_apply_middlewares_in(rich_request, &middlewares).await {
+        let mut rich_request = match self
+            .maybe_apply_middlewares_in(rich_request, &middlewares)
+            .await
+        {
             Ok(req) => req,
             Err(resp) => {
                 tracing::debug!("Middleware short-circuited the request handling");
@@ -443,50 +457,58 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             }
 
             GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                let result = self.handle_http_auth_call_binding(
-                    &auth_call_back.security_scheme_with_metadata,
-                    &rich_request,
-                )
-                .await;
+                let result = self
+                    .handle_http_auth_call_binding(
+                        &auth_call_back.security_scheme_with_metadata,
+                        &rich_request,
+                    )
+                    .await;
 
-                result.to_response(&rich_request, &self.gateway_session_store).await
+                result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await
             }
 
             GatewayBindingCompiled::Worker(resolved_worker_binding) => {
                 let result = self
-                    .handle_worker_binding(
-                        &namespace,
-                        &mut rich_request,
-                        &resolved_worker_binding,
-                    )
+                    .handle_worker_binding(&namespace, &mut rich_request, &resolved_worker_binding)
                     .await;
 
-                let response = result.to_response(&rich_request, &self.gateway_session_store).await;
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
 
                 maybe_apply_middlewares_out(response, &middlewares).await
             }
 
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-                let result = self.handle_http_handler_binding(
-                    &namespace,
-                    &mut rich_request,
-                    &http_handler_binding
-                ).await;
+                let result = self
+                    .handle_http_handler_binding(
+                        &namespace,
+                        &mut rich_request,
+                        &http_handler_binding,
+                    )
+                    .await;
 
-                let response = result.to_response(&rich_request, &self.gateway_session_store).await;
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
 
                 maybe_apply_middlewares_out(response, &middlewares).await
             }
 
             GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
-                let result = self.handle_file_server_binding(
-                    &namespace,
-                    &mut rich_request,
-                    &resolved_file_server_binding,
-                )
-                .await;
+                let result = self
+                    .handle_file_server_binding(
+                        &namespace,
+                        &mut rich_request,
+                        &resolved_file_server_binding,
+                    )
+                    .await;
 
-                let response = result.to_response(&rich_request, &self.gateway_session_store).await;
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
 
                 maybe_apply_middlewares_out(response, &middlewares).await
             }
@@ -498,35 +520,37 @@ async fn resolve_rib_input(
     input: &serde_json::Map<String, Value>,
     required_types: &RibInputTypeInfo,
 ) -> Result<RibInput, String> {
-
     let mut result_map: HashMap<String, ValueAndType> = HashMap::new();
 
     for (key, analysed_type) in required_types.types.iter() {
-        let input_value = input.get(key).ok_or(format!("Required input not available: {key}"))?;
+        let input_value = input
+            .get(key)
+            .ok_or(format!("Required input not available: {key}"))?;
 
         let parsed_value = TypeAnnotatedValue::parse_with_type(
             input_value,
-            &analysed_type
+            analysed_type
         ).map_err(|err| format!("Input {key} doesn't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), analysed_type))?;
 
-        let converted_value = parsed_value.try_into().map_err(|err| format!("Internal error converting between value representations: {err}"))?;
+        let converted_value = parsed_value.try_into().map_err(|err| {
+            format!("Internal error converting between value representations: {err}")
+        })?;
 
         result_map.insert(key.clone(), converted_value);
     }
 
-    Ok(RibInput {
-        input: result_map,
-    })
+    Ok(RibInput { input: result_map })
 }
 
-async fn maybe_apply_middlewares_out(mut response: poem::Response, middlewares: &Option<HttpMiddlewares>) -> poem::Response {
+async fn maybe_apply_middlewares_out(
+    mut response: poem::Response,
+    middlewares: &Option<HttpMiddlewares>,
+) -> poem::Response {
     if let Some(middlewares) = middlewares {
         let result = middlewares.process_middleware_out(&mut response).await;
         match result {
             Ok(_) => response,
-            Err(err) => {
-                err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
-            }
+            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
         }
     } else {
         response

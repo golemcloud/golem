@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::fmt::Display;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use std::collections::HashMap;
+use std::fmt::Display;
 pub mod api_definition_lookup;
 pub mod auth_call_back_binding_handler;
 pub mod file_server_binding_handler;
@@ -27,14 +27,14 @@ pub mod gateway_session;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
 pub mod http_handler_binding_handler;
+pub mod request;
 pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
-pub mod request;
 pub use gateway_worker_request_executor::*;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct GatewayResolvedWorkerRequest<Namespace> {

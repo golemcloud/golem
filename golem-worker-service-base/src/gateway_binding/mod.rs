@@ -23,7 +23,6 @@ use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 pub use static_binding::*;
-use std::ops::Deref;
 
 mod gateway_binding_compiled;
 mod http_handler_binding;

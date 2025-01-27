@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use bytes::Bytes;
-use http::HeaderMap;
-use serde_json::Value;
+use super::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, ResolvedRouteEntry};
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::router::PathParamExtractor;
-use super::gateway_session::{DataKey, GatewaySessionStore, SessionId};
+use bytes::Bytes;
 use golem_common::SafeDisplay;
+use http::HeaderMap;
+use serde_json::Value;
+use std::collections::HashMap;
 
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
@@ -34,7 +34,8 @@ pub struct RichRequest {
 
 impl RichRequest {
     pub fn url(&self) -> Result<url::Url, String> {
-        url::Url::parse(&self.underlying.uri().to_string()).map_err(|e| format!("Failed parsing url: {e}"))
+        url::Url::parse(&self.underlying.uri().to_string())
+            .map_err(|e| format!("Failed parsing url: {e}"))
     }
 
     pub async fn add_auth_details(
@@ -53,14 +54,18 @@ impl RichRequest {
     }
 
     fn path_and_query(&self) -> Result<String, String> {
-        self.underlying.uri().path_and_query().map(|paq| paq.to_string())
+        self.underlying
+            .uri()
+            .path_and_query()
+            .map(|paq| paq.to_string())
             .ok_or("No path and query provided".to_string())
     }
 
     fn request_path_values(&self) -> RequestPathValues {
         use crate::gateway_request::http_request::router;
 
-        let path_param_values: HashMap<VarInfo, String> = self.path_param_extractors
+        let path_param_values: HashMap<VarInfo, String> = self
+            .path_param_extractors
             .iter()
             .map(|param| match param {
                 router::PathParamExtractor::Single { var_info, index } => {
@@ -77,7 +82,12 @@ impl RichRequest {
     }
 
     fn request_query_values(&self) -> Result<RequestQueryValues, String> {
-        let query_key_values = self.underlying.uri().query().map(query_components_from_str).unwrap_or_default();
+        let query_key_values = self
+            .underlying
+            .uri()
+            .query()
+            .map(query_components_from_str)
+            .unwrap_or_default();
 
         RequestQueryValues::from(&query_key_values, &self.query_info)
             .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
@@ -144,7 +154,6 @@ impl RichRequest {
         Ok(basic)
     }
 
-
     pub fn as_json(&self) -> Result<Value, String> {
         Ok(Value::Object(self.as_basic_json_hashmap()?))
     }
@@ -160,29 +169,30 @@ impl RichRequest {
     }
 
     /// consumes the body of the underlying request
-    pub async fn as_wasi_http_input(&mut self) -> Result<golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest, String> {
+    pub async fn as_wasi_http_input(
+        &mut self,
+    ) -> Result<golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest, String>
+    {
         use golem_common::virtual_exports::http_incoming_handler as hic;
 
         let headers = {
             let mut acc = Vec::new();
             for (header_name, header_value) in self.underlying.headers().iter() {
                 let header_bytes: Vec<u8> = header_value.as_bytes().into();
-                acc.push((
-                    header_name.clone().to_string(),
-                    Bytes::from(header_bytes),
-                ));
+                acc.push((header_name.clone().to_string(), Bytes::from(header_bytes)));
             }
             hic::HttpFields(acc)
         };
 
-        let body_bytes = self.underlying
+        let body_bytes = self
+            .underlying
             .take_body()
             .into_bytes()
             .await
             .map_err(|e| format!("Failed reading request body: ${e}"))?;
 
         let body = hic::HttpBodyAndTrailers {
-            content: hic::HttpBodyContent(Bytes::from(body_bytes)),
+            content: hic::HttpBodyContent(body_bytes),
             trailers: None,
         };
 
@@ -199,19 +209,18 @@ impl RichRequest {
             body: Some(body),
         })
     }
-
 }
 
 pub struct SplitResolvedRouteEntryResult<Namespace> {
     pub namespace: Namespace,
     pub binding: GatewayBindingCompiled,
     pub middlewares: Option<HttpMiddlewares>,
-    pub rich_request: RichRequest
+    pub rich_request: RichRequest,
 }
 
 pub fn split_resolved_route_entry<Namespace>(
     request: poem::Request,
-    entry: ResolvedRouteEntry<Namespace>
+    entry: ResolvedRouteEntry<Namespace>,
 ) -> SplitResolvedRouteEntryResult<Namespace> {
     // helper function to save a few clones
 
@@ -224,10 +233,15 @@ pub fn split_resolved_route_entry<Namespace>(
         path_segments: entry.path_segments,
         path_param_extractors: entry.route_entry.path_params,
         query_info: entry.route_entry.query_params,
-        auth_data: None
+        auth_data: None,
     };
 
-    SplitResolvedRouteEntryResult { namespace, binding, middlewares, rich_request }
+    SplitResolvedRouteEntryResult {
+        namespace,
+        binding,
+        middlewares,
+        rich_request,
+    }
 }
 
 fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
@@ -246,7 +260,10 @@ fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
 }
 
 pub fn authority_from_request(request: &poem::Request) -> Result<String, String> {
-    request.header(http::header::HOST).map(|h| h.to_string()).ok_or("No host header provided".to_string())
+    request
+        .header(http::header::HOST)
+        .map(|h| h.to_string())
+        .ok_or("No host header provided".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -340,7 +357,6 @@ mod internal {
         }
     }
 }
-
 
 #[derive(Clone, Debug, Default)]
 pub struct RequestPathValues(pub JsonKeyValues);

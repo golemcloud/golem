@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use golem_worker_service_base::gateway_execution::gateway_binding_resolver::resolve_gateway_binding;
 use test_r::test;
 
 test_r::enable!();
@@ -34,9 +33,9 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, GatewaySessionStore,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
-use golem_worker_service_base::gateway_request::http_request::{ApiInputPath};
+use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
-    IdentityProvider, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::LOCATION;
@@ -45,8 +44,6 @@ use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
 use serde_json::Value;
 use url::Url;
-use golem_worker_service_base::gateway_execution::WorkerDetail;
-use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -1152,13 +1149,6 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
         )
         .await;
 
-        let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
-            &api_specification,
-            &internal::get_component_metadata(),
-            &DefaultNamespace::default(),
-        )
-        .unwrap();
-
         let session_store = internal::get_session_store();
 
         let response = execute(
@@ -1571,6 +1561,7 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 mod internal {
     use async_trait::async_trait;
     use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
@@ -1583,12 +1574,20 @@ mod internal {
     use golem_worker_service_base::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary,
     };
+    use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
+    use golem_worker_service_base::gateway_execution::api_definition_lookup::{
+        ApiDefinitionLookupError, HttpApiDefinitionsLookup,
+    };
     use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
         FileServerBindingHandler, FileServerBindingResult,
+    };
+    use golem_worker_service_base::gateway_execution::gateway_session::{
+        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
     };
     use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
+    use golem_worker_service_base::gateway_execution::WorkerDetail;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
@@ -1604,18 +1603,9 @@ mod internal {
     };
     use poem::Response;
     use rib::RibResult;
-    use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-        ApiDefinitionLookupError, HttpApiDefinitionsLookup,
-    };
-    use golem_worker_service_base::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
-    };
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
-    use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-    use golem_worker_service_base::gateway_execution::WorkerDetail;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,
@@ -1629,7 +1619,11 @@ mod internal {
 
     #[async_trait]
     impl HttpApiDefinitionsLookup<DefaultNamespace> for TestApiDefinitionLookup {
-        async fn get(&self, _input: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError> {
+        async fn get(
+            &self,
+            _input: &ApiSiteString,
+        ) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError>
+        {
             Ok(vec![self.api_definition.clone()])
         }
     }
@@ -1683,7 +1677,7 @@ mod internal {
         pub function_params: Value,
         pub user_email: Option<String>,
         pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured,
-        pub idempotency_key: Option<IdempotencyKey>
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Clone)]
@@ -1914,7 +1908,7 @@ mod internal {
             function_params: function_params.expect("Worker response expects function_params"),
             user_email: user_email.clone(),
             cors_middleware_headers: None,
-            idempotency_key
+            idempotency_key,
         }
     }
 
@@ -1979,7 +1973,7 @@ mod internal {
                     cors_header_expose_headers,
                 })
             },
-            idempotency_key
+            idempotency_key,
         }
     }
 

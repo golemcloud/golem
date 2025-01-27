@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -26,7 +27,6 @@ use http_body_util::BodyExt;
 use std::convert::Infallible;
 use std::str::FromStr;
 use std::sync::Arc;
-use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 
 #[async_trait]
 pub trait HttpHandlerBindingHandler<Namespace> {
@@ -47,7 +47,7 @@ pub struct HttpHandlerBindingSuccess {
 #[derive(Debug)]
 pub enum HttpHandlerBindingError {
     InternalError(String),
-    WorkerRequestExecutorError(WorkerRequestExecutorError)
+    WorkerRequestExecutorError(WorkerRequestExecutorError),
 }
 
 pub struct DefaultHttpHandlerBindingHandler<Namespace> {
@@ -79,14 +79,12 @@ impl<Namespace: HasAccountId + Send + Sync + Clone + 'static> HttpHandlerBinding
         let typ: golem_wasm_ast::analysis::protobuf::Type = (&golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest::analysed_type()).into();
 
         let type_annotated_param =
-            TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(
-                |e| {
-                    HttpHandlerBindingError::InternalError(format!(
-                        "Failed converting request into wasm rpc: {:?}",
-                        e
-                    ))
-                },
-            )?;
+            TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(|e| {
+                HttpHandlerBindingError::InternalError(format!(
+                    "Failed converting request into wasm rpc: {:?}",
+                    e
+                ))
+            })?;
 
         let resolved_request: GatewayResolvedWorkerRequest<Namespace> =
             GatewayResolvedWorkerRequest {

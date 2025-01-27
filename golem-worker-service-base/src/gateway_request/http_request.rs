@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_deployment::ApiSiteString;
-use http::header::HOST;
-use http::uri::Scheme;
-use http::StatusCode;
-use hyper::http::{HeaderMap, Method};
-use poem::{Body, Response};
-use serde_json::Value;
+use poem::Response;
 use std::collections::HashMap;
 use std::fmt::Display;
-use tracing::error;
 
 #[derive(Debug)]
 pub struct ErrorResponse(pub Response);

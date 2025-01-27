@@ -16,11 +16,11 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
+use crate::gateway_api_deployment::ApiSiteString;
 use crate::service::gateway::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
 use golem_common::model::HasAccountId;
 use tracing::error;
-use crate::gateway_api_deployment::ApiSiteString;
 
 // To lookup the set of API Definitions based on an incoming input.
 // The input can be HttpRequest or GrpcRequest and so forth, and ApiDefinition
@@ -28,7 +28,10 @@ use crate::gateway_api_deployment::ApiSiteString;
 // for a given input type.
 #[async_trait]
 pub trait HttpApiDefinitionsLookup<Namespace> {
-    async fn get(&self, host: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError>;
+    async fn get(
+        &self,
+        host: &ApiSiteString,
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError>;
 }
 
 pub struct ApiDefinitionLookupError(pub String);
@@ -55,7 +58,10 @@ impl<AuthCtx, Namespace> DefaultHttpApiDefinitionLookup<AuthCtx, Namespace> {
 impl<AuthCtx, Namespace: HasAccountId + Send + Sync> HttpApiDefinitionsLookup<Namespace>
     for DefaultHttpApiDefinitionLookup<AuthCtx, Namespace>
 {
-    async fn get(&self, host: &ApiSiteString) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
+    async fn get(
+        &self,
+        host: &ApiSiteString,
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
         let http_api_defs = self
             .deployment_service
             .get_definitions_by_site(host)

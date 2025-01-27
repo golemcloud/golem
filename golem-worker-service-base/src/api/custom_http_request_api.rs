@@ -15,7 +15,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
@@ -36,7 +35,9 @@ pub struct CustomHttpRequestApi {
 
 impl CustomHttpRequestApi {
     pub fn new<Namespace: Clone + Send + Sync + 'static>(
-        worker_request_executor_service: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
+        worker_request_executor_service: Arc<
+            dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
+        >,
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,

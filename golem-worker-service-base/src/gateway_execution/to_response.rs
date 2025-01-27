@@ -12,26 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::auth_call_back_binding_handler::{AuthorisationError, AuthorisationSuccess};
+use super::file_server_binding_handler::FileServerBindingSuccess;
+use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingSuccess};
+use super::RibInputTypeMismatch;
 use crate::api::WorkerApiBaseError;
-use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
-use crate::gateway_execution::file_server_binding_handler::{
-    FileServerBindingError, FileServerBindingResult,
-};
+use crate::gateway_execution::file_server_binding_handler::FileServerBindingError;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpCors as CorsPreflight;
 use crate::gateway_rib_interpreter::EvaluationError;
 use async_trait::async_trait;
-use http::{header::*, request};
+use http::header::*;
 use http::StatusCode;
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
-use super::auth_call_back_binding_handler::{AuthorisationError, AuthorisationSuccess};
-use super::file_server_binding_handler::FileServerBindingSuccess;
-use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingResult, HttpHandlerBindingSuccess};
-use super::RibInputTypeMismatch;
-use crate::gateway_execution::request::RichRequest;
 
 #[async_trait]
 pub trait ToHttpResponse {
@@ -43,17 +40,16 @@ pub trait ToHttpResponse {
 }
 
 #[async_trait]
-impl <T: ToHttpResponse + Send, E: ToHttpResponse + Send> ToHttpResponse for Result<T, E> {
+impl<T: ToHttpResponse + Send, E: ToHttpResponse + Send> ToHttpResponse for Result<T, E> {
     async fn to_response(
         self,
-        request: & RichRequest,
+        request: &RichRequest,
         session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
             Ok(t) => t.to_response(request, session_store).await,
-            Err(e) => e.to_response(request, session_store).await
+            Err(e) => e.to_response(request, session_store).await,
         }
-
     }
 }
 
@@ -64,27 +60,32 @@ pub enum GatewayHttpError {
     RibInputTypeMismatch(RibInputTypeMismatch),
     EvaluationError(EvaluationError),
     HttpHandlerBindingError(HttpHandlerBindingError),
-    FileServerBindingError(FileServerBindingError)
+    FileServerBindingError(FileServerBindingError),
 }
 
 #[async_trait]
 impl ToHttpResponse for GatewayHttpError {
     async fn to_response(
         self,
-        request_details: & RichRequest,
+        request_details: &RichRequest,
         session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match self {
-            GatewayHttpError::BadRequest(e) =>
-                poem::Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(
-                        format!("invalid input: {e}"),
-                    )),
-            GatewayHttpError::RibInputTypeMismatch(err) => err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST),
-            GatewayHttpError::EvaluationError(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
-            GatewayHttpError::HttpHandlerBindingError(inner) => inner.to_response(request_details, session_store).await,
-            GatewayHttpError::FileServerBindingError(inner) => inner.to_response(request_details, session_store).await
+            GatewayHttpError::BadRequest(e) => poem::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from_string(format!("invalid input: {e}"))),
+            GatewayHttpError::RibInputTypeMismatch(err) => {
+                err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST)
+            }
+            GatewayHttpError::EvaluationError(err) => {
+                err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            GatewayHttpError::HttpHandlerBindingError(inner) => {
+                inner.to_response(request_details, session_store).await
+            }
+            GatewayHttpError::FileServerBindingError(inner) => {
+                inner.to_response(request_details, session_store).await
+            }
         }
     }
 }
@@ -114,13 +115,17 @@ impl ToHttpResponse for FileServerBindingError {
             FileServerBindingError::InternalError(e) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from_string(format!("Error {e}"))),
-            FileServerBindingError::ComponentServiceError(inner) => WorkerApiBaseError::from(inner).into_response(),
-            FileServerBindingError::WorkerServiceError(inner) => WorkerApiBaseError::from(inner).into_response(),
+            FileServerBindingError::ComponentServiceError(inner) => {
+                WorkerApiBaseError::from(inner).into_response()
+            }
+            FileServerBindingError::WorkerServiceError(inner) => {
+                WorkerApiBaseError::from(inner).into_response()
+            }
             FileServerBindingError::InvalidRibResult(e) => poem::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(
-                    format!("Error while processing rib result: {e}"),
-                )),
+                .body(Body::from_string(format!(
+                    "Error while processing rib result: {e}"
+                ))),
         }
     }
 }
@@ -136,7 +141,6 @@ impl ToHttpResponse for HttpHandlerBindingSuccess {
     }
 }
 
-
 #[async_trait]
 impl ToHttpResponse for HttpHandlerBindingError {
     async fn to_response(
@@ -148,13 +152,11 @@ impl ToHttpResponse for HttpHandlerBindingError {
             HttpHandlerBindingError::InternalError(e) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from_string(format!("Error {e}"))),
-            HttpHandlerBindingError::WorkerRequestExecutorError(e) => {
-                poem::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string(
-                        format!("Error calling worker executor {e}"),
-                    ))
-            }
+            HttpHandlerBindingError::WorkerRequestExecutorError(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!(
+                    "Error calling worker executor {e}"
+                ))),
         }
     }
 }
@@ -335,17 +337,17 @@ mod internal {
             }
         }
 
-        pub(crate) fn to_http_response(
-            &self,
-            request_details: &RichRequest,
-        ) -> poem::Response {
+        pub(crate) fn to_http_response(&self, request_details: &RichRequest) -> poem::Response {
             let response_content_type = self.headers.get_content_type();
             let response_headers = self.headers.headers.clone();
 
             let status = &self.status;
             let evaluation_result = &self.body;
 
-            let accepted_content_types = request_details.underlying.header(http::header::ACCEPT).map(|s| s.to_string());
+            let accepted_content_types = request_details
+                .underlying
+                .header(http::header::ACCEPT)
+                .map(|s| s.to_string());
 
             let content_type =
                 ContentTypeHeaders::from(response_content_type, accepted_content_types);
@@ -423,7 +425,7 @@ mod test {
             path_segments: vec![],
             path_param_extractors: vec![],
             query_info: vec![],
-            auth_data: None
+            auth_data: None,
         }
     }
 
