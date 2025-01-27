@@ -34,7 +34,7 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
+use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
@@ -96,7 +96,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         // phase 1. we only have the request details available
         {
-            let request_value = request.as_json_with_body().await.unwrap();
+            let request_value = request
+                .as_json_with_body()
+                .await
+                .map_err(GatewayHttpError::BadRequest)?;
             rib_input.insert("request".to_string(), request_value);
         }
 
@@ -108,7 +111,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
             )
-            .await;
+            .await?;
 
         // phase 2. we have both the request and the worker details available
         {
@@ -123,7 +126,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             &worker_detail,
         )
         .await
-        .map_err(GatewayHttpError::EvaluationError)
     }
 
     async fn handle_http_handler_binding(
@@ -135,7 +137,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
 
         {
-            let request_value = request.as_json().unwrap();
+            let request_value = request.as_json().map_err(GatewayHttpError::BadRequest)?;
             rib_input.insert("request".to_string(), request_value);
         }
 
@@ -147,9 +149,12 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
             )
-            .await;
+            .await?;
 
-        let incoming_http_request = request.as_wasi_http_input().await.unwrap();
+        let incoming_http_request = request
+            .as_wasi_http_input()
+            .await
+            .map_err(GatewayHttpError::BadRequest)?;
 
         let result = self
             .http_handler_binding_handler
@@ -174,7 +179,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         // phase 1. we only have the request details available
         {
-            let request_value = request.as_json_with_body().await.unwrap();
+            let request_value = request
+                .as_json_with_body()
+                .await
+                .map_err(GatewayHttpError::BadRequest)?;
             rib_input.insert("request".to_string(), request_value);
         }
 
@@ -186,7 +194,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
             )
-            .await;
+            .await?;
 
         // phase 2. we have both the request and the worker details available
         {
@@ -201,8 +209,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &rib_input,
                 &worker_detail,
             )
-            .await
-            .map_err(GatewayHttpError::EvaluationError)?;
+            .await?;
 
         self.file_server_binding_handler
             .handle_file_server_binding_result(namespace, &worker_detail, response_script_result)
@@ -236,36 +243,42 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         &self,
         script: &WorkerNameCompiled,
         request_value: &serde_json::Map<String, Value>,
-    ) -> String {
+    ) -> GatewayHttpResult<String> {
         let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input_type_info)
             .await
-            .unwrap();
+            .map_err(GatewayHttpError::BadRequest)?;
 
-        rib::interpret_pure(&script.compiled_worker_name, &rib_input)
+        let result = rib::interpret_pure(&script.compiled_worker_name, &rib_input)
             .await
-            .unwrap()
+            .map_err(GatewayHttpError::RibInterpretPureError)?
             .get_literal()
-            .unwrap()
-            .as_string()
+            .ok_or(GatewayHttpError::BadRequest(
+                "Worker name is not a Rib expression that resolves to String".to_string(),
+            ))?
+            .as_string();
+
+        Ok(result)
     }
 
     async fn evaluate_idempotency_key_rib_script(
         &self,
         script: &IdempotencyKeyCompiled,
         request_value: &serde_json::Map<String, Value>,
-    ) -> IdempotencyKey {
+    ) -> GatewayHttpResult<IdempotencyKey> {
         let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
             .await
-            .unwrap();
+            .map_err(GatewayHttpError::BadRequest)?;
 
         let value = rib::interpret_pure(&script.compiled_idempotency_key, &rib_input)
             .await
-            .unwrap()
+            .map_err(GatewayHttpError::RibInterpretPureError)?
             .get_literal()
-            .unwrap()
+            .ok_or(GatewayHttpError::BadRequest(
+                "Idempotency key is not a Rib expression that resolves to String".to_string(),
+            ))?
             .as_string();
 
-        IdempotencyKey::new(value)
+        Ok(IdempotencyKey::new(value))
     }
 
     async fn get_worker_detail(
@@ -275,11 +288,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
-    ) -> WorkerDetail {
+    ) -> GatewayHttpResult<WorkerDetail> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
                 .evaluate_worker_name_rib_script(worker_name_compiled, request_value)
-                .await;
+                .await?;
             Some(result)
         } else {
             None
@@ -291,7 +304,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
             let result = self
                 .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request_value)
-                .await;
+                .await?;
             Some(result)
         } else {
             request
@@ -302,11 +315,11 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
-        WorkerDetail {
+        Ok(WorkerDetail {
             component_id: component_id.clone(),
             worker_name,
             idempotency_key,
-        }
+        })
     }
 
     async fn get_response_script_result(
@@ -315,10 +328,10 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         compiled_response_mapping: &ResponseMappingCompiled,
         request_value: &serde_json::Map<String, Value>,
         worker_detail: &WorkerDetail,
-    ) -> Result<RibResult, EvaluationError> {
+    ) -> GatewayHttpResult<RibResult> {
         let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input)
             .await
-            .unwrap();
+            .map_err(GatewayHttpError::BadRequest)?;
 
         self.evaluator
             .evaluate(
@@ -330,6 +343,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 namespace.clone(),
             )
             .await
+            .map_err(GatewayHttpError::EvaluationError)
     }
 
     async fn maybe_apply_middlewares_in(

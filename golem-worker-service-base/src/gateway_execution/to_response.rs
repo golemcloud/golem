@@ -59,6 +59,7 @@ pub enum GatewayHttpError {
     BadRequest(String),
     RibInputTypeMismatch(RibInputTypeMismatch),
     EvaluationError(EvaluationError),
+    RibInterpretPureError(String),
     HttpHandlerBindingError(HttpHandlerBindingError),
     FileServerBindingError(FileServerBindingError),
 }
@@ -73,10 +74,15 @@ impl ToHttpResponse for GatewayHttpError {
         match self {
             GatewayHttpError::BadRequest(e) => poem::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!("invalid input: {e}"))),
+                .body(Body::from_string(format!("Invalid input: {e}"))),
             GatewayHttpError::RibInputTypeMismatch(err) => {
                 err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST)
             }
+            GatewayHttpError::RibInterpretPureError(err) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!(
+                    "Failed interpreting pure rib expression: {err}"
+                ))),
             GatewayHttpError::EvaluationError(err) => {
                 err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
             }
