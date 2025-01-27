@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{HttpRequestDetails, WorkerDetail};
-use crate::gateway_execution::GatewayResolvedWorkerRequest;
+use crate::gateway_binding::{HttpRequestDetails};
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::HasAccountId;
@@ -27,7 +27,6 @@ use http_body_util::BodyExt;
 use std::convert::Infallible;
 use std::str::FromStr;
 use std::sync::Arc;
-
 use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 
 #[async_trait]

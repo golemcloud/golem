@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
+use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
     resolve_gateway_binding, ErrorOrRedirect, HttpRequestDetails, ResolvedBinding, ResolvedHttpHandlerBinding, ResolvedWorkerBinding, StaticBinding
 };
@@ -80,7 +81,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
     }
 
-    pub async fn execute(
+    async fn execute(
         &self,
         http_request_details: &mut HttpRequestDetails,
         middlewares: Option<HttpMiddlewares>,
@@ -320,18 +321,24 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
 {
-    async fn execute_http_request(&self, request: HttpRequestDetails) -> poem::Response {
+    async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
 
-        let api_site_string = match request.api_site_string() {
-            Ok(ass) => ass,
-            Err(e) => {
-                return poem::Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from_string(e))
-            },
-        };
+        //         let host_header = self.underlying.header(http::header::HOST).map(|h| h.to_string())
+        //     .ok_or("No host header provided".to_string())?;
+        // Ok(ApiSiteString(host_header))
+
+        // let api_site_string = match request.api_site_string() {
+        //     Ok(ass) => ass,
+        //     Err(e) => {
+        //         return poem::Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from_string(e))
+        //     },
+        // };
+
+        let authority = authority_from_request(&request)?;
 
         let possible_api_definitions = self
             .api_definition_lookup_service
-            .get(&api_site_string)
+            .get(&ApiSiteString(authority))
             .await;
 
         let possible_api_definitions = match possible_api_definitions {
@@ -339,7 +346,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(api_defs_lookup_error) => {
                 error!(
                     "API request host: {} - error: {}",
-                    api_site_string, api_defs_lookup_error
+                    authority, api_defs_lookup_error
                 );
                 return poem::Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)

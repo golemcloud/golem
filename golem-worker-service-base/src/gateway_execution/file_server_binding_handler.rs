@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::empty_worker_metadata;
-use crate::gateway_binding::WorkerDetail;
+use crate::gateway_execution::WorkerDetail;
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};

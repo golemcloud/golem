@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
+use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_binding::{
-    GatewayBindingCompiled, HttpRequestDetails, RibInputTypeMismatch, StaticBinding,
+    GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, StaticBinding, WorkerBindingCompiled
 };
-use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
+use crate::gateway_binding::{ResponseMappingCompiled};
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
+use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
+use crate::gateway_request::http_request::router::{PathParamExtractor, RouteEntry};
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::{IdentityProvider, OpenIdClient};
 use async_trait::async_trait;
@@ -38,79 +39,79 @@ use std::sync::Arc;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 
-#[derive(Debug)]
-pub enum ErrorOrRedirect {
-    Error(GatewayBindingResolverError),
-    Redirect(poem::Response),
-}
+// #[derive(Debug)]
+// pub enum ErrorOrRedirect {
+//     Error(GatewayBindingResolverError),
+//     Redirect(poem::Response),
+// }
 
-impl ErrorOrRedirect {
-    pub fn internal(err: String) -> Self {
-        ErrorOrRedirect::Error(GatewayBindingResolverError::Internal(err))
-    }
+// impl ErrorOrRedirect {
+//     pub fn internal(err: String) -> Self {
+//         ErrorOrRedirect::Error(GatewayBindingResolverError::Internal(err))
+//     }
 
-    pub fn route_not_found() -> Self {
-        ErrorOrRedirect::Error(GatewayBindingResolverError::RouteNotFound)
-    }
+//     pub fn route_not_found() -> Self {
+//         ErrorOrRedirect::Error(GatewayBindingResolverError::RouteNotFound)
+//     }
 
-    pub fn rib_input_type_mismatch(err: RibInputTypeMismatch) -> Self {
-        ErrorOrRedirect::Error(GatewayBindingResolverError::RibInputTypeMismatch(err))
-    }
-}
+//     pub fn rib_input_type_mismatch(err: RibInputTypeMismatch) -> Self {
+//         ErrorOrRedirect::Error(GatewayBindingResolverError::RibInputTypeMismatch(err))
+//     }
+// }
 
-#[derive(Debug)]
-pub enum GatewayBindingResolverError {
-    RibInputTypeMismatch(RibInputTypeMismatch),
-    Internal(String),
-    RouteNotFound,
-    MiddlewareError(MiddlewareError),
-}
+// #[derive(Debug)]
+// pub enum GatewayBindingResolverError {
+//     RibInputTypeMismatch(RibInputTypeMismatch),
+//     Internal(String),
+//     RouteNotFound,
+//     MiddlewareError(MiddlewareError),
+// }
 
-impl SafeDisplay for GatewayBindingResolverError {
-    fn to_safe_string(&self) -> String {
-        match self {
-            GatewayBindingResolverError::RibInputTypeMismatch(err) => {
-                format!("Input type mismatch: {}", err)
-            }
-            GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
-            GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
-            GatewayBindingResolverError::MiddlewareError(err) => err.to_safe_string(),
-        }
-    }
-}
+// impl SafeDisplay for GatewayBindingResolverError {
+//     fn to_safe_string(&self) -> String {
+//         match self {
+//             GatewayBindingResolverError::RibInputTypeMismatch(err) => {
+//                 format!("Input type mismatch: {}", err)
+//             }
+//             GatewayBindingResolverError::Internal(err) => format!("Internal: {}", err),
+//             GatewayBindingResolverError::RouteNotFound => "RouteNotFound".to_string(),
+//             GatewayBindingResolverError::MiddlewareError(err) => err.to_safe_string(),
+//         }
+//     }
+// }
 
-impl GatewayBindingResolverError {
-    pub fn to_http_response(self) -> poem::Response {
-        match self {
-            GatewayBindingResolverError::Internal(str) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(str)),
-            GatewayBindingResolverError::RouteNotFound => poem::Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from_string("Route not found".to_string())),
-            GatewayBindingResolverError::RibInputTypeMismatch(_) => poem::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string("Rib input type mismatch".to_string())),
-            GatewayBindingResolverError::MiddlewareError(error) => error
-                .to_response_from_safe_display(|error| match error {
-                    MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                    MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-                }),
-        }
-    }
-}
+// impl GatewayBindingResolverError {
+//     pub fn to_http_response(self) -> poem::Response {
+//         match self {
+//             GatewayBindingResolverError::Internal(str) => poem::Response::builder()
+//                 .status(StatusCode::INTERNAL_SERVER_ERROR)
+//                 .body(Body::from_string(str)),
+//             GatewayBindingResolverError::RouteNotFound => poem::Response::builder()
+//                 .status(StatusCode::NOT_FOUND)
+//                 .body(Body::from_string("Route not found".to_string())),
+//             GatewayBindingResolverError::RibInputTypeMismatch(_) => poem::Response::builder()
+//                 .status(StatusCode::BAD_REQUEST)
+//                 .body(Body::from_string("Rib input type mismatch".to_string())),
+//             GatewayBindingResolverError::MiddlewareError(error) => error
+//                 .to_response_from_safe_display(|error| match error {
+//                     MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+//                     MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+//                 }),
+//         }
+//     }
+// }
 
-pub struct ResolvedGatewayBinding<Namespace> {
-    pub request_details: HttpRequestDetails,
-    pub resolved_binding: ResolvedBinding<Namespace>,
+pub struct ResolvedRouteEntry<Namespace> {
+    pub path_segments: Vec<String>,
+    pub route_entry: RouteEntry<Namespace>
 }
 
 #[derive(Clone, Debug)]
-pub enum ResolvedBinding<Namespace> {
+pub enum ResolvedBinding {
     Static(StaticBinding),
-    Worker(ResolvedWorkerBinding<Namespace>),
-    FileServer(ResolvedWorkerBinding<Namespace>),
-    HttpHandler(ResolvedHttpHandlerBinding<Namespace>),
+    Worker(WorkerBindingCompiled),
+    FileServer(WorkerBindingCompiled),
+    HttpHandler(HttpHandlerBindingCompiled),
 }
 
 #[derive(Clone, Debug)]
@@ -121,116 +122,116 @@ pub struct AuthParams {
     pub original_uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorkerDetail {
-    pub component_id: VersionedComponentId,
-    pub worker_name: Option<String>,
-    pub idempotency_key: Option<IdempotencyKey>,
-}
+// #[derive(Debug, Clone, PartialEq)]
+// pub struct WorkerDetail {
+//     pub component_id: VersionedComponentId,
+//     pub worker_name: Option<String>,
+//     pub idempotency_key: Option<IdempotencyKey>,
+// }
 
-impl WorkerDetail {
-    fn as_json(&self) -> Value {
-        let mut worker_detail_content = HashMap::new();
-        worker_detail_content.insert(
-            "component_id".to_string(),
-            Value::String(self.component_id.component_id.0.to_string()),
-        );
+// impl WorkerDetail {
+//     fn as_json(&self) -> Value {
+//         let mut worker_detail_content = HashMap::new();
+//         worker_detail_content.insert(
+//             "component_id".to_string(),
+//             Value::String(self.component_id.component_id.0.to_string()),
+//         );
 
-        if let Some(worker_name) = &self.worker_name {
-            worker_detail_content
-                .insert("name".to_string(), Value::String(worker_name.to_string()));
-        }
+//         if let Some(worker_name) = &self.worker_name {
+//             worker_detail_content
+//                 .insert("name".to_string(), Value::String(worker_name.to_string()));
+//         }
 
-        if let Some(idempotency_key) = &self.idempotency_key {
-            worker_detail_content.insert(
-                "idempotency_key".to_string(),
-                Value::String(idempotency_key.value.clone()),
-            );
-        }
+//         if let Some(idempotency_key) = &self.idempotency_key {
+//             worker_detail_content.insert(
+//                 "idempotency_key".to_string(),
+//                 Value::String(idempotency_key.value.clone()),
+//             );
+//         }
 
-        let map = serde_json::Map::from_iter(worker_detail_content);
+//         let map = serde_json::Map::from_iter(worker_detail_content);
 
-        Value::Object(map)
-    }
+//         Value::Object(map)
+//     }
 
-    pub fn resolve_rib_input_value(
-        &self,
-        required_types: &RibInputTypeInfo,
-    ) -> Result<RibInput, RibInputTypeMismatch> {
-        let request_type_info = required_types.types.get("worker");
+//     pub fn resolve_rib_input_value(
+//         &self,
+//         required_types: &RibInputTypeInfo,
+//     ) -> Result<RibInput, RibInputTypeMismatch> {
+//         let request_type_info = required_types.types.get("worker");
 
-        match request_type_info {
-            Some(worker_details_type) => {
-                let rib_input_with_request_content = &self.as_json();
-                let request_value =
-                    TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
-                        .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
-                let request_value = request_value.try_into().map_err(|err| {
-                    RibInputTypeMismatch(format!(
-                        "Internal error converting between value representations: {err}"
-                    ))
-                })?;
+//         match request_type_info {
+//             Some(worker_details_type) => {
+//                 let rib_input_with_request_content = &self.as_json();
+//                 let request_value =
+//                     TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
+//                         .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
+//                 let request_value = request_value.try_into().map_err(|err| {
+//                     RibInputTypeMismatch(format!(
+//                         "Internal error converting between value representations: {err}"
+//                     ))
+//                 })?;
 
-                let mut rib_input_map = HashMap::new();
-                rib_input_map.insert("worker".to_string(), request_value);
-                Ok(RibInput {
-                    input: rib_input_map,
-                })
-            }
-            None => Ok(RibInput::default()),
-        }
-    }
-}
+//                 let mut rib_input_map = HashMap::new();
+//                 rib_input_map.insert("worker".to_string(), request_value);
+//                 Ok(RibInput {
+//                     input: rib_input_map,
+//                 })
+//             }
+//             None => Ok(RibInput::default()),
+//         }
+//     }
+// }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedWorkerBinding<Namespace> {
-    pub worker_detail: WorkerDetail,
-    pub compiled_response_mapping: ResponseMappingCompiled,
-    pub namespace: Namespace,
-}
+// #[derive(Debug, Clone)]
+// pub struct ResolvedWorkerBinding<Namespace> {
+//     pub worker_detail: WorkerDetail,
+//     pub compiled_response_mapping: ResponseMappingCompiled,
+//     pub namespace: Namespace,
+// }
 
-impl<Namespace> ResolvedGatewayBinding<Namespace> {
-    pub fn get_worker_detail(&self) -> Option<WorkerDetail> {
-        match &self.resolved_binding {
-            ResolvedBinding::Worker(resolved_worker_binding) => {
-                Some(resolved_worker_binding.worker_detail.clone())
-            }
-            _ => None,
-        }
-    }
-    pub fn from_static_binding(
-        request_details: &GatewayRequestDetails,
-        static_binding: &StaticBinding,
-    ) -> ResolvedGatewayBinding<Namespace> {
-        ResolvedGatewayBinding {
-            request_details: request_details.clone(),
-            resolved_binding: ResolvedBinding::Static(static_binding.clone()),
-        }
-    }
+// impl<Namespace> ResolvedGatewayBinding<Namespace> {
+//     pub fn get_worker_detail(&self) -> Option<WorkerDetail> {
+//         match &self.resolved_binding {
+//             ResolvedBinding::Worker(resolved_worker_binding) => {
+//                 Some(resolved_worker_binding.worker_detail.clone())
+//             }
+//             _ => None,
+//         }
+//     }
+//     pub fn from_static_binding(
+//         request_details: &GatewayRequestDetails,
+//         static_binding: &StaticBinding,
+//     ) -> ResolvedGatewayBinding<Namespace> {
+//         ResolvedGatewayBinding {
+//             request_details: request_details.clone(),
+//             resolved_binding: ResolvedBinding::Static(static_binding.clone()),
+//         }
+//     }
 
-    pub fn from_resolved_worker_binding(
-        request_details: &GatewayRequestDetails,
-        resolved_worker_binding: ResolvedWorkerBinding<Namespace>,
-    ) -> ResolvedGatewayBinding<Namespace> {
-        ResolvedGatewayBinding {
-            request_details: request_details.clone(),
-            resolved_binding: ResolvedBinding::Worker(resolved_worker_binding),
-        }
-    }
-}
+//     pub fn from_resolved_worker_binding(
+//         request_details: &GatewayRequestDetails,
+//         resolved_worker_binding: ResolvedWorkerBinding<Namespace>,
+//     ) -> ResolvedGatewayBinding<Namespace> {
+//         ResolvedGatewayBinding {
+//             request_details: request_details.clone(),
+//             resolved_binding: ResolvedBinding::Worker(resolved_worker_binding),
+//         }
+//     }
+// }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedHttpHandlerBinding<Namespace> {
-    pub worker_detail: WorkerDetail,
-    pub namespace: Namespace,
-}
+// #[derive(Debug, Clone)]
+// pub struct ResolvedHttpHandlerBinding<Namespace> {
+//     pub worker_detail: WorkerDetail,
+//     pub namespace: Namespace,
+// }
 
 pub async fn resolve_gateway_binding<Namespace: Clone>(
-    gateway_session_store: &GatewaySessionStore,
-    identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
+    // gateway_session_store: &GatewaySessionStore,
+    // identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
     compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
-    request: poem::Request,
-) -> Result<ResolvedGatewayBinding<Namespace>, ErrorOrRedirect> {
+    request: &poem::Request,
+) -> Option<ResolvedRouteEntry<Namespace>> {
     let compiled_routes = compiled_api_definitions
         .iter()
         .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
@@ -238,7 +239,7 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
 
     let router = router::build(compiled_routes);
 
-    let path: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
+    let path_segments: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
     // let request_query_variables = input
     //     .api_input_path
     //     .query_components()
@@ -246,30 +247,29 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
     // let request_body = &input.req_body;
     // let headers = &input.headers;
 
-    let router::RouteEntry {
-        path_params,
-        query_params,
-        namespace,
-        binding,
-        middlewares,
-    } = router
-        .check_path(&request.method(), &path)
-        .ok_or(ErrorOrRedirect::route_not_found())?;
+    let route_entry = router
+        .check_path(&request.method(), &path_segments)?;
+        // .ok_or(GatewayBindingResolverError::RouteNotFound)?;
 
-    let zipped_path_params: HashMap<VarInfo, String> = {
-        path_params
-            .iter()
-            .map(|param| match param {
-                router::PathParamExtractor::Single { var_info, index } => {
-                    (var_info.clone(), path[*index].to_string())
-                }
-                router::PathParamExtractor::AllFollowing { var_info, index } => {
-                    let value = path[*index..].join("/");
-                    (var_info.clone(), value)
-                }
-            })
-            .collect()
-    };
+    Some(ResolvedRouteEntry {
+        path_segments: path_segments.into_iter().map(|s| s.to_string()).collect(),
+        route_entry: route_entry.clone()
+    })
+
+    // let zipped_path_params: HashMap<VarInfo, String> = {
+    //     path_params
+    //         .iter()
+    //         .map(|param| match param {
+    //             router::PathParamExtractor::Single { var_info, index } => {
+    //                 (var_info.clone(), path[*index].to_string())
+    //             }
+    //             router::PathParamExtractor::AllFollowing { var_info, index } => {
+    //                 let value = path[*index..].join("/");
+    //                 (var_info.clone(), value)
+    //             }
+    //         })
+    //         .collect()
+    // };
 
     // let mut http_request_details = HttpRequestDetails::from_input_http_request(
     //     &input.scheme,
@@ -290,72 +290,72 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
     //     ))
     // })?;
 
-    let mut http_request_details = HttpRequestDetails::from_request(request, path_params.clone(), query_params.clone());
+    // let mut http_request_details = HttpRequestDetails::from_request(request, path_params.clone(), query_params.clone());
 
-    if let Some(middlewares) = middlewares {
-        let middleware_result = internal::redirect_or_continue(
-            &mut http_request_details,
-            middlewares,
-            &gateway_session_store,
-            &identity_provider,
-        )
-        .await
-        .map_err(|err| {
-            ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
-        })?;
+    // if let Some(middlewares) = middlewares {
+    //     let middleware_result = internal::redirect_or_continue(
+    //         &mut http_request_details,
+    //         middlewares,
+    //         &gateway_session_store,
+    //         &identity_provider,
+    //     )
+    //     .await
+    //     .map_err(|err| {
+    //         ErrorOrRedirect::Error(GatewayBindingResolverError::MiddlewareError(err))
+    //     })?;
 
-        if let MiddlewareSuccess::Redirect(response) = middleware_result {
-            return Err(ErrorOrRedirect::Redirect(response));
-        }
-    }
+    //     if let MiddlewareSuccess::Redirect(response) = middleware_result {
+    //         return Err(ErrorOrRedirect::Redirect(response));
+    //     }
+    // }
 
-    match binding {
-        GatewayBindingCompiled::FileServer(worker_binding) => {
-            internal::get_resolved_worker_binding(
-                worker_binding,
-                &http_request_details,
-                namespace,
-                headers,
-            )
-            .await
-            .map(|resolved_binding| ResolvedGatewayBinding {
-                request_details: GatewayRequestDetails::Http(http_request_details),
-                resolved_binding: ResolvedBinding::FileServer(resolved_binding),
-            })
-        }
-        GatewayBindingCompiled::Worker(worker_binding) => {
-            internal::get_resolved_worker_binding(
-                worker_binding,
-                &http_request_details,
-                namespace,
-                headers,
-            )
-            .await
-            .map(|resolved_binding| ResolvedGatewayBinding {
-                request_details: GatewayRequestDetails::Http(http_request_details),
-                resolved_binding: ResolvedBinding::Worker(resolved_binding),
-            })
-        }
-        GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-            internal::get_resolved_http_handler_binding(
-                http_handler_binding,
-                &http_request_details,
-                namespace,
-                headers,
-            )
-            .await
-            .map(|resolved_binding| ResolvedGatewayBinding {
-                request_details: GatewayRequestDetails::Http(http_request_details),
-                resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
-            })
-        }
-        GatewayBindingCompiled::Static(static_binding) => {
-            Ok(ResolvedGatewayBinding::from_static_binding(
-                &GatewayRequestDetails::Http(http_request_details),
-                static_binding,
-            ))
-        }
-    }
+    // match binding {
+    //     GatewayBindingCompiled::FileServer(worker_binding) => {
+    //         internal::get_resolved_worker_binding(
+    //             worker_binding,
+    //             &http_request_details,
+    //             namespace,
+    //             headers,
+    //         )
+    //         .await
+    //         .map(|resolved_binding| ResolvedGatewayBinding {
+    //             request_details: GatewayRequestDetails::Http(http_request_details),
+    //             resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+    //         })
+    //     }
+    //     GatewayBindingCompiled::Worker(worker_binding) => {
+    //         internal::get_resolved_worker_binding(
+    //             worker_binding,
+    //             &http_request_details,
+    //             namespace,
+    //             headers,
+    //         )
+    //         .await
+    //         .map(|resolved_binding| ResolvedGatewayBinding {
+    //             request_details: GatewayRequestDetails::Http(http_request_details),
+    //             resolved_binding: ResolvedBinding::Worker(resolved_binding),
+    //         })
+    //     }
+    //     GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+    //         internal::get_resolved_http_handler_binding(
+    //             http_handler_binding,
+    //             &http_request_details,
+    //             namespace,
+    //             headers,
+    //         )
+    //         .await
+    //         .map(|resolved_binding| ResolvedGatewayBinding {
+    //             request_details: GatewayRequestDetails::Http(http_request_details),
+    //             resolved_binding: ResolvedBinding::HttpHandler(resolved_binding),
+    //         })
+    //     }
+    //     GatewayBindingCompiled::Static(static_binding) => {
+    //         Ok(ResolvedGatewayBinding::from_static_binding(
+    //             &GatewayRequestDetails::Http(http_request_details),
+    //             static_binding,
+    //         ))
+    //     }
+    // }
 }
 
 // #[async_trait]
@@ -496,206 +496,206 @@ pub async fn resolve_gateway_binding<Namespace: Clone>(
 //     }
 // }
 
-mod internal {
-    use crate::gateway_binding::{
-        ErrorOrRedirect, HttpHandlerBindingCompiled, HttpRequestDetails, ResolvedWorkerBinding,
-        RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
-    };
-    use crate::gateway_execution::gateway_session::GatewaySessionStore;
-    use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-    use crate::gateway_security::IdentityProvider;
-    use golem_common::model::IdempotencyKey;
-    use http::HeaderMap;
-    use std::sync::Arc;
+// mod internal {
+//     use crate::gateway_binding::{
+//         ErrorOrRedirect, HttpHandlerBindingCompiled, HttpRequestDetails, ResolvedWorkerBinding,
+//         RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
+//     };
+//     use crate::gateway_execution::gateway_session::GatewaySessionStore;
+//     use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
+//     use crate::gateway_security::IdentityProvider;
+//     use golem_common::model::IdempotencyKey;
+//     use http::HeaderMap;
+//     use std::sync::Arc;
 
-    use super::ResolvedHttpHandlerBinding;
+//     use super::ResolvedHttpHandlerBinding;
 
-    pub async fn redirect_or_continue(
-        input: &mut HttpRequestDetails,
-        middlewares: &HttpMiddlewares,
-        session_store: &GatewaySessionStore,
-        identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
-    ) -> Result<MiddlewareSuccess, MiddlewareError> {
-        let input_middleware_result = middlewares
-            .process_middleware_in(input, session_store, identity_provider)
-            .await;
+//     pub async fn redirect_or_continue(
+//         input: &mut HttpRequestDetails,
+//         middlewares: &HttpMiddlewares,
+//         session_store: &GatewaySessionStore,
+//         identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
+//     ) -> Result<MiddlewareSuccess, MiddlewareError> {
+//         let input_middleware_result = middlewares
+//             .process_middleware_in(input, session_store, identity_provider)
+//             .await;
 
-        match input_middleware_result {
-            Ok(incoming_middleware_result) => match incoming_middleware_result {
-                MiddlewareSuccess::Redirect(response) => Ok(MiddlewareSuccess::Redirect(response)),
-                MiddlewareSuccess::PassThrough { session_id } => {
-                    if let Some(session_id) = &session_id {
-                        let result = input.inject_auth_details(session_id, session_store).await;
+//         match input_middleware_result {
+//             Ok(incoming_middleware_result) => match incoming_middleware_result {
+//                 MiddlewareSuccess::Redirect(response) => Ok(MiddlewareSuccess::Redirect(response)),
+//                 MiddlewareSuccess::PassThrough { session_id } => {
+//                     if let Some(session_id) = &session_id {
+//                         let result = input.inject_auth_details(session_id, session_store).await;
 
-                        if let Err(err_response) = result {
-                            return Err(MiddlewareError::InternalError(err_response));
-                        }
-                    }
+//                         if let Err(err_response) = result {
+//                             return Err(MiddlewareError::InternalError(err_response));
+//                         }
+//                     }
 
-                    Ok(MiddlewareSuccess::PassThrough { session_id })
-                }
-            },
+//                     Ok(MiddlewareSuccess::PassThrough { session_id })
+//                 }
+//             },
 
-            Err(err) => Err(err),
-        }
-    }
+//             Err(err) => Err(err),
+//         }
+//     }
 
-    pub async fn get_resolved_worker_binding<Namespace: Clone>(
-        binding: &WorkerBindingCompiled,
-        http_request_details: &HttpRequestDetails,
-        namespace: &Namespace,
-        headers: &HeaderMap,
-    ) -> Result<ResolvedWorkerBinding<Namespace>, ErrorOrRedirect> {
-        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
-            let resolve_rib_input = http_request_details
-                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .await
-                .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+//     pub async fn get_resolved_worker_binding<Namespace: Clone>(
+//         binding: &WorkerBindingCompiled,
+//         http_request_details: &HttpRequestDetails,
+//         namespace: &Namespace,
+//         headers: &HeaderMap,
+//     ) -> Result<ResolvedWorkerBinding<Namespace>, ErrorOrRedirect> {
+//         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+//             let resolve_rib_input = http_request_details
+//                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+//                 .await
+//                 .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
-            let worker_name = rib::interpret_pure(
-                &worker_name_compiled.compiled_worker_name,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| {
-                ErrorOrRedirect::internal(format!(
-                    "Failed to evaluate worker name rib expression. {}",
-                    err
-                ))
-            })?
-            .get_literal()
-            .ok_or(ErrorOrRedirect::internal(
-                "Worker name is not a Rib expression that resolves to String".to_string(),
-            ))?
-            .as_string();
+//             let worker_name = rib::interpret_pure(
+//                 &worker_name_compiled.compiled_worker_name,
+//                 &resolve_rib_input,
+//             )
+//             .await
+//             .map_err(|err| {
+//                 ErrorOrRedirect::internal(format!(
+//                     "Failed to evaluate worker name rib expression. {}",
+//                     err
+//                 ))
+//             })?
+//             .get_literal()
+//             .ok_or(ErrorOrRedirect::internal(
+//                 "Worker name is not a Rib expression that resolves to String".to_string(),
+//             ))?
+//             .as_string();
 
-            Some(worker_name)
-        } else {
-            None
-        };
+//             Some(worker_name)
+//         } else {
+//             None
+//         };
 
-        let component_id = &binding.component_id;
+//         let component_id = &binding.component_id;
 
-        let idempotency_key =
-            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
-                let resolve_rib_input = http_request_details
-                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                    .await
-                    .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+//         let idempotency_key =
+//             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+//                 let resolve_rib_input = http_request_details
+//                     .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+//                     .await
+//                     .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
-                let idempotency_key_value = rib::interpret_pure(
-                    &idempotency_key_compiled.compiled_idempotency_key,
-                    &resolve_rib_input,
-                )
-                .await
-                .map_err(|err| ErrorOrRedirect::internal(err.to_string()))?;
+//                 let idempotency_key_value = rib::interpret_pure(
+//                     &idempotency_key_compiled.compiled_idempotency_key,
+//                     &resolve_rib_input,
+//                 )
+//                 .await
+//                 .map_err(|err| ErrorOrRedirect::internal(err.to_string()))?;
 
-                let idempotency_key = idempotency_key_value
-                    .get_literal()
-                    .ok_or(ErrorOrRedirect::internal(
-                        "Idempotency Key is not a string".to_string(),
-                    ))?
-                    .as_string();
+//                 let idempotency_key = idempotency_key_value
+//                     .get_literal()
+//                     .ok_or(ErrorOrRedirect::internal(
+//                         "Idempotency Key is not a string".to_string(),
+//                     ))?
+//                     .as_string();
 
-                Some(IdempotencyKey::new(idempotency_key))
-            } else {
-                headers
-                    .get("idempotency-key")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|value| IdempotencyKey::new(value.to_string()))
-            };
+//                 Some(IdempotencyKey::new(idempotency_key))
+//             } else {
+//                 headers
+//                     .get("idempotency-key")
+//                     .and_then(|h| h.to_str().ok())
+//                     .map(|value| IdempotencyKey::new(value.to_string()))
+//             };
 
-        let worker_detail = WorkerDetail {
-            component_id: component_id.clone(),
-            worker_name: worker_name_opt,
-            idempotency_key,
-        };
+//         let worker_detail = WorkerDetail {
+//             component_id: component_id.clone(),
+//             worker_name: worker_name_opt,
+//             idempotency_key,
+//         };
 
-        let resolved_binding = ResolvedWorkerBinding {
-            worker_detail,
-            compiled_response_mapping: binding.response_compiled.clone(),
-            namespace: namespace.clone(),
-        };
+//         let resolved_binding = ResolvedWorkerBinding {
+//             worker_detail,
+//             compiled_response_mapping: binding.response_compiled.clone(),
+//             namespace: namespace.clone(),
+//         };
 
-        Ok(resolved_binding)
-    }
+//         Ok(resolved_binding)
+//     }
 
-    pub async fn get_resolved_http_handler_binding<Namespace: Clone>(
-        binding: &HttpHandlerBindingCompiled,
-        http_request_details: &HttpRequestDetails,
-        namespace: &Namespace,
-        headers: &HeaderMap,
-    ) -> Result<ResolvedHttpHandlerBinding<Namespace>, ErrorOrRedirect> {
-        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
-            let resolve_rib_input = http_request_details
-                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                .await
-                .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+//     pub async fn get_resolved_http_handler_binding<Namespace: Clone>(
+//         binding: &HttpHandlerBindingCompiled,
+//         http_request_details: &HttpRequestDetails,
+//         namespace: &Namespace,
+//         headers: &HeaderMap,
+//     ) -> Result<ResolvedHttpHandlerBinding<Namespace>, ErrorOrRedirect> {
+//         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+//             let resolve_rib_input = http_request_details
+//                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+//                 .await
+//                 .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
-            let worker_name = rib::interpret_pure(
-                &worker_name_compiled.compiled_worker_name,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| {
-                ErrorOrRedirect::internal(format!(
-                    "Failed to evaluate worker name rib expression. {}",
-                    err
-                ))
-            })?
-            .get_literal()
-            .ok_or(ErrorOrRedirect::internal(
-                "Worker name is not a Rib expression that resolves to String".to_string(),
-            ))?
-            .as_string();
+//             let worker_name = rib::interpret_pure(
+//                 &worker_name_compiled.compiled_worker_name,
+//                 &resolve_rib_input,
+//             )
+//             .await
+//             .map_err(|err| {
+//                 ErrorOrRedirect::internal(format!(
+//                     "Failed to evaluate worker name rib expression. {}",
+//                     err
+//                 ))
+//             })?
+//             .get_literal()
+//             .ok_or(ErrorOrRedirect::internal(
+//                 "Worker name is not a Rib expression that resolves to String".to_string(),
+//             ))?
+//             .as_string();
 
-            Some(worker_name)
-        } else {
-            None
-        };
+//             Some(worker_name)
+//         } else {
+//             None
+//         };
 
-        let component_id = &binding.component_id;
+//         let component_id = &binding.component_id;
 
-        let idempotency_key =
-            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
-                let resolve_rib_input = http_request_details
-                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                    .await
-                    .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
+//         let idempotency_key =
+//             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+//                 let resolve_rib_input = http_request_details
+//                     .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+//                     .await
+//                     .map_err(ErrorOrRedirect::rib_input_type_mismatch)?;
 
-                let idempotency_key_value = rib::interpret_pure(
-                    &idempotency_key_compiled.compiled_idempotency_key,
-                    &resolve_rib_input,
-                )
-                .await
-                .map_err(|err| ErrorOrRedirect::internal(err.to_string()))?;
+//                 let idempotency_key_value = rib::interpret_pure(
+//                     &idempotency_key_compiled.compiled_idempotency_key,
+//                     &resolve_rib_input,
+//                 )
+//                 .await
+//                 .map_err(|err| ErrorOrRedirect::internal(err.to_string()))?;
 
-                let idempotency_key = idempotency_key_value
-                    .get_literal()
-                    .ok_or(ErrorOrRedirect::internal(
-                        "Idempotency Key is not a string".to_string(),
-                    ))?
-                    .as_string();
+//                 let idempotency_key = idempotency_key_value
+//                     .get_literal()
+//                     .ok_or(ErrorOrRedirect::internal(
+//                         "Idempotency Key is not a string".to_string(),
+//                     ))?
+//                     .as_string();
 
-                Some(IdempotencyKey::new(idempotency_key))
-            } else {
-                headers
-                    .get("idempotency-key")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|value| IdempotencyKey::new(value.to_string()))
-            };
+//                 Some(IdempotencyKey::new(idempotency_key))
+//             } else {
+//                 headers
+//                     .get("idempotency-key")
+//                     .and_then(|h| h.to_str().ok())
+//                     .map(|value| IdempotencyKey::new(value.to_string()))
+//             };
 
-        let worker_detail = WorkerDetail {
-            component_id: component_id.clone(),
-            worker_name: worker_name_opt,
-            idempotency_key,
-        };
+//         let worker_detail = WorkerDetail {
+//             component_id: component_id.clone(),
+//             worker_name: worker_name_opt,
+//             idempotency_key,
+//         };
 
-        let resolved_binding = ResolvedHttpHandlerBinding {
-            worker_detail,
-            namespace: namespace.clone(),
-        };
+//         let resolved_binding = ResolvedHttpHandlerBinding {
+//             worker_detail,
+//             namespace: namespace.clone(),
+//         };
 
-        Ok(resolved_binding)
-    }
-}
+//         Ok(resolved_binding)
+//     }
+// }

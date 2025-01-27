@@ -52,7 +52,7 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
     let uri = http::Uri::builder()
         .scheme(converted_scheme)
         .authority(request.authority)
-        .path_and_query(request.path_with_query)
+        .path_and_query(request.path_and_query)
         .build()
         .map_err(|e| {
             GolemError::invalid_request(format!("Failed to construct a valid url: {e}"))
