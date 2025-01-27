@@ -51,11 +51,6 @@ impl RichRequest {
         Ok(())
     }
 
-    fn authority(&self) -> Result<String, String> {
-        self.underlying.header(http::header::HOST).map(|h| h.to_string())
-            .ok_or("No host header provided".to_string())
-    }
-
     fn path_and_query(&self) -> Result<String, String> {
         self.underlying.uri().path_and_query().map(|paq| paq.to_string())
             .ok_or("No path and query provided".to_string())
@@ -190,7 +185,7 @@ impl RichRequest {
             trailers: None,
         };
 
-        let authority = self.authority()?;
+        let authority = authority_from_request(&self.underlying)?;
 
         let path_and_query = self.path_and_query()?;
 
@@ -247,4 +242,8 @@ fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
     }
 
     query_components
+}
+
+pub fn authority_from_request(request: &poem::Request) -> Result<String, String> {
+    request.header(http::header::HOST).map(|h| h.to_string()).ok_or("No host header provided".to_string())
 }

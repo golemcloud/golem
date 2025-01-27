@@ -49,7 +49,7 @@ use std::sync::Arc;
 use tracing::error;
 use super::file_server_binding_handler::{FileServerBindingResult, FileServerBindingSuccess};
 use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
-use super::request::{split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult};
+use super::request::{authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult};
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetail;
 
@@ -384,11 +384,18 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
 {
     async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
-        let authority = authority_from_request(&request)?;
+        let authority = match authority_from_request(&request) {
+            Ok(success) => success,
+            Err(err) => {
+                return poem::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(err));
+            }
+        };
 
         let possible_api_definitions = self
             .api_definition_lookup_service
-            .get(&ApiSiteString(authority))
+            .get(&ApiSiteString(authority.clone()))
             .await;
 
         let possible_api_definitions = match possible_api_definitions {
@@ -419,7 +426,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             rich_request
         } = split_resolved_route_entry(request, resolved_route_entry);
 
-        let rich_request = match self.maybe_apply_middlewares_in(rich_request, &middlewares).await {
+        let mut rich_request = match self.maybe_apply_middlewares_in(rich_request, &middlewares).await {
             Ok(req) => req,
             Err(resp) => {
                 tracing::debug!("Middleware short-circuited the request handling");
@@ -431,7 +438,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
                 cors_preflight
                     .clone()
-                    .to_response(http_request_details, &self.gateway_session_store)
+                    .to_response(&rich_request, &self.gateway_session_store)
                     .await
             }
 
@@ -510,16 +517,6 @@ async fn resolve_rib_input(
     Ok(RibInput {
         input: result_map,
     })
-}
-
-fn authority_from_request(request: &poem::Request) -> GatewayHttpResult<String> {
-    request.header(http::header::HOST).map(|h| h.to_string())
-        .ok_or(GatewayHttpError::BadRequest("No host header provided".to_string()))
-}
-
-fn path_and_query_from_request(request: &poem::Request) -> GatewayHttpResult<String> {
-    request.uri().path_and_query().map(|paq| paq.to_string())
-        .ok_or(GatewayHttpError::BadRequest("No path and query provided".to_string()))
 }
 
 async fn maybe_apply_middlewares_out(mut response: poem::Response, middlewares: &Option<HttpMiddlewares>) -> poem::Response {
