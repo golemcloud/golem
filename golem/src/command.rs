@@ -56,10 +56,15 @@ impl<Ctx> CliCommand<Ctx> for SingleExecutableCommand {
                 data_dir,
                 clean,
             } => {
-                let base_directories = xdg::BaseDirectories::with_prefix("golem")
-                    .map_err(|_| GolemError("Failed to get XDG base directories".to_string()))?;
-
-                let data_dir = data_dir.unwrap_or_else(|| base_directories.get_state_home());
+                let data_dir = {
+                    if let Some(data_dir) = data_dir {
+                        data_dir
+                    } else {
+                        dirs::data_local_dir()
+                            .ok_or_else(|| GolemError("Failed to get data dir".to_string()))?
+                            .join("golem")
+                    }
+                };
 
                 if clean && tokio::fs::metadata(&data_dir).await.is_ok() {
                     tokio::fs::remove_dir_all(&data_dir)
