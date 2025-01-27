@@ -14,12 +14,10 @@
 
 use std::collections::HashMap;
 use std::fmt::Display;
-
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
 pub mod api_definition_lookup;
 pub mod auth_call_back_binding_handler;
 pub mod file_server_binding_handler;
@@ -32,6 +30,7 @@ pub mod http_handler_binding_handler;
 pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
+pub mod request;
 pub use gateway_worker_request_executor::*;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
