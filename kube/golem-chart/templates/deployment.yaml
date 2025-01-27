@@ -30,26 +30,26 @@ spec:
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
-            - name: REDIS_HOST
+            - name: GOLEM__PERSISTENCE__TYPE
+              value: "Redis"
+            - name: GOLEM__PERSISTENCE__CONFIG__HOST
               value: {{ .Values.shardManager.redis.host }}
-            - name: GOLEM__REDIS__KEY_PREFIX
+            - name: GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX
               value: {{.Values.env}}
-            - name: GOLEM__REDIS__HOST
-              value: {{ .Values.shardManager.redis.host }}
-            - name: GOLEM__REDIS__PORT
+            - name: GOLEM__PERSISTENCE__CONFIG__PORT
               value: "{{ .Values.shardManager.redis.port }}"
-            - name: GOLEM__REDIS__DATABASE
+            - name: GOLEM__PERSISTENCE__CONFIG__DATABASE
               value: "{{ .Values.shardManager.redis.database }}"
 {{- if .Values.shardManager.redis.username }}
-            - name: GOLEM__REDIS__USERNAME
+            - name: GOLEM__PERSISTENCE__CONFIG__USERNAME
               value: "{{ .Values.shardManager.redis.username }}"
 {{- end }}
 {{- if eq .Values.shardManager.redis.password.type "plain" }}
-            - name: GOLEM__REDIS__PASSWORD
+            - name: GOLEM__PERSISTENCE__CONFIG__PASSWORD
               value: "{{ .Values.shardManager.redis.password.plain }}"
 {{- end }}
 {{- if eq .Values.shardManager.redis.password.type "secret" }}
-            - name: GOLEM__REDIS__PASSWORD
+            - name: GOLEM__PERSISTENCE__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.shardManager.redis.password.secret.name }}
@@ -304,6 +304,31 @@ spec:
               value: "{{ .Values.workerService.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME
               value: {{ .Values.workerService.postgres.username }}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__TYPE
+              value: "Redis"
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST
+              value: {{ .Values.workerService.redis.host }}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX
+              value: {{.Values.env}}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT
+              value: "{{ .Values.workerService.redis.port }}"
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE
+              value: "{{ .Values.workerService.redis.database }}"
+      {{- if .Values.workerService.redis.username }}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__USERNAME
+              value: "{{ .Values.workerService.redis.username }}"
+      {{- end }}
+      {{- if eq .Values.workerService.redis.password.type "plain" }}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD
+              value: "{{ .Values.workerService.redis.password.plain }}"
+      {{- end }}
+      {{- if eq .Values.workerService.redis.password.type "secret" }}
+            - name: GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.workerService.redis.password.secret.name }}
+                  key: {{ .Values.workerService.redis.password.secret.key }}
+      {{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
             - name: RUST_BACKTRACE
