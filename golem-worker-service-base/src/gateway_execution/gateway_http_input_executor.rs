@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpRequestDetails, IdempotencyKeyCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedBinding, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, IdempotencyKeyCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedBinding, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -164,33 +164,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     //     }
     // }
 
-    async fn get_rib_result(
-        &self,
-        namespace: Namespace,
-        compiled_response_mapping: &ResponseMappingCompiled,
-        request_value: serde_json::Map<String, Value>,
-        worker_detail: WorkerDetail
-    ) -> Result<RibResult, EvaluationError> {
-        // let worker_detail_json_value = worker_detail.as_json();
-
-        // request_value.insert("worker".to_string(), worker_detail_json_value);
-
-        let rib_input = resolve_rib_input(request_value, &compiled_response_mapping.rib_input).await.unwrap();
-
-        self.evaluator
-            .evaluate(
-                worker_detail.worker_name.as_deref(),
-                &worker_detail
-                    .component_id
-                    .component_id,
-                &worker_detail.idempotency_key,
-                &compiled_response_mapping.response_mapping_compiled,
-                &rib_input,
-                namespace.clone(),
-            )
-            .await
-    }
-
     async fn evaluate_worker_name_rib_script(
         &self,
         script: &WorkerNameCompiled,
@@ -229,9 +202,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         IdempotencyKey::new(value)
     }
 
-    async fn get_worker_details(
+    async fn get_worker_detail(
         &self,
-        request: RichRequest,
+        request: &RichRequest,
         request_value: &serde_json::Map<String, Value>,
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
@@ -244,6 +217,9 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             None
         };
 
+        // We prefer to take idempotency key from the rib script,
+        // if that is not available we fall back to our custom header.
+        // If neither are available, the worker-executor will later generate an idempotency key.
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
             let result = self.evaluate_idempotency_key_rib_script(idempotency_key_compiled, request_value).await;
             Some(result)
@@ -262,24 +238,64 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
     }
 
+    async fn get_response_script_result(
+        &self,
+        namespace: &Namespace,
+        compiled_response_mapping: &ResponseMappingCompiled,
+        request_value: &serde_json::Map<String, Value>,
+        worker_detail: &WorkerDetail
+    ) -> Result<RibResult, EvaluationError> {
+        let rib_input = resolve_rib_input(&request_value, &compiled_response_mapping.rib_input).await.unwrap();
+
+        self.evaluator
+            .evaluate(
+                worker_detail.worker_name.as_deref(),
+                &worker_detail
+                    .component_id
+                    .component_id,
+                &worker_detail.idempotency_key,
+                &compiled_response_mapping.response_mapping_compiled,
+                &rib_input,
+                namespace.clone(),
+            )
+            .await
+    }
+
+
     async fn handle_worker_binding(
         &self,
+        namespace: &Namespace,
         request: &mut RichRequest,
-        resolved_binding: &WorkerBindingCompiled,
+        binding: &WorkerBindingCompiled,
     ) -> GatewayHttpResult<RibResult> {
-        let json_value = request.as_json_with_body().await.unwrap();
+        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
 
+        // phase 1. we only have the request details available
+        {
+            let request_value = request.as_json_with_body().await.unwrap();
+            rib_input.insert("request".to_string(), request_value);
+        }
 
+        let worker_detail = self.get_worker_detail(
+            request,
+            &rib_input,
+            &binding.worker_name_compiled,
+            &binding.idempotency_key_compiled,
+            &binding.component_id
+        ).await;
 
-
-        let (rib_input_from_request_details, rib_input_from_worker_details) =
-            resolve_response_mapping_rib_inputs(request_details, resolved_binding).await?;
+        // phase 2. we have both the request and the worker details available
+        {
+            let worker_value: Value = worker_detail.as_json();
+            rib_input.insert("worker".to_string(), worker_value);
+        }
 
         self
-            .get_rib_result(
-                rib_input_from_request_details,
-                rib_input_from_worker_details,
-                resolved_binding,
+            .get_response_script_result(
+                namespace,
+                &binding.response_compiled,
+                &rib_input,
+                &worker_detail
             )
             .await
             .map_err(GatewayHttpError::EvaluationError)
@@ -287,55 +303,32 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
     async fn handle_http_handler_binding(
         &self,
+        namespace: &Namespace,
         request: &mut RichRequest,
-        http_handler_binding: &ResolvedHttpHandlerBinding<Namespace>,
+        binding: &HttpHandlerBindingCompiled,
     ) -> GatewayHttpResult<HttpHandlerBindingResult> {
-        let inner_request = &mut request.0;
-        let incoming_http_request = {
-            use golem_common::virtual_exports::http_incoming_handler as hic;
+        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
 
-            let headers = {
-                let mut acc = Vec::new();
-                for (header_name, header_value) in inner_request.headers().iter() {
-                    let header_bytes: Vec<u8> = header_value.as_bytes().into();
-                    acc.push((
-                        header_name.clone().to_string(),
-                        Bytes::from(header_bytes),
-                    ));
-                }
-                hic::HttpFields(acc)
-            };
+        {
+            let request_value = request.as_json().unwrap();
+            rib_input.insert("request".to_string(), request_value);
+        }
 
-            let body_bytes = inner_request
-                .take_body()
-                .into_bytes()
-                .await
-                .map_err(|e| GatewayHttpError::BadRequest(format!("Failed reading request body: ${e}")))?;
+        let worker_detail = self.get_worker_detail(
+            request,
+            &rib_input,
+            &binding.worker_name_compiled,
+            &binding.idempotency_key_compiled,
+            &binding.component_id
+        ).await;
 
-            let body = hic::HttpBodyAndTrailers {
-                content: hic::HttpBodyContent(Bytes::from(body_bytes)),
-                trailers: None,
-            };
-
-            let authority = authority_from_request(&inner_request)?;
-
-            let path_and_query = path_and_query_from_request(&inner_request)?;
-
-            hic::IncomingHttpRequest {
-                scheme: inner_request.scheme().clone().into(),
-                authority,
-                path_and_query,
-                method: hic::HttpMethod::from_http_method(inner_request.method().into()),
-                headers,
-                body: Some(body),
-            }
-        };
+        let incoming_http_request = request.as_wasi_http_input().await.unwrap();
 
         let result = self
             .http_handler_binding_handler
             .handle_http_handler_binding(
-                &http_handler_binding.namespace,
-                &http_handler_binding.worker_detail,
+                namespace,
+                &worker_detail,
                 incoming_http_request,
             )
             .await;
@@ -346,29 +339,51 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         }
 
         Ok(result)
-
-        // result
-        //     .to_response(&request_details, &self.gateway_session_store)
-        //     .await
     }
 
     async fn handle_file_server_binding(
         &self,
-        request_details: &mut RichRequest,
-        resolved_binding: &ResolvedWorkerBinding<Namespace>,
+        namespace: &Namespace,
+        request: &mut RichRequest,
+        binding: &WorkerBindingCompiled, // TODO make separate type
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
-        let (request_rib_input, worker_rib_input) = resolve_response_mapping_rib_inputs(request_details, resolved_binding).await?;
+        let mut rib_input: serde_json::Map<String, Value> = serde_json::Map::new();
 
-        let worker_response = self
-            .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
+        // phase 1. we only have the request details available
+        {
+            let request_value = request.as_json_with_body().await.unwrap();
+            rib_input.insert("request".to_string(), request_value);
+        }
+
+        let worker_detail = self.get_worker_detail(
+            request,
+            &rib_input,
+            &binding.worker_name_compiled,
+            &binding.idempotency_key_compiled,
+            &binding.component_id
+        ).await;
+
+        // phase 2. we have both the request and the worker details available
+        {
+            let worker_value: Value = worker_detail.as_json();
+            rib_input.insert("worker".to_string(), worker_value);
+        }
+
+        let response_script_result = self
+            .get_response_script_result(
+                namespace,
+                &binding.response_compiled,
+                &rib_input,
+                &worker_detail
+            )
             .await
             .map_err(GatewayHttpError::EvaluationError)?;
 
         self.file_server_binding_handler
             .handle_file_server_binding_result(
-                &resolved_binding.namespace,
-                &resolved_binding.worker_detail,
-                worker_response,
+                &namespace,
+                &worker_detail,
+                response_script_result,
             )
             .await
             .map_err(GatewayHttpError::FileServerBindingError)
@@ -726,6 +741,46 @@ impl RichRequest {
         basic.insert("body".to_string(), body.0);
 
         Ok(Value::Object(basic))
+    }
+
+    async fn as_wasi_http_input(&self) -> Result<golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest, String> {
+        use golem_common::virtual_exports::http_incoming_handler as hic;
+
+        let headers = {
+            let mut acc = Vec::new();
+            for (header_name, header_value) in self.underlying.headers().iter() {
+                let header_bytes: Vec<u8> = header_value.as_bytes().into();
+                acc.push((
+                    header_name.clone().to_string(),
+                    Bytes::from(header_bytes),
+                ));
+            }
+            hic::HttpFields(acc)
+        };
+
+        let body_bytes = self.underlying
+            .take_body()
+            .into_bytes()
+            .await
+            .map_err(|e| GatewayHttpError::BadRequest(format!("Failed reading request body: ${e}")))?;
+
+        let body = hic::HttpBodyAndTrailers {
+            content: hic::HttpBodyContent(Bytes::from(body_bytes)),
+            trailers: None,
+        };
+
+        let authority = self.authority()?;
+
+        let path_and_query = self.path_and_query()?;
+
+        Ok(hic::IncomingHttpRequest {
+            scheme: self.underlying.scheme().clone().into(),
+            authority,
+            path_and_query,
+            method: hic::HttpMethod::from_http_method(self.underlying.method().into()),
+            headers,
+            body: Some(body),
+        })
     }
 
 }
