@@ -62,6 +62,7 @@ pub enum GatewayHttpError {
     RibInterpretPureError(String),
     HttpHandlerBindingError(HttpHandlerBindingError),
     FileServerBindingError(FileServerBindingError),
+    AuthorisationError(AuthorisationError),
 }
 
 #[async_trait]
@@ -90,6 +91,9 @@ impl ToHttpResponse for GatewayHttpError {
                 inner.to_response(request_details, session_store).await
             }
             GatewayHttpError::FileServerBindingError(inner) => {
+                inner.to_response(request_details, session_store).await
+            }
+            GatewayHttpError::AuthorisationError(inner) => {
                 inner.to_response(request_details, session_store).await
             }
         }

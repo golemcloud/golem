@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::auth_call_back_binding_handler::AuthorisationSuccess;
 use super::file_server_binding_handler::FileServerBindingSuccess;
 use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
 use super::request::{
@@ -26,9 +27,7 @@ use crate::gateway_binding::{
     WorkerNameCompiled,
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
-use crate::gateway_execution::auth_call_back_binding_handler::{
-    AuthCallBackBindingHandler, AuthCallBackResult,
-};
+use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
@@ -217,26 +216,24 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             .map_err(GatewayHttpError::FileServerBindingError)
     }
 
-    async fn handle_http_auth_call_binding(
+    async fn handle_http_auth_callback_binding(
         &self,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         request: &RichRequest,
-    ) -> GatewayHttpResult<AuthCallBackResult> {
+    ) -> GatewayHttpResult<AuthorisationSuccess> {
         let url = request
             .url()
             .map_err(|e| GatewayHttpError::BadRequest(format!("Failed getting url: {e}")))?;
 
-        let authorisation_result = self
-            .auth_call_back_binding_handler
+        self.auth_call_back_binding_handler
             .handle_auth_call_back(
                 &url,
                 security_scheme_with_metadata,
                 &self.gateway_session_store,
                 &self.identity_provider,
             )
-            .await;
-
-        Ok(authorisation_result)
+            .await
+            .map_err(GatewayHttpError::AuthorisationError)
     }
 
     async fn evaluate_worker_name_rib_script(
@@ -472,7 +469,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 
             GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
                 let result = self
-                    .handle_http_auth_call_binding(
+                    .handle_http_auth_callback_binding(
                         &auth_call_back.security_scheme_with_metadata,
                         &rich_request,
                     )

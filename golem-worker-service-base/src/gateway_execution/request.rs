@@ -23,6 +23,8 @@ use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 
+const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
+
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
     pub underlying: poem::Request,
@@ -208,6 +210,24 @@ impl RichRequest {
             headers,
             body: Some(body),
         })
+    }
+
+    pub fn get_cookie_values(&self) -> HashMap<&str, &str> {
+        let mut result = HashMap::new();
+
+        for header_name in COOKIE_HEADER_NAMES.iter() {
+            if let Some(value) = self.underlying.header(header_name) {
+                let parts: Vec<&str> = value.split(';').collect();
+                for part in parts {
+                    let key_value: Vec<&str> = part.split('=').collect();
+                    if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+                        result.insert(key.trim(), value.trim());
+                    }
+                }
+            }
+        }
+
+        result
     }
 }
 

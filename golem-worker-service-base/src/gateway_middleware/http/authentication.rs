@@ -31,16 +31,16 @@ impl HttpAuthenticationMiddleware {
 
         let identity_token_verifier = open_id_client.id_token_verifier();
 
-        let cookie_jar = input.underlying.cookie();
+        let cookie_values = input.get_cookie_values();
 
-        let id_token = cookie_jar.get("id_token").map(|c| c.to_string());
-        let state = cookie_jar.get("session_id").map(|c| c.to_string());
+        let id_token = cookie_values.get("id_token");
+        let state = cookie_values.get("session_id");
 
         if let (Some(id_token), Some(state)) = (id_token, state) {
             internal::get_session_details_or_redirect(
-                &state,
+                state,
                 identity_token_verifier,
-                &id_token,
+                id_token,
                 session_store,
                 input,
                 identity_provider,
@@ -191,7 +191,14 @@ mod internal {
         client: &OpenIdClient,
         http_authorizer: &HttpAuthenticationMiddleware,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
-        let redirect_uri = input.underlying.uri().to_string();
+        let redirect_uri = input
+            .underlying
+            .uri()
+            .path_and_query()
+            .ok_or(MiddlewareError::InternalError(
+                "Failed to get redirect uri".to_string(),
+            ))?
+            .to_string();
 
         let authorization = identity_provider.get_authorization_url(
             client,
