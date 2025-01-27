@@ -41,7 +41,7 @@ mod worker_binding;
 pub enum GatewayBinding {
     Default(WorkerBinding),
     FileServer(WorkerBinding),
-    Static(Box<StaticBinding>),
+    Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
 }
 
@@ -71,7 +71,7 @@ impl GatewayBinding {
     }
 
     pub fn static_binding(value: StaticBinding) -> GatewayBinding {
-        GatewayBinding::Static(Box::new(value))
+        GatewayBinding::Static(value)
     }
 
     pub fn get_component_id(&self) -> Option<VersionedComponentId> {
@@ -113,7 +113,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
             GatewayBinding::Static(static_binding) => {
                 let static_binding =
                     golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                        static_binding.deref().clone(),
+                        static_binding.clone(),
                     )?;
 
                 let inner = static_binding

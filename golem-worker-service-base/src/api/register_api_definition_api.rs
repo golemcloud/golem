@@ -579,7 +579,7 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
                 ),
             ),
             GatewayBindingCompiled::Static(static_binding) => {
-                let binding_type = match static_binding.deref() {
+                let binding_type = match static_binding {
                     StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
                     StaticBinding::HttpAuthCallBack(_) => {
                         return Err(
@@ -702,7 +702,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 )
             }
 
-            GatewayBinding::Static(static_binding) => match static_binding.deref() {
+            GatewayBinding::Static(static_binding) => match static_binding {
                 StaticBinding::HttpCorsPreflight(cors) => Ok(GatewayBindingData {
                     binding_type: Some(GatewayBindingType::CorsPreflight),
                     component_id: None,

@@ -405,11 +405,11 @@ impl RequestPathValues {
             .map(|field| &field.value)
     }
 
-    fn from(path_variables: &HashMap<VarInfo, String>) -> RequestPathValues {
+    pub fn from(path_variables: HashMap<VarInfo, String>) -> RequestPathValues {
         let record_fields: Vec<JsonKeyValue> = path_variables
-            .iter()
+            .into_iter()
             .map(|(key, value)| JsonKeyValue {
-                name: key.key_name.clone(),
+                name: key.key_name,
                 value: internal::refine_json_str_value(value),
             })
             .collect();
@@ -424,7 +424,7 @@ impl RequestPathValues {
 pub struct RequestQueryValues(pub JsonKeyValues);
 
 impl RequestQueryValues {
-    fn from(
+    pub fn from(
         query_key_values: &HashMap<String, String>,
         query_keys: &[QueryInfo],
     ) -> Result<RequestQueryValues, Vec<String>> {
@@ -453,7 +453,7 @@ impl RequestQueryValues {
 pub struct RequestHeaderValues(pub JsonKeyValues);
 
 impl RequestHeaderValues {
-    fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
+    pub fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
         let mut headers_map: JsonKeyValues = JsonKeyValues::default();
 
         for (header_name, header_value) in headers {

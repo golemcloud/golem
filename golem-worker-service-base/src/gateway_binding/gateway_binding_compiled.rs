@@ -30,7 +30,7 @@ use super::HttpHandlerBinding;
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
-    Static(Box<StaticBinding>),
+    Static(StaticBinding),
     FileServer(WorkerBindingCompiled),
     HttpHandler(HttpHandlerBindingCompiled),
 }
@@ -108,7 +108,7 @@ impl TryFrom<GatewayBindingCompiled>
             }
 
             GatewayBindingCompiled::Static(static_binding) => {
-                let binding_type = match static_binding.deref() {
+                let binding_type = match static_binding {
                     StaticBinding::HttpCorsPreflight(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight,
                     StaticBinding::HttpAuthCallBack(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack,
                 };
@@ -128,9 +128,7 @@ impl TryFrom<GatewayBindingCompiled>
                         worker_functions_in_response: None,
                         binding_type: Some(binding_type as i32),
                         static_binding: Some(
-                            golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                                *static_binding,
-                            )?,
+                            golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(static_binding)?,
                         ),
                         response_rib_output: None,
                     },
@@ -291,9 +289,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     .static_binding
                     .ok_or("Missing static_binding for Static")?;
 
-                Ok(GatewayBindingCompiled::Static(Box::new(
-                    static_binding.try_into()?,
-                )))
+                Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
         }
     }
