@@ -14,9 +14,10 @@
 
 use std::collections::HashMap;
 use bytes::Bytes;
+use http::HeaderMap;
 use serde_json::Value;
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedRouteEntry};
+use crate::gateway_binding::{GatewayBindingCompiled, ResolvedRouteEntry};
 use crate::gateway_middleware::HttpMiddlewares;
 use crate::gateway_request::http_request::router::PathParamExtractor;
 use super::gateway_session::{DataKey, GatewaySessionStore, SessionId};
@@ -246,4 +247,124 @@ fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
 
 pub fn authority_from_request(request: &poem::Request) -> Result<String, String> {
     request.header(http::header::HOST).map(|h| h.to_string()).ok_or("No host header provided".to_string())
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestQueryValues(pub JsonKeyValues);
+
+impl RequestQueryValues {
+    pub fn from(
+        query_key_values: &HashMap<String, String>,
+        query_keys: &[QueryInfo],
+    ) -> Result<RequestQueryValues, Vec<String>> {
+        let mut unavailable_query_variables: Vec<String> = vec![];
+        let mut query_variable_map: JsonKeyValues = JsonKeyValues::default();
+
+        for spec_query_variable in query_keys.iter() {
+            let key = &spec_query_variable.key_name;
+            if let Some(query_value) = query_key_values.get(key) {
+                let typed_value = internal::refine_json_str_value(query_value);
+                query_variable_map.push(key.clone(), typed_value);
+            } else {
+                unavailable_query_variables.push(spec_query_variable.to_string());
+            }
+        }
+
+        if unavailable_query_variables.is_empty() {
+            Ok(RequestQueryValues(query_variable_map))
+        } else {
+            Err(unavailable_query_variables)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestHeaderValues(pub JsonKeyValues);
+
+impl RequestHeaderValues {
+    pub fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
+        let mut headers_map: JsonKeyValues = JsonKeyValues::default();
+
+        for (header_name, header_value) in headers {
+            let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
+
+            let typed_header_value = internal::refine_json_str_value(header_value_str);
+
+            headers_map.push(header_name.to_string(), typed_header_value);
+        }
+
+        Ok(RequestHeaderValues(headers_map))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestBodyValue(pub Value);
+
+#[derive(Clone, Debug, Default)]
+pub struct JsonKeyValues {
+    pub fields: Vec<JsonKeyValue>,
+}
+
+impl JsonKeyValues {
+    pub fn push(&mut self, key: String, value: Value) {
+        self.fields.push(JsonKeyValue { name: key, value });
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct JsonKeyValue {
+    pub name: String,
+    pub value: Value,
+}
+
+mod internal {
+    use rib::{CoercedNumericValue, LiteralValue};
+    use serde_json::Value;
+
+    pub(crate) fn refine_json_str_value(value: impl AsRef<str>) -> Value {
+        let primitive = LiteralValue::from(value.as_ref().to_string());
+        match primitive {
+            LiteralValue::Num(number) => match number {
+                CoercedNumericValue::PosInt(value) => {
+                    Value::Number(serde_json::Number::from(value))
+                }
+                CoercedNumericValue::NegInt(value) => {
+                    Value::Number(serde_json::Number::from(value))
+                }
+                CoercedNumericValue::Float(value) => {
+                    Value::Number(serde_json::Number::from_f64(value).unwrap())
+                }
+            },
+            LiteralValue::String(value) => Value::String(value),
+            LiteralValue::Bool(value) => Value::Bool(value),
+        }
+    }
+}
+
+
+#[derive(Clone, Debug, Default)]
+pub struct RequestPathValues(pub JsonKeyValues);
+
+impl RequestPathValues {
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0
+            .fields
+            .iter()
+            .find(|field| field.name == key)
+            .map(|field| &field.value)
+    }
+
+    fn from(path_variables: HashMap<VarInfo, String>) -> RequestPathValues {
+        let record_fields: Vec<JsonKeyValue> = path_variables
+            .into_iter()
+            .map(|(key, value)| JsonKeyValue {
+                name: key.key_name,
+                value: internal::refine_json_str_value(value),
+            })
+            .collect();
+
+        RequestPathValues(JsonKeyValues {
+            fields: record_fields,
+        })
+    }
 }

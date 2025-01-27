@@ -25,7 +25,6 @@ use crate::gateway_execution::gateway_http_input_executor::{
 use crate::gateway_execution::gateway_session::GatewaySession;
 use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
-use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
 use futures_util::FutureExt;

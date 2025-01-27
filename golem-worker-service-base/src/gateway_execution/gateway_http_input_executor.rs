@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, IdempotencyKeyCompiled, RequestBodyValue, RequestHeaderValues, RequestPathValues, RequestQueryValues, ResolvedBinding, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, ResolvedBinding, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
@@ -28,7 +28,7 @@ use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
 use crate::gateway_request::http_request::router::PathParamExtractor;
-use crate::gateway_request::http_request::{ErrorResponse, InputHttpRequest};
+use crate::gateway_request::http_request::{ErrorResponse};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;

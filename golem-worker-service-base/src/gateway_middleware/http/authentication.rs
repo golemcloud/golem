@@ -1,4 +1,3 @@
-use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
@@ -63,7 +62,6 @@ impl HttpAuthenticationMiddleware {
 }
 
 mod internal {
-    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
     use crate::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,

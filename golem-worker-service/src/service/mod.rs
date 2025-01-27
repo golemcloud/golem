@@ -59,7 +59,6 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
 };
-use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{

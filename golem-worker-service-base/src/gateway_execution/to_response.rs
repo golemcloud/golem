@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
@@ -21,7 +20,6 @@ use crate::gateway_execution::file_server_binding_handler::{
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::HttpCors as CorsPreflight;
-use crate::gateway_request::request_details;
 use crate::gateway_rib_interpreter::EvaluationError;
 use async_trait::async_trait;
 use http::{header::*, request};
@@ -281,7 +279,6 @@ impl ToHttpResponse for AuthorisationError {
 }
 
 mod internal {
-    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -390,7 +387,6 @@ mod test {
     use std::sync::Arc;
     use test_r::test;
 
-    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
     };

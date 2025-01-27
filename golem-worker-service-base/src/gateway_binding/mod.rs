@@ -15,7 +15,6 @@
 pub(crate) use self::http_handler_binding::*;
 pub(crate) use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
-pub(crate) use crate::gateway_request::request_details::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;

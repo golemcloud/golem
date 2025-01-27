@@ -14,7 +14,7 @@
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_binding::{
-    GatewayBindingCompiled, HttpHandlerBindingCompiled, HttpRequestDetails, StaticBinding, WorkerBindingCompiled
+    GatewayBindingCompiled, HttpHandlerBindingCompiled, StaticBinding, WorkerBindingCompiled
 };
 use crate::gateway_binding::{ResponseMappingCompiled};
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -22,7 +22,7 @@ use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
 use crate::gateway_request::http_request::router::{PathParamExtractor, RouteEntry};
-use crate::gateway_request::http_request::{router, InputHttpRequest};
+use crate::gateway_request::http_request::{router};
 use crate::gateway_security::{IdentityProvider, OpenIdClient};
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
