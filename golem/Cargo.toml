@@ -32,6 +32,7 @@ golem-worker-service-base = { path = "../golem-worker-service-base", version = "
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
+dirs = { workspace = true }
 http-body-util = "0.1.2"
 hyper = { workspace = true }
 futures = { workspace = true }
@@ -49,15 +50,15 @@ sqlx = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-xdg = { workspace = true }
 
 # Sozu builds with simd support by default, but it only works on x86_64
+# Sozu does not support windows, until we find an alternative we exclude suzo deps, and build a dummy binary
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+[target.'cfg(all(target_arch = "x86_64", not(windows)))'.dependencies]
 sozu-command-lib = { workspace = true }
 sozu-lib = { workspace = true }
 
-[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+[target.'cfg(all(not(target_arch = "x86_64"), not(windows)))'.dependencies]
 sozu-command-lib = { workspace = true, default-features = false }
 sozu-lib = { workspace = true, default-features = false }
 

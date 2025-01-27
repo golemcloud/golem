@@ -43,7 +43,7 @@ clap_complete = { version = "4.5.38" }
 cli-table = { workspace = true }
 colored = "2.1.0"
 derive_more = { workspace = true }
-dirs = "5.0.1"
+dirs = { workspace = true }
 futures-util = { workspace = true }
 glob = "0.3.1"
 golem-examples = "=1.1.1"
