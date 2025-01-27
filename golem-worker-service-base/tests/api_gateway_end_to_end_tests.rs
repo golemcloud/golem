@@ -74,6 +74,7 @@ async fn execute(
         internal::get_test_rib_interpreter(),
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
+        internal::get_test_http_handler_binding_handler(),
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
@@ -1594,12 +1595,16 @@ mod internal {
         FileServerBindingHandler, FileServerBindingResult,
     };
     use golem_worker_service_base::gateway_execution::gateway_binding_resolver::WorkerDetail;
+    use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
+        HttpHandlerBindingHandler, HttpHandlerBindingResult,
+    };
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
     };
     use golem_worker_service_base::gateway_middleware::HttpCors;
 
+    use golem_worker_service_base::gateway_request::request_details::HttpRequestDetails;
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -1671,6 +1676,19 @@ mod internal {
             _worker_detail: &WorkerDetail,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
+            unimplemented!()
+        }
+    }
+
+    struct TestHttpHandlerBindingHandler {}
+    #[async_trait]
+    impl<Namespace> HttpHandlerBindingHandler<Namespace> for TestHttpHandlerBindingHandler {
+        async fn handle_http_handler_binding(
+            &self,
+            _namespace: &Namespace,
+            _worker_detail: &WorkerDetail,
+            _request_details: &HttpRequestDetails,
+        ) -> HttpHandlerBindingResult {
             unimplemented!()
         }
     }
@@ -1826,6 +1844,11 @@ mod internal {
     pub fn get_test_file_server_binding_handler<Namespace>(
     ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
+    }
+
+    pub fn get_test_http_handler_binding_handler<Namespace>(
+    ) -> Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send> {
+        Arc::new(TestHttpHandlerBindingHandler {})
     }
 
     pub fn get_preflight_from_response(response: Response) -> HttpCors {

@@ -1868,11 +1868,16 @@ async fn wasi_incoming_request_handler(
         .await;
 
     let args: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
         Value::Variant {
             case_idx: 0,
             case_value: None,
         },
+        Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        Value::String("localhost:8000".to_string()),
+        Value::String("/".to_string()),
         Value::List(vec![]),
         Value::Option(None),
     ]);
@@ -1918,11 +1923,16 @@ async fn wasi_incoming_request_handler_echo(
         .await;
 
     let args: Value = Value::Record(vec![
-        Value::String("http://localhost:8000/foo?bar=baz".to_string()),
         Value::Variant {
             case_idx: 2,
             case_value: None,
         },
+        Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        Value::String("localhost:8000".to_string()),
+        Value::String("/foo?bar=baz".to_string()),
         Value::List(vec![Value::Tuple(vec![
             Value::String("test-header".to_string()),
             Value::List(
@@ -2052,11 +2062,16 @@ async fn wasi_incoming_request_handler_state(
         .await;
 
     let args_put: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
         Value::Variant {
             case_idx: 3,
             case_value: None,
         },
+        Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        Value::String("localhost:8000".to_string()),
+        Value::String("/".to_string()),
         Value::List(vec![]),
         Value::Option(Some(Box::new(Value::Record(vec![
             Value::List(
@@ -2071,11 +2086,16 @@ async fn wasi_incoming_request_handler_state(
     ]);
 
     let args_get: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
         Value::Variant {
             case_idx: 0,
             case_value: None,
         },
+        Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        Value::String("localhost:8000".to_string()),
+        Value::String("/".to_string()),
         Value::List(vec![]),
         Value::Option(None),
     ]);

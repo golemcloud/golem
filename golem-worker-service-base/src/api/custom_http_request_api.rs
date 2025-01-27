@@ -23,6 +23,7 @@ use crate::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
 };
 use crate::gateway_execution::gateway_session::GatewaySession;
+use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
@@ -47,6 +48,7 @@ impl CustomHttpRequestApi {
                 + Send,
         >,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
+        http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
         gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
@@ -59,6 +61,7 @@ impl CustomHttpRequestApi {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
+            http_handler_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider: Arc::new(DefaultIdentityProvider),

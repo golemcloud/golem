@@ -25,7 +25,7 @@ use tracing::error;
 
 #[derive(Clone, Debug)]
 pub struct InputHttpRequest {
-    pub scheme: Option<Scheme>,
+    pub scheme: Scheme,
     pub host: ApiSiteString,
     pub api_input_path: ApiInputPath,
     pub headers: HeaderMap,
@@ -44,10 +44,10 @@ impl From<ErrorResponse> for Response {
 
 impl InputHttpRequest {
     pub async fn from_request(request: poem::Request) -> Result<InputHttpRequest, ErrorResponse> {
+        let scheme = request.scheme().clone();
         let (req_parts, body) = request.into_parts();
         let headers = req_parts.headers;
         let uri = req_parts.uri;
-        let scheme = uri.scheme();
 
         let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
             Some(host) => ApiSiteString(host.to_string()),
@@ -77,7 +77,7 @@ impl InputHttpRequest {
         };
 
         Ok(InputHttpRequest {
-            scheme: scheme.cloned(),
+            scheme: scheme.clone(),
             host,
             api_input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
