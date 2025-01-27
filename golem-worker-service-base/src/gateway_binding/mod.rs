@@ -50,7 +50,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
             },
@@ -62,7 +62,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
             },

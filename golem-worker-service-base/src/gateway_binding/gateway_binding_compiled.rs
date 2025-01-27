@@ -41,7 +41,7 @@ impl GatewayBindingCompiled {
             GatewayBindingCompiled::Worker(_) => false,
             GatewayBindingCompiled::FileServer(_) => false,
             GatewayBindingCompiled::HttpHandler(_) => false,
-            GatewayBindingCompiled::Static(static_binding) => match static_binding.deref() {
+            GatewayBindingCompiled::Static(static_binding) => match static_binding {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
             },
