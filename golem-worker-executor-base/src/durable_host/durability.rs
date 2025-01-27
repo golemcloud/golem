@@ -175,17 +175,13 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         Ok(oplog_idx.into())
     }
 
-    async fn end_durable_function(
-        &mut self,
-        function_type: durability::DurableFunctionType,
-        begin_index: durability::OplogIndex,
-    ) -> anyhow::Result<()> {
+    async fn end_durable_function(&mut self, function_type: durability::DurableFunctionType, begin_index: durability::OplogIndex, _forced_commit: bool) -> anyhow::Result<()> {
         DurabilityHost::end_durable_function(
             self,
             &function_type.into(),
             OplogIndex::from_u64(begin_index),
         )
-        .await?;
+            .await?;
         Ok(())
     }
 

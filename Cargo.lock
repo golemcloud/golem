@@ -3917,7 +3917,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit 1.1.2",
+ "golem-wit",
  "include_dir",
  "itertools 0.14.0",
  "nanoid",
@@ -4200,14 +4200,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit.git?branch=add_fork#04fe3305ef75c43e52ce959c9c7ebd1f60bb7acf"
-
-[[package]]
-name = "golem-wit"
-version = "1.1.2"
+version = "1.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf53fc25db491f96c480d7f195175f6da5f18dcc6ef548d04b2ae648b7796bbf"
+checksum = "04cb9d855d8604587ccf16a402f759ee6e85b555201b6d6b1c9f0764a0fbc6d2"
 
 [[package]]
 name = "golem-worker-executor"
@@ -4284,7 +4279,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit 0.0.0",
+ "golem-wit",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
