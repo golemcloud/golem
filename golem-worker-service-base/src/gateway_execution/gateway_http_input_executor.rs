@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, QueryInfo, VarInfo};
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, ResolvedBinding, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, ResolvedRouteEntry, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled
 };
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::{
