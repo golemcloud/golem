@@ -129,7 +129,9 @@ const NewRouteForm = ({
       if(!noRedirect){
         router.replace(`/apis/${apiId}/${routeId}${version? `?version=${version}`: ''}`);
       }
+      setError(null);
       onSuccess?.();
+      
     } catch (error) {
       console.error("Error creating route:", error);
     }
