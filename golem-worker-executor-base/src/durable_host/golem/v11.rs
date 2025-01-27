@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::api",
-            "fork-worker",
+            "fork_worker",
             DurableFunctionType::WriteRemote,
         )
         .await?;
