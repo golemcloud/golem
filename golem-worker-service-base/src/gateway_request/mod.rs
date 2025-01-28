@@ -13,4 +13,3 @@
 // limitations under the License.
 
 pub mod http_request;
-pub mod request_details;

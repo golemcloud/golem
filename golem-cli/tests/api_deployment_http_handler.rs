@@ -95,16 +95,16 @@ async fn api_deployment_http_handler(
         client
             .post(format!("http://{host}/test?foo=baz"))
             .header("test-header", "test-header-value")
-            .body("\"test-body\"")
+            .body("test-body")
             .send()
             .await
     }?;
     assert_eq!(res.status().as_u16(), 200);
     assert_eq!(
         res.headers().get("echo-test-header").unwrap(),
-        "\"test-header-value\""
+        "test-header-value"
     );
-    assert_eq!(res.text().await?, "\"test-body\"");
+    assert_eq!(res.text().await?, "test-body");
 
     Ok(())
 }
