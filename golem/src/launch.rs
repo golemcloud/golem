@@ -14,6 +14,7 @@
 
 use crate::health;
 use crate::migration::IncludedMigrationsDir;
+use crate::proxy;
 use crate::AllRunDetails;
 use anyhow::Context;
 use golem_common::config::DbConfig;
@@ -45,8 +46,6 @@ use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::Instrument;
-
-use crate::proxy;
 
 pub struct LaunchArgs {
     pub router_host: String,
@@ -195,7 +194,7 @@ fn worker_executor_config(
                 ..ComponentServiceGrpcConfig::default()
             }
         ),
-        compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {  }),
+        compiled_component_service: CompiledComponentServiceConfig::Disabled(golem_worker_executor_base::services::golem_config::CompiledComponentServiceDisabledConfig {}),
         shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
             host: args.router_host.clone(),
             port: shard_manager_run_details.grpc_port,

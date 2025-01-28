@@ -201,9 +201,8 @@ impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
             .get_bindings()
             .iter()
             .cloned()
-            .filter_map(|binding| binding.get_worker_binding())
-            .map(|binding| async move {
-                let id = &binding.component_id;
+            .filter_map(|binding| binding.get_component_id())
+            .map(|id| async move {
                 self.component_service
                     .get_by_version(&id.component_id, id.version, auth_ctx)
                     .await

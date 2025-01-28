@@ -12,8 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::AllRunDetails;
+use tokio::task::JoinSet;
+use tracing::info;
+
+#[cfg(not(windows))]
 use anyhow::Context;
+#[cfg(not(windows))]
 use sozu_command_lib::proto::command::WorkerResponse;
+#[cfg(not(windows))]
 use sozu_command_lib::{
     channel::Channel,
     config::ListenerBuilder,
@@ -22,12 +29,10 @@ use sozu_command_lib::{
         RequestHttpFrontend, RulePosition, SocketAddress, WorkerRequest,
     },
 };
+#[cfg(not(windows))]
 use std::net::Ipv4Addr;
-use tokio::task::JoinSet;
-use tracing::info;
 
-use crate::AllRunDetails;
-
+#[cfg(not(windows))]
 pub fn start_proxy(
     listener_addr: &str,
     listener_port: u16,
@@ -162,4 +167,19 @@ pub fn start_proxy(
     }
 
     Ok(command_channel)
+}
+
+#[cfg(windows)]
+pub struct Dummy;
+
+#[cfg(windows)]
+pub fn start_proxy(
+    _listener_addr: &str,
+    _listener_port: u16,
+    _healthcheck_port: u16,
+    _all_run_details: &AllRunDetails,
+    _join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<Dummy, anyhow::Error> {
+    info!("Proxy is not supported on windows yet");
+    Ok(Dummy)
 }

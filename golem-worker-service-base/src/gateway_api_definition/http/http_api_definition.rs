@@ -16,8 +16,8 @@ use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern
 use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
-use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
+use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
     HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, HttpMiddlewares,
 };
@@ -620,6 +620,28 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::FileServer(binding),
+                    middlewares: route.middlewares.clone(),
+                })
+            }
+
+            GatewayBinding::HttpHandler(http_handler_binding) => {
+                let metadata = metadata_dictionary
+                    .metadata
+                    .get(&http_handler_binding.component_id)
+                    .ok_or(RouteCompilationErrors::MetadataNotFoundError(
+                        http_handler_binding.component_id.clone(),
+                    ))?;
+
+                let binding = HttpHandlerBindingCompiled::from_raw_http_handler_binding(
+                    http_handler_binding,
+                    metadata,
+                )
+                .map_err(RouteCompilationErrors::RibCompilationError)?;
+
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::HttpHandler(binding),
                     middlewares: route.middlewares.clone(),
                 })
             }

@@ -1,0 +1,7 @@
+components:
+  wasi-http-incoming-request-handler-echo:
+    sourceWit: wit
+    generatedWit: generated-wit
+    componentWasm: ../wasi-http-incoming-request-handler-echo.wasm
+    linkedWasm: ../wasi-http-incoming-request-handler-echo.wasm
+    componentType: durable

@@ -26,9 +26,6 @@ use crate::security::TestIdentityProvider;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{
-    DefaultGatewayBindingResolver, GatewayBindingResolver,
-};
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
 };
@@ -36,9 +33,9 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, GatewaySessionStore,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
-use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
-    IdentityProvider, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::header::LOCATION;
@@ -74,6 +71,7 @@ async fn execute(
         internal::get_test_rib_interpreter(),
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
+        internal::get_test_http_handler_binding_handler(),
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
@@ -1151,34 +1149,19 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
         )
         .await;
 
-        let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
+        let session_store = internal::get_session_store();
+
+        let response = execute(
+            api_request,
             &api_specification,
-            &internal::get_component_metadata(),
-            &DefaultNamespace::default(),
+            &session_store,
+            &TestIdentityProvider::default(),
         )
-        .unwrap();
+        .await;
 
-        let input_http_request = InputHttpRequest::from_request(api_request).await.unwrap();
+        let test_response = internal::get_details_from_response(response).await;
 
-        let identity_provider: Arc<dyn IdentityProvider + Sync + Send> =
-            Arc::new(TestIdentityProvider::default());
-
-        // Resolve the API definition binding from input
-        let resolver = DefaultGatewayBindingResolver::new(
-            input_http_request,
-            &internal::get_session_store(),
-            &identity_provider,
-        );
-
-        let resolved_route = resolver
-            .resolve_gateway_binding(vec![compiled_api_spec])
-            .await
-            .unwrap();
-
-        assert_eq!(
-            resolved_route.get_worker_detail().unwrap().idempotency_key,
-            idempotency_key
-        );
+        assert_eq!(test_response.idempotency_key, idempotency_key);
     }
 
     test_key(&HeaderMap::new(), None).await;
@@ -1577,7 +1560,8 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
-    use golem_common::model::ComponentId;
+    use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
@@ -1590,36 +1574,35 @@ mod internal {
     use golem_worker_service_base::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary,
     };
+    use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
+    use golem_worker_service_base::gateway_execution::api_definition_lookup::{
+        ApiDefinitionLookupError, HttpApiDefinitionsLookup,
+    };
     use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
         FileServerBindingHandler, FileServerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::gateway_binding_resolver::WorkerDetail;
+    use golem_worker_service_base::gateway_execution::gateway_session::{
+        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
+    };
+    use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
+        HttpHandlerBindingHandler, HttpHandlerBindingResult,
+    };
+    use golem_worker_service_base::gateway_execution::WorkerDetail;
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
     };
     use golem_worker_service_base::gateway_middleware::HttpCors;
-
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
         ACCESS_CONTROL_MAX_AGE,
     };
-
     use poem::Response;
     use rib::RibResult;
-
-    use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-        ApiDefinitionLookupError, ApiDefinitionsLookup,
-    };
-    use golem_worker_service_base::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySession, GatewaySessionError, GatewaySessionStore, SessionId,
-    };
-    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1635,13 +1618,12 @@ mod internal {
     }
 
     #[async_trait]
-    impl ApiDefinitionsLookup<InputHttpRequest> for TestApiDefinitionLookup {
-        type ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>;
-
+    impl HttpApiDefinitionsLookup<DefaultNamespace> for TestApiDefinitionLookup {
         async fn get(
             &self,
-            _input: &InputHttpRequest,
-        ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError> {
+            _input: &ApiSiteString,
+        ) -> Result<Vec<CompiledHttpApiDefinition<DefaultNamespace>>, ApiDefinitionLookupError>
+        {
             Ok(vec![self.api_definition.clone()])
         }
     }
@@ -1675,13 +1657,27 @@ mod internal {
         }
     }
 
+    struct TestHttpHandlerBindingHandler {}
+    #[async_trait]
+    impl<Namespace> HttpHandlerBindingHandler<Namespace> for TestHttpHandlerBindingHandler {
+        async fn handle_http_handler_binding(
+            &self,
+            _namespace: &Namespace,
+            _worker_detail: &WorkerDetail,
+            _request_details: IncomingHttpRequest,
+        ) -> HttpHandlerBindingResult {
+            unimplemented!()
+        }
+    }
+
     #[derive(Debug, Clone)]
     pub struct DefaultResult {
         pub worker_name: String,
         pub function_name: String,
         pub function_params: Value,
         pub user_email: Option<String>,
-        pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured
+        pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured,
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Clone)]
@@ -1765,7 +1761,7 @@ mod internal {
 
         if let Some(idempotency_key) = worker_request.clone().idempotency_key {
             record_elems.push((
-                "idempotency-key".to_string(),
+                "idempotency_key".to_string(),
                 TypeAnnotatedValue::Str(idempotency_key.to_string()),
             ))
         };
@@ -1826,6 +1822,11 @@ mod internal {
     pub fn get_test_file_server_binding_handler<Namespace>(
     ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
+    }
+
+    pub fn get_test_http_handler_binding_handler<Namespace>(
+    ) -> Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send> {
+        Arc::new(TestHttpHandlerBindingHandler {})
     }
 
     pub fn get_preflight_from_response(response: Response) -> HttpCors {
@@ -1895,12 +1896,19 @@ mod internal {
 
         let function_params = body_json.get("function_params").cloned();
 
+        let idempotency_key = body_json
+            .get("idempotency_key")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .map(IdempotencyKey::new);
+
         DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
             user_email: user_email.clone(),
             cors_middleware_headers: None,
+            idempotency_key,
         }
     }
 
@@ -1934,6 +1942,12 @@ mod internal {
 
         let function_params = body_json.get("function_params").cloned();
 
+        let idempotency_key = body_json
+            .get("idempotency_key")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .map(IdempotencyKey::new);
+
         DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
@@ -1959,6 +1973,7 @@ mod internal {
                     cors_header_expose_headers,
                 })
             },
+            idempotency_key,
         }
     }
 

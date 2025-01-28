@@ -736,6 +736,9 @@ impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for G
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
                 GatewayBindingType::FileServer
             }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
+                GatewayBindingType::HttpHandler
+            }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 GatewayBindingType::CorsPreflight
             }
@@ -754,6 +757,9 @@ impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::G
             }
             GatewayBindingType::FileServer => {
                 golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer
+            }
+            GatewayBindingType::HttpHandler => {
+                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler
             }
             GatewayBindingType::CorsPreflight => {
                 golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight

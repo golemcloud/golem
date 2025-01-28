@@ -454,9 +454,8 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
     tracing::debug!("Invoking wasi:http/incoming-http-handler handle");
 
     let (_, mut task_exits) = {
-        let hyper_request =
+        let (scheme, hyper_request) =
             virtual_export_compat::http_incoming_handler::input_to_hyper_request(function_input)?;
-        let scheme = wasi_http_scheme_from_request(&hyper_request)?;
         let incoming = store_context
             .data_mut()
             .as_wasi_http_view()
@@ -746,21 +745,4 @@ enum FindFunctionResult {
     ExportedFunction(Func),
     ResourceDrop,
     IncomingHttpHandlerBridge,
-}
-
-fn wasi_http_scheme_from_request<T>(
-    req: &hyper::Request<T>,
-) -> Result<wasmtime_wasi_http::bindings::http::types::Scheme, GolemError> {
-    use http::uri::*;
-    use wasmtime_wasi_http::bindings::http::types::Scheme as WasiScheme;
-
-    let raw_scheme = req.uri().scheme().ok_or(GolemError::invalid_request(
-        "Could not extract scheme from uri".to_string(),
-    ))?;
-
-    match raw_scheme {
-        scheme if *scheme == Scheme::HTTP => Ok(WasiScheme::Http),
-        scheme if *scheme == Scheme::HTTPS => Ok(WasiScheme::Https),
-        scheme => Ok(WasiScheme::Other(scheme.to_string())),
-    }
 }

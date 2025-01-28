@@ -101,7 +101,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             errors.push(RouteValidationError {
                 method: route.method.clone(),
                 path: route.path.to_string(),
-                component: route.binding.get_worker_binding().map(|w| w.component_id),
+                component: route.binding.get_component_id(),
                 detail,
             });
         }

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
-
-use crate::gateway_binding::WorkerBindingCompiled;
+use super::{IdempotencyKeyCompiled, WorkerNameCompiled};
+use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 use golem_service_base::model::VersionedComponentId;
-use rib::Expr;
+use golem_wasm_ast::analysis::AnalysedExport;
+use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerBinding {
@@ -26,9 +28,47 @@ pub struct WorkerBinding {
     pub response_mapping: ResponseMapping,
 }
 
-// ResponseMapping will consist of actual logic such as invoking worker functions
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResponseMapping(pub Expr);
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerBindingCompiled {
+    pub component_id: VersionedComponentId,
+    pub worker_name_compiled: Option<WorkerNameCompiled>,
+    pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
+    pub response_compiled: ResponseMappingCompiled,
+}
+
+impl WorkerBindingCompiled {
+    pub fn from_raw_worker_binding(
+        gateway_worker_binding: &WorkerBinding,
+        export_metadata: &[AnalysedExport],
+    ) -> Result<Self, String> {
+        let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
+            .worker_name
+            .clone()
+            .map(|worker_name_expr| {
+                WorkerNameCompiled::from_worker_name(&worker_name_expr, export_metadata)
+            })
+            .transpose()?;
+
+        let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
+            Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
+                idempotency_key,
+                export_metadata,
+            )?),
+            None => None,
+        };
+        let response_compiled = ResponseMappingCompiled::from_response_mapping(
+            &gateway_worker_binding.response_mapping,
+            export_metadata,
+        )?;
+
+        Ok(WorkerBindingCompiled {
+            component_id: gateway_worker_binding.component_id.clone(),
+            worker_name_compiled,
+            idempotency_key_compiled,
+            response_compiled,
+        })
+    }
+}
 
 impl From<WorkerBindingCompiled> for WorkerBinding {
     fn from(value: WorkerBindingCompiled) -> Self {
@@ -46,5 +86,37 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
                 worker_binding.response_compiled.response_mapping_expr,
             ),
         }
+    }
+}
+
+// ResponseMapping will consist of actual logic such as invoking worker functions
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponseMapping(pub Expr);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponseMappingCompiled {
+    pub response_mapping_expr: Expr,
+    pub response_mapping_compiled: RibByteCode,
+    pub rib_input: RibInputTypeInfo,
+    pub worker_calls: Option<WorkerFunctionsInRib>,
+    // Optional to keep backward compatibility
+    pub rib_output: Option<RibOutputTypeInfo>,
+}
+
+impl ResponseMappingCompiled {
+    pub fn from_response_mapping(
+        response_mapping: &ResponseMapping,
+        exports: &[AnalysedExport],
+    ) -> Result<Self, String> {
+        let response_compiled =
+            DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, exports)?;
+
+        Ok(ResponseMappingCompiled {
+            response_mapping_expr: response_mapping.0.clone(),
+            response_mapping_compiled: response_compiled.byte_code,
+            rib_input: response_compiled.rib_input_type_info,
+            worker_calls: response_compiled.worker_invoke_calls,
+            rib_output: response_compiled.rib_output_type_info,
+        })
     }
 }

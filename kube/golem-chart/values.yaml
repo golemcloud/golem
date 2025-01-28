@@ -68,6 +68,17 @@ workerService:
       secret: # password from kubernetes secret
         name: golem-postgres-postgresql
         key: password
+  redis:
+    port: 6379
+    host: golem-redis-master
+    username: ""
+    database: 0
+    password:
+      type: secret # secret or plain, or none if no auth
+      plain: ""
+      secret: # password from kubernetes secret
+        name: golem-redis
+        key: redis-password
 #  nodeSelector: # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
 # component service configuration

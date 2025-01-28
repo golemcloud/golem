@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::empty_worker_metadata;
-use crate::gateway_binding::WorkerDetail;
+use crate::gateway_execution::WorkerDetail;
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};
@@ -65,6 +65,97 @@ pub struct FileServerBindingDetails {
     pub file_path: ComponentFilePath,
 }
 
+impl FileServerBindingDetails {
+    pub fn from_rib_result(result: RibResult) -> Result<FileServerBindingDetails, String> {
+        // Three supported formats:
+        // 1. A string path. Mime type is guessed from the path. Status code is 200.
+        // 2. A record with a 'file-path' field. Mime type and status are optionally taken from the record, otherwise guessed.
+        // 3. A result of either of the above, with the same rules applied.
+        match result {
+            RibResult::Val(value) => match value {
+                ValueAndType {
+                    value: Value::Result(value),
+                    typ: AnalysedType::Result(typ),
+                } => match value {
+                    Ok(ok) => {
+                        let ok = ValueAndType::new(
+                            *ok.ok_or("ok unset".to_string())?,
+                            (*typ.ok.ok_or("Missing 'ok' type")?).clone(),
+                        );
+                        Self::from_rib_happy(ok)
+                    }
+                    Err(err) => {
+                        let value = err.ok_or("err unset".to_string())?;
+                        Err(format!("Error result: {value:?}"))
+                    }
+                },
+                other => Self::from_rib_happy(other),
+            },
+            RibResult::Unit => Err("Expected a value".to_string()),
+        }
+    }
+
+    /// Like the above, just without the result case.
+    fn from_rib_happy(value: ValueAndType) -> Result<FileServerBindingDetails, String> {
+        match &value {
+            ValueAndType {
+                value: Value::String(raw_path),
+                ..
+            } => Self::make_from(raw_path.clone(), None, None),
+            ValueAndType {
+                value: Value::Record(field_values),
+                typ: AnalysedType::Record(record),
+            } => {
+                let path_position = record
+                    .fields
+                    .iter()
+                    .position(|pair| &pair.name == "file-path")
+                    .ok_or("Record must contain 'file-path' field")?;
+
+                let path = if let Value::String(path) = &field_values[path_position] {
+                    path
+                } else {
+                    return Err("file-path must be a string".to_string());
+                };
+
+                let status = get_status_code(field_values, record)?;
+                let headers = get_response_headers_or_default(&value)?;
+                let content_type = headers.get_content_type();
+
+                Self::make_from(path.to_string(), content_type, status)
+            }
+            _ => Err("Response value expected".to_string()),
+        }
+    }
+
+    fn make_from(
+        path: String,
+        content_type: Option<ContentType>,
+        status_code: Option<StatusCode>,
+    ) -> Result<FileServerBindingDetails, String> {
+        let file_path = ComponentFilePath::from_either_str(&path)?;
+
+        let content_type = match content_type {
+            Some(content_type) => content_type,
+            None => {
+                let mime_type = mime_guess::from_path(&path)
+                    .first()
+                    .ok_or("Could not determine mime type")?;
+                ContentType::from_str(mime_type.as_ref())
+                    .map_err(|e| format!("Invalid mime type: {}", e))?
+            }
+        };
+
+        let status_code = status_code.unwrap_or(StatusCode::OK);
+
+        Ok(FileServerBindingDetails {
+            status_code,
+            content_type,
+            file_path,
+        })
+    }
+}
+
 pub struct DefaultFileServerBindingHandler {
     component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -77,7 +168,7 @@ impl DefaultFileServerBindingHandler {
         initial_component_files_service: Arc<InitialComponentFilesService>,
         worker_service: Arc<dyn WorkerService + Sync + Send>,
     ) -> Self {
-        DefaultFileServerBindingHandler {
+        Self {
             component_service,
             initial_component_files_service,
             worker_service,
@@ -175,96 +266,5 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                 data: Box::pin(stream),
             })
         }
-    }
-}
-
-impl FileServerBindingDetails {
-    pub fn from_rib_result(result: RibResult) -> Result<FileServerBindingDetails, String> {
-        // Three supported formats:
-        // 1. A string path. Mime type is guessed from the path. Status code is 200.
-        // 2. A record with a 'file-path' field. Mime type and status are optionally taken from the record, otherwise guessed.
-        // 3. A result of either of the above, with the same rules applied.
-        match result {
-            RibResult::Val(value) => match value {
-                ValueAndType {
-                    value: Value::Result(value),
-                    typ: AnalysedType::Result(typ),
-                } => match value {
-                    Ok(ok) => {
-                        let ok = ValueAndType::new(
-                            *ok.ok_or("ok unset".to_string())?,
-                            (*typ.ok.ok_or("Missing 'ok' type")?).clone(),
-                        );
-                        Self::from_rib_happy(ok)
-                    }
-                    Err(err) => {
-                        let value = err.ok_or("err unset".to_string())?;
-                        Err(format!("Error result: {value:?}"))
-                    }
-                },
-                other => Self::from_rib_happy(other),
-            },
-            RibResult::Unit => Err("Expected a value".to_string()),
-        }
-    }
-
-    /// Like the above, just without the result case.
-    fn from_rib_happy(value: ValueAndType) -> Result<FileServerBindingDetails, String> {
-        match &value {
-            ValueAndType {
-                value: Value::String(raw_path),
-                ..
-            } => Self::make_from(raw_path.clone(), None, None),
-            ValueAndType {
-                value: Value::Record(field_values),
-                typ: AnalysedType::Record(record),
-            } => {
-                let path_position = record
-                    .fields
-                    .iter()
-                    .position(|pair| &pair.name == "file-path")
-                    .ok_or("Record must contain 'file-path' field")?;
-
-                let path = if let Value::String(path) = &field_values[path_position] {
-                    path
-                } else {
-                    return Err("file-path must be a string".to_string());
-                };
-
-                let status = get_status_code(field_values, record)?;
-                let headers = get_response_headers_or_default(&value)?;
-                let content_type = headers.get_content_type();
-
-                Self::make_from(path.to_string(), content_type, status)
-            }
-            _ => Err("Response value expected".to_string()),
-        }
-    }
-
-    fn make_from(
-        path: String,
-        content_type: Option<ContentType>,
-        status_code: Option<StatusCode>,
-    ) -> Result<FileServerBindingDetails, String> {
-        let file_path = ComponentFilePath::from_either_str(&path)?;
-
-        let content_type = match content_type {
-            Some(content_type) => content_type,
-            None => {
-                let mime_type = mime_guess::from_path(&path)
-                    .first()
-                    .ok_or("Could not determine mime type")?;
-                ContentType::from_str(mime_type.as_ref())
-                    .map_err(|e| format!("Invalid mime type: {}", e))?
-            }
-        };
-
-        let status_code = status_code.unwrap_or(StatusCode::OK);
-
-        Ok(FileServerBindingDetails {
-            status_code,
-            content_type,
-            file_path,
-        })
     }
 }

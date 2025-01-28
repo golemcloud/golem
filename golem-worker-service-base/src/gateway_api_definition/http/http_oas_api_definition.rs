@@ -123,7 +123,9 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
-    use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
+    use crate::gateway_binding::{
+        GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, WorkerBinding,
+    };
     use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
     use golem_service_base::model::VersionedComponentId;
@@ -256,7 +258,7 @@ mod internal {
                     }
 
                     (GatewayBindingType::Default, _) => {
-                        let binding = get_gateway_binding(worker_gateway_info)?;
+                        let binding = get_worker_binding(worker_gateway_info)?;
 
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
@@ -267,12 +269,23 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
-                        let binding = get_gateway_binding(worker_gateway_info)?;
+                        let binding = get_worker_binding(worker_gateway_info)?;
 
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::Default(binding),
+                            security,
+                            cors: None
+                        })
+                    }
+                    (GatewayBindingType::HttpHandler, _) => {
+                        let binding = get_http_handler_binding(worker_gateway_info)?;
+
+                        Ok(RouteRequest {
+                            path: path_pattern.clone(),
+                            method,
+                            binding: GatewayBinding::HttpHandler(binding),
                             security,
                             cors: None
                         })
@@ -304,7 +317,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_gateway_binding(
+    pub(crate) fn get_worker_binding(
         gateway_binding_value: &Value,
     ) -> Result<WorkerBinding, String> {
         let binding = WorkerBinding {
@@ -312,6 +325,18 @@ mod internal {
             component_id: get_component_id(gateway_binding_value)?,
             idempotency_key: get_idempotency_key(gateway_binding_value)?,
             response_mapping: get_response_mapping(gateway_binding_value)?,
+        };
+
+        Ok(binding)
+    }
+
+    pub(crate) fn get_http_handler_binding(
+        gateway_binding_value: &Value,
+    ) -> Result<HttpHandlerBinding, String> {
+        let binding = HttpHandlerBinding {
+            worker_name: get_worker_id_expr(gateway_binding_value)?,
+            component_id: get_component_id(gateway_binding_value)?,
+            idempotency_key: get_idempotency_key(gateway_binding_value)?,
         };
 
         Ok(binding)

@@ -11,8 +11,8 @@ description = "GRPC API for Golem services"
 harness = false
 
 [dependencies]
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0", default-features = false, features = ["protobuf"] }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host-bindings", "protobuf"] }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["protobuf"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host-bindings", "protobuf"] }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }

@@ -1,6 +1,6 @@
-use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::request::RichRequest;
 use crate::gateway_middleware::{MiddlewareError, MiddlewareSuccess};
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use openidconnect::Scope;
@@ -18,7 +18,7 @@ impl HttpAuthenticationMiddleware {
 
     pub async fn apply_http_auth(
         &self,
-        input: &HttpRequestDetails,
+        input: &RichRequest,
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
@@ -62,11 +62,11 @@ impl HttpAuthenticationMiddleware {
 }
 
 mod internal {
-    use crate::gateway_binding::HttpRequestDetails;
     use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError;
     use crate::gateway_execution::gateway_session::{
         DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
     };
+    use crate::gateway_execution::request::RichRequest;
     use crate::gateway_middleware::http::middleware_error::MiddlewareSuccess;
     use crate::gateway_middleware::{HttpAuthenticationMiddleware, MiddlewareError};
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
@@ -83,7 +83,7 @@ mod internal {
         identity_token_verifier: CoreIdTokenVerifier<'_>,
         id_token: &str,
         session_store: &GatewaySessionStore,
-        input: &HttpRequestDetails,
+        input: &RichRequest,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         open_id_client: &OpenIdClient,
         http_authentication_details: &HttpAuthenticationMiddleware,
@@ -142,7 +142,7 @@ mod internal {
         identity_token_verifier: CoreIdTokenVerifier<'_>,
         session_id: &SessionId,
         session_store: &GatewaySessionStore,
-        input: &HttpRequestDetails,
+        input: &RichRequest,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         open_id_client: &OpenIdClient,
         http_authentication_details: &HttpAuthenticationMiddleware,
@@ -186,12 +186,19 @@ mod internal {
 
     pub(crate) async fn redirect(
         session_store: &GatewaySessionStore,
-        input: &HttpRequestDetails,
+        input: &RichRequest,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
         http_authorizer: &HttpAuthenticationMiddleware,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
-        let redirect_uri = input.get_api_input_path();
+        let redirect_uri = input
+            .underlying
+            .uri()
+            .path_and_query()
+            .ok_or(MiddlewareError::InternalError(
+                "Failed to get redirect uri".to_string(),
+            ))?
+            .to_string();
 
         let authorization = identity_provider.get_authorization_url(
             client,
