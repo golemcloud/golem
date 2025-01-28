@@ -15,8 +15,6 @@
 pub(crate) use self::http_handler_binding::*;
 pub(crate) use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
-pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
-pub(crate) use crate::gateway_request::request_details::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
@@ -25,7 +23,6 @@ use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 pub use static_binding::*;
-use std::ops::Deref;
 
 mod gateway_binding_compiled;
 mod http_handler_binding;
@@ -42,7 +39,7 @@ mod worker_binding;
 pub enum GatewayBinding {
     Default(WorkerBinding),
     FileServer(WorkerBinding),
-    Static(Box<StaticBinding>),
+    Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
 }
 
@@ -52,7 +49,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
             },
@@ -64,7 +61,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
             },
@@ -72,7 +69,7 @@ impl GatewayBinding {
     }
 
     pub fn static_binding(value: StaticBinding) -> GatewayBinding {
-        GatewayBinding::Static(Box::new(value))
+        GatewayBinding::Static(value)
     }
 
     pub fn get_component_id(&self) -> Option<VersionedComponentId> {
@@ -114,7 +111,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
             GatewayBinding::Static(static_binding) => {
                 let static_binding =
                     golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                        static_binding.deref().clone(),
+                        static_binding.clone(),
                     )?;
 
                 let inner = static_binding

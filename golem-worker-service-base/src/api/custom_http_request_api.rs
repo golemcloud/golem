@@ -15,8 +15,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
-use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_http_input_executor::{
@@ -25,7 +24,6 @@ use crate::gateway_execution::gateway_http_input_executor::{
 use crate::gateway_execution::gateway_session::GatewaySession;
 use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
-use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
 use futures_util::FutureExt;
@@ -40,13 +38,7 @@ impl CustomHttpRequestApi {
         worker_request_executor_service: Arc<
             dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
         >,
-        api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<
-                    InputHttpRequest,
-                    ApiDefinition = CompiledHttpApiDefinition<Namespace>,
-                > + Sync
-                + Send,
-        >,
+        api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
         gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
