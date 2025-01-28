@@ -12,81 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_deployment::ApiSiteString;
-use http::header::HOST;
-use http::uri::Scheme;
-use http::StatusCode;
-use hyper::http::{HeaderMap, Method};
-use poem::{Body, Response};
-use serde_json::Value;
+use poem::Response;
 use std::collections::HashMap;
 use std::fmt::Display;
-use tracing::error;
-
-#[derive(Clone, Debug)]
-pub struct InputHttpRequest {
-    pub scheme: Scheme,
-    pub host: ApiSiteString,
-    pub api_input_path: ApiInputPath,
-    pub headers: HeaderMap,
-    pub req_method: Method,
-    pub req_body: Value,
-}
 
 #[derive(Debug)]
-pub struct ErrorResponse(Response);
+pub struct ErrorResponse(pub Response);
 
 impl From<ErrorResponse> for Response {
     fn from(value: ErrorResponse) -> Self {
         value.0
-    }
-}
-
-impl InputHttpRequest {
-    pub async fn from_request(request: poem::Request) -> Result<InputHttpRequest, ErrorResponse> {
-        let scheme = request.scheme().clone();
-        let (req_parts, body) = request.into_parts();
-        let headers = req_parts.headers;
-        let uri = req_parts.uri;
-
-        let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
-            Some(host) => ApiSiteString(host.to_string()),
-            None => {
-                return Err(ErrorResponse(
-                    Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string("Missing host".to_string())),
-                ));
-            }
-        };
-
-        let json_request_body: Value = if body.is_empty() {
-            Value::Null
-        } else {
-            match body.into_json().await {
-                Ok(json_request_body) => json_request_body,
-                Err(err) => {
-                    error!("API request host: {} - error: {}", host, err);
-                    return Err(ErrorResponse(
-                        Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body(Body::from_string("Request body parse error".to_string())),
-                    ));
-                }
-            }
-        };
-
-        Ok(InputHttpRequest {
-            scheme: scheme.clone(),
-            host,
-            api_input_path: ApiInputPath {
-                base_path: uri.path().to_string(),
-                query_path: uri.query().map(|x| x.to_string()),
-            },
-            headers,
-            req_method: req_parts.method,
-            req_body: json_request_body,
-        })
     }
 }
 
