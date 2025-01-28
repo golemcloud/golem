@@ -3931,9 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
+version = "0.0.0"
 dependencies = [
  "clap",
  "convert_case",
@@ -4075,6 +4073,7 @@ dependencies = [
  "colored",
  "console-subscriber",
  "golem-api-grpc",
+ "golem-client",
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
@@ -4088,6 +4087,7 @@ dependencies = [
  "once_cell",
  "postgres",
  "redis",
+ "reqwest 0.12.12",
  "serde",
  "serde_json",
  "serde_yaml",

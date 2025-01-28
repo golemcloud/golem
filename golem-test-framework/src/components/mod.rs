@@ -17,7 +17,6 @@ use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
@@ -204,3 +203,10 @@ impl EnvVarBuilder {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GolemEnvVars();
+
+fn new_reqwest_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("Failed to build reqwest client")
+}

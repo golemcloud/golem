@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::rdb::Rdb;
+use crate::components::{new_reqwest_client, wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
+use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use create_component_request::Data;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response, create_plugin_response,
     get_component_metadata_response, get_components_response, install_plugin_response,
@@ -22,6 +26,19 @@ use golem_api_grpc::proto::golem::component::v1::{
     CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
     GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+};
+use golem_client::api::ComponentClient as ComponentServiceHttpClient;
+use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
+use golem_client::api::PluginClient as PluginServiceHttpClient;
+use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
+use golem_client::Context;
+use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginTypeSpecificDefinition,
+};
+use golem_common::model::{
+    ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile,
+    PluginInstallationId,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -35,14 +52,7 @@ use tokio::time::sleep;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
-
-use crate::components::rdb::Rdb;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
-use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, PluginDefinition};
-use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, PluginInstallationId};
+use url::Url;
 
 pub mod docker;
 pub mod filesystem;
@@ -50,10 +60,22 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
+#[derive(Clone)]
+pub enum ComponentClient {
+    Grpc(ComponentServiceGrpcClient<Channel>),
+    Http(Arc<ComponentServiceHttpClientLive>),
+}
+
+#[derive(Clone)]
+pub enum PluginClient {
+    Grpc(PluginServiceGrpcClient<Channel>),
+    Http(Arc<PluginServiceHttpClientLive>),
+}
+
 #[async_trait]
 pub trait ComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel>;
-    async fn plugins_client(&self) -> PluginServiceClient<Channel>;
+    fn component_client(&self) -> ComponentClient;
+    fn plugin_client(&self) -> PluginClient;
 
     async fn get_or_add_component(
         &self,
@@ -71,66 +93,87 @@ pub trait ComponentService {
                 file_name = format!("{}-ephemeral", file_name);
             }
 
-            let mut client = self.client().await;
-            let response = client
-                .get_components(GetComponentsRequest {
-                    project_id: None,
-                    component_name: Some(file_name.to_string()),
-                })
-                .await
-                .expect("Failed to call get-components")
-                .into_inner();
-
-            match response.result {
-                None => {
-                    panic!("Missing response from golem-component-service for get-components")
-                }
-                Some(get_components_response::Result::Success(result)) => {
-                    debug!("Response from get_components was {result:?}");
-                    let latest = result
-                        .components
-                        .into_iter()
-                        .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version);
-                    match latest {
-                        Some(component)
-                            if Into::<ComponentType>::into(component.component_type())
-                                == component_type =>
-                        {
-                            break component
-                                .versioned_component_id
-                                .expect("versioned_component_id field is missing")
-                                .component_id
-                                .expect("component_id field is missing")
-                                .try_into()
-                                .expect("component_id has unexpected format")
+            let latest_component_id: Option<ComponentId> = match self.component_client() {
+                ComponentClient::Grpc(mut client) => {
+                    match client
+                        .get_components(GetComponentsRequest {
+                            project_id: None,
+                            component_name: Some(file_name.to_string()),
+                        })
+                        .await
+                        .expect("Failed to call get-components")
+                        .into_inner()
+                        .result
+                    {
+                        None => {
+                            panic!(
+                                "Missing response from golem-component-service for get-components"
+                            )
                         }
-                        _ => {
-                            match self
-                                .add_component_with_name(local_path, &file_name, component_type)
-                                .await
-                            {
-                                Ok(component_id) => break component_id,
-                                Err(AddComponentError::AlreadyExists) => {
-                                    if retries > 0 {
-                                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
-                                        retries -= 1;
-                                        sleep(Duration::from_secs(1)).await;
-                                        continue;
-                                    } else {
-                                        panic!("Component with name {file_name} already exists in golem-component-service");
-                                    }
-                                }
-                                Err(AddComponentError::Other(message)) => {
-                                    panic!(
-                                        "Failed to add component with name {file_name}: {message}"
-                                    );
-                                }
-                            }
+                        Some(get_components_response::Result::Success(result)) => {
+                            debug!("Response from get_components (GRPC) was {result:?}");
+                            result
+                                .components
+                                .into_iter()
+                                .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version)
+                                .map(|component| {
+                                    component
+                                        .versioned_component_id
+                                        .expect("versioned_component_id field is missing")
+                                        .component_id
+                                        .expect("component_id field is missing")
+                                        .try_into()
+                                        .expect("component_id has unexpected format")
+                                })
+                        }
+                        Some(get_components_response::Result::Error(error)) => {
+                            panic!(
+                                "Failed to get components from golem-component-service (GRPC): {error:?}"
+                            );
                         }
                     }
                 }
-                Some(get_components_response::Result::Error(error)) => {
-                    panic!("Failed to get components from golem-component-service: {error:?}");
+                ComponentClient::Http(client) => {
+                    match client.get_components(Some(&file_name)).await {
+                        Ok(result) => {
+                            debug!("Response from get_components (HTTP) was {result:?}");
+                            result
+                                .into_iter()
+                                .max_by_key(|component| component.versioned_component_id.version)
+                                .map(|component| {
+                                    ComponentId(component.versioned_component_id.component_id)
+                                })
+                        }
+                        Err(error) => {
+                            panic!(
+                                "Failed to get components from golem-component-service (HTTP): {error:?}"
+                            );
+                        }
+                    }
+                }
+            };
+
+            if let Some(latest_component_id) = latest_component_id {
+                return latest_component_id;
+            }
+
+            match self
+                .add_component_with_name(local_path, &file_name, component_type)
+                .await
+            {
+                Ok(component_id) => break component_id,
+                Err(AddComponentError::AlreadyExists) => {
+                    if retries > 0 {
+                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
+                        retries -= 1;
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
+                    } else {
+                        panic!("Component with name {file_name} already exists in golem-component-service");
+                    }
+                }
+                Err(AddComponentError::Other(message)) => {
+                    panic!("Failed to add component with name {file_name}: {message}");
                 }
             }
         }
@@ -185,84 +228,124 @@ pub trait ComponentService {
         files: &[InitialComponentFile],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> Result<ComponentId, AddComponentError> {
-        let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
 
-        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-            component_type.into();
+        match self.component_client() {
+            ComponentClient::Grpc(mut client) => {
+                let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+                    component_type.into();
 
-        let files = files.iter().map(|f| f.clone().into()).collect();
+                let files = files.iter().map(|f| f.clone().into()).collect();
 
-        let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
-            data: Some(Data::Header(CreateComponentRequestHeader {
-                project_id: None,
-                component_name: name.to_string(),
-                component_type: Some(component_type as i32),
-                files,
-                dynamic_linking: HashMap::from_iter(
-                    dynamic_linking
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone().into())),
-                ),
-            })),
-        }];
+                let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
+                    data: Some(create_component_request::Data::Header(
+                        CreateComponentRequestHeader {
+                            project_id: None,
+                            component_name: name.to_string(),
+                            component_type: Some(component_type as i32),
+                            files,
+                            dynamic_linking: HashMap::from_iter(
+                                dynamic_linking
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone().into())),
+                            ),
+                        },
+                    )),
+                }];
 
-        loop {
-            let mut buffer = [0; 4096];
+                loop {
+                    let mut buffer = [0; 4096];
 
-            let n = file.read(&mut buffer).await.map_err(|_| {
-                AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
-            })?;
-
-            if n == 0 {
-                break;
-            } else {
-                chunks.push(CreateComponentRequest {
-                    data: Some(Data::Chunk(CreateComponentRequestChunk {
-                        component_chunk: buffer[0..n].to_vec(),
-                    })),
-                });
-            }
-        }
-        let response = client
-            .create_component(tokio_stream::iter(chunks))
-            .await
-            .map_err(|status| {
-                AddComponentError::Other(format!("Failed to call create_component: {status:?}"))
-            })?
-            .into_inner();
-        match response.result {
-            None => Err(AddComponentError::Other(
-                "Missing response from golem-component-service for create-component".to_string(),
-            )),
-            Some(create_component_response::Result::Success(component)) => {
-                info!("Created component {component:?}");
-                Ok(component
-                    .versioned_component_id
-                    .ok_or(AddComponentError::Other(
-                        "Missing versioned_component_id field".to_string(),
-                    ))?
-                    .component_id
-                    .ok_or(AddComponentError::Other(
-                        "Missing component_id field".to_string(),
-                    ))?
-                    .try_into()
-                    .map_err(|error| {
+                    let n = file.read(&mut buffer).await.map_err(|_| {
                         AddComponentError::Other(format!(
-                            "component_id has unexpected format: {error}"
+                            "Failed to read component from {local_path:?}"
                         ))
-                    })?)
-            }
-            Some(create_component_response::Result::Error(error)) => match error.error {
-                Some(component_error::Error::AlreadyExists(_)) => {
-                    Err(AddComponentError::AlreadyExists)
+                    })?;
+
+                    if n == 0 {
+                        break;
+                    } else {
+                        chunks.push(CreateComponentRequest {
+                            data: Some(create_component_request::Data::Chunk(
+                                CreateComponentRequestChunk {
+                                    component_chunk: buffer[0..n].to_vec(),
+                                },
+                            )),
+                        });
+                    }
                 }
-                _ => Err(AddComponentError::Other(format!(
-                    "Failed to create component in golem-component-service: {error:?}"
-                ))),
-            },
+                let response = client
+                    .create_component(tokio_stream::iter(chunks))
+                    .await
+                    .map_err(|status| {
+                        AddComponentError::Other(format!(
+                            "Failed to call create_component: {status:?}"
+                        ))
+                    })?
+                    .into_inner();
+                match response.result {
+                    None => Err(AddComponentError::Other(
+                        "Missing response from golem-component-service for create-component"
+                            .to_string(),
+                    )),
+                    Some(create_component_response::Result::Success(component)) => {
+                        info!("Created component (GRPC) {component:?}");
+                        Ok(component
+                            .versioned_component_id
+                            .ok_or(AddComponentError::Other(
+                                "Missing versioned_component_id field".to_string(),
+                            ))?
+                            .component_id
+                            .ok_or(AddComponentError::Other(
+                                "Missing component_id field".to_string(),
+                            ))?
+                            .try_into()
+                            .map_err(|error| {
+                                AddComponentError::Other(format!(
+                                    "component_id has unexpected format: {error}"
+                                ))
+                            })?)
+                    }
+                    Some(create_component_response::Result::Error(error)) => match error.error {
+                        Some(component_error::Error::AlreadyExists(_)) => {
+                            Err(AddComponentError::AlreadyExists)
+                        }
+                        _ => Err(AddComponentError::Other(format!(
+                            "Failed to create component in golem-component-service: {error:?}"
+                        ))),
+                    },
+                }
+            }
+            ComponentClient::Http(client) => {
+                match client
+                    .create_component(
+                        name,
+                        Some(&component_type),
+                        file,
+                        to_http_file_permissions(files).as_ref(),
+                        None::<File>, // TODO: zipped files
+                        to_http_dynamic_linking(dynamic_linking).as_ref(),
+                    )
+                    .await
+                {
+                    Ok(component) => {
+                        debug!("Created component (HTTP) {:?}", component);
+                        Ok(ComponentId(component.versioned_component_id.component_id))
+                    }
+                    Err(error) => {
+                        if let golem_client::Error::Item(
+                            golem_client::api::ComponentError::Error409(_),
+                        ) = &error
+                        {
+                            Err(AddComponentError::AlreadyExists)
+                        } else {
+                            Err(AddComponentError::Other(format!("{error:?}")))
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -290,101 +373,139 @@ pub trait ComponentService {
         files: &Option<Vec<InitialComponentFile>>,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> u64 {
-        let mut client = self.client().await;
         let mut file = File::open(local_path)
             .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
 
-        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-            component_type.into();
+        match self.component_client() {
+            ComponentClient::Grpc(mut client) => {
+                let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+                    component_type.into();
 
-        let update_files = files.is_some();
+                let update_files = files.is_some();
 
-        let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> = files
-            .iter()
-            .flatten()
-            .map(|f| f.clone().into())
-            .collect::<Vec<_>>();
+                let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> =
+                    files
+                        .iter()
+                        .flatten()
+                        .map(|f| f.clone().into())
+                        .collect::<Vec<_>>();
 
-        let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
-            data: Some(update_component_request::Data::Header(
-                UpdateComponentRequestHeader {
-                    component_id: Some(component_id.clone().into()),
-                    component_type: Some(component_type as i32),
-                    update_files,
-                    files,
-                    dynamic_linking: HashMap::from_iter(
-                        dynamic_linking
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone().into())),
-                    ),
-                },
-            )),
-        }];
-
-        loop {
-            let mut buffer = [0; 4096];
-
-            let n = file
-                .read(&mut buffer)
-                .await
-                .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
-
-            if n == 0 {
-                break;
-            } else {
-                chunks.push(UpdateComponentRequest {
-                    data: Some(update_component_request::Data::Chunk(
-                        UpdateComponentRequestChunk {
-                            component_chunk: buffer[0..n].to_vec(),
+                let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
+                    data: Some(update_component_request::Data::Header(
+                        UpdateComponentRequestHeader {
+                            component_id: Some(component_id.clone().into()),
+                            component_type: Some(component_type as i32),
+                            update_files,
+                            files,
+                            dynamic_linking: HashMap::from_iter(
+                                dynamic_linking
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone().into())),
+                            ),
                         },
                     )),
-                });
+                }];
+
+                loop {
+                    let mut buffer = [0; 4096];
+
+                    let n = file
+                        .read(&mut buffer)
+                        .await
+                        .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+                    if n == 0 {
+                        break;
+                    } else {
+                        chunks.push(UpdateComponentRequest {
+                            data: Some(update_component_request::Data::Chunk(
+                                UpdateComponentRequestChunk {
+                                    component_chunk: buffer[0..n].to_vec(),
+                                },
+                            )),
+                        });
+                    }
+                }
+                let response = client
+                    .update_component(tokio_stream::iter(chunks))
+                    .await
+                    .expect("Failed to update component")
+                    .into_inner();
+                match response.result {
+                    None => {
+                        panic!("Missing response from golem-component-service for create-component")
+                    }
+                    Some(update_component_response::Result::Success(component)) => {
+                        info!("Updated component (GRPC) {component:?}");
+                        component.versioned_component_id.unwrap().version
+                    }
+                    Some(update_component_response::Result::Error(error)) => {
+                        panic!("Failed to update component in golem-component-service (GRPC): {error:?}");
+                    }
+                }
             }
-        }
-        let response = client
-            .update_component(tokio_stream::iter(chunks))
-            .await
-            .expect("Failed to update component")
-            .into_inner();
-        match response.result {
-            None => {
-                panic!("Missing response from golem-component-service for create-component")
-            }
-            Some(update_component_response::Result::Success(component)) => {
-                info!("Created component {component:?}");
-                component.versioned_component_id.unwrap().version
-            }
-            Some(update_component_response::Result::Error(error)) => {
-                panic!("Failed to update component in golem-component-service: {error:?}");
+            ComponentClient::Http(client) => {
+                match client
+                    .update_component(
+                        &component_id.0,
+                        Some(&component_type),
+                        file,
+                        files
+                            .as_ref()
+                            .and_then(|files| to_http_file_permissions(&files))
+                            .as_ref(),
+                        None::<File>, // TODO: zipped files
+                        to_http_dynamic_linking(dynamic_linking).as_ref(),
+                    )
+                    .await
+                {
+                    Ok(component) => {
+                        debug!("Updated component (HTTP) {:?}", component);
+                        component.versioned_component_id.version
+                    }
+                    Err(error) => {
+                        panic!("Failed to update component in golem-component-service (HTTP): {error:?}");
+                    }
+                }
             }
         }
     }
 
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
-        let response = self
-            .client()
-            .await
-            .get_latest_component_metadata(GetLatestComponentRequest {
-                component_id: Some(component_id.clone().into()),
-            })
-            .await
-            .expect("Failed to get latest component metadata")
-            .into_inner();
-        match response.result {
-            None => {
-                panic!("Missing response from golem-component-service for create-component")
+        match self.component_client() {
+            ComponentClient::Grpc(mut client) => {
+                let response = client
+                    .get_latest_component_metadata(GetLatestComponentRequest {
+                        component_id: Some(component_id.clone().into()),
+                    })
+                    .await
+                    .expect("Failed to get latest component metadata (GRPC)")
+                    .into_inner();
+                match response.result {
+                    None => {
+                        panic!("Missing response from golem-component-service for create-component")
+                    }
+                    Some(get_component_metadata_response::Result::Success(component)) => {
+                        component
+                            .component
+                            .expect("No component in response")
+                            .versioned_component_id
+                            .expect("No versioned_component_id field")
+                            .version
+                    }
+                    Some(get_component_metadata_response::Result::Error(error)) => {
+                        panic!("Failed to get component metadata from golem-component-service: {error:?}");
+                    }
+                }
             }
-            Some(get_component_metadata_response::Result::Success(component)) => {
-                component
-                    .component
-                    .expect("No component in response")
+            ComponentClient::Http(client) => {
+                client
+                    .get_latest_component_metadata(&component_id.0)
+                    .await
+                    .expect("Failed to get latest component metadata (HTTP)")
                     .versioned_component_id
-                    .expect("No versioned_component_id field")
                     .version
-            }
-            Some(get_component_metadata_response::Result::Error(error)) => {
-                panic!("Failed to get component metadata from golem-component-service: {error:?}");
             }
         }
     }
@@ -393,21 +514,62 @@ pub trait ComponentService {
         &self,
         definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
     ) -> crate::Result<()> {
-        let mut client = self.plugins_client().await;
-        let response = client
-            .create_plugin(CreatePluginRequest {
-                plugin: Some(definition.into()),
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            None => Err(anyhow!(
-                "Missing response from golem-component-service for create-plugin"
-            )),
-            Some(create_plugin_response::Result::Success(_)) => Ok(()),
-            Some(create_plugin_response::Result::Error(error)) => Err(anyhow!(
-                "Failed to create plugin in golem-component-service: {error:?}"
-            )),
+        match self.plugin_client() {
+            PluginClient::Grpc(mut client) => {
+                let response = client
+                    .create_plugin(CreatePluginRequest {
+                        plugin: Some(definition.into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    None => Err(anyhow!(
+                        "Missing response from golem-component-service for create-plugin"
+                    )),
+                    Some(create_plugin_response::Result::Success(_)) => Ok(()),
+                    Some(create_plugin_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to create plugin in golem-component-service: {error:?}"
+                    )),
+                }
+            }
+            PluginClient::Http(client) => {
+                let result = client.create_plugin(
+                    &golem_client::model::PluginDefinitionWithoutOwnerDefaultPluginScope {
+                        name: definition.name,
+                        version: definition.version,
+                        description: definition.description,
+                        icon: definition.icon,
+                        homepage: definition.homepage,
+                        specs: match definition.specs {
+                            PluginTypeSpecificDefinition::ComponentTransformer(def) => {
+                                golem_client::model::PluginTypeSpecificDefinition::ComponentTransformer(
+                                    golem_client::model::ComponentTransformerDefinition {
+                                        provided_wit_package: def.provided_wit_package,
+                                        json_schema: def.json_schema,
+                                        validate_url: def.validate_url,
+                                        transform_url: def.transform_url,
+                                    },
+                                )
+                            }
+                            PluginTypeSpecificDefinition::OplogProcessor(def) => {
+                                golem_client::model::PluginTypeSpecificDefinition::OplogProcessor(
+                                    golem_client::model::OplogProcessorDefinition {
+                                        component_id: def.component_id.0,
+                                        component_version: def.component_version,
+                                    },
+                                )
+                            }
+                        },
+                        scope: definition.scope,
+                    },
+                ).await;
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!(
+                        "Failed to create plugin in golem-component-service: {error:?}"
+                    )),
+                }
+            }
         }
     }
 
@@ -419,36 +581,59 @@ pub trait ComponentService {
         priority: i32,
         parameters: HashMap<String, String>,
     ) -> crate::Result<PluginInstallationId> {
-        let mut client = self.client().await;
-        let response = client
-            .install_plugin(
-                golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
-                    component_id: Some(component_id.clone().into()),
-                    name: plugin_name.to_string(),
-                    version: plugin_version.to_string(),
-                    priority,
-                    parameters,
-                },
-            )
-            .await?
-            .into_inner();
+        match self.component_client() {
+            ComponentClient::Grpc(mut client) => {
+                let response = client
+                    .install_plugin(
+                        golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
+                            component_id: Some(component_id.clone().into()),
+                            name: plugin_name.to_string(),
+                            version: plugin_version.to_string(),
+                            priority,
+                            parameters,
+                        },
+                    )
+                    .await?
+                    .into_inner();
 
-        match response.result {
-            None => Err(anyhow!(
-                "Missing response from golem-component-service for install-plugin"
-            )),
-            Some(install_plugin_response::Result::Success(result)) => Ok(result
-                .installation
-                .ok_or(anyhow!("Missing plugin_installation field"))?
-                .id
-                .ok_or(anyhow!("Missing plugin_installation_id field"))?
-                .try_into()
-                .map_err(|error| {
-                    anyhow!("plugin_installation_id has unexpected format: {error}")
-                })?),
-            Some(install_plugin_response::Result::Error(error)) => Err(anyhow!(
-                "Failed to install plugin in golem-component-service: {error:?}"
-            )),
+                match response.result {
+                    None => Err(anyhow!(
+                        "Missing response from golem-component-service for install-plugin"
+                    )),
+                    Some(install_plugin_response::Result::Success(result)) => Ok(result
+                        .installation
+                        .ok_or(anyhow!("Missing plugin_installation field"))?
+                        .id
+                        .ok_or(anyhow!("Missing plugin_installation_id field"))?
+                        .try_into()
+                        .map_err(|error| {
+                            anyhow!("plugin_installation_id has unexpected format: {error}")
+                        })?),
+                    Some(install_plugin_response::Result::Error(error)) => Err(anyhow!(
+                        "Failed to install plugin in golem-component-service (GRPC): {error:?}"
+                    )),
+                }
+            }
+            ComponentClient::Http(client) => {
+                let result = client
+                    .install_plugin(
+                        &component_id.0,
+                        &golem_client::model::PluginInstallationCreation {
+                            name: plugin_name.to_string(),
+                            version: plugin_version.to_string(),
+                            priority,
+                            parameters,
+                        },
+                    )
+                    .await;
+
+                match result {
+                    Ok(result) => Ok(PluginInstallationId(result.id)),
+                    Err(error) => Err(anyhow!(
+                        "Failed to install plugin in golem-component-service (HTTP): {error:?}"
+                    )),
+                }
+            }
         }
     }
 
@@ -471,24 +656,90 @@ pub trait ComponentService {
     async fn kill(&self);
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> ComponentServiceClient<Channel> {
-    ComponentServiceClient::connect(format!("http://{host}:{grpc_port}"))
+async fn new_component_grpc_client(
+    host: &str,
+    grpc_port: u16,
+) -> ComponentServiceGrpcClient<Channel> {
+    ComponentServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-component-service")
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn new_plugins_client(host: &str, grpc_port: u16) -> PluginServiceClient<Channel> {
-    PluginServiceClient::connect(format!("http://{host}:{grpc_port}"))
+fn new_component_http_client(host: &str, http_port: u16) -> Arc<ComponentServiceHttpClientLive> {
+    Arc::new(ComponentServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_component_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    grpc_port: u16,
+    http_port: u16,
+) -> ComponentClient {
+    match protocol {
+        GolemClientProtocol::Grpc => {
+            ComponentClient::Grpc(new_component_grpc_client(host, grpc_port).await)
+        }
+        GolemClientProtocol::Http => {
+            ComponentClient::Http(new_component_http_client(host, http_port))
+        }
+    }
+}
+
+async fn new_plugin_grpc_client(host: &str, grpc_port: u16) -> PluginServiceGrpcClient<Channel> {
+    PluginServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-component-service (plugins)")
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
+fn new_plugin_http_client(host: &str, http_port: u16) -> Arc<PluginServiceHttpClientLive> {
+    Arc::new(PluginServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_plugin_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    grpc_port: u16,
+    http_port: u16,
+) -> PluginClient {
+    match protocol {
+        GolemClientProtocol::Grpc => {
+            PluginClient::Grpc(new_plugin_grpc_client(host, grpc_port).await)
+        }
+        GolemClientProtocol::Http => PluginClient::Http(new_plugin_http_client(host, http_port)),
+    }
+}
+
+async fn wait_for_startup(
+    protocol: GolemClientProtocol,
+    host: &str,
+    grpc_port: u16,
+    _http_port: u16,
+    timeout: Duration,
+) {
+    match protocol {
+        GolemClientProtocol::Grpc => {
+            wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
+        }
+        GolemClientProtocol::Http => {
+            todo!()
+        }
+    }
 }
 
 #[async_trait]
@@ -557,5 +808,51 @@ impl Display for AddComponentError {
             AddComponentError::AlreadyExists => write!(f, "Component already exists"),
             AddComponentError::Other(message) => write!(f, "{message}"),
         }
+    }
+}
+
+fn to_http_file_permissions(
+    files: &[InitialComponentFile],
+) -> Option<golem_common::model::ComponentFilePathWithPermissionsList> {
+    if files.is_empty() {
+        None
+    } else {
+        Some(golem_client::model::ComponentFilePathWithPermissionsList {
+            values: files
+                .iter()
+                .map(|file| ComponentFilePathWithPermissions {
+                    path: file.path.clone(),
+                    permissions: file.permissions,
+                })
+                .collect(),
+        })
+    }
+}
+
+fn to_http_dynamic_linking(
+    dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+) -> Option<golem_client::model::DynamicLinking> {
+    if dynamic_linking.is_empty() {
+        None
+    } else {
+        Some(golem_client::model::DynamicLinking {
+            dynamic_linking: dynamic_linking
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        match v {
+                            DynamicLinkedInstance::WasmRpc(link) => {
+                                golem_client::model::DynamicLinkedInstance::WasmRpc(
+                                    golem_client::model::DynamicLinkedWasmRpc {
+                                        target_interface_name: link.target_interface_name.clone(),
+                                    },
+                                )
+                            }
+                        },
+                    )
+                })
+                .collect(),
+        })
     }
 }

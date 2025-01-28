@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{AddComponentError, ComponentService};
+use crate::components::component_service::{
+    AddComponentError, ComponentClient, ComponentService, PluginClient,
+};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
@@ -26,7 +26,6 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -137,11 +136,11 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
+    fn component_client(&self) -> ComponentClient {
         panic!("No real component service running")
     }
 
-    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
+    fn plugin_client(&self) -> PluginClient {
         panic!("No real component service running")
     }
 

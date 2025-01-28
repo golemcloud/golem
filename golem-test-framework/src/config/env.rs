@@ -37,7 +37,7 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use crate::config::{DbType, TestDependencies};
+use crate::config::{DbType, GolemClientProtocol, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
@@ -50,7 +50,7 @@ use tracing::Level;
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
     pub number_of_shards_override: Option<usize>,
-    pub shared_client: bool,
+    pub shared_client: bool, // TODO: check for usages
     pub db_type: DbType,
     pub quiet: bool,
     pub golem_docker_services: bool,
@@ -59,6 +59,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_port: u16,
     pub redis_key_prefix: String,
     pub golem_test_components: PathBuf,
+    pub golem_client_protocol: GolemClientProtocol,
 }
 
 impl EnvBasedTestDependenciesConfig {
@@ -149,6 +150,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_port: 6379,
             redis_key_prefix: "".to_string(),
             golem_test_components: Path::new("../test-components").to_path_buf(),
+            golem_client_protocol: GolemClientProtocol::Grpc,
         }
     }
 }
@@ -272,8 +274,8 @@ impl EnvBasedTestDependencies {
                     )),
                     rdb,
                     config.default_verbosity(),
-                    config.shared_client,
                     config.keep_docker_containers,
+                    config.golem_client_protocol,
                 )
                 .await,
             )
@@ -289,7 +291,7 @@ impl EnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_stderr_level(),
-                    config.shared_client,
+                    config.golem_client_protocol,
                 )
                 .await,
             )
