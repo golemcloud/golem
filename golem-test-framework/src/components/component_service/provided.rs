@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentClient, ComponentService, PluginClient,
+    new_component_client, new_plugin_client, ComponentServiceClient, ComponentService, PluginServiceClient,
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
@@ -23,8 +23,8 @@ pub struct ProvidedComponentService {
     host: String,
     http_port: u16,
     grpc_port: u16,
-    component_client: ComponentClient,
-    plugin_client: PluginClient,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl ProvidedComponentService {
@@ -48,11 +48,11 @@ impl ProvidedComponentService {
 
 #[async_trait]
 impl ComponentService for ProvidedComponentService {
-    fn component_client(&self) -> ComponentClient {
+    fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
 
-    fn plugin_client(&self) -> PluginClient {
+    fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
     }
 

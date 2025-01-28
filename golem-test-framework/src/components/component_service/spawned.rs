@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, wait_for_startup, ComponentClient, ComponentService,
-    ComponentServiceEnvVars, PluginClient,
+    new_component_client, new_plugin_client, wait_for_startup, ComponentServiceClient, ComponentService,
+    ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::rdb::Rdb;
 use crate::components::{ChildProcessLogger, GolemEnvVars};
@@ -32,8 +32,8 @@ pub struct SpawnedComponentService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    component_client: ComponentClient,
-    plugin_client: PluginClient,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl SpawnedComponentService {
@@ -139,11 +139,11 @@ impl SpawnedComponentService {
 
 #[async_trait]
 impl ComponentService for SpawnedComponentService {
-    fn component_client(&self) -> ComponentClient {
+    fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
 
-    fn plugin_client(&self) -> PluginClient {
+    fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
     }
 

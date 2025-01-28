@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, wait_for_startup, ComponentClient, ComponentService,
-    ComponentServiceEnvVars, PluginClient,
+    new_component_client, new_plugin_client, wait_for_startup, ComponentServiceClient, ComponentService,
+    ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
@@ -43,8 +43,8 @@ pub struct K8sComponentService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
-    component_client: ComponentClient,
-    plugin_client: PluginClient,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl K8sComponentService {
@@ -233,11 +233,11 @@ impl K8sComponentService {
 
 #[async_trait]
 impl ComponentService for K8sComponentService {
-    fn component_client(&self) -> ComponentClient {
+    fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
 
-    fn plugin_client(&self) -> PluginClient {
+    fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
     }
 

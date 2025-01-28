@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    AddComponentError, ComponentClient, ComponentService, PluginClient,
+    AddComponentError, ComponentServiceClient, ComponentService, PluginServiceClient,
 };
 use async_trait::async_trait;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -136,11 +136,11 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
-    fn component_client(&self) -> ComponentClient {
+    fn component_client(&self) -> ComponentServiceClient {
         panic!("No real component service running")
     }
 
-    fn plugin_client(&self) -> PluginClient {
+    fn plugin_client(&self) -> PluginServiceClient {
         panic!("No real component service running")
     }
 

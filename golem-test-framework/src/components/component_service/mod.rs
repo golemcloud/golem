@@ -61,21 +61,21 @@ pub mod provided;
 pub mod spawned;
 
 #[derive(Clone)]
-pub enum ComponentClient {
+pub enum ComponentServiceClient {
     Grpc(ComponentServiceGrpcClient<Channel>),
     Http(Arc<ComponentServiceHttpClientLive>),
 }
 
 #[derive(Clone)]
-pub enum PluginClient {
+pub enum PluginServiceClient {
     Grpc(PluginServiceGrpcClient<Channel>),
     Http(Arc<PluginServiceHttpClientLive>),
 }
 
 #[async_trait]
 pub trait ComponentService {
-    fn component_client(&self) -> ComponentClient;
-    fn plugin_client(&self) -> PluginClient;
+    fn component_client(&self) -> ComponentServiceClient;
+    fn plugin_client(&self) -> PluginServiceClient;
 
     async fn get_or_add_component(
         &self,
@@ -94,7 +94,7 @@ pub trait ComponentService {
             }
 
             let latest_component_id: Option<ComponentId> = match self.component_client() {
-                ComponentClient::Grpc(mut client) => {
+                ComponentServiceClient::Grpc(mut client) => {
                     match client
                         .get_components(GetComponentsRequest {
                             project_id: None,
@@ -133,7 +133,7 @@ pub trait ComponentService {
                         }
                     }
                 }
-                ComponentClient::Http(client) => {
+                ComponentServiceClient::Http(client) => {
                     match client.get_components(Some(&file_name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
@@ -233,7 +233,7 @@ pub trait ComponentService {
         })?;
 
         match self.component_client() {
-            ComponentClient::Grpc(mut client) => {
+            ComponentServiceClient::Grpc(mut client) => {
                 let component_type: golem_api_grpc::proto::golem::component::ComponentType =
                     component_type.into();
 
@@ -318,7 +318,7 @@ pub trait ComponentService {
                     },
                 }
             }
-            ComponentClient::Http(client) => {
+            ComponentServiceClient::Http(client) => {
                 match client
                     .create_component(
                         name,
@@ -378,7 +378,7 @@ pub trait ComponentService {
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
 
         match self.component_client() {
-            ComponentClient::Grpc(mut client) => {
+            ComponentServiceClient::Grpc(mut client) => {
                 let component_type: golem_api_grpc::proto::golem::component::ComponentType =
                     component_type.into();
 
@@ -445,7 +445,7 @@ pub trait ComponentService {
                     }
                 }
             }
-            ComponentClient::Http(client) => {
+            ComponentServiceClient::Http(client) => {
                 match client
                     .update_component(
                         &component_id.0,
@@ -474,7 +474,7 @@ pub trait ComponentService {
 
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
         match self.component_client() {
-            ComponentClient::Grpc(mut client) => {
+            ComponentServiceClient::Grpc(mut client) => {
                 let response = client
                     .get_latest_component_metadata(GetLatestComponentRequest {
                         component_id: Some(component_id.clone().into()),
@@ -499,7 +499,7 @@ pub trait ComponentService {
                     }
                 }
             }
-            ComponentClient::Http(client) => {
+            ComponentServiceClient::Http(client) => {
                 client
                     .get_latest_component_metadata(&component_id.0)
                     .await
@@ -515,7 +515,7 @@ pub trait ComponentService {
         definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
     ) -> crate::Result<()> {
         match self.plugin_client() {
-            PluginClient::Grpc(mut client) => {
+            PluginServiceClient::Grpc(mut client) => {
                 let response = client
                     .create_plugin(CreatePluginRequest {
                         plugin: Some(definition.into()),
@@ -532,7 +532,7 @@ pub trait ComponentService {
                     )),
                 }
             }
-            PluginClient::Http(client) => {
+            PluginServiceClient::Http(client) => {
                 let result = client.create_plugin(
                     &golem_client::model::PluginDefinitionWithoutOwnerDefaultPluginScope {
                         name: definition.name,
@@ -582,7 +582,7 @@ pub trait ComponentService {
         parameters: HashMap<String, String>,
     ) -> crate::Result<PluginInstallationId> {
         match self.component_client() {
-            ComponentClient::Grpc(mut client) => {
+            ComponentServiceClient::Grpc(mut client) => {
                 let response = client
                     .install_plugin(
                         golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
@@ -614,7 +614,7 @@ pub trait ComponentService {
                     )),
                 }
             }
-            ComponentClient::Http(client) => {
+            ComponentServiceClient::Http(client) => {
                 let result = client
                     .install_plugin(
                         &component_id.0,
@@ -682,13 +682,13 @@ async fn new_component_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
-) -> ComponentClient {
+) -> ComponentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
-            ComponentClient::Grpc(new_component_grpc_client(host, grpc_port).await)
+            ComponentServiceClient::Grpc(new_component_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            ComponentClient::Http(new_component_http_client(host, http_port))
+            ComponentServiceClient::Http(new_component_http_client(host, http_port))
         }
     }
 }
@@ -716,12 +716,14 @@ async fn new_plugin_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
-) -> PluginClient {
+) -> PluginServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
-            PluginClient::Grpc(new_plugin_grpc_client(host, grpc_port).await)
+            PluginServiceClient::Grpc(new_plugin_grpc_client(host, grpc_port).await)
         }
-        GolemClientProtocol::Http => PluginClient::Http(new_plugin_http_client(host, http_port)),
+        GolemClientProtocol::Http => {
+            PluginServiceClient::Http(new_plugin_http_client(host, http_port))
+        }
     }
 }
 

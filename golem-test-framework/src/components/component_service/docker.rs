@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentClient, ComponentService,
-    ComponentServiceEnvVars, PluginClient,
+    new_component_client, new_plugin_client, ComponentServiceClient, ComponentService,
+    ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
@@ -35,8 +35,8 @@ pub struct DockerComponentService {
     keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
-    component_client: ComponentClient,
-    plugin_client: PluginClient,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl DockerComponentService {
@@ -123,11 +123,11 @@ impl DockerComponentService {
 
 #[async_trait]
 impl ComponentService for DockerComponentService {
-    fn component_client(&self) -> ComponentClient {
+    fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
 
-    fn plugin_client(&self) -> PluginClient {
+    fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
     }
 
