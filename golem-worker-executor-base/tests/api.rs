@@ -1273,7 +1273,7 @@ async fn get_worker_metadata(
     );
 
     check!(metadata2.last_known_status.component_size == expected_component_size);
-    check!(metadata2.last_known_status.total_linear_memory_size == 2293760);
+    check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
 }
 
 #[test]
