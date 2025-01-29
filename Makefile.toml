@@ -192,59 +192,57 @@ args = [
 description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag: -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --report-time
 '''
 
 [tasks.worker-executor-tests-group2]
 description = "Runs worker executor tests only (group 2/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group2 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group2 -- --report-time
 '''
 
 [tasks.worker-executor-tests-group3]
 description = "Runs worker executor tests only (group 3/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group3 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group3 -- --report-time
 '''
 
 [tasks.worker-executor-tests-group4]
 description = "Runs worker executor tests only (group 4/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --nocapture --report-time $JUNIT_OPTS --test-threads=1
+cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --report-time $JUNIT_OPTS
 '''
-# NOTE: temporarily set test-threads=1 to debug flakyness
 
 [tasks.worker-executor-tests-group5]
 description = "Runs worker executor tests only (group 5/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group5 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group5 -- --report-time
 '''
-
 
 [tasks.worker-executor-tests-group6]
 description = "Runs worker executor tests only (group 6/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group6 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group6 -- --report-time
 '''
 
 [tasks.worker-executor-tests-group7]
 description = "Runs worker executor tests only (group 7/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group7 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group7 -- --report-time
 '''
 
 [tasks.worker-executor-tests-group8]
 description = "Runs worker executor tests only (group 8/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group8 -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group8 -- --report-time
 '''
 
 [tasks.integration-tests]
