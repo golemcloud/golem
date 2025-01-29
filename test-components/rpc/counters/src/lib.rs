@@ -42,6 +42,11 @@ impl Guest for Component {
     fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode {
         in_
     }
+
+    fn bug_golem1265(s: String) -> Result<(), String> {
+        eprintln!("Got {s}");
+        Ok(())
+    }
 }
 
 pub struct Counter {
