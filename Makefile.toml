@@ -214,9 +214,8 @@ cargo test --package golem-worker-executor-base --test integration :tag:group3 -
 description = "Runs worker executor tests only (group 4/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --report-time $JUNIT_OPTS --test-threads=
+cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --report-time $JUNIT_OPTS
 '''
-# NOTE: temporarily set test-threads=1 to debug flakyness
 
 [tasks.worker-executor-tests-group5]
 description = "Runs worker executor tests only (group 5/8)"
@@ -224,7 +223,6 @@ env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" =
 script = '''
 cargo test --package golem-worker-executor-base --test integration :tag:group5 -- --report-time
 '''
-
 
 [tasks.worker-executor-tests-group6]
 description = "Runs worker executor tests only (group 6/8)"
