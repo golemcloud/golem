@@ -55,7 +55,6 @@ pub struct GolemConfig {
     pub port: u16,
     pub http_address: String,
     pub http_port: u16,
-    pub debug_worker_output: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -363,7 +362,6 @@ impl Default for GolemConfig {
             port: 9000,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
-            debug_worker_output: true,
         }
     }
 }
