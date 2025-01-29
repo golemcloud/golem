@@ -116,6 +116,17 @@ impl Guest for Component {
 
         vec![(name1, key1), (name2, key2), (name3, key3)]
     }
+
+    fn bug_golem1265(s: String) -> Result<(), String> {
+        println!("Reproducer for golem issue #1265");
+        let component_id =
+            env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+        let counters_uri = Uri {
+            value: format!("urn:worker:{component_id}/bug1265"),
+        };
+        let api = Api::new(&counters_uri);
+        api.blocking_bug_golem1265(&s)
+    }
 }
 
 fn create_use_and_drop_counters(counters_uri: &Uri) {
