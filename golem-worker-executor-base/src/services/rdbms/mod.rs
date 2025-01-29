@@ -24,6 +24,7 @@ use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
+use bincode::{Decode, Encode};
 use golem_common::model::WorkerId;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -32,7 +33,7 @@ use std::sync::Arc;
 use url::Url;
 
 pub trait RdbmsType: Debug + Display + Default + Send {
-    type DbColumn: Clone + Send + Sync + PartialEq + Debug;
+    type DbColumn: Clone + Send + Sync + PartialEq + Debug + bincode::Decode + bincode::Encode;
     type DbValue: Clone + Send + Sync + PartialEq + Debug;
 }
 
@@ -272,7 +273,7 @@ impl<T: RdbmsType> DbResult<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum Error {
     ConnectionFailure(String),
     QueryParameterFailure(String),

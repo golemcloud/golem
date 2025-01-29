@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::metrics::wasm::record_host_function_call;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::rdbms::postgres::{
     Composite, CompositeType, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
     DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
@@ -54,7 +53,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         &mut self,
         address: String,
     ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
-        record_host_function_call("rdbms::postgres::db-connection", "open");
+        self.observe_function_call("rdbms::postgres::db-connection", "open");
 
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let result = self
@@ -80,7 +79,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        record_host_function_call("rdbms::postgres::db-connection", "query-stream");
+        self.observe_function_call("rdbms::postgres::db-connection", "query-stream");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -117,7 +116,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        record_host_function_call("rdbms::postgres::db-connection", "query");
+        self.observe_function_call("rdbms::postgres::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -154,7 +153,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        record_host_function_call("rdbms::postgres::db-connection", "execute");
+        self.observe_function_call("rdbms::postgres::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -183,7 +182,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<PostgresDbConnection>,
     ) -> anyhow::Result<Result<Resource<DbTransactionEntry>, Error>> {
-        record_host_function_call("rdbms::postgres::db-connection", "begin-transaction");
+        self.observe_function_call("rdbms::postgres::db-connection", "begin-transaction");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -210,7 +209,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-connection", "drop");
+        self.observe_function_call("rdbms::postgres::db-connection", "drop");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let pool_key = self
             .as_wasi_view()
@@ -250,7 +249,7 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        record_host_function_call("rdbms::postgres::db-result-stream", "get-columns");
+        self.observe_function_call("rdbms::postgres::db-result-stream", "get-columns");
 
         let internal = self
             .as_wasi_view()
@@ -270,7 +269,7 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        record_host_function_call("rdbms::postgres::db-result-stream", "get-next");
+        self.observe_function_call("rdbms::postgres::db-result-stream", "get-next");
         let internal = self
             .as_wasi_view()
             .table()
@@ -292,7 +291,7 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-result-stream", "drop");
+        self.observe_function_call("rdbms::postgres::db-result-stream", "drop");
         self.as_wasi_view()
             .table()
             .delete::<DbResultStreamEntry>(rep)?;
@@ -320,7 +319,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        record_host_function_call("rdbms::postgres::db-transaction", "query");
+        self.observe_function_call("rdbms::postgres::db-transaction", "query");
         match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
                 let internal = self
@@ -349,7 +348,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        record_host_function_call("rdbms::postgres::db-transaction", "query-stream");
+        self.observe_function_call("rdbms::postgres::db-transaction", "query-stream");
         match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
                 let internal = self
@@ -378,7 +377,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        record_host_function_call("rdbms::postgres::db-transaction", "execute");
+        self.observe_function_call("rdbms::postgres::db-transaction", "execute");
         match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
                 let internal = self
@@ -401,7 +400,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        record_host_function_call("rdbms::postgres::db-transaction", "commit");
+        self.observe_function_call("rdbms::postgres::db-transaction", "commit");
         let internal = self
             .as_wasi_view()
             .table()
@@ -416,7 +415,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        record_host_function_call("rdbms::postgres::db-transaction", "query");
+        self.observe_function_call("rdbms::postgres::db-transaction", "query");
         let internal = self
             .as_wasi_view()
             .table()
@@ -428,7 +427,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-result-stream", "drop");
+        self.observe_function_call("rdbms::postgres::db-result-stream", "drop");
         let entry = self
             .as_wasi_view()
             .table()
@@ -454,7 +453,7 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         &mut self,
         value: DbColumnType,
     ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
-        record_host_function_call("rdbms::postgres::lazy-db-column-type", "create");
+        self.observe_function_call("rdbms::postgres::lazy-db-column-type", "create");
         let value = to_db_column_type(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
             .as_wasi_view()
@@ -467,7 +466,7 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<LazyDbColumnTypeEntry>,
     ) -> anyhow::Result<DbColumnType> {
-        record_host_function_call("rdbms::postgres::lazy-db-column-type", "get");
+        self.observe_function_call("rdbms::postgres::lazy-db-column-type", "get");
         let mut value = self
             .as_wasi_view()
             .table()
@@ -486,7 +485,7 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<LazyDbColumnTypeEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::lazy-db-column-type", "drop");
+        self.observe_function_call("rdbms::postgres::lazy-db-column-type", "drop");
         self.as_wasi_view()
             .table()
             .delete::<LazyDbColumnTypeEntry>(rep)?;
@@ -507,7 +506,7 @@ impl LazyDbValueEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
-        record_host_function_call("rdbms::postgres::lazy-db-value", "create");
+        self.observe_function_call("rdbms::postgres::lazy-db-value", "create");
         let value = to_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
             .as_wasi_view()
@@ -517,7 +516,7 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn get(&mut self, self_: Resource<LazyDbValueEntry>) -> anyhow::Result<DbValue> {
-        record_host_function_call("rdbms::postgres::lazy-db-value", "get");
+        self.observe_function_call("rdbms::postgres::lazy-db-value", "get");
         let mut value = self
             .as_wasi_view()
             .table()
@@ -538,7 +537,7 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<LazyDbValueEntry>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::lazy-db-value", "drop");
+        self.observe_function_call("rdbms::postgres::lazy-db-value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<LazyDbValueEntry>(rep)?;

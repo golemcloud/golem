@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
+use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub enum DbColumnType {
     Boolean,
     Tinyint,
@@ -182,7 +183,7 @@ impl Display for DbValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,

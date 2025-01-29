@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
+use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use itertools::Itertools;
 use mac_address::MacAddress;
@@ -25,7 +26,7 @@ pub trait NamedType {
     fn name(&self) -> String;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct EnumType {
     pub name: String,
 }
@@ -48,7 +49,7 @@ impl Display for EnumType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct CompositeType {
     pub name: String,
     pub attributes: Vec<(String, DbColumnType)>,
@@ -80,7 +81,7 @@ impl NamedType for CompositeType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DomainType {
     pub name: String,
     pub base_type: Box<DbColumnType>,
@@ -107,7 +108,7 @@ impl NamedType for DomainType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct RangeType {
     pub name: String,
     pub base_type: Box<DbColumnType>,
@@ -168,7 +169,7 @@ impl<T: Debug> Display for ValuesRange<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Interval {
     pub months: i32,
     pub days: i32,
@@ -209,7 +210,7 @@ impl Display for TimeTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Enum {
     pub name: String,
     pub value: String,
@@ -316,7 +317,7 @@ impl Display for Range {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub enum DbColumnType {
     Character,
     Int2,
@@ -638,7 +639,7 @@ impl DbValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
