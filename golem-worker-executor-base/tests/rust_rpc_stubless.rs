@@ -1130,3 +1130,65 @@ async fn ephemeral_worker_invocation_via_rpc1(
         _ => panic!("Unexpected result value"),
     }
 }
+
+#[test]
+#[tracing::instrument]
+async fn golem_bug_1265_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor
+        .store_component_with_dynamic_linking(
+            "caller",
+            &[
+                (
+                    "rpc:counters-client/counters-client",
+                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                        target_interface_name: HashMap::from_iter(vec![
+                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                            (
+                                "counter".to_string(),
+                                "rpc:counters-exports/api".to_string(),
+                            ),
+                        ]),
+                    }),
+                ),
+                (
+                    "rpc:ephemeral-client/ephemeral-client",
+                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                        target_interface_name: HashMap::from_iter(vec![(
+                            "api".to_string(),
+                            "rpc:ephemeral-exports/api".to_string(),
+                        )]),
+                    }),
+                ),
+            ],
+        )
+        .await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-counters-bug1265", vec![], env)
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &caller_worker_id,
+            "rpc:caller-exports/caller-inline-functions.{bug-golem1265}",
+            vec![Value::String("test".to_string())],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(result == Ok(vec![Value::Result(Ok(None))]));
+}

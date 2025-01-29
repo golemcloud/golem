@@ -20,6 +20,8 @@ interface api {
   }
 
   bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
+
+  bug-golem1265: func(s: string) -> result<_, string>;
 }
 
 world counters {

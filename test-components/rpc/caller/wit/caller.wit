@@ -12,4 +12,6 @@ world caller {
   export bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
 
   export ephemeral-test1: func() -> list<tuple<string, string>>;
+
+  export bug-golem1265: func(s: string) -> result<_, string>;
 }
