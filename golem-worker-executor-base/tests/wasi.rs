@@ -1857,7 +1857,8 @@ async fn wasi_incoming_request_handler(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler")
+        .component("wasi-http-incoming-request-handler")
+        .store()
         .await;
     let worker_id = executor
         .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
@@ -1911,7 +1912,8 @@ async fn wasi_incoming_request_handler_echo(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-echo")
+        .component("wasi-http-incoming-request-handler-echo")
+        .store()
         .await;
 
     let worker_id = executor
@@ -2050,7 +2052,8 @@ async fn wasi_incoming_request_handler_state(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-state")
+        .component("wasi-http-incoming-request-handler-state")
+        .store()
         .await;
 
     let worker_id = executor
