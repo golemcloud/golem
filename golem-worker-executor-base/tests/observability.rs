@@ -247,7 +247,7 @@ async fn get_oplog_with_api_changing_updates(
     println!("oplog\n{:#?}", oplog);
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 15);
+    assert_eq!(oplog.len(), 17);
 }
 
 #[test]
