@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentServiceClient, ComponentService, PluginServiceClient,
+    new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
+    PluginServiceClient,
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;

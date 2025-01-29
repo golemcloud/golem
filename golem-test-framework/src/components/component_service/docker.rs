@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentServiceClient, ComponentService,
+    new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::docker::KillContainer;

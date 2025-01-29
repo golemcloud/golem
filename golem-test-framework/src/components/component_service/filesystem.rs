@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    AddComponentError, ComponentServiceClient, ComponentService, PluginServiceClient,
+    AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
 use async_trait::async_trait;
 use golem_common::model::component_metadata::DynamicLinkedInstance;

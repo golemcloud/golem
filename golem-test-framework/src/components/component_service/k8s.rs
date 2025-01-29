@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_component_client, new_plugin_client, wait_for_startup, ComponentServiceClient, ComponentService,
-    ComponentServiceEnvVars, PluginServiceClient,
+    new_component_client, new_plugin_client, wait_for_startup, ComponentService,
+    ComponentServiceClient, ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,

@@ -453,7 +453,7 @@ pub trait ComponentService {
                         file,
                         files
                             .as_ref()
-                            .and_then(|files| to_http_file_permissions(&files))
+                            .and_then(|files| to_http_file_permissions(files))
                             .as_ref(),
                         None::<File>, // TODO: zipped files
                         to_http_dynamic_linking(dynamic_linking).as_ref(),
