@@ -107,6 +107,38 @@ function fieldSpecializationDescription(path: string): ReactNode | undefined {
   )
 }
 
+function relatedFieldDescription(path: string): ReactNode | undefined {
+  const relatedSpecs = FieldSpecializations.filter(spec => {
+    const pathContainsProfile = path.indexOf("profiles") !== -1
+    const parentContainsProfile = spec.parentPrefix.indexOf("profiles") !== -1
+    return pathContainsProfile == parentContainsProfile && path.startsWith(spec.parentPrefix)
+  })
+
+  if (relatedSpecs.length === 0) {
+    return undefined
+  }
+
+  return (
+    <div className="nx-text-xs">
+      <p className="nx-mt-6 nx-leading-6">
+        <em>
+          <strong>Related fields:</strong>
+        </em>
+      </p>
+      <ul className="nx-list-disc first:nx-mt-0 ltr:nx-ml-6 rtl:nx-mr-6">
+        {relatedSpecs.map(spec => {
+          const relatedPath = `${spec.pathPrefixMatch}${path.substring(spec.parentPrefix.length)}`
+          return (
+            <li className="nx-my-2" key={relatedPath}>
+              {fieldLink({ path: relatedPath })}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 const FieldsContext = createContext<{
   addField: (release: Release, path: string, id: string) => void
   getFields: () => Record<Release, Record<string, string>>
@@ -119,6 +151,7 @@ export const Field: FC<FieldProps> = ({
   const since_release = release(since)
   const id = fieldPathToId(path)
   const specializationDescription = !noSpecialization && fieldSpecializationDescription(path)
+  const relatedDescription = !noSpecialization && relatedFieldDescription(path)
 
   const fieldContext = useContext(FieldsContext)
   useEffect(() => {
@@ -146,6 +179,7 @@ export const Field: FC<FieldProps> = ({
         <hr className="nx-opacity-50" />
         {specializationDescription && specializationDescription}
         {children}
+        {relatedDescription && relatedDescription}
       </div>
     </>
   )

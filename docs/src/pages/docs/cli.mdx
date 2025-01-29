@@ -13,7 +13,7 @@ There are 3 different Golem CLI versions available for installation:
 - **Open source** specific golem-cli without support for the hosted version of Golem.
 - **Cloud** version without support for the open source version of Golem.
 
-The universla Golem CLI includes all the functionality of the open source specific Golem CLI and Golem Cloud CLI. For these examples we will use universal `golem-cli` unless specified otherwise.
+The universal Golem CLI includes all the functionality of the open source specific Golem CLI and Golem Cloud CLI. For these examples we will use universal `golem-cli` unless specified otherwise.
 
 ## Installation
 
@@ -70,15 +70,15 @@ Make sure to install version **3.15 or higher**.
 Then use **one** of the following commands to install the desired version of Golem CLI:
 
 ```bash filename="Universal Golem CLI" copy
-cargo install --features universal golem-cloud-cli
+cargo install --features universal golem-cloud-cli --locked
 ```
 
 ```bash filename="Open source Golem CLI" copy
-cargo install golem-cli
+cargo install golem-cli --locked
 ```
 
 ```bash filename="Cloud-only Golem CLI" copy
-cargo install golem-cloud-cli --bin golem-cloud-cli
+cargo install golem-cloud-cli --bin golem-cloud-cli --locked
 ```
 
 ## Profiles
