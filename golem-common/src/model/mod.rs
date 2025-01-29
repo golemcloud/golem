@@ -1906,6 +1906,7 @@ pub enum GatewayBindingType {
     #[default]
     Default,
     FileServer,
+    HttpHandler,
     CorsPreflight,
 }
 

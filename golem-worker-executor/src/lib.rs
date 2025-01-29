@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0, durability};
+use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_1, durability};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
@@ -203,8 +203,8 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
         api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_1::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc0_1_1::types::add_to_linker_get_host(
             &mut linker,

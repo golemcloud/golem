@@ -116,6 +116,13 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::compute_latest_worker_status(this, worker_id, metadata).await
     }
 
+    async fn resume_replay(
+        store: &mut (impl AsContextMut<Data = Context> + Send),
+        instance: &Instance,
+    ) -> Result<RetryDecision, GolemError> {
+        DurableWorkerCtx::<Context>::resume_replay(store, instance).await
+    }
+
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &Instance,

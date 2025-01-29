@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) use self::http_handler_binding::*;
+pub(crate) use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
-pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
-pub(crate) use crate::gateway_request::request_details::*;
+use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
-use rib::Expr;
+use golem_wasm_ast::analysis::AnalysedExport;
+use rib::{Expr, RibByteCode, RibInputTypeInfo};
 pub use static_binding::*;
-use std::ops::Deref;
-pub(crate) use worker_binding::*;
-pub(crate) use worker_binding_compiled::*;
 
 mod gateway_binding_compiled;
+mod http_handler_binding;
 mod static_binding;
 mod worker_binding;
-mod worker_binding_compiled;
+
 // A gateway binding is integration to the backend. This is similar to AWS's x-amazon-gateway-integration
 // where it holds the details of where to re-route.
 
@@ -38,7 +39,8 @@ mod worker_binding_compiled;
 pub enum GatewayBinding {
     Default(WorkerBinding),
     FileServer(WorkerBinding),
-    Static(Box<StaticBinding>),
+    Static(StaticBinding),
+    HttpHandler(HttpHandlerBinding),
 }
 
 impl GatewayBinding {
@@ -46,7 +48,8 @@ impl GatewayBinding {
         match self {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::HttpHandler(_) => false,
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
             },
@@ -57,7 +60,8 @@ impl GatewayBinding {
         match self {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
-            Self::Static(s) => match s.deref() {
+            Self::HttpHandler(_) => false,
+            Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
             },
@@ -65,21 +69,16 @@ impl GatewayBinding {
     }
 
     pub fn static_binding(value: StaticBinding) -> GatewayBinding {
-        GatewayBinding::Static(Box::new(value))
+        GatewayBinding::Static(value)
     }
 
-    pub fn get_worker_binding(&self) -> Option<WorkerBinding> {
+    pub fn get_component_id(&self) -> Option<VersionedComponentId> {
         match self {
-            Self::Default(worker_binding) => Some(worker_binding.clone()),
-            Self::FileServer(worker_binding) => Some(worker_binding.clone()),
-            Self::Static(_) => None,
-        }
-    }
-
-    pub fn get_worker_binding_mut(&mut self) -> Option<&mut WorkerBinding> {
-        match self {
-            Self::Default(worker_binding) => Some(worker_binding),
-            Self::FileServer(worker_binding) => Some(worker_binding),
+            Self::Default(worker_binding) => Some(worker_binding.component_id.clone()),
+            Self::FileServer(worker_binding) => Some(worker_binding.component_id.clone()),
+            Self::HttpHandler(http_handler_binding) => {
+                Some(http_handler_binding.component_id.clone())
+            }
             Self::Static(_) => None,
         }
     }
@@ -91,7 +90,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
         match value {
             GatewayBinding::Default(worker_binding) => Ok(
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                    binding_type: Some(0),
+                    binding_type: Some(GatewayBindingType::Default.into()),
                     component: Some(worker_binding.component_id.into()),
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: Some(worker_binding.response_mapping.0.into()),
@@ -101,7 +100,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
             ),
             GatewayBinding::FileServer(worker_binding) => Ok(
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                    binding_type: Some(1),
+                    binding_type: Some(GatewayBindingType::FileServer.into()),
                     component: Some(worker_binding.component_id.into()),
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: Some(worker_binding.response_mapping.0.into()),
@@ -112,7 +111,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
             GatewayBinding::Static(static_binding) => {
                 let static_binding =
                     golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                        static_binding.deref().clone(),
+                        static_binding.clone(),
                     )?;
 
                 let inner = static_binding
@@ -127,7 +126,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
 
                 Ok(
                     golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                        binding_type: Some(gateway_binding_type as i32),
+                        binding_type: Some(gateway_binding_type.into()),
                         component: None,
                         worker_name: None,
                         response: None,
@@ -136,6 +135,16 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     },
                 )
             }
+            GatewayBinding::HttpHandler(worker_binding) => Ok(
+                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
+                    binding_type: Some(GatewayBindingType::HttpHandler.into()),
+                    component: Some(worker_binding.component_id.into()),
+                    worker_name: worker_binding.worker_name.map(|x| x.into()),
+                    response: None,
+                    idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
+                    static_binding: None,
+                },
+            ),
         }
     }
 }
@@ -185,6 +194,19 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                     response_mapping: ResponseMapping(response),
                 }))
             }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
+                let component_id = VersionedComponentId::try_from(
+                    value.component.ok_or("Missing component id".to_string())?,
+                )?;
+                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
+                let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
+
+                Ok(GatewayBinding::HttpHandler(HttpHandlerBinding {
+                    component_id,
+                    worker_name,
+                    idempotency_key,
+                }))
+            }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 let static_binding = value.static_binding.ok_or("Missing static binding")?;
 
@@ -201,5 +223,50 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 )?))
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerNameCompiled {
+    pub worker_name: Expr,
+    pub compiled_worker_name: RibByteCode,
+    pub rib_input_type_info: RibInputTypeInfo,
+}
+
+impl WorkerNameCompiled {
+    pub fn from_worker_name(
+        worker_name: &Expr,
+        exports: &[AnalysedExport],
+    ) -> Result<Self, String> {
+        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
+
+        Ok(WorkerNameCompiled {
+            worker_name: worker_name.clone(),
+            compiled_worker_name: compiled_worker_name.byte_code,
+            rib_input_type_info: compiled_worker_name.rib_input_type_info,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IdempotencyKeyCompiled {
+    pub idempotency_key: Expr,
+    pub compiled_idempotency_key: RibByteCode,
+    pub rib_input: RibInputTypeInfo,
+}
+
+impl IdempotencyKeyCompiled {
+    pub fn from_idempotency_key(
+        idempotency_key: &Expr,
+        exports: &[AnalysedExport],
+    ) -> Result<Self, String> {
+        let idempotency_key_compiled =
+            DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
+
+        Ok(IdempotencyKeyCompiled {
+            idempotency_key: idempotency_key.clone(),
+            compiled_idempotency_key: idempotency_key_compiled.byte_code,
+            rib_input: idempotency_key_compiled.rib_input_type_info,
+        })
     }
 }

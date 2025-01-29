@@ -17,14 +17,15 @@ harness = false
 [features]
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-rib = { path = "../golem-rib", version = "0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
+async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
 async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
@@ -51,7 +52,8 @@ futures-util = { workspace = true }
 gethostname = "0.5.0"
 hex = { workspace = true }
 http = { workspace = true }
-http-body = "1.0.1"                                 # keep in sync with wasmtime
+http-body = { workspace = true }
+http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
@@ -91,7 +93,7 @@ zstd = "0.13"
 sqlx = { workspace = true }
 
 [dev-dependencies]
-golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
@@ -106,6 +108,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
+system-interface = { workspace = true }
 
 [[test]]
 name = "integration"

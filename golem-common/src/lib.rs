@@ -65,6 +65,8 @@ pub mod tracing;
 #[cfg(feature = "model")]
 pub mod uri;
 
+pub mod virtual_exports;
+
 #[cfg(test)]
 test_r::enable!();
 

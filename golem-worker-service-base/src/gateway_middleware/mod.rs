@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::request::RichRequest;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 pub use http::*;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ impl HttpMiddlewares {
 
     pub async fn process_middleware_in(
         &self,
-        http_request_details: &HttpRequestDetails,
+        rich_request: &RichRequest,
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Sync + Send>,
     ) -> Result<MiddlewareSuccess, MiddlewareError> {
@@ -51,7 +51,7 @@ impl HttpMiddlewares {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
                     let result = auth
-                        .apply_http_auth(http_request_details, session_store, identity_provider)
+                        .apply_http_auth(rich_request, session_store, identity_provider)
                         .await?;
 
                     match result {

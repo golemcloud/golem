@@ -1,7 +1,7 @@
 [target.aarch64-unknown-linux-gnu]
 pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libssl-dev:$CROSS_DEB_ARCH libfontconfig1-dev:$CROSS_DEB_ARCH unzip curl",
+    "apt-get update && apt-get --assume-yes install libssl-dev:$CROSS_DEB_ARCH unzip curl",
     "curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v27.3/protoc-27.3-linux-x86_64.zip",
     "unzip protoc-27.3-linux-x86_64.zip -d /usr/local",
     "chmod +x /usr/local/bin/protoc"

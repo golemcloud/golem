@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim as base
+FROM ubuntu:latest as base
 
 ARG TARGETARCH
 
@@ -17,7 +17,7 @@ COPY /target/$RUST_TARGET/release/golem-component-service ./
 COPY /golem-component-service/config/component-service.toml ./config/component-service.toml
 COPY /golem-component-service/db ./db
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates libfontconfig1-dev
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
 RUN update-ca-certificates
 
 EXPOSE 8080

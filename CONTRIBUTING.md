@@ -1,217 +1,155 @@
-## Running integration tests
+# Golem development
 
-Install [cargo make](https://github.com/sagiegurari/cargo-make)
+To work on **Golem** you need to install the following tools:
+
+- Latest **stable** rust compiler
+  - use [rustup](https://rustup.rs/)
+  - then run `rustup update stable`
+  - and `rustup default stable`
+- Install the `wasm32-wasip1` target
+  - `rustup target add wasm32-wasip1`
+- Install [cargo-make](https://github.com/sagiegurari/cargo-make)
+  - `cargo install --force cargo-make`
+- The [prost crate](https://crates.io/crates/prost) requires `protoc` to be installed.
+  - Requires **version 28** or later
+  - `brew install protobuf` on OSX
+  - Otherwise follow the [official instructions](https://github.com/protocolbuffers/protobuf#protobuf-compiler-installation)
+
+To be able to run all integration tests:
+  - Install redis
+    - `brew install redis` on OSX
+  - Install [docker](https://www.docker.com) (for running PostgreSQL container in tests)
+
+To be able to run all services with `cargo-make run` with a merged log view:
+- Install [lnav](https://lnav.org)
+  - `brew install lnav` on OSX
+- Install [nginx](https://nginx.org)
+  - `brew install nginx` on OSX
+
+Everything else is managed by `cargo-make`.
+
+## Development workflow
+
+### Building
+To compile everything use
 
 ```shell
-cargo install --force cargo-make
+cargo make build
 ```
-
-runs all unit tests, worker executor tests and integration tests
+It is recommended to do a full build before starting working on Golem and opening it with an IDE. During development it is usually enough to recompile only the crate you are working on, for example:
 
 ```shell
-cargo make test
+cargo build -p golem-worker-service-base
 ```
 
-runs unit tests only
+#### If cargo runs out of memory
+Depending on the number of CPU cores and available memory, building everything can use a lot of memory. If cargo runs out of memory or just uses too much, you can limit the number of parallel jobs by providing a cargo `config.toml` file, for example:
+
+```toml
+[build]
+jobs = 4
+```
+
+in `~/.cargo/config.toml`. For other options and possibilities check [the cargo documentation](https://doc.rust-lang.org/cargo/reference/config.html).
+
+### Running tests
+
+Tests are using the [test-r library](https://test-r.vigoo.dev).
+
+During development you can run the involved tests in the usual ways: from the IDE, or using `cargo test` command selecting a specific crate and test module, for example:
+
+```shell
+cargo test -p golem-worker-executor-base api::promise -- --report-time
+```
+
+#### Running all unit tests
+To run all unit tests use
 
 ```shell
 cargo make unit-tests
 ```
 
-runs worker executor tests only
+#### Running all worker executor tests
+The **worker executor tests** are testing the Golem Worker Executor standalone without any of the other services. These tests require `redis`. To run all of them use
+
+```shell
+cargo make worker-executor-tests
+```
+
+As there are many of these tests, they are organized into **groups** that are executed in parallel on CI. You can run only a specific group with cargo make, for example:
+
+```shell
+cargo make worker-executor-tests-group1
+```
+
+#### Running all integration tests
+The **integration tests** are starting up several Golem services and testing them together. These tests also require `docker` and `redis` to be available.
+
+To run all integration tests use
 
 ```shell
 cargo make integration-tests
 ```
 
-runs CLI tests only
+#### Running all the CLI tests
+The **CLI tests** are similar to the integration tests but interact with the running services only through the Golem CLI application.
+
+To run all CLI tests use
 
 ```shell
 cargo make cli-tests
 ```
 
-runs sharding integration tests only
+#### Using a debugger
+When using a debugger with the tests, make sure to pass the `--nocapture` option to the test runner, otherwise the debugger will not be usable (when capturing is on, the test framework spawns child processes to run the actual tests).
+
+### Updating the REST API
+Golem **generates OpenAPI specs** from the Rust code (using the [poem-openapi crate](https://crates.io/crates/poem-openapi), and the generated OpenAPI yaml file is also stored in the repository and a Rust Client crate is generated from it, used by the CLI app and also published into crates.io.
+
+When changing anything that affects the user facing REST API, this YAML needs to be explicitly regenerated. If this does not happen, the CI process will fail and ask for doing it.
+
+To regenerate the OpenAPI spec use
 
 ```shell
-cargo make sharding-tests
+cargo make generate-openapi
 ```
 
-## Running Benchmarks
+### Updating the config files
+Service config files are also generated from code similarly to OpenAPI specs. When changing any of the service configuration data types, they have to be regeneraetd otherwise the CI process fails and asks for doing it.
 
-1. Raise PR
-2. Reviewer or author of PR can run benchmarks by typing in a PR comment as follows
+To regenerate these files, use
+
 ```shell
-    /run-benchmark
+cargo make generate-configs
 ```
 
-3. For all new benchmark types (meaning, those for which there is no baseline to compare), it should generate a report as below, as a PR comment
+### Preparing the pull request
+Golem CI checks the pull requests with `rustfmt` and `cargo clippy`. To make sure these checks pass, before opening a pull request run
 
-## Benchmark Report
-| Benchmark Type | Cluster Size | Size | Length | Avg Time |
-|---------------|--------------|------|--------|----------|
-| benchmark_cold_start_large.json | 3 | 10 | 100 | 201.255108ms |
-| benchmark_cold_start_large_no_compilation.json | 3 | 10 | 100 | 123.000794122s |
-| benchmark_cold_start_medium.json | 3 | 10 | 100 | 121.566283ms |
-| benchmark_cold_start_medium_no_compilation.json | 3 | 10 | 100 | 178.508111048s |
-| benchmark_cold_start_small.json | 3 | 10 | 100 | 75.379351ms |
-| benchmark_cold_start_small_no_compilation.json | 3 | 10 | 100 | 423.142651ms |
-| benchmark_durability_overhead.json | 3 | 10 | 100 | 57.51445ms |
-| benchmark_latency_large.json | 3 | 10 | 100 | 61.586289ms |
-| benchmark_latency_medium.json | 3 | 10 | 100 | 60.646373ms |
-| benchmark_latency_small.json | 3 | 10 | 100 | 54.76123ms |
-| benchmark_suspend_worker.json | 3 | 10 | 100 | 10.03030193s |
-
-RunID: 9435476881
-
-4. The underlying data used to created the above report will be automatically pushed back to the PR branch
-5. If there exists a baseline to compare for the benchmark type, then a comparison report will be generated for those benchmarks
-6. If there is no need to compare with any baseline, regardless of a baseline exist or not, then simply run
-
-```bash
-
-/run-benchmark-refresh
-
-```
-7. Refresh message can be useful in the event of comparison failures (Example: A failure due to schema mismatch especially when a developer refactor the benchmark code itself)
-
-## Starting all services locally
-
-There is a simple `cargo make run` task that starts all the debug executables of the services locally, using the default configuration. The prerequisites are:
-
-- `nginx` installed (on OSX can be installed with `brew install nginx`)
-- `redis` installed (on OSX can be installed with `brew install redis`)
-- `lnav` installed (on OSX can be installed with `brew install lnav`)
-
-The `cargo make run` command will start all the services and show a unified view of the logs using `lnav`. Quitting `lnav` kills the spawned processes.
-
-## Local Testing using Docker containers
-
-To spin up services using the latest code
-
-```bash
-# Clone golem
-cd golem
-
-# Find more info below if you are having issues running this command(example: Running from MAC may fail)
-# Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
-cargo build --release --target x86_64-unknown-linux-gnu
-
-docker compose -f docker-compose-sqlite.yaml up --build
+```shell
+cargo make fix
 ```
 
-To start the service without a rebuild
+and fix any possible errors and warnings reported by it.
 
-```bash
+## Running Golem locally
 
-docker compose -f docker-compose-sqlite.yaml up
+There are two ways now to run Golem locally:
 
+### Using cargo make run
+
+By running
+
+```shell
+cargo make run
 ```
 
-To compose down,
+all the services are going to be built and started as individual native processes, configured to communicate with each other. Beside that, an `nginx` process is going to be started to unify the various processes' HTTP APIs, and `lnav` is started to merge their logs.
 
-```bash
+### Using the Single Golem Executable
 
-docker compose -f docker-compose-sqlite.yaml down
+Golem now contains a **single executable** crate, called `golem`, that links all the services into a single binary. This binary is built using a regular `cargo make build` run and can be executed with
 
+```shell
+cargo run -p golem
 ```
-
-To compose down including persistence volume
-
-```bash
-
-docker compose -f docker-compose-sqlite.yaml down -v
-
-```
-
-Note that, if you are using MAC, the persistence volumes may be present in the Linux VM. You can inspect this using the following command:
-
-```bash
-
-docker run -it --rm --privileged --pid=host alpine:latest nsenter -t 1 -m -u -n -i sh
-
-# As an example: cd /var/lib/docker/volumes/golem-services_redis_data/_data
-/var/lib/docker/volumes/golem-services_redis_data/_data # ls -lrt
-total 4
--rw-------    1 999      ping          3519 Jan 19 02:32 dump.rdb
-/var/lib/docker/volumes/golem-services_redis_data/_data #
-
-```
-
-If you have issues running the above cargo build command, then read on:
-
-Make sure to do `docker-compose pull` next time to make sure you are pulling the latest images than the cached ones
-
-### Cargo Build
-
-### MAC
-
-If you are running ` cargo build --target ARCH-unknown-linux-gnu` (cross compiling to Linux) from MAC, you may encounter
-some missing dependencies. If interested, refer, https://github.com/messense/homebrew-macos-cross-toolchains
-
-### Intel MAC
-
-Typically, the following should allow you to run it successfully.
-
-```bash
-brew tap messense/macos-cross-toolchains
-brew install messense/macos-cross-toolchains/x86_64-unknown-linux-gnu
-# If openssl is not in system
-# brew install openssl
-export OPENSSL_DIR=$(brew --prefix openssl)
-export CC_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-gcc
-export CXX_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-g++
-export AR_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-ar
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-gcc
-```
-
-From the root of the project
-
-```bash
-rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-component-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-component-compilation-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-worker-executor
-```
-
-### ARM MAC
-
-Typically, the following should allow you to run it successfully.
-
-```bash
-brew tap messense/macos-cross-toolchains
-brew install aarch64-unknown-linux-gnu
-# If openssl is not in system
-# brew install openssl
-export OPENSSL_DIR=$(brew --prefix openssl)
-export CC_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-gcc
-export CXX_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-g++
-export AR_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-ar
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-gcc
-```
-
-From the root of the project
-
-```bash
-rustup target add aarch64-unknown-linux-gnu
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-compilation-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
-```
-
-### LINUX
-
-From the root of the project
-
-```bash
-rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-component-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-component-compilation-service
-cargo build --release --target x86_64-unknown-linux-gnu --package golem-worker-executor
-```
-

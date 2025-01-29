@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim as base
+FROM ubuntu:latest as base
 
 ARG TARGETARCH
 
@@ -16,7 +16,7 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/worker-executor ./
 COPY /golem-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates libfontconfig1-dev
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
 RUN update-ca-certificates
 
 EXPOSE 9000
