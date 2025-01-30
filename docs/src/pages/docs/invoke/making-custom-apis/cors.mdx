@@ -14,12 +14,12 @@ Here is an example of how to set up CORS for your API definition.
     - method: Options
       path: /users/{user-id}
       binding:
-      bindingType: cors-preflight
+        bindingType: cors-preflight
     - method: Get
       path: /users/{user-id}
       binding:
-      response: |
-        {status: 200u64, body: "Hello World"}
+        response: |
+          {status: 200u64, body: "Hello World"}
 ```
 
 Here, we define the preflight request endpoint for `/users/{user-id}` as the OPTIONS method.

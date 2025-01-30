@@ -53,20 +53,13 @@ The elements of a route are as follows:
 
 In the following section, you will learn more about the binding.
 
-### Binding
+### Bindings
 
-The per-endpoint binding specifies the following elements:
+Bindings are the glue that connects your endpoint to an actual worker.
+Examples of what binding can do include invoking a worker, retrieving files from the worker filesystem and
+forwarding http requests to the wasi:http/proxy world.
 
-- **Component**. The component to use for the endpoint.
-- **Version**. The version of the component to use for the endpoint.
-- **Worker**. The worker to invoke when the endpoint itself is invoked.
-- **Rib**. A small script that specifies how to adapt the input of the request,
-  including the body and headers, to the input of a function on a worker; and
-  how to adapt the output of the function to the output of the response,
-  including the body and headers.
-
-The script is written in [Rib](/docs/rib), which is a lightweight scripting
-languages that has first-class support for WASM component types.
+There are many different binding types that address various usecases, learn more about them [here](/docs/http-api-definition-binding-types).
 
 # Management
 
