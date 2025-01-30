@@ -62,8 +62,6 @@ export const generateDefaultValues = (fields: Parameter[]): FormData => {
           );
         } else if(field.typ?.inner?.type === "Bool"){
           defaults[field.name] = false;
-        }else{
-          defaults[field.name] = "";
         }
         break;
       default:
