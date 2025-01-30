@@ -1141,34 +1141,33 @@ async fn golem_bug_1265_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
+    let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
-        .store_component_with_dynamic_linking(
-            "caller",
-            &[
-                (
-                    "rpc:counters-client/counters-client",
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![
-                            ("api".to_string(), "rpc:counters-exports/api".to_string()),
-                            (
-                                "counter".to_string(),
-                                "rpc:counters-exports/api".to_string(),
-                            ),
-                        ]),
-                    }),
-                ),
-                (
-                    "rpc:ephemeral-client/ephemeral-client",
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        target_interface_name: HashMap::from_iter(vec![(
-                            "api".to_string(),
-                            "rpc:ephemeral-exports/api".to_string(),
-                        )]),
-                    }),
-                ),
-            ],
-        )
+        .component("caller")
+        .with_dynamic_linking(&[
+            (
+                "rpc:counters-client/counters-client",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: HashMap::from_iter(vec![
+                        ("api".to_string(), "rpc:counters-exports/api".to_string()),
+                        (
+                            "counter".to_string(),
+                            "rpc:counters-exports/api".to_string(),
+                        ),
+                    ]),
+                }),
+            ),
+            (
+                "rpc:ephemeral-client/ephemeral-client",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    target_interface_name: HashMap::from_iter(vec![(
+                        "api".to_string(),
+                        "rpc:ephemeral-exports/api".to_string(),
+                    )]),
+                }),
+            ),
+        ])
+        .store()
         .await;
 
     let mut env = HashMap::new();
