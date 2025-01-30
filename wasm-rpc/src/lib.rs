@@ -76,7 +76,7 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{
+pub use bindings::golem::rpc0_1_1::types::{
     FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, WasmRpc, WitNode, WitType,
     WitTypeNode, WitValue,
 };
@@ -90,10 +90,9 @@ pub use wasmtime_wasi::Pollable;
 #[cfg(feature = "host-bindings")]
 mod generated {
     use ::wasmtime::component::bindgen;
-
     bindgen!({
         path: "wit",
-        world: "wit-value",
+        world: "wasm-rpc",
         tracing: false,
         async: true,
         trappable_imports: true,
@@ -110,7 +109,7 @@ mod generated {
 pub use generated::golem;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc::types::{
+pub use generated::golem::rpc0_1_1::types::{
     Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, WitNode, WitType, WitTypeNode,
     WitValue,
 };
@@ -431,11 +430,6 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
         Ok(arbitrary_value.into())
     }
 }
-
-#[cfg(feature = "host-bindings")]
-pub const WASM_RPC_WIT: &str = include_str!("../wit/wasm-rpc.wit");
-#[cfg(feature = "host-bindings")]
-pub const WASI_POLL_WIT: &str = include_str!("../wit/deps/io/poll.wit");
 
 pub const WASM_RPC_VERSION: &str = version::lib_version!();
 

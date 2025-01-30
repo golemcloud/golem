@@ -273,6 +273,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare WIT dependencies
+        run: cargo make wit
       - name: Build wasm-rpc in stub mode
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 

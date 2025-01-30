@@ -1,0 +1,19 @@
+package golem:api;
+
+world golem {
+  import golem:api/host@0.2.0;
+  import golem:api/host@1.1.1;
+  import golem:api/oplog@1.1.1;
+  import golem:durability/durability@1.2.0;
+
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  import wasi:blobstore/types;
+  import wasi:keyvalue/atomic@0.1.0;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/cache@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:keyvalue/types@0.1.0;
+  import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+  import wasi:logging/logging;
+}

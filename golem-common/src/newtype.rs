@@ -15,19 +15,9 @@
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident, $proto_type:path) => {
-        #[derive(
-            Clone,
-            Debug,
-            PartialOrd,
-            Ord,
-            derive_more::FromStr,
-            Eq,
-            Hash,
-            PartialEq,
-            Serialize,
-            Deserialize,
-        )]
-        #[serde(transparent)]
+        #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
+        #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "model", serde(transparent))]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -36,22 +26,35 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl Encode for $name {
-            fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        impl bincode::Encode for $name {
+            fn encode<E: bincode::enc::Encoder>(
+                &self,
+                encoder: &mut E,
+            ) -> Result<(), bincode::error::EncodeError> {
+                use bincode::enc::write::Writer;
+
                 encoder.writer().write(self.0.as_bytes())
             }
         }
 
-        impl Decode for $name {
-            fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        impl bincode::Decode for $name {
+            fn decode<D: bincode::de::Decoder>(
+                decoder: &mut D,
+            ) -> Result<Self, bincode::error::DecodeError> {
+                use bincode::de::read::Reader;
+
                 let mut bytes = [0u8; 16];
                 decoder.reader().read(&mut bytes)?;
                 Ok(Self(Uuid::from_bytes(bytes)))
             }
         }
 
-        impl<'de> BorrowDecode<'de> for $name {
-            fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        impl<'de> bincode::BorrowDecode<'de> for $name {
+            fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+                decoder: &mut D,
+            ) -> Result<Self, bincode::error::DecodeError> {
+                use bincode::de::read::Reader;
+
                 let mut bytes = [0u8; 16];
                 decoder.reader().read(&mut bytes)?;
                 Ok(Self(Uuid::from_bytes(bytes)))
@@ -147,12 +150,13 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl Display for $name {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", &self.0)
             }
         }
 
+        #[cfg(feature = "model")]
         impl golem_wasm_rpc::IntoValue for $name {
             fn into_value(self) -> golem_wasm_rpc::Value {
                 let (hi, lo) = self.0.as_u64_pair();

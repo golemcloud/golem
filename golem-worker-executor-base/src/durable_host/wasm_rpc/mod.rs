@@ -35,7 +35,7 @@ use golem_common::model::{
 };
 use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
-use golem_wasm_rpc::golem::rpc::types::{
+use golem_wasm_rpc::golem::rpc0_1_1::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -780,14 +780,14 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     // generator does not include types that are not used in any exported _functions_
     async fn extract_value(
         &mut self,
-        vnt: golem_wasm_rpc::golem::rpc::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
     ) -> anyhow::Result<WitValue> {
         Ok(vnt.value)
     }
 
     async fn extract_type(
         &mut self,
-        vnt: golem_wasm_rpc::golem::rpc::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
     ) -> anyhow::Result<WitType> {
         Ok(vnt.typ)
     }

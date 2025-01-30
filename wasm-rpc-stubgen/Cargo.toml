@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/wasm-rpc"
+repository = "https://github.com/golemcloud/golem"
 description = "Golem WASM RPC stub generator"
 
 [lib]
@@ -37,6 +37,7 @@ fs_extra = { workspace = true }
 glob = "0.3.1"
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wit = "1.1.6"
 heck = "0.5.0"
 id-arena = "2.2.1"
 indexmap = "2.7.0"
@@ -57,7 +58,7 @@ syn = "2.0.90"
 tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = "0.8.19"
-wac-graph = "=0.6.1"
+wac-graph = "0.6.1"
 walkdir = "2.5.0"
 wit-bindgen-rust = "=0.26.0"
 wit-encoder = "=0.221.2"
