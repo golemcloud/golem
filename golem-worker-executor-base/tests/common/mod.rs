@@ -79,8 +79,8 @@ use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
-use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, WasmRpc};
-use golem_wasm_rpc::golem::rpc::types::{HostFutureInvokeResult, Pollable};
+use golem_wasm_rpc::golem::rpc0_1_1::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem::rpc0_1_1::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::{api1_1_1, durability};
 use golem_worker_executor_base::services::events::Events;
@@ -97,6 +97,7 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{debug, info};
+use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
@@ -259,17 +260,22 @@ impl TestDependencies for TestWorkerExecutor {
 }
 
 pub struct TestContext {
+    base_prefix: String,
     unique_id: u16,
 }
 
 impl TestContext {
     pub fn new(last_unique_id: &LastUniqueId) -> Self {
+        let base_prefix = Uuid::new_v4().to_string();
         let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
-        Self { unique_id }
+        Self {
+            base_prefix,
+            unique_id,
+        }
     }
 
     pub fn redis_prefix(&self) -> String {
-        format!("test-{}:", self.unique_id)
+        format!("test-{}-{}:", self.base_prefix, self.unique_id)
     }
 
     pub fn grpc_port(&self) -> u16 {
@@ -1022,7 +1028,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         api1_1_1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         api1_1_1::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem::rpc0_1_1::types::add_to_linker_get_host(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         Ok(linker)
     }
 }

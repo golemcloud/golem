@@ -23,7 +23,7 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{ComponentFilePath, PluginInstallationId};
-use golem_wasm_rpc::golem::rpc::types::{
+use golem_wasm_rpc::golem::rpc0_1_1::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

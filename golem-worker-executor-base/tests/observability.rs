@@ -38,7 +38,7 @@ async fn get_oplog_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let worker_id = WorkerId {
         component_id,
@@ -106,7 +106,7 @@ async fn search_oplog_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").store().await;
 
     let worker_id = WorkerId {
         component_id,
@@ -208,7 +208,7 @@ async fn get_oplog_with_api_changing_updates(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker(&component_id, "get_oplog_with_api_changing_updates")
         .await;
@@ -244,6 +244,8 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
+    println!("oplog\n{:#?}", oplog);
+
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 17);
 }
@@ -258,7 +260,7 @@ async fn get_oplog_starting_with_updated_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let target_version = executor
         .update_component(&component_id, "update-test-v2")
         .await;
