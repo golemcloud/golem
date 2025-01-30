@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -28,6 +28,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[timeout(300_000)]
 async fn javascript_example_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
