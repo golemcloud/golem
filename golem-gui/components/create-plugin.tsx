@@ -17,7 +17,7 @@ import { Button2 } from "./ui/button";
 const CreatePluginForm = () => {
   const { components } = useComponents();
   const { upsertPulgin } = useAddPlugin();
-
+  console.log("components ", components);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
@@ -40,7 +40,17 @@ const CreatePluginForm = () => {
   });
 
   const pluginType = watch("type");
+  const selectedComponentId = watch("componentId");
 
+  const seenIds = new Set();
+  const uniqueOptions = components.filter((component: Component) => {
+    const id = component.versionedComponentId?.componentId;
+    if (seenIds.has(id)) {
+      return false;
+    }
+    seenIds.add(id);
+    return true;
+  });
   const onSubmit = async (data: PluginFormValues) => {
     setIsSubmitting(true);
     const pluginData = {
@@ -52,7 +62,7 @@ const CreatePluginForm = () => {
           ? {
               type: "OplogProcessor",
               componentId: data.componentId,
-              componentVersion: data.componentVersion,
+              componentVersion: (data.componentVersion),
             }
           : {
               type: "ComponentTransformer",
@@ -114,12 +124,7 @@ const CreatePluginForm = () => {
           name="type"
           control={control}
           render={({ field }) => (
-            <Select
-              {...field}
-              size="small"
-              fullWidth
-              disabled={isSubmitting}
-            >
+            <Select {...field} size="small" fullWidth disabled={isSubmitting}>
               <MenuItem value="OplogProcessor">Oplog Processor</MenuItem>
               <MenuItem value="ComponentTransformer">
                 Component Transformer
@@ -145,7 +150,7 @@ const CreatePluginForm = () => {
                   disabled={isSubmitting}
                   fullWidth
                 >
-                  {components?.map((component: Component) => (
+                  {uniqueOptions?.map((component: Component) => (
                     <MenuItem
                       key={component.versionedComponentId.componentId}
                       value={component.versionedComponentId.componentId}
@@ -163,15 +168,29 @@ const CreatePluginForm = () => {
               render={({ field, fieldState }) => (
                 <TextField
                   {...field}
+                  select
                   label="Component Version"
-                  type="number"
                   size="small"
                   error={!!fieldState.error}
                   helperText={fieldState.error?.message}
                   disabled={isSubmitting}
                   fullWidth
-                  onChange={(e) => field.onChange(Number(e.target.value))}
-                />
+                >
+                  {components
+                    ?.filter(
+                      (component) =>
+                        component.versionedComponentId.componentId ===
+                        selectedComponentId
+                    )
+                    ?.map((component) => (
+                      <MenuItem
+                        key={component.versionedComponentId.version}
+                        value={component.versionedComponentId.version}
+                      >
+                        {component.versionedComponentId.version}
+                      </MenuItem>
+                    ))}
+                </TextField>
               )}
             />
           </>
