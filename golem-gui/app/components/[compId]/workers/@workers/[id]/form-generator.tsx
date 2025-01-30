@@ -60,7 +60,9 @@ export const generateDefaultValues = (fields: Parameter[]): FormData => {
           defaults[field.name] = generateDefaultValues(
             field?.typ?.inner?.fields || []
           );
-        } else {
+        } else if(field.typ?.inner?.type === "Bool"){
+          defaults[field.name] = false;
+        }else{
           defaults[field.name] = "";
         }
         break;
