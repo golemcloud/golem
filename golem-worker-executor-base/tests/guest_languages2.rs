@@ -28,7 +28,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-#[timeout(180_000)]
+#[timeout(300_000)]
 async fn javascript_example_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

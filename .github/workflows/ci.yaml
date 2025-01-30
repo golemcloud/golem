@@ -411,6 +411,8 @@ jobs:
           include_passed: true
   cli-tests:
     runs-on: ubuntu-latest-xlarge
+    env:
+      CARGO_BUILD_JOBS: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v4
