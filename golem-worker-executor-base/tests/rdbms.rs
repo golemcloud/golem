@@ -638,7 +638,7 @@ async fn rdbms_component_test<T: RdbmsType>(
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.store_component("rdbms-service").await;
+    let component_id = executor.component("rdbms-service").store().await;
     let worker_ids =
         start_workers::<T>(&executor, &component_id, db_addresses, workers_per_db).await;
 

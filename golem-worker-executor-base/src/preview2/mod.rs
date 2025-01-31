@@ -36,6 +36,14 @@ wasmtime::component::bindgen!({
         "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+        "wasi:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
+        "wasi:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
+        "wasi:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
+        "wasi:rdbms/postgres/db-connection": super::durable_host::rdbms::postgres::PostgresDbConnection,
+        "wasi:rdbms/postgres/db-result-stream": super::durable_host::rdbms::postgres::DbResultStreamEntry,
+        "wasi:rdbms/postgres/db-transaction": super::durable_host::rdbms::postgres::DbTransactionEntry,
+        "wasi:rdbms/postgres/lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
+        "wasi:rdbms/postgres/lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
     },
 });
 
