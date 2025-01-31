@@ -67,7 +67,9 @@ impl Benchmark for DurabilityOverhead {
     ) -> Self::IterationContext {
         let component_id = benchmark_context
             .deps
-            .store_unique_component("durability-overhead")
+            .component("durability-overhead")
+            .unique()
+            .store()
             .await;
 
         let durable_worker_ids =

@@ -15,6 +15,9 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[cfg(feature = "base-model")]
+pub mod base_model;
+
 #[cfg(feature = "tokio")]
 pub mod cache;
 
@@ -35,7 +38,10 @@ pub mod json_yaml;
 #[cfg(feature = "observability")]
 pub mod metrics;
 
+#[cfg(feature = "model")]
 pub mod model;
+
+#[cfg(any(feature = "model", feature = "base-model"))]
 pub mod newtype;
 
 #[cfg(feature = "redis")]
@@ -44,16 +50,19 @@ pub mod redis;
 #[cfg(feature = "sql")]
 pub mod repo;
 
+#[cfg(feature = "model")]
 pub mod retriable_error;
 
 #[cfg(feature = "tokio")]
 pub mod retries;
 
+#[cfg(feature = "serialization")]
 pub mod serialization;
 
 #[cfg(feature = "observability")]
 pub mod tracing;
 
+#[cfg(feature = "model")]
 pub mod uri;
 
 pub mod virtual_exports;

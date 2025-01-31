@@ -267,13 +267,13 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     write_embedded_source(
         &target_deps.join("wasm-rpc"),
         "wasm-rpc.wit",
-        golem_wasm_rpc::WASM_RPC_WIT,
+        golem_wit::WASM_RPC_WIT,
     )?;
 
     write_embedded_source(
         &target_deps.join("io"),
         "poll.wit",
-        golem_wasm_rpc::WASI_POLL_WIT,
+        golem_wit::WASI_POLL_WIT,
     )?;
 
     Ok(())

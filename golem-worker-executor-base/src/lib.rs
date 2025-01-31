@@ -99,6 +99,7 @@ const VERSION: &str = golem_version!();
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
+    pub epoch_thread: std::thread::JoinHandle<()>,
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -251,12 +252,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
-        let worker_executor_impl = create_worker_executor_impl::<Ctx, Self>(
+        let (worker_executor_impl, epoch_thread) = create_worker_executor_impl::<Ctx, Self>(
             golem_config.clone(),
             self,
             runtime.clone(),
             &lazy_worker_activator,
-            join_set,
         )
         .await?;
 
@@ -274,6 +274,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(RunDetails {
             http_port,
             grpc_port: addr.port(),
+            epoch_thread,
         })
     }
 }
@@ -283,8 +284,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     bootstrap: &A,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<All<Ctx>, anyhow::Error> {
+) -> Result<(All<Ctx>, std::thread::JoinHandle<()>), anyhow::Error> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -475,17 +475,13 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     let engine = Arc::new(Engine::new(&config)?);
     let linker = bootstrap.create_wasmtime_linker(&engine)?;
 
-    let mut epoch_interval = tokio::time::interval(golem_config.limits.epoch_interval);
     let engine_ref: Arc<Engine> = engine.clone();
-    join_set.spawn(
-        async move {
-            loop {
-                epoch_interval.tick().await;
-                engine_ref.increment_epoch();
-            }
-        }
-        .in_current_span(),
-    );
+
+    let epoch_interval = golem_config.limits.epoch_interval;
+    let epoch_thread = std::thread::spawn(move || loop {
+        std::thread::sleep(epoch_interval);
+        engine_ref.increment_epoch();
+    });
 
     let linker = Arc::new(linker);
 
@@ -544,7 +540,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         golem_config.scheduler.refresh_interval,
     );
 
-    bootstrap
+    let all = bootstrap
         .create_services(
             active_workers,
             engine,
@@ -570,5 +566,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             plugins,
             oplog_processor_plugin,
         )
-        .await
+        .await?;
+
+    Ok((all, epoch_thread))
 }

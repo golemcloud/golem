@@ -12,7 +12,7 @@ use golem_wasm_ast::IgnoreAllButMetadata;
 use humansize::{ISizeFormatter, BINARY};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::Path;
 use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -102,7 +102,14 @@ async fn measure_component(
 
     let component_id = executor
         .component_service()
-        .get_or_add_component(path, ComponentType::Durable)
+        .get_or_add_component(
+            path,
+            path.file_name().unwrap().to_string_lossy().as_ref(),
+            ComponentType::Durable,
+            &[],
+            &HashMap::new(),
+            false,
+        )
         .await;
 
     let data = std::fs::read(path)?;

@@ -64,35 +64,126 @@ use tokio::sync::oneshot::Sender;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
+    dsl: &'a DSL,
+    name: String,
+    component_type: ComponentType,
+    unique: bool,
+    unverified: bool,
+    files: Vec<InitialComponentFile>,
+    dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
+}
+
+impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
+    pub fn new(dsl: &'a DSL, name: impl AsRef<str>) -> Self {
+        Self {
+            dsl,
+            name: name.as_ref().to_string(),
+            component_type: ComponentType::Durable,
+            unique: false,
+            unverified: false,
+            files: vec![],
+            dynamic_linking: vec![],
+        }
+    }
+
+    /// Set the component type to ephemeral.
+    pub fn ephemeral(mut self) -> Self {
+        self.component_type = ComponentType::Ephemeral;
+        self
+    }
+
+    /// Set the component type to durable.
+    pub fn durable(mut self) -> Self {
+        self.component_type = ComponentType::Durable;
+        self
+    }
+
+    /// Always create as a new component - otherwise, if the same component was already uploaded, it will be reused
+    pub fn unique(mut self) -> Self {
+        self.unique = true;
+        self
+    }
+
+    /// Reuse an existing component of the same WASM if it exists
+    pub fn reused(mut self) -> Self {
+        self.unique = false;
+        self
+    }
+
+    /// Local filesystem mode only - do not try to parse the component
+    pub fn unverified(mut self) -> Self {
+        self.unverified = true;
+        self
+    }
+
+    /// Local filesystem mode only - parse the component before storing
+    pub fn verified(mut self) -> Self {
+        self.unverified = false;
+        self
+    }
+
+    /// Set the initial files for the component
+    pub fn with_files(mut self, files: &[InitialComponentFile]) -> Self {
+        self.files = files.to_vec();
+        self
+    }
+
+    /// Adds an initial file to the component
+    pub fn add_file(mut self, file: InitialComponentFile) -> Self {
+        self.files.push(file);
+        self
+    }
+
+    /// Set the dynamic linking for the component
+    pub fn with_dynamic_linking(
+        mut self,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> Self {
+        self.dynamic_linking = dynamic_linking.to_vec();
+        self
+    }
+
+    /// Adds a dynamic linked instance to the component
+    pub fn add_dynamic_linking(
+        mut self,
+        name: &'static str,
+        instance: DynamicLinkedInstance,
+    ) -> Self {
+        self.dynamic_linking.push((name, instance));
+        self
+    }
+
+    /// Stores the component
+    pub async fn store(self) -> ComponentId {
+        self.dsl
+            .store_component_with(
+                &self.name,
+                self.component_type,
+                self.unique,
+                self.unverified,
+                &self.files,
+                &self.dynamic_linking,
+            )
+            .await
+    }
+}
+
 #[async_trait]
 pub trait TestDsl {
-    async fn store_component(&self, name: &str) -> ComponentId;
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
-    async fn store_unique_component(&self, name: &str) -> ComponentId;
-    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self>;
+
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
@@ -303,37 +394,59 @@ pub trait TestDsl {
 
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-
-        self.component_service()
-            .get_or_add_component(&source_path, ComponentType::Durable)
-            .await
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self> {
+        StoreComponentBuilder::new(self, name)
     }
 
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let component_name = if unique {
+            let uuid = Uuid::new_v4();
+            format!("{name}-{uuid}")
+        } else {
+            match component_type {
+                ComponentType::Durable => name.to_string(),
+                ComponentType::Ephemeral => format!("{name}-ephemeral"),
+            }
+        };
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
 
-        self.component_service()
-            .get_or_add_component(&source_path, ComponentType::Ephemeral)
-            .await
-    }
-
-    async fn store_unique_component(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        self.component_service()
-            .add_component_with_name(&source_path, &unique_name, ComponentType::Durable)
-            .await
-            .expect("Failed to store unique component")
-    }
-
-    async fn store_component_unverified(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
-            .get_or_add_component_unverified(&source_path, ComponentType::Durable)
-            .await
+        if unique {
+            self.component_service()
+                .add_component(
+                    &source_path,
+                    &component_name,
+                    component_type,
+                    files,
+                    &dynamic_linking,
+                    unverified,
+                )
+                .await
+                .expect("Failed to add component")
+        } else {
+            self.component_service()
+                .get_or_add_component(
+                    &source_path,
+                    &component_name,
+                    component_type,
+                    files,
+                    &dynamic_linking,
+                    unverified,
+                )
+                .await
+        }
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
@@ -342,88 +455,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .add_component_with_id(&source_path, component_id, ComponentType::Durable)
             .await
             .expect("Failed to store component");
-    }
-
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                &unique_name,
-                component_type,
-                files,
-                &HashMap::new(),
-            )
-            .await
-            .expect("Failed to store component")
-    }
-
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
-            .add_component_with_files(&source_path, name, component_type, files, &HashMap::new())
-            .await
-            .expect("Failed to store component with id {component_id}")
-    }
-
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                name,
-                ComponentType::Durable,
-                &[],
-                &dynamic_linking,
-            )
-            .await
-            .expect("Failed to store component with id {component_id}")
-    }
-
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                &unique_name,
-                ComponentType::Durable,
-                &[],
-                &dynamic_linking,
-            )
-            .await
-            .expect("Failed to store component")
     }
 
     async fn add_initial_component_file(
@@ -1635,33 +1666,21 @@ pub fn to_worker_metadata(
 
 #[async_trait]
 pub trait TestDslUnsafe {
-    async fn store_component(&self, name: &str) -> ComponentId;
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
-    async fn store_unique_component(&self, name: &str) -> ComponentId;
-    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    type Safe: TestDsl;
+
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
+
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
     async fn update_component_with_files(
@@ -1829,59 +1848,35 @@ pub trait TestDslUnsafe {
 
 #[async_trait]
 impl<T: TestDsl + Sync> TestDslUnsafe for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_component(self, name).await
+    type Safe = T;
+
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
+        StoreComponentBuilder::new(self, name)
     }
 
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_ephemeral_component(self, name).await
-    }
-
-    async fn store_unique_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_unique_component(self, name).await
-    }
-
-    async fn store_component_unverified(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_component_unverified(self, name).await
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        <T as TestDsl>::store_component_with(
+            self,
+            name,
+            component_type,
+            unique,
+            unverified,
+            files,
+            dynamic_linking,
+        )
+        .await
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
-    }
-
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        <T as TestDsl>::store_unique_component_with_files(self, name, component_type, files).await
-    }
-
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        <T as TestDsl>::store_component_with_files(self, name, component_type, files).await
-    }
-
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        <T as TestDsl>::store_component_with_dynamic_linking(self, name, dynamic_linking).await
-    }
-
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        <T as TestDsl>::store_unique_component_with_dynamic_linking(self, name, dynamic_linking)
-            .await
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {

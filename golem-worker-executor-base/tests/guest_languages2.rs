@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
@@ -28,6 +28,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[timeout(300_000)]
 async fn javascript_example_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -36,7 +37,7 @@ async fn javascript_example_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-3").await;
+    let component_id = executor.component("js-3").store().await;
     let worker_id = executor.start_worker(&component_id, "js-3").await;
 
     let result_fetch_get = executor
@@ -65,7 +66,7 @@ async fn javascript_example_4(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-4").await;
+    let component_id = executor.component("js-4").store().await;
     let worker_id = executor.start_worker(&component_id, "js-4").await;
 
     let result = executor
@@ -88,7 +89,7 @@ async fn python_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("python-1").await;
+    let component_id = executor.component("python-1").store().await;
     let worker_id = executor.start_worker(&component_id, "python-1").await;
 
     let _ = executor
@@ -121,7 +122,7 @@ async fn swift_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("swift-1").await;
+    let component_id = executor.component("swift-1").store().await;
     let worker_id = executor.start_worker(&component_id, "swift-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;

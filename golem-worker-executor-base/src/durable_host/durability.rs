@@ -16,7 +16,6 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::preview2::golem;
 use crate::preview2::golem::durability::durability;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
@@ -72,6 +71,7 @@ pub trait DurabilityHost {
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
+        forced_commit: bool,
     ) -> Result<(), GolemError>;
 
     /// Gets the current durable execution state
@@ -179,12 +179,13 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: durability::DurableFunctionType,
         begin_index: durability::OplogIndex,
-        _forced_commit: bool,
+        forced_commit: bool,
     ) -> anyhow::Result<()> {
         DurabilityHost::end_durable_function(
             self,
             &function_type.into(),
             OplogIndex::from_u64(begin_index),
+            forced_commit,
         )
         .await?;
         Ok(())
@@ -194,11 +195,15 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
     ) -> anyhow::Result<durability::DurableExecutionState> {
         let state = DurabilityHost::durable_execution_state(self);
-        let persistence_level: golem::api0_2_0::host::PersistenceLevel =
-            state.persistence_level.into();
         Ok(durability::DurableExecutionState {
             is_live: state.is_live,
-            persistence_level: persistence_level.into(),
+            persistence_level: match state.persistence_level {
+                PersistenceLevel::PersistNothing => durability::PersistenceLevel::PersistNothing,
+                PersistenceLevel::PersistRemoteSideEffects => {
+                    durability::PersistenceLevel::PersistRemoteSideEffects
+                }
+                PersistenceLevel::Smart => durability::PersistenceLevel::Smart,
+            },
         })
     }
 
@@ -228,14 +233,16 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
         let request = unsafe {
-            transmute::<durability::ValueAndType, golem_wasm_rpc::golem::rpc::types::ValueAndType>(
-                request,
-            )
+            transmute::<
+                durability::ValueAndType,
+                golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+            >(request)
         };
         let response = unsafe {
-            transmute::<durability::ValueAndType, golem_wasm_rpc::golem::rpc::types::ValueAndType>(
-                response,
-            )
+            transmute::<
+                durability::ValueAndType,
+                golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+            >(response)
         };
         DurabilityHost::persist_typed_durable_function_invocation(
             self,
@@ -273,10 +280,12 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
+        forced_commit: bool,
     ) -> Result<(), GolemError> {
         self.state.end_function(function_type, begin_index).await?;
         if function_type == &DurableFunctionType::WriteRemote
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+            || forced_commit
         {
             self.state.oplog.commit(CommitLevel::DurableOnly).await;
         }
@@ -480,7 +489,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
                 self.function_type.clone(),
             )
             .await;
-            ctx.end_durable_function(&self.function_type, self.begin_index)
+            ctx.end_durable_function(&self.function_type, self.begin_index, false)
                 .await?;
         }
         Ok(())
@@ -509,7 +518,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
                 self.function_type.clone(),
             )
             .await;
-            ctx.end_durable_function(&self.function_type, self.begin_index)
+            ctx.end_durable_function(&self.function_type, self.begin_index, false)
                 .await?;
         }
         Ok(())
@@ -524,7 +533,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         let function_name = self.function_name();
         Self::validate_oplog_entry(&oplog_entry, &function_name)?;
 
-        ctx.end_durable_function(&self.function_type, self.begin_index)
+        ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
 
         Ok((oplog_entry.response.into(), oplog_entry.oplog_entry_version))

@@ -1,6 +1,7 @@
 # List of top-level tasks intended for use:
 #
 # - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
+# - `cargo make wit`: fetches the WIT dependencies based on wit/deps.toml
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
@@ -46,13 +47,35 @@ alias = "dev-flow"
 [tasks.dev-flow]
 description = "Runs a full development flow, including fixing format and clippy, building and running tests"
 dependencies = [
+    "wit",
     "fix",
     "check",
     "build",
     # "test"
 ]
 
+# WIT DEPENDENCIES
+[tasks.wit]
+description = "Fetches the WIT dependencies based on wit/deps.toml"
+dependencies = ["wit-host", "wit-wasm-rpc"]
+
+[tasks.wit-wasm-rpc]
+dependencies = ["wit-host"]
+script_runner = "@duckscript"
+script = """
+rm -r wasm-rpc/wit/deps
+mkdir wasm-rpc/wit/deps
+cp wit/deps/io wasm-rpc/wit/deps
+cp wit/deps/wasm-rpc wasm-rpc/wit/deps
+"""
+
+[tasks.wit-host]
+install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
+command = "wit-deps"
+args = ["update"]
+
 [tasks.build]
+dependencies = ["wit"]
 description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
@@ -64,16 +87,19 @@ condition = { env_not_set = [
 run_task = "build-bins"
 
 [tasks.build-bins]
+dependencies = ["wit"]
 description = "Builds all executables in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--bins"]
 
 [tasks.build-worker-service]
+dependencies = ["wit"]
 description = "Builds the worker-service"
 command = "cargo"
 args = ["build", "-p", "golem-worker-service"]
 
 [tasks.build-component-service]
+dependencies = ["wit"]
 description = "Builds the component-service"
 command = "cargo"
 args = ["build", "-p", "golem-component-service"]
@@ -83,6 +109,7 @@ description = """This is the top-level task that builds everything in release mo
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
 for docker images."""
 dependencies = [
+    "wit",
     "set-version",
     "build-release-default",
     "build-release-override-linux-amd64",
@@ -115,7 +142,7 @@ args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
 
 [tasks.check]
 description = "Runs rustfmt and clippy checks without applying any fix"
-dependencies = ["check-clippy", "check-rustfmt"]
+dependencies = ["wit", "check-clippy", "check-rustfmt"]
 
 [tasks.check-rustfmt]
 description = "Runs rustfmt checks without applying any fix"
@@ -133,7 +160,7 @@ args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
-dependencies = ["fix-clippy", "fix-rustfmt"]
+dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
@@ -154,7 +181,6 @@ args = [
     "--no-deps",
     "-Dwarnings",
 ]
-
 ## ** TEST **
 
 [tasks.test]
@@ -168,6 +194,7 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
+dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
 cargo test --workspace --lib --all-features --exclude wasm-rpc-stubgen-tests-integration -- --nocapture --report-time $JUNIT_OPTS
@@ -175,6 +202,7 @@ cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time
 '''
 
 [tasks.worker-executor-tests]
+dependencies = ["wit"]
 description = "Runs worker executor tests only"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
@@ -189,60 +217,68 @@ args = [
 ]
 
 [tasks.worker-executor-tests-group1]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time
-cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 2/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group2 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group3]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 3/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group3 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group3 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group4]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 4/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --report-time $JUNIT_OPTS
+cargo test --package golem-worker-executor-base --test integration :tag:group4 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group5]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 5/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group5 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group5 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group6]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 6/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group6 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group6 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group7]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 7/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group7 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group7 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group8]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 8/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration :tag:group8 -- --report-time
+cargo test --package golem-worker-executor-base --test integration :tag:group8 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.integration-tests]
