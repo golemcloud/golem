@@ -7,13 +7,21 @@ import {
   ArrowLeft,
   Pickaxe,
   Info,
+  Workflow,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/errorBoundary";
+import { Component } from "@/types/component";
 
-const ComponentLeftNav = () => {
+interface ComponentLeftNavProps {
+  componentDetails: Component;
+}
+
+const ComponentLeftNav: React.FC<ComponentLeftNavProps> = ({
+  componentDetails,
+}) => {
   const navigate = useNavigate();
   const { componentId } = useParams();
   const location = useLocation();
@@ -49,21 +57,40 @@ const ComponentLeftNav = () => {
                 <span>Overview</span>
               </Button>
             </li>
-            <li>
-              <Button
-                variant="ghost"
-                onClick={() => navigate(`/components/${componentId}/workers`)}
-                className={cn(
-                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                  isActive("workers") || isActive("create")
-                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
-                )}
-              >
-                <Pickaxe className="h-5 w-5 mr-2" />
-                <span>Workers</span>
-              </Button>
-            </li>
+            {componentDetails?.componentType === "Durable" ||
+            !componentDetails?.componentType ? (
+              <li>
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate(`/components/${componentId}/workers`)}
+                  className={cn(
+                    "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                    isActive("workers") || isActive("create")
+                      ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                      : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                  )}
+                >
+                  <Pickaxe className="h-5 w-5 mr-2" />
+                  <span>Workers</span>
+                </Button>
+              </li>
+            ) : (
+              <li>
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate(`/components/${componentId}/invoke`)}
+                  className={cn(
+                    "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                    isActive("invoke")
+                      ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                      : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                  )}
+                >
+                  <Workflow className="h-5 w-5 mr-2" />
+                  <span>Invoke</span>
+                </Button>
+              </li>
+            )}
 
             <li>
               <Button

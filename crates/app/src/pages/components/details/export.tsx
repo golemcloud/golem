@@ -74,7 +74,7 @@ function convertJsonToFunctionStructure(json: Parameter[] | Result[]) {
 }
 
 export default function Exports() {
-  const { componentId } = useParams();
+  const { componentId = "" } = useParams();
   const [componentList, setComponentList] = useState([] as Component[]);
   const [component, setComponent] = useState<Component>({});
   const [versionList, setVersionList] = useState([] as number[]);
@@ -147,7 +147,7 @@ export default function Exports() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav />
+        <ComponentLeftNav componentDetails={component} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

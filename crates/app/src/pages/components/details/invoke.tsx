@@ -7,7 +7,7 @@ import {
   Export,
 } from "@/types/component.ts";
 import ErrorBoundary from "@/components/errorBoundary";
-import WorkerLeftNav from "./leftNav";
+import ComponentLeftNav from "./componentsLeftNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ClipboardCopy } from "lucide-react";
@@ -20,8 +20,8 @@ import {
   safeFormatJSON,
 } from "@/lib/worker";
 
-export default function WorkerInvoke() {
-  const { componentId = "", workerName = "" } = useParams();
+export default function ComponentInvoke() {
+  const { componentId = "" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -70,7 +70,7 @@ export default function WorkerInvoke() {
         matchingComponent?.exports?.[0]?.functions?.[0]
       ) {
         navigate(
-          `/components/${componentId}/workers/${workerName}/invoke?name=${matchingComponent.exports[0].name}&&fn=${matchingComponent.exports[0].functions[0].name}`
+          `/components/${componentId}/invoke?name=${matchingComponent.exports[0].name}&&fn=${matchingComponent.exports[0].functions[0].name}`
         );
       }
     } catch (error: unknown) {
@@ -112,9 +112,8 @@ export default function WorkerInvoke() {
       const functionName = `${encodeURIComponent(name)}.${encodeURIComponent(
         `{${urlFn}}`
       )}`;
-      const response = await API.invokeWorkerAwait(
+      const response = await API.invokeEphemeralAwait(
         componentId,
-        workerName,
         functionName,
         apiData
       );
@@ -137,13 +136,8 @@ export default function WorkerInvoke() {
   return (
     <ErrorBoundary>
       <div className="flex h-screen">
-        <WorkerLeftNav />
+        <ComponentLeftNav componentDetails={componentList[componentId]} />
         <div className="flex-1 flex flex-col bg-background">
-          <header className="w-full border-b py-4 px-6">
-            <h1 className="text-2xl font-semibold text-foreground truncate">
-              {workerName}
-            </h1>
-          </header>
           <div className="flex">
             <div className="border-r px-8 py-4 min-w-[300px]">
               <div className="grid grid-cols-1 gap-4 overflow-scroll h-[80vh]">
@@ -163,7 +157,7 @@ export default function WorkerInvoke() {
                                 variant="ghost"
                                 onClick={() =>
                                   navigate(
-                                    `/components/${componentId}/workers/${workerName}/invoke?name=${exportItem.name}&&fn=${fn.name}`
+                                    `/components/${componentId}/invoke?name=${exportItem.name}&&fn=${fn.name}`
                                   )
                                 }
                                 className={cn(
@@ -210,7 +204,7 @@ export default function WorkerInvoke() {
                   {resultValue && (
                     <SectionCard
                       title="Result"
-                      description="View the result of your latest worker invocation"
+                      description="View the result of your latest invocation"
                       value={resultValue}
                       readOnly
                     />

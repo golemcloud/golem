@@ -57,7 +57,7 @@ export default function WorkerList() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav />
+        <ComponentLeftNav componentDetails={component} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">
@@ -104,7 +104,7 @@ export default function WorkerList() {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-scroll h-[55vh]">
+                <div className="overflow-scroll h-[70vh]">
                   {filteredWorkers.map((worker, index) => (
                     <Card
                       key={index}

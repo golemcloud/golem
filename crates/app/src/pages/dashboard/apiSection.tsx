@@ -22,7 +22,7 @@ export function APISection() {
 
   return (
     <ErrorBoundary>
-      <Card className={"rounded-lg"}>
+      <Card className={"rounded-lg flex-1"}>
         <CardHeader>
           <div className="flex justify-between items-center mb-6">
             <CardTitle>APIs</CardTitle>
@@ -33,7 +33,7 @@ export function APISection() {
         </CardHeader>
         <CardContent>
           {apis.length > 0 ? (
-            <div className="grid gap-0 overflow-scroll max-h-[70vh]">
+            <div className="grid gap-0 overflow-scroll max-h-[50vh]">
               {apis.map((api) => (
                 <div
                   key={api.id}

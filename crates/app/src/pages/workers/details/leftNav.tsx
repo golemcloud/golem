@@ -1,37 +1,23 @@
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import {
-  useNavigate,
-  useParams,
-  useLocation,
-  useSearchParams,
-} from "react-router-dom";
-import { Container, Home, Settings, ArrowLeft, Tv } from "lucide-react";
+  Container,
+  Home,
+  Settings,
+  ArrowLeft,
+  Tv,
+  Workflow,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/errorBoundary";
-import { useEffect, useState } from "react";
-import { API } from "@/service";
-import { Component, ComponentExportFunction } from "@/types/component.ts";
 
 const WorkerLeftNav = () => {
   const navigate = useNavigate();
   const { componentId = "", workerName = "" } = useParams();
   const location = useLocation();
-  const [componentList, setComponentList] = useState<{
-    [key: string]: Component;
-  }>({});
-
-  const [searchParams] = useSearchParams();
-
-  const urlFn = searchParams.get("fn") || "";
 
   const isActive = (path: string) => location.pathname.endsWith(path);
-
-  useEffect(() => {
-    API.getComponentByIdAsKey().then(async (response) => {
-      setComponentList(response);
-    });
-  }, []);
 
   return (
     <ErrorBoundary>
@@ -108,6 +94,25 @@ const WorkerLeftNav = () => {
                 variant="ghost"
                 onClick={() =>
                   navigate(
+                    `/components/${componentId}/workers/${workerName}/invoke`
+                  )
+                }
+                className={cn(
+                  "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                  isActive("invoke")
+                    ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                    : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
+                )}
+              >
+                <Workflow className="h-4 w-4 mr-2" />
+                <span>Invoke</span>
+              </Button>
+            </li>
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  navigate(
                     `/components/${componentId}/workers/${workerName}/manage`
                   )
                 }
@@ -123,45 +128,6 @@ const WorkerLeftNav = () => {
               </Button>
             </li>
           </ul>
-        </div>
-        <div className="mt-20">
-          <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
-            Invoke
-          </h2>
-          <div className="grid grid-cols-1 gap-4 my-4 overflow-scroll h-[35vh]">
-            {componentList?.[componentId]?.exports?.map((exportItem) => (
-              <div key={exportItem.name}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">
-                    {exportItem.name}
-                  </span>
-                </div>
-                <ul className="space-y-1">
-                  {exportItem?.functions?.length > 0 &&
-                    exportItem.functions.map((fn: ComponentExportFunction) => (
-                      <li key={fn.name}>
-                        <Button
-                          variant="ghost"
-                          onClick={() =>
-                            navigate(
-                              `/components/${componentId}/workers/${workerName}/invoke?name=${exportItem.name}&&fn=${fn.name}`
-                            )
-                          }
-                          className={cn(
-                            "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                            urlFn === fn.name
-                              ? "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                              : "hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400"
-                          )}
-                        >
-                          <span>{fn.name}</span>
-                        </Button>
-                      </li>
-                    ))}
-                </ul>
-              </div>
-            ))}
-          </div>
         </div>
       </nav>
     </ErrorBoundary>

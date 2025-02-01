@@ -64,7 +64,7 @@ export default function ComponentSettings() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav />
+        <ComponentLeftNav componentDetails={component} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

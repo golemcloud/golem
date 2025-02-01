@@ -62,7 +62,7 @@ const ApiLeftNav = () => {
       <nav className="w-64 border-r p-4 border-gray-200 dark:border-gray-700 min-h-[94vh]">
         <div className="mb-6">
           <div className="flex items-center mb-6">
-            <div onClick={() => navigate(`/apis`)}>
+            <div onClick={() => navigate(-1)}>
               <ArrowLeft className="h-5 w-5 mr-2 text-gray-800 dark:text-gray-200 hover:text-gray-600 dark:hover:text-gray-400 cursor-pointer" />
             </div>
             <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-200">

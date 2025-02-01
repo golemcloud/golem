@@ -10,7 +10,7 @@ import { Worker, WorkerStatus as IWorkerStatus } from "@/types/worker.ts";
 import ErrorBoundary from "@/components/errorBoundary";
 
 export const ComponentDetails = () => {
-  const { componentId } = useParams();
+  const { componentId = "" } = useParams();
   const [component, setComponent] = useState({} as Component);
   const [workerStatus, setWorkerStatus] = useState({} as IWorkerStatus);
 
@@ -31,7 +31,7 @@ export const ComponentDetails = () => {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav />
+        <ComponentLeftNav componentDetails={component} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

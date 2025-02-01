@@ -161,6 +161,19 @@ export class Service {
     return r;
   };
 
+  public invokeEphemeralAwait = async (
+    componentId: string,
+    functionName: string,
+    payload: any
+  ) => {
+    const r = await this.callApi(
+      ENDPOINT.invokeEphemeralWorker(componentId, functionName),
+      "POST",
+      JSON.stringify(payload)
+    );
+    return r;
+  };
+
   public getDeploymentApi = async (versionId: string) => {
     const r = await this.callApi(ENDPOINT.getDeploymentApi(versionId));
     return r;

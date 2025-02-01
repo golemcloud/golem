@@ -19,12 +19,14 @@ import { useNavigate } from "react-router-dom";
 import { removeDuplicateApis } from "@/lib/utils";
 
 export default function Deployments() {
-  const [expandedDeployment, setExpandedDeployment] = useState([] as string[]);
   const navigate = useNavigate();
 
+  const [expandedDeployment, setExpandedDeployment] = useState([] as string[]);
   const [apiList, setApiList] = useState([] as Api[]);
+  const [copied, setCopied] = useState(false);
   const [deployments, setDeployments] = useState([] as Deployment[]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState("");
   const [selectedDeploymentHost, setSelectedDeploymentHost] = useState<
     string | null
   >(null);
@@ -67,6 +69,20 @@ export default function Deployments() {
       });
   };
 
+  const copyToClipboard = () => {
+    // TODO: Add support for Curl Message properly
+    const curlCommand = `curl -X`;
+    navigator.clipboard
+      .writeText(curlCommand)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000); // Hide message after 2 seconds
+      })
+      .catch((err) => {
+        console.error("Failed to copy:", err);
+      });
+  };
+
   return (
     <ErrorBoundary>
       <div className="p-6  mx-auto max-w-7xl">
@@ -87,7 +103,15 @@ export default function Deployments() {
           {deployments.length > 0 ? (
             <div className="grid gap-6 overflow-scroll max-h-[80vh]">
               {deployments.map((deployment, index) => (
-                <Card key={index} className="p-6">
+                <Card
+                  key={index}
+                  className="p-6"
+                  onMouseEnter={() => setIsHovered(deployment.site.host)}
+                  onMouseLeave={() => {
+                    setIsHovered("");
+                    setCopied(false);
+                  }}
+                >
                   <div className="space-y-6">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
@@ -133,64 +157,81 @@ export default function Deployments() {
                       </Dialog>
                     </div>
 
-                    <div className="grid gap-x-4 text-sm">
-                      <div>
-                        <p className="text-muted-foreground">Host</p>
-                        <p className="mt-1">{deployment.site.host}</p>
-                      </div>
-                    </div>
-
                     <div className="space-y-2">
                       {deployment.apiDefinitions.map((api, index) => (
                         <div
                           key={index}
                           className="grid items-center space-x-2 gap-2"
                         >
-                          <div className="flex items-center gap-4 space-between">
-                            <div className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-sm">
-                              {api.id} (v{api.version})
-                            </div>
-                            {(
-                              (
-                                apiList?.find(
-                                  (data: Api) =>
-                                    data.id === api.id &&
-                                    data.version === api.version
-                                ) || {}
-                              ).routes || []
-                            )?.length > 0 && (
-                              <button
+                          <div className="flex justify-between">
+                            <div className="flex items-center gap-4 space-between">
+                              <div
+                                className="relative rounded bg-muted p-1 font-mono text-sm cursor-pointer"
                                 onClick={() => {
-                                  if (
-                                    expandedDeployment.includes(
-                                      `${api.id}.${api.version}`
-                                    )
-                                  ) {
-                                    setExpandedDeployment(
-                                      expandedDeployment.filter(
-                                        (item) =>
-                                          item !== `${api.id}.${api.version}`
-                                      )
-                                    );
-                                  } else {
-                                    setExpandedDeployment([
-                                      ...expandedDeployment,
-                                      `${api.id}.${api.version}`,
-                                    ]);
-                                  }
+                                  navigate(
+                                    `/apis/${api.id}/version/${api.version}`
+                                  );
                                 }}
-                                className="p-1 hover:bg-accent rounded-md"
                               >
-                                <ChevronRight
-                                  className={`w-4 h-4 text-muted-foreground transition-transform ${
-                                    expandedDeployment.includes(
-                                      `${api.id}.${api.version}`
-                                    )
-                                      ? "rotate-90"
-                                      : ""
-                                  }`}
-                                />
-                              </button>
+                                {api.id} (v{api.version})
+                              </div>
+                              {(
+                                (
+                                  apiList?.find(
+                                    (data: Api) =>
+                                      data.id === api.id &&
+                                      data.version === api.version
+                                  ) || {}
+                                ).routes || []
+                              )?.length > 0 && (
+                                <button
+                                  onClick={() => {
+                                    if (
+                                      expandedDeployment.includes(
+                                        `${api.id}.${api.version}`
+                                      )
+                                    ) {
+                                      setExpandedDeployment(
+                                        expandedDeployment.filter(
+                                          (item) =>
+                                            item !== `${api.id}.${api.version}`
+                                        )
+                                      );
+                                    } else {
+                                      setExpandedDeployment([
+                                        ...expandedDeployment,
+                                        `${api.id}.${api.version}`,
+                                      ]);
+                                    }
+                                  }}
+                                  className="p-1 hover:bg-accent rounded-md"
+                                >
+                                  <ChevronRight
+                                    className={`w-4 h-4 text-muted-foreground transition-transform ${
+                                      expandedDeployment.includes(
+                                        `${api.id}.${api.version}`
+                                      )
+                                        ? "rotate-90"
+                                        : ""
+                                    }`}
+                                  />
+                                </button>
+                              )}
+                            </div>
+                            {isHovered === deployment.site.host && (
+                              <div className="flex items-center space-x-3">
+                                <div
+                                  onClick={copyToClipboard}
+                                  className="cursor-pointer hover:bg-accent hover:text-accent-foreground font-mono text-sm p-1"
+                                >
+                                  Copy Curl
+                                </div>
+                                {copied && (
+                                  <span className="text-green-600 font-mono text-sm">
+                                    ✅ Copied!
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
                           {expandedDeployment.includes(
@@ -236,12 +277,21 @@ const RoutesCard = ({
   const routes = apiList.find(
     (api: Api) => api.id === apiId && api.version === version
   )?.routes;
+  const navigate = useNavigate();
 
   return (
     routes && (
       <div className="space-y-2">
         {routes.map((endpoint, index) => (
-          <div key={index} className="flex items-center space-x-2">
+          <div
+            key={index}
+            className="flex items-center space-x-2 cursor-pointer"
+            onClick={() => {
+              navigate(
+                `/apis/${apiId}/version/${version}/routes?path=${endpoint.path}&method=${endpoint.method}`
+              );
+            }}
+          >
             <span className="px-2 py-0.5 text-xs font-medium rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200">
               {endpoint.method}
             </span>
