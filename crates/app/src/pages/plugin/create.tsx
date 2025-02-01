@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useState } from "react";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 import { API } from "@/service";
 import {
   Select,
@@ -83,7 +83,7 @@ const formSchema = z.object({
 export default function CreatePlugin() {
   const navigate = useNavigate();
   const [componentApiList, setComponentApiList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
   const [activeSpecTab, setActiveSpecTab] = useState("OplogProcessor");
   const form = useForm<z.infer<typeof formSchema>>({
@@ -374,7 +374,7 @@ export default function CreatePlugin() {
                                 <SelectContent>
                                   {componentApiList[
                                     form.watch("specs.componentId")
-                                  ]?.versionId?.map((v: number) => (
+                                  ]?.versionList?.map((v: number) => (
                                     <SelectItem key={v} value={v.toString()}>
                                       V{v}
                                     </SelectItem>

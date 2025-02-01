@@ -21,61 +21,35 @@ import ErrorBoundary from "@/components/errorBoundary";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { BaseDirectory } from "@tauri-apps/api/path";
 import { useEffect, useState } from "react";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 import { API } from "@/service";
 import { formatRelativeTime } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
 export default function ComponentInfo() {
-  const { componentId } = useParams();
-  const [componentList, setComponentList] = useState([] as Component[]);
-  const [component, setComponent] = useState<Component>({});
+  const { componentId = "" } = useParams();
+  const [componentList, setComponentList] = useState<{
+    [key: string]: ComponentList;
+  }>({});
   const [versionList, setVersionList] = useState([] as number[]);
-  const [versionChange, setVersionChange] = useState("0" as string);
+  const [versionChange, setVersionChange] = useState(0 as number);
 
   useEffect(() => {
     if (componentId) {
       API.getComponentByIdAsKey().then((response) => {
-        setVersionList(response[componentId].versionId || []);
-      });
-
-      API.getComponents().then((response) => {
+        const componentData = response[componentId];
+        const versionList = componentData?.versionList || [];
+        setVersionList(versionList);
         setComponentList(response);
-        const selectedComponentList = response.filter(
-          (component: Component) =>
-            component.versionedComponentId?.componentId === componentId
-        );
-        let mostRecentComponent = {} as Component;
-        selectedComponentList.forEach((component: Component) => {
-          if (component.createdAt) {
-            const currentDate = new Date(component.createdAt);
-            if (
-              !mostRecentComponent.createdAt ||
-              currentDate > new Date(mostRecentComponent.createdAt)
-            ) {
-              mostRecentComponent = component;
-            }
-          }
-        });
-        setComponent(mostRecentComponent);
-        setVersionChange(
-          mostRecentComponent?.versionedComponentId?.version?.toString() || ""
-        );
+        if (versionList.length > 0) {
+          setVersionChange(versionList[versionList.length - 1]);
+        }
       });
     }
   }, [componentId]);
 
-  const handleVersionChange = (version: string) => {
+  const handleVersionChange = (version: number) => {
     setVersionChange(version);
-    const componentDetails = componentList.find((component: Component) => {
-      if (component.versionedComponentId) {
-        return (
-          component.versionedComponentId.componentId === componentId &&
-          component.versionedComponentId.version?.toString() === version
-        );
-      }
-    });
-    setComponent(componentDetails || {});
   };
 
   async function downloadFile() {
@@ -101,16 +75,21 @@ export default function ComponentInfo() {
     }
   }
 
+  const componentDetails =
+    componentList[componentId]?.versions?.[versionChange] || {};
+
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav
+          componentType={componentList[componentId]?.componentType}
+        />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">
               <div className="flex items-center gap-4">
                 <h1 className="text-xl font-semibold text-foreground truncate">
-                  {component.componentName}
+                  {componentList[componentId]?.componentName}
                 </h1>
               </div>
             </div>
@@ -129,8 +108,8 @@ export default function ComponentInfo() {
                 <div className="flex items-center gap-2">
                   {versionList.length > 0 && (
                     <Select
-                      defaultValue={versionChange}
-                      onValueChange={(version) => handleVersionChange(version)}
+                      defaultValue={versionChange.toString()}
+                      onValueChange={(version) => handleVersionChange(+version)}
                     >
                       <SelectTrigger className="w-[80px]">
                         <SelectValue> v{versionChange}</SelectValue>
@@ -156,7 +135,7 @@ export default function ComponentInfo() {
                       Component ID
                     </div>
                     <div className="font-mono text-sm">
-                      {component.versionedComponentId?.componentId}
+                      {componentDetails.versionedComponentId?.componentId}
                     </div>
                   </div>
                   <div className="grid grid-cols-[180px,1fr] items-center gap-4 py-3 border-b">
@@ -170,7 +149,7 @@ export default function ComponentInfo() {
                       Name
                     </div>
                     <div className="font-mono text-sm">
-                      {component.componentName}
+                      {componentDetails.componentName}
                     </div>
                   </div>
                   <div className="grid grid-cols-[180px,1fr] items-center gap-4 py-3 border-b">
@@ -178,7 +157,10 @@ export default function ComponentInfo() {
                       Size
                     </div>
                     <div className="font-mono text-sm">
-                      {Math.round((component?.componentSize || 0) / 1024)} KB
+                      {Math.round(
+                        (componentDetails?.componentSize || 0) / 1024
+                      )}{" "}
+                      KB
                     </div>
                   </div>
                   <div className="grid grid-cols-[180px,1fr] items-center gap-4 py-3">
@@ -186,8 +168,8 @@ export default function ComponentInfo() {
                       Created At
                     </div>
                     <div className="font-mono text-sm">
-                      {component.createdAt
-                        ? formatRelativeTime(component.createdAt)
+                      {componentDetails.createdAt
+                        ? formatRelativeTime(componentDetails.createdAt)
                         : "NA"}
                     </div>
                   </div>

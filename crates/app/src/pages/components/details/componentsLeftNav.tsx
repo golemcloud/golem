@@ -13,14 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/errorBoundary";
-import { Component } from "@/types/component";
 
 interface ComponentLeftNavProps {
-  componentDetails: Component;
+  componentType: string | undefined;
 }
 
 const ComponentLeftNav: React.FC<ComponentLeftNavProps> = ({
-  componentDetails,
+  componentType = "Durable",
 }) => {
   const navigate = useNavigate();
   const { componentId } = useParams();
@@ -57,8 +56,7 @@ const ComponentLeftNav: React.FC<ComponentLeftNavProps> = ({
                 <span>Overview</span>
               </Button>
             </li>
-            {componentDetails?.componentType === "Durable" ||
-            !componentDetails?.componentType ? (
+            {componentType === "Durable" ? (
               <li>
                 <Button
                   variant="ghost"

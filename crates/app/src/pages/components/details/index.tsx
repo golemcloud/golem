@@ -5,18 +5,18 @@ import { WorkerStatus } from "./widgets/workerStatus";
 import ComponentLeftNav from "./componentsLeftNav";
 import { useEffect, useState } from "react";
 import { API } from "@/service";
-import { Component } from "@/types/component.ts";
+import { ComponentList } from "@/types/component.ts";
 import { Worker, WorkerStatus as IWorkerStatus } from "@/types/worker.ts";
 import ErrorBoundary from "@/components/errorBoundary";
 
 export const ComponentDetails = () => {
   const { componentId = "" } = useParams();
-  const [component, setComponent] = useState({} as Component);
+  const [component, setComponent] = useState({} as ComponentList);
   const [workerStatus, setWorkerStatus] = useState({} as IWorkerStatus);
 
   useEffect(() => {
-    API.getComponentById(componentId!).then((res) => {
-      setComponent(res);
+    API.getComponentByIdAsKey().then((response) => {
+      setComponent(response[componentId]);
     });
 
     API.findWorker(componentId!).then((res) => {
@@ -31,7 +31,7 @@ export const ComponentDetails = () => {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">
@@ -48,7 +48,10 @@ export const ComponentDetails = () => {
                 <MetricCard
                   title="Latest Component Version"
                   value={
-                    "v" + (component?.versionedComponentId?.version || "0")
+                    "v" +
+                    (component?.versionList?.[
+                      component?.versionList?.length - 1
+                    ] || "0")
                   }
                   type="version"
                 />
@@ -74,7 +77,12 @@ export const ComponentDetails = () => {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <ExportsList exports={component?.metadata?.exports || []} />
+                <ExportsList
+                  exports={
+                    component?.versions?.[component.versions?.length - 1]
+                      ?.metadata?.exports || []
+                  }
+                />
                 <WorkerStatus workerStatus={workerStatus} />
               </div>
             </div>

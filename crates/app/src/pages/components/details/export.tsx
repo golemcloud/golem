@@ -20,8 +20,8 @@ import { useEffect, useState } from "react";
 import { API } from "@/service";
 import { useParams } from "react-router-dom";
 import {
-  Component,
   ComponentExportFunction,
+  ComponentList,
   Export,
   Field,
   Parameter,
@@ -75,69 +75,59 @@ function convertJsonToFunctionStructure(json: Parameter[] | Result[]) {
 
 export default function Exports() {
   const { componentId = "" } = useParams();
-  const [componentList, setComponentList] = useState([] as Component[]);
-  const [component, setComponent] = useState<Component>({});
+  const [component, setComponent] = useState<ComponentList>({});
   const [versionList, setVersionList] = useState([] as number[]);
   const [versionChange, setVersionChange] = useState(0 as number);
   const [functions, setFunctions] = useState([] as ComponentExportFunction[]);
 
   useEffect(() => {
     if (componentId) {
-      API.getComponents().then((response) => {
-        setComponentList(response);
-      });
-
       API.getComponentByIdAsKey().then((response) => {
-        setVersionList(response[componentId].versionId || []);
+        setVersionList(response[componentId].versionList || []);
+        setVersionChange(
+          response[componentId].versionList?.[
+            response[componentId].versionList?.length - 1
+          ] || 0
+        );
         setComponent(response[componentId]);
       });
     }
   }, [componentId]);
 
   useEffect(() => {
-    if (component && component.exports) {
-      const functions = component.exports.reduce(
-        (acc: ComponentExportFunction[], curr: Export) => {
-          const updatedFunctions = curr.functions.map(
-            (func: ComponentExportFunction) => ({
-              ...func,
-              exportName: curr.name,
-            })
-          );
+    const componentDetails = component.versions?.find(
+      (data) => data.versionedComponentId?.version === versionChange
+    );
+    if (componentDetails) {
+      const functions =
+        componentDetails.metadata?.exports.reduce(
+          (acc: ComponentExportFunction[], curr: Export) => {
+            const updatedFunctions = curr.functions.map(
+              (func: ComponentExportFunction) => ({
+                ...func,
+                exportName: curr.name,
+              })
+            );
 
-          return acc.concat(updatedFunctions);
-        },
-        []
-      );
+            return acc.concat(updatedFunctions);
+          },
+          []
+        ) || [];
       setFunctions(functions);
     }
-  }, [component]);
+  }, [component, versionChange]);
 
   const handleVersionChange = (version: number) => {
     setVersionChange(version);
-    const componentDetails = componentList.find((component: Component) => {
-      if (component.versionedComponentId) {
-        return (
-          component.versionedComponentId.componentId === componentId &&
-          component.versionedComponentId.version === version
-        );
-      }
-    });
-    if (componentDetails) {
-      setComponent({
-        ...componentDetails,
-        exports: componentDetails.metadata?.exports,
-      });
-    } else {
-      setComponent({});
-    }
   };
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
 
     const searchResult = calculateExportFunctions(
-      component.exports || []
+      component.versions?.find(
+        (data) => data.versionedComponentId?.version === versionChange
+      )?.metadata?.exports || []
     ).filter((fn: ComponentExportFunction) => {
       return fn.name.includes(value);
     });
@@ -147,7 +137,7 @@ export default function Exports() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component?.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

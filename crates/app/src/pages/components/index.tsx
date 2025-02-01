@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { calculateExportFunctions, formatRelativeTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { API } from "@/service";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 import { Worker, WorkerStatus } from "@/types/worker";
 import ErrorBoundary from "@/components/errorBoundary";
 
@@ -17,10 +17,10 @@ const Metrix = ["Idle", "Running", "Suspended", "Failed"];
 const Components = () => {
   const navigate = useNavigate();
   const [componentList, setComponentList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
   const [componentApiList, setComponentApiList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
   const [workerList, setWorkerList] = useState(
     {} as {
@@ -65,7 +65,7 @@ const Components = () => {
     const filteredList = Object.fromEntries(
       Object.entries(componentApiList).filter(
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        ([_, data]: [string, Component]) =>
+        ([_, data]: [string, ComponentList]) =>
           data.componentName?.toLowerCase().includes(value) ?? false
       )
     );
@@ -108,7 +108,7 @@ const Components = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 overflow-scroll max-h-[78vh]">
-            {Object.values(componentList).map((data: Component) => (
+            {Object.values(componentList).map((data: ComponentList) => (
               <Card
                 key={data.componentId}
                 className="border shadow-sm cursor-pointer"
@@ -143,20 +143,30 @@ const Components = () => {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary" className="rounded-md">
-                      V{data.versionId?.[0] || ""}
+                      V{data.versionList?.[data.versionList?.length - 1] || "0"}
                     </Badge>
                     <Badge variant="secondary" className="rounded-md">
-                      {calculateExportFunctions(data.exports || []).length || 0}{" "}
+                      {calculateExportFunctions(
+                        data.versions?.[data.versions?.length - 1]?.metadata
+                          ?.exports || []
+                      ).length || 0}{" "}
                       Exports
                     </Badge>
                     <Badge variant="secondary" className="rounded-md">
-                      {Math.round((data.componentSize || 0) / 1024)} KB
+                      {Math.round(
+                        (data.versions?.[data.versions?.length - 1]
+                          ?.componentSize || 0) / 1024
+                      )}{" "}
+                      KB
                     </Badge>
                     <Badge variant="secondary" className="rounded-md">
-                      {data.componentType}
+                      {data.versions?.[data.versions?.length - 1].componentType}
                     </Badge>
                     <span className="ml-auto text-sm text-muted-foreground">
-                      {formatRelativeTime(data.createdAt || new Date())}
+                      {formatRelativeTime(
+                        data.versions?.[data.versions?.length - 1].createdAt ||
+                          new Date()
+                      )}
                     </span>
                   </div>
                 </CardContent>

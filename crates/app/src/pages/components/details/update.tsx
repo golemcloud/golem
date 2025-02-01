@@ -24,7 +24,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { API } from "@/service";
 import { toast } from "@/hooks/use-toast.ts";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 
 const formSchema = z.object({
   component: z.instanceof(File).refine((file) => file.size < 50000000, {
@@ -43,7 +43,7 @@ export default function ComponentUpdate() {
     },
   });
 
-  const [component, setComponent] = useState({} as Component);
+  const [component, setComponent] = useState({} as ComponentList);
 
   useEffect(() => {
     if (componentId) {
@@ -69,7 +69,7 @@ export default function ComponentUpdate() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Component } from "@/types/component.ts";
+import { Component, ComponentList } from "@/types/component.ts";
 import { ENDPOINT } from "@/service/endpoints.ts";
 import { Api } from "@/types/api.ts";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -61,11 +61,6 @@ export class Service {
       "DELETE"
     );
     return r;
-  };
-
-  public getComponentById = async (componentId: string) => {
-    const r = await this.callApi(ENDPOINT.getComponentById(componentId));
-    return r as Component;
   };
 
   public createWorker = async (componentID: string, params: any) => {
@@ -197,27 +192,46 @@ export class Service {
   };
 
   public getComponentByIdAsKey = async (): Promise<
-    Record<string, Component>
+    Record<string, ComponentList>
   > => {
-    const result: Record<string, Component> = {};
+    // Assume getComponents returns a Promise<RawComponent[]>
     const components = await this.getComponents();
-    components.forEach((data: Component) => {
-      if (data?.versionedComponentId?.componentId) {
-        result[data.versionedComponentId.componentId] = {
-          componentName: data.componentName,
-          componentId: data.versionedComponentId.componentId,
-          createdAt: data.createdAt,
-          exports: data?.metadata?.exports,
-          componentSize: data.componentSize,
-          componentType: data.componentType,
-          versionId: [
-            ...(result[data.versionedComponentId.componentId]?.versionId ?? []),
-            data.versionedComponentId.version!,
-          ],
-        };
-      }
-    });
-    return result;
+
+    const componentList = components.reduce<Record<string, ComponentList>>(
+      (acc, component) => {
+        const {
+          componentName,
+          versionedComponentId = {},
+          componentType,
+        } = component;
+
+        // Use type assertion to help TS with the optional fields in versionedComponentId
+        const { componentId = "", version = 0 } = versionedComponentId;
+
+        // Use componentId as the key. If not available, you might want to skip or handle differently.
+        const key = componentId || "";
+
+        // Initialize the component entry if it doesn't exist
+        if (!acc[key]) {
+          acc[key] = {
+            componentName: componentName || "",
+            componentId: componentId || "",
+            componentType: componentType || "",
+            versions: [],
+            versionList: [],
+          };
+        }
+        if (acc[key].versionList) {
+          acc[key].versionList.push(version);
+        }
+        if (acc[key].versions) {
+          acc[key].versions.push(component);
+        }
+        return acc;
+      },
+      {}
+    );
+    return componentList;
   };
 
   public getPlugins = async (): Promise<Plugin[]> => {
@@ -230,7 +244,7 @@ export class Service {
 
   public downloadComponent = async (
     componentId: string,
-    version: string
+    version: number
   ): Promise<any> => {
     return await this.downloadApi(
       ENDPOINT.downloadComponent(componentId, version)
