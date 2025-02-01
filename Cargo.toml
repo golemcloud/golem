@@ -83,7 +83,7 @@ async_zip = "0.0.17"
 aws-config = "1.5.10"
 aws-sdk-s3 = "1.65.0"
 axum = { version = "0.7.9", features = ["multipart"] }
-bigdecimal = "0.4.7"
+bigdecimal = { version = "0.4.7", features = ["serde"] }
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 bytes = "1.9.0"
 cap-std = "3.4.2" # keep in sync with wasmtime

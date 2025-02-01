@@ -17,6 +17,7 @@ use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use itertools::Itertools;
 use mac_address::MacAddress;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::ops::Bound;
@@ -135,7 +136,7 @@ impl NamedType for RangeType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct ValuesRange<T> {
     pub start: Bound<T>,
     pub end: Bound<T>,
@@ -192,15 +193,19 @@ impl Display for Interval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct TimeTz {
+    #[bincode(with_serde)]
     pub time: chrono::NaiveTime,
-    pub offset: chrono::FixedOffset,
+    pub offset: i32,
 }
 
 impl TimeTz {
     pub fn new(time: chrono::NaiveTime, offset: chrono::FixedOffset) -> Self {
-        TimeTz { time, offset }
+        TimeTz {
+            time,
+            offset: offset.utc_minus_local(),
+        }
     }
 }
 
@@ -234,7 +239,7 @@ impl Display for Enum {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Composite {
     pub name: String,
     pub values: Vec<DbValue>,
@@ -263,7 +268,7 @@ impl NamedType for Composite {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Domain {
     pub name: String,
     pub value: Box<DbValue>,
@@ -290,7 +295,7 @@ impl Display for Domain {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Range {
     pub name: String,
     pub value: Box<ValuesRange<DbValue>>,
@@ -440,7 +445,7 @@ impl Display for DbColumnType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum DbValue {
     Character(i8),
     Int2(i16),
@@ -448,34 +453,34 @@ pub enum DbValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
-    Numeric(BigDecimal),
+    Numeric(#[bincode(with_serde)] BigDecimal),
     Boolean(bool),
-    Timestamp(chrono::NaiveDateTime),
-    Timestamptz(chrono::DateTime<chrono::Utc>),
-    Date(chrono::NaiveDate),
-    Time(chrono::NaiveTime),
+    Timestamp(#[bincode(with_serde)] chrono::NaiveDateTime),
+    Timestamptz(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
+    Date(#[bincode(with_serde)] chrono::NaiveDate),
+    Time(#[bincode(with_serde)] chrono::NaiveTime),
     Timetz(TimeTz),
     Interval(Interval),
     Text(String),
     Varchar(String),
     Bpchar(String),
     Bytea(Vec<u8>),
-    Json(serde_json::Value),
-    Jsonb(serde_json::Value),
+    Json(#[bincode(with_serde)] serde_json::Value),
+    Jsonb(#[bincode(with_serde)] serde_json::Value),
     Jsonpath(String),
     Xml(String),
-    Uuid(Uuid),
-    Inet(IpAddr),
-    Cidr(IpAddr),
-    Macaddr(MacAddress),
-    Bit(BitVec),
-    Varbit(BitVec),
+    Uuid(#[bincode(with_serde)] Uuid),
+    Inet(#[bincode(with_serde)] IpAddr),
+    Cidr(#[bincode(with_serde)] IpAddr),
+    Macaddr(#[bincode(with_serde)] MacAddress),
+    Bit(#[bincode(with_serde)] BitVec),
+    Varbit(#[bincode(with_serde)] BitVec),
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
-    Numrange(ValuesRange<BigDecimal>),
-    Tsrange(ValuesRange<chrono::NaiveDateTime>),
-    Tstzrange(ValuesRange<chrono::DateTime<chrono::Utc>>),
-    Daterange(ValuesRange<chrono::NaiveDate>),
+    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>),
+    Tsrange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDateTime>),
+    Tstzrange(#[bincode(with_serde)] ValuesRange<chrono::DateTime<chrono::Utc>>),
+    Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),
     Money(i64),
     Oid(u32),
     Enum(Enum),

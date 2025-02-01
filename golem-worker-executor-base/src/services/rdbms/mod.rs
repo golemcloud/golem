@@ -33,8 +33,8 @@ use std::sync::Arc;
 use url::Url;
 
 pub trait RdbmsType: Debug + Display + Default + Send {
-    type DbColumn: Clone + Send + Sync + PartialEq + Debug + bincode::Decode + bincode::Encode;
-    type DbValue: Clone + Send + Sync + PartialEq + Debug;
+    type DbColumn: Clone + Send + Sync + PartialEq + Debug + Decode + Encode;
+    type DbValue: Clone + Send + Sync + PartialEq + Debug + Decode + Encode;
 }
 
 #[derive(Clone)]

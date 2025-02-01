@@ -20,7 +20,6 @@ use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use chrono::Offset;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
@@ -544,7 +543,7 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
                 postgres_types::DbValue::Timetz(postgres_types::TimeTz::new(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::Utc.fix(),
+                    chrono::FixedOffset::west_opt(3 * 60 * 60).unwrap(),
                 )),
                 postgres_types::DbValue::Interval(postgres_types::Interval::new(10, 20, 30)),
                 postgres_types::DbValue::Bytea("bytea".as_bytes().to_vec()),
@@ -1290,7 +1289,7 @@ async fn postgres_create_insert_select_array_test(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
                     postgres_types::TimeTz::new(
                         chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        chrono::Utc.fix(),
+                        chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
                     ),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(

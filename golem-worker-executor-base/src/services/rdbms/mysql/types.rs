@@ -98,7 +98,7 @@ impl Display for DbColumnType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum DbValue {
     Boolean(bool),
     Tinyint(i8),
@@ -115,11 +115,11 @@ pub enum DbValue {
     BigintUnsigned(u64),
     Float(f32),
     Double(f64),
-    Decimal(BigDecimal),
-    Date(chrono::NaiveDate),
-    Datetime(chrono::DateTime<chrono::Utc>),
-    Timestamp(chrono::DateTime<chrono::Utc>),
-    Time(chrono::NaiveTime),
+    Decimal(#[bincode(with_serde)] BigDecimal),
+    Date(#[bincode(with_serde)] chrono::NaiveDate),
+    Datetime(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
+    Timestamp(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
+    Time(#[bincode(with_serde)] chrono::NaiveTime),
     Year(u16),
     Fixchar(String),
     Varchar(String),
@@ -135,8 +135,8 @@ pub enum DbValue {
     Longblob(Vec<u8>),
     Enumeration(String),
     Set(String),
-    Bit(BitVec),
-    Json(serde_json::Value),
+    Bit(#[bincode(with_serde)] BitVec),
+    Json(#[bincode(with_serde)] serde_json::Value),
     Null,
 }
 

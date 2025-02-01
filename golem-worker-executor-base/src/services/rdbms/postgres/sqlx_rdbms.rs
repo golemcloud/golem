@@ -248,7 +248,7 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
         }),
         DbColumnType::Timetz => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Timetz(v) = v {
-                Some(PgTimeTz::from(v))
+                PgTimeTz::try_from(v).ok()
             } else {
                 None
             }
@@ -754,17 +754,20 @@ impl From<PgTimeTz> for TimeTz {
     fn from(value: PgTimeTz) -> Self {
         Self {
             time: value.time,
-            offset: value.offset,
+            offset: value.offset.utc_minus_local(),
         }
     }
 }
 
-impl From<TimeTz> for PgTimeTz {
-    fn from(value: TimeTz) -> Self {
-        Self {
+impl TryFrom<TimeTz> for PgTimeTz {
+    type Error = String;
+    fn try_from(value: TimeTz) -> Result<Self, Self::Error> {
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        Ok(Self {
             time: value.time,
-            offset: value.offset,
-        }
+            offset,
+        })
     }
 }
 

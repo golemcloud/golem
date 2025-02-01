@@ -578,14 +578,17 @@ impl TryFrom<Timetz> for postgres_types::TimeTz {
         let time = value.time.try_into()?;
         let offset = chrono::offset::FixedOffset::west_opt(value.offset)
             .ok_or("Offset value is not valid")?;
-        Ok(Self { time, offset })
+        Ok(Self {
+            time,
+            offset: offset.utc_minus_local(),
+        })
     }
 }
 
 impl From<postgres_types::TimeTz> for Timetz {
     fn from(v: postgres_types::TimeTz) -> Self {
         let time = v.time.into();
-        let offset = v.offset.local_minus_utc();
+        let offset = v.offset;
         Timetz { time, offset }
     }
 }
@@ -1922,7 +1925,6 @@ pub mod tests {
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
-    use chrono::Offset;
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
@@ -2036,7 +2038,7 @@ pub mod tests {
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
                 postgres_types::TimeTz::new(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::Utc.fix(),
+                    chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
                 ),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(

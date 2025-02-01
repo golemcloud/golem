@@ -1126,6 +1126,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -1184,6 +1185,9 @@ name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bit-vec"
@@ -5872,6 +5876,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8836fae9d0d4be2c8b4efcdd79e828a2faa058a90d005abf42f91cac5493a08e"
 dependencies = [
  "nix 0.28.0",
+ "serde",
  "winapi",
 ]
 

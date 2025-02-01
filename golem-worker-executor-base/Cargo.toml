@@ -37,7 +37,7 @@ aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.6.0"
 bigdecimal = { workspace = true }
-bit-vec = "0.6"
+bit-vec = { version = "0.6", features = ["serde"] }
 bytes = { workspace = true }
 cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
@@ -65,7 +65,7 @@ iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 log = "0.4.22"
-mac_address = "1.1.7"
+mac_address = { version = "1.1.7", features = ["serde"] }
 md5 = "0.7.0"
 metrohash = "1.0.7"
 nonempty-collections = "0.2.9"
