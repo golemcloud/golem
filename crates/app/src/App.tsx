@@ -32,6 +32,7 @@ import CreateDeployment from "@/pages/deployment/create";
 import {ApiLayout} from "./pages/api/details/api-layout";
 import ComponentInvoke from "@/pages/components/details/invoke";
 import Plugins from "@/pages/components/details/plugin.tsx";
+import {ComponentLayout} from "@/pages/components/details/component-layout.tsx";
 
 function App() {
     return (
@@ -47,41 +48,21 @@ function App() {
                         <Route path="/components/create" element={<CreateComponent/>}/>
                         <Route
                             path="/components/:componentId"
-                            element={<ComponentDetails/>}
-                        />
-                        <Route
-                            path="/components/:componentId/settings"
-                            element={<ComponentSettings/>}
-                        />
-                        <Route
-                            path="/components/:componentId/update"
-                            element={<ComponentUpdate/>}
-                        />
-                        <Route
-                            path="/components/:componentId/info"
-                            element={<ComponentInfo/>}
-                        />
-                        <Route
-                            path="/components/:componentId/exports"
-                            element={<Exports/>}
-                        />
-                        <Route
-                            path="/components/:componentId/plugins"
-                            element={<Plugins/>}
-                        />
-
-                        <Route
-                            path="/components/:componentId/invoke"
-                            element={<ComponentInvoke/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers"
-                            element={<WorkerList/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers/create"
-                            element={<CreateWorker/>}
-                        />
+                            element={<ComponentLayout/>}
+                        >
+                            <Route path="" element={<ComponentDetails/>}/>
+                            <Route path="settings" element={<ComponentSettings/>}/>
+                            <Route path="update" element={<ComponentUpdate/>}/>
+                            <Route path="info" element={<ComponentInfo/>}/>
+                            <Route path="exports" element={<Exports/>}/>
+                            <Route path="plugins" element={<Plugins/>}/>
+                            <Route path="invoke" element={<ComponentInvoke/>}/>
+                            <Route path="workers" element={<WorkerList/>}/>
+                            <Route
+                                path="workers/create"
+                                element={<CreateWorker/>}
+                            />
+                        </Route>
                         <Route
                             path="/components/:componentId/workers/:workerName"
                             element={<WorkerDetails/>}
