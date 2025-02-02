@@ -60,13 +60,13 @@ enum StatementAction<T: RdbmsType + Clone> {
 #[derive(Clone, Debug)]
 struct ExpectedQueryResult<T: RdbmsType + Clone> {
     expected_columns: Option<Vec<T::DbColumn>>,
-    expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+    expected_rows: Option<Vec<DbRow<T>>>,
 }
 
 impl<T: RdbmsType + Clone> ExpectedQueryResult<T> {
     fn new(
         expected_columns: Option<Vec<T::DbColumn>>,
-        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+        expected_rows: Option<Vec<DbRow<T>>>,
     ) -> Self {
         Self {
             expected_rows,
@@ -124,7 +124,7 @@ impl<T: RdbmsType + Clone> StatementTest<T> {
         statement: &'static str,
         params: Vec<T::DbValue>,
         expected_columns: Option<Vec<T::DbColumn>>,
-        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+        expected_rows: Option<Vec<DbRow<T>>>,
     ) -> Self {
         Self {
             action: StatementAction::Query(ExpectedQueryResult::new(
@@ -140,7 +140,7 @@ impl<T: RdbmsType + Clone> StatementTest<T> {
         statement: &'static str,
         params: Vec<T::DbValue>,
         expected_columns: Option<Vec<T::DbColumn>>,
-        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+        expected_rows: Option<Vec<DbRow<T>>>,
     ) -> Self {
         Self {
             action: StatementAction::QueryStream(ExpectedQueryResult::new(
@@ -155,7 +155,7 @@ impl<T: RdbmsType + Clone> StatementTest<T> {
     fn with_query_expected(
         &self,
         expected_columns: Option<Vec<T::DbColumn>>,
-        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+        expected_rows: Option<Vec<DbRow<T>>>,
     ) -> Self {
         Self {
             action: StatementAction::Query(ExpectedQueryResult::new(
@@ -169,7 +169,7 @@ impl<T: RdbmsType + Clone> StatementTest<T> {
     fn with_query_stream_expected(
         &self,
         expected_columns: Option<Vec<T::DbColumn>>,
-        expected_rows: Option<Vec<DbRow<T::DbValue>>>,
+        expected_rows: Option<Vec<DbRow<T>>>,
     ) -> Self {
         Self {
             action: StatementAction::QueryStream(ExpectedQueryResult::new(
@@ -251,7 +251,7 @@ async fn postgres_transaction_tests(
 
     let count = 60;
 
-    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<PostgresType>> = Vec::with_capacity(count);
 
     let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
 
@@ -478,7 +478,7 @@ async fn postgres_create_insert_select_test(
 
     let count = 4;
 
-    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<PostgresType>> = Vec::with_capacity(count);
     let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
@@ -1201,7 +1201,7 @@ async fn postgres_create_insert_select_array_test(
 
     let count = 4;
 
-    let mut rows: Vec<DbRow<postgres_types::DbValue>> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<PostgresType>> = Vec::with_capacity(count);
     let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
@@ -1933,7 +1933,7 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsS
 
     let count = 60;
 
-    let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<MysqlType>> = Vec::with_capacity(count);
 
     let mut statements: Vec<StatementTest<MysqlType>> = Vec::with_capacity(count);
 
@@ -2097,7 +2097,7 @@ async fn mysql_create_insert_select_test(
 
     let count = 4;
 
-    let mut rows: Vec<DbRow<mysql_types::DbValue>> = Vec::with_capacity(count);
+    let mut rows: Vec<DbRow<MysqlType>> = Vec::with_capacity(count);
     let mut statements: Vec<StatementTest<MysqlType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<mysql_types::DbValue> =
@@ -2519,7 +2519,7 @@ async fn execute_rdbms_test<T: RdbmsType + Clone>(
     results
 }
 
-async fn rdbms_test<T: RdbmsType + Clone>(
+async fn rdbms_test<T: RdbmsType + Clone + PartialEq>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     test: RdbmsTest<T>,
@@ -2537,7 +2537,7 @@ async fn rdbms_test<T: RdbmsType + Clone>(
     check!(!exists);
 }
 
-fn check_test_results<T: RdbmsType + Clone>(
+fn check_test_results<T: RdbmsType + Clone + PartialEq>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
     results: Vec<Result<StatementResult<T>, Error>>,
@@ -2601,7 +2601,7 @@ fn check_test_results<T: RdbmsType + Clone>(
     }
 }
 
-async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
+async fn rdbms_par_test<T: RdbmsType + Clone + PartialEq + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_addresses: Vec<String>,
     count: u8,

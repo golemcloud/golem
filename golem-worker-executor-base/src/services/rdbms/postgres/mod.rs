@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 pub(crate) const POSTGRES: &str = "postgres";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PostgresType;
 
 impl PostgresType {

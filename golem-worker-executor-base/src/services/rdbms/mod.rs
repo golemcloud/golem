@@ -24,7 +24,7 @@ use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
+use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -33,8 +33,24 @@ use std::sync::Arc;
 use url::Url;
 
 pub trait RdbmsType: Debug + Display + Default + Send {
-    type DbColumn: Clone + Send + Sync + PartialEq + Debug + Decode + Encode;
-    type DbValue: Clone + Send + Sync + PartialEq + Debug + Decode + Encode;
+    type DbColumn: Clone
+        + Send
+        + Sync
+        + PartialEq
+        + Debug
+        + Decode
+        + for<'de> BorrowDecode<'de>
+        + Encode
+        + 'static;
+    type DbValue: Clone
+        + Send
+        + Sync
+        + PartialEq
+        + Debug
+        + Decode
+        + for<'de> BorrowDecode<'de>
+        + Encode
+        + 'static;
 }
 
 #[derive(Clone)]
@@ -160,8 +176,9 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct RdbmsPoolKey {
+    #[bincode(with_serde)]
     pub address: Url,
 }
 
@@ -232,26 +249,26 @@ impl Display for RdbmsPoolKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct DbRow<V> {
-    pub values: Vec<V>,
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct DbRow<T: RdbmsType> {
+    pub values: Vec<T::DbValue>,
 }
 
 #[async_trait]
 pub trait DbResultStream<T: RdbmsType> {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T>>>, Error>;
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DbResult<T: RdbmsType> {
     pub columns: Vec<T::DbColumn>,
-    pub rows: Vec<DbRow<T::DbValue>>,
+    pub rows: Vec<DbRow<T>>,
 }
 
 impl<T: RdbmsType> DbResult<T> {
-    pub fn new(columns: Vec<T::DbColumn>, rows: Vec<DbRow<T::DbValue>>) -> Self {
+    pub fn new(columns: Vec<T::DbColumn>, rows: Vec<DbRow<T>>) -> Self {
         Self { columns, rows }
     }
 
@@ -264,7 +281,7 @@ impl<T: RdbmsType> DbResult<T> {
         result_set: Arc<dyn DbResultStream<T> + Send + Sync>,
     ) -> Result<DbResult<T>, Error> {
         let columns = result_set.get_columns().await?;
-        let mut rows: Vec<DbRow<T::DbValue>> = vec![];
+        let mut rows: Vec<DbRow<T>> = vec![];
 
         while let Some(vs) = result_set.get_next().await? {
             rows.extend(vs);

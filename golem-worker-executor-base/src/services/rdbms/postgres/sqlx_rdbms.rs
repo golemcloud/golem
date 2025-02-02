@@ -422,7 +422,7 @@ fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> Db
     DbValue::Range(Range::new(name, value))
 }
 
-impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
+impl TryFrom<&sqlx::postgres::PgRow> for DbRow<PostgresType> {
     type Error = String;
 
     fn try_from(value: &sqlx::postgres::PgRow) -> Result<Self, Self::Error> {
