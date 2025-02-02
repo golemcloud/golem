@@ -17,12 +17,13 @@ pub mod types;
 
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::{Rdbms, RdbmsType};
+use bincode::{Decode, Encode};
 use std::fmt::Display;
 use std::sync::Arc;
 
 pub(crate) const MYSQL: &str = "mysql";
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
 pub struct MysqlType;
 
 impl MysqlType {

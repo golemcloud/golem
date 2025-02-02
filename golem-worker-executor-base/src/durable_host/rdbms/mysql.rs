@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::rdbms::mysql::{
     DbColumn, DbColumnType, DbResult, DbRow, DbValue, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction,
 };
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
-// use crate::services::rdbms::{Error as RdbmsError};
+use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bit_vec::BitVec;
+use golem_common::model::oplog::DurableFunctionType;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
-// use golem_common::model::oplog::DurableFunctionType;
-// use crate::durable_host::serialized::SerializableError;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -119,30 +119,70 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<DbResult, Error>> {
         self.observe_function_call("rdbms::mysql::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
-        let pool_key = self
-            .as_wasi_view()
-            .table()
-            .get::<MysqlDbConnection>(&self_)?
-            .pool_key
-            .clone();
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
-            Ok(params) => {
-                let result = self
-                    .state
-                    .rdbms_service
-                    .mysql()
-                    .query(&pool_key, &worker_id, &statement, params)
-                    .await
-                    .map(DbResult::from)
-                    .map_err(Error::from);
-                Ok(result)
-            }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        }
+        let durability =
+            Durability::<crate::services::rdbms::DbResult<MysqlType>, SerializableError>::new(
+                self,
+                "golem rdbms::mysql::db-connection",
+                "query",
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
+        let result = if durability.is_live() {
+            let pool_key = self
+                .as_wasi_view()
+                .table()
+                .get::<MysqlDbConnection>(&self_)?
+                .pool_key
+                .clone();
+
+            let params = params
+                .into_iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<mysql_types::DbValue>, String>>()
+                .map_err(RdbmsError::QueryParameterFailure);
+
+            let (params, result) = match params {
+                Ok(params) => {
+                    let result = self
+                        .state
+                        .rdbms_service
+                        .mysql()
+                        .query(&pool_key, &worker_id, &statement, params.clone())
+                        .await;
+                    (params, result)
+                }
+                Err(error) => (vec![], Err(error)),
+            };
+            let input = (pool_key.masked_address(), statement.clone(), params);
+            durability.persist(self, input, result).await
+        } else {
+            durability.replay(self).await
+        };
+        Ok(result.map(DbResult::from).map_err(Error::from))
+        // let pool_key = self
+        //     .as_wasi_view()
+        //     .table()
+        //     .get::<MysqlDbConnection>(&self_)?
+        //     .pool_key
+        //     .clone();
+        // match params
+        //     .into_iter()
+        //     .map(|v| v.try_into())
+        //     .collect::<Result<Vec<_>, String>>()
+        // {
+        //     Ok(params) => {
+        //         let result = self
+        //             .state
+        //             .rdbms_service
+        //             .mysql()
+        //             .query(&pool_key, &worker_id, &statement, params)
+        //             .await
+        //             .map(DbResult::from)
+        //             .map_err(Error::from);
+        //         Ok(result)
+        //     }
+        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        // }
     }
 
     async fn execute(
@@ -153,76 +193,77 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<u64, Error>> {
         self.observe_function_call("rdbms::mysql::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let durability = Durability::<u64, SerializableError>::new(
+            self,
+            "golem rdbms::mysql::db-connection",
+            "execute",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let pool_key = self
+                .as_wasi_view()
+                .table()
+                .get::<MysqlDbConnection>(&self_)?
+                .pool_key
+                .clone();
 
-        // let durability = Durability::<Result<u64, RdbmsError>, SerializableError>::new(
-        //     self,
-        //     "golem rdbms::mysql::db-connection",
-        //     "execute",
-        //     DurableFunctionType::WriteRemote,
-        // )
-        //     .await?;
-        // let result = if durability.is_live() {
-        //     let pool_key = self
-        //         .as_wasi_view()
-        //         .table()
-        //         .get::<MysqlDbConnection>(&self_)?
-        //         .pool_key
-        //         .clone();
-        //
-        //     let params = params
-        //         .into_iter()
-        //         .map(|v| v.try_into())
-        //         .collect::<Result<Vec<mysql_types::DbValue>, String>>().map_err(RdbmsError::QueryParameterFailure);
-        //
-        //     let result = match params
-        //     {
-        //         Ok(params) => {
-        //             self
-        //                 .state
-        //                 .rdbms_service
-        //                 .mysql()
-        //                 .execute(&pool_key, &worker_id, &statement, params)
-        //                 .await
-        //         }
-        //         Err(error) => Err(error),
-        //     };
-        //     let input = statement.clone();
-        //     durability.persist(self, input, Ok(result)).await
-        // } else {
-        //     durability.replay(self).await
-        // };
+            let params = params
+                .into_iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<mysql_types::DbValue>, String>>()
+                .map_err(RdbmsError::QueryParameterFailure);
+
+            let (params, result) = match params {
+                Ok(params) => {
+                    let result = self
+                        .state
+                        .rdbms_service
+                        .mysql()
+                        .execute(&pool_key, &worker_id, &statement, params.clone())
+                        .await;
+                    (params, result)
+                }
+                Err(error) => (vec![], Err(error)),
+            };
+            let input = (pool_key.masked_address(), statement.clone(), params);
+            durability.persist(self, input, result).await
+        } else {
+            durability.replay(self).await
+        };
+        Ok(result.map_err(Error::from))
         // match result {
-        //     Ok(result) => Ok(result.map_err(Error::from)),
+        //     Ok(result) => Ok(result),
         //     Err(error) => {
         //         Ok(Err(error))
         //     }
         // }
 
-        let pool_key = self
-            .as_wasi_view()
-            .table()
-            .get::<MysqlDbConnection>(&self_)?
-            .pool_key
-            .clone();
-
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
-            Ok(params) => {
-                let result = self
-                    .state
-                    .rdbms_service
-                    .mysql()
-                    .execute(&pool_key, &worker_id, &statement, params)
-                    .await
-                    .map_err(|e| e.into());
-
-                Ok(result)
-            }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        }
+        // let pool_key = self
+        //     .as_wasi_view()
+        //     .table()
+        //     .get::<MysqlDbConnection>(&self_)?
+        //     .pool_key
+        //     .clone();
+        //
+        // match params
+        //     .into_iter()
+        //     .map(|v| v.try_into())
+        //     .collect::<Result<Vec<_>, String>>()
+        // {
+        //     Ok(params) => {
+        //         let result = self
+        //             .state
+        //             .rdbms_service
+        //             .mysql()
+        //             .execute(&pool_key, &worker_id, &statement, params)
+        //             .await
+        //             .map_err(|e| e.into());
+        //
+        //         Ok(result)
+        //     }
+        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        // }
     }
 
     async fn begin_transaction(

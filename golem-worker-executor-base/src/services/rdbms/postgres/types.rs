@@ -189,7 +189,7 @@ impl Interval {
 
 impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}m {}d {}ms", self.months, self.days, self.microseconds)
+        write!(f, "{}m {}d {}us", self.months, self.days, self.microseconds)
     }
 }
 

@@ -1192,8 +1192,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Composite {
         let name = type_info.name().to_string();
         if let PgTypeKind::Composite(vs) = type_info.kind() {
             let attributes = get_db_column_type_attributes(vs.to_vec())?;
-            let mut decoder =
-                sqlx::postgres::types::PgRecordDecoder::new(value).map_err(|e| e.to_string())?;
+            let mut decoder = sqlx::postgres::types::PgRecordDecoder::new(value)?;
             let mut values: Vec<DbValue> = Vec::with_capacity(attributes.len());
             for (_, db_column_type) in attributes {
                 let db_value = get_db_value(&db_column_type, &mut decoder)?;

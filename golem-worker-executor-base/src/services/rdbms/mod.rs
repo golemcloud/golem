@@ -20,6 +20,8 @@ pub(crate) mod sqlx_common;
 #[cfg(test)]
 mod tests;
 
+use crate::durable_host::serialized::SerializableError;
+use crate::error::GolemError;
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
@@ -311,6 +313,14 @@ impl Error {
     pub(crate) fn query_response_failure<E: Display>(error: E) -> Error {
         Self::QueryResponseFailure(error.to_string())
     }
+
+    pub(crate) fn query_parameter_failure<E: Display>(error: E) -> Error {
+        Self::QueryParameterFailure(error.to_string())
+    }
+
+    pub(crate) fn other_response_failure<E: Display>(error: E) -> Error {
+        Self::Other(error.to_string())
+    }
 }
 
 impl Display for Error {
@@ -322,5 +332,54 @@ impl Display for Error {
             Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
             Error::Other(msg) => write!(f, "Other: {}", msg),
         }
+    }
+}
+
+impl From<&Error> for SerializableError {
+    fn from(value: &Error) -> Self {
+        // TODO figure out better translation
+        SerializableError::Generic {
+            message: value.to_string(),
+        }
+    }
+}
+
+impl From<SerializableError> for Error {
+    fn from(value: SerializableError) -> Self {
+        // TODO figure out better translation
+        match value {
+            SerializableError::Generic { message } => {
+                if message.starts_with("ConnectionFailure: ") {
+                    Self::connection_failure(message.trim_start_matches("ConnectionFailure: "))
+                } else if message.starts_with("QueryParameterFailure: ") {
+                    Self::query_parameter_failure(
+                        message.trim_start_matches("QueryParameterFailure: "),
+                    )
+                } else if message.starts_with("QueryExecutionFailure: ") {
+                    Self::query_execution_failure(
+                        message.trim_start_matches("QueryExecutionFailure: "),
+                    )
+                } else if message.starts_with("QueryResponseFailure: ") {
+                    Self::query_response_failure(
+                        message.trim_start_matches("QueryResponseFailure: "),
+                    )
+                } else if message.starts_with("Other: ") {
+                    Self::other_response_failure(message.trim_start_matches("Other: "))
+                } else {
+                    Self::other_response_failure(message)
+                }
+            }
+            SerializableError::FsError { code } => Self::other_response_failure(code),
+            SerializableError::Golem { error } => Self::other_response_failure(error),
+            SerializableError::SocketError { code } => Self::other_response_failure(code),
+            SerializableError::Rpc { error } => Self::other_response_failure(error),
+            SerializableError::WorkerProxy { error } => Self::other_response_failure(error),
+        }
+    }
+}
+
+impl From<GolemError> for Error {
+    fn from(value: GolemError) -> Self {
+        Self::other_response_failure(value)
     }
 }
