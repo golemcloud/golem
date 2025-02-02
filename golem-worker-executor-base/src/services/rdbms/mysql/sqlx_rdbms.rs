@@ -169,7 +169,7 @@ fn bind_value(
     }
 }
 
-impl TryFrom<&sqlx::mysql::MySqlRow> for DbRow<MysqlType> {
+impl TryFrom<&sqlx::mysql::MySqlRow> for DbRow<DbValue> {
     type Error = String;
 
     fn try_from(value: &sqlx::mysql::MySqlRow) -> Result<Self, Self::Error> {

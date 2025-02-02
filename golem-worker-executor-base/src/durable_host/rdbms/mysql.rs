@@ -593,8 +593,8 @@ impl From<mysql_types::DbValue> for DbValue {
     }
 }
 
-impl From<crate::services::rdbms::DbRow<MysqlType>> for DbRow {
-    fn from(value: crate::services::rdbms::DbRow<MysqlType>) -> Self {
+impl From<crate::services::rdbms::DbRow<mysql_types::DbValue>> for DbRow {
+    fn from(value: crate::services::rdbms::DbRow<mysql_types::DbValue>) -> Self {
         Self {
             values: value.values.into_iter().map(|v| v.into()).collect(),
         }

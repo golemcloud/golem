@@ -250,25 +250,25 @@ impl Display for RdbmsPoolKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub struct DbRow<T: RdbmsType> {
-    pub values: Vec<T::DbValue>,
+pub struct DbRow<T: 'static> {
+    pub values: Vec<T>,
 }
 
 #[async_trait]
 pub trait DbResultStream<T: RdbmsType> {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow<T>>>, Error>;
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct DbResult<T: RdbmsType> {
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct DbResult<T: RdbmsType + 'static> {
     pub columns: Vec<T::DbColumn>,
-    pub rows: Vec<DbRow<T>>,
+    pub rows: Vec<DbRow<T::DbValue>>,
 }
 
 impl<T: RdbmsType> DbResult<T> {
-    pub fn new(columns: Vec<T::DbColumn>, rows: Vec<DbRow<T>>) -> Self {
+    pub fn new(columns: Vec<T::DbColumn>, rows: Vec<DbRow<T::DbValue>>) -> Self {
         Self { columns, rows }
     }
 
@@ -281,7 +281,7 @@ impl<T: RdbmsType> DbResult<T> {
         result_set: Arc<dyn DbResultStream<T> + Send + Sync>,
     ) -> Result<DbResult<T>, Error> {
         let columns = result_set.get_columns().await?;
-        let mut rows: Vec<DbRow<T>> = vec![];
+        let mut rows: Vec<DbRow<T::DbValue>> = vec![];
 
         while let Some(vs) = result_set.get_next().await? {
             rows.extend(vs);

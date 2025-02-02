@@ -1292,7 +1292,7 @@ fn to_bound(
 }
 
 fn from_db_rows(
-    values: Vec<crate::services::rdbms::DbRow<PostgresType>>,
+    values: Vec<crate::services::rdbms::DbRow<postgres_types::DbValue>>,
     resource_table: &mut ResourceTable,
 ) -> Result<Vec<DbRow>, String> {
     let mut result: Vec<DbRow> = Vec::with_capacity(values.len());
@@ -1304,7 +1304,7 @@ fn from_db_rows(
 }
 
 fn from_db_row(
-    value: crate::services::rdbms::DbRow<PostgresType>,
+    value: crate::services::rdbms::DbRow<postgres_types::DbValue>,
     resource_table: &mut ResourceTable,
 ) -> Result<DbRow, String> {
     let mut values: Vec<DbValue> = Vec::with_capacity(value.values.len());

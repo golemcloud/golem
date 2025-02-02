@@ -736,20 +736,20 @@ where
 pub struct SqlxDbResultStream<'q, T: RdbmsType, DB: Database> {
     rdbms_type: T,
     columns: Vec<T::DbColumn>,
-    first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T>>>>>,
+    first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
     row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
 }
 
 impl<'q, T, DB> SqlxDbResultStream<'q, T, DB>
 where
-    T: RdbmsType + Sync,
+    T: RdbmsType + Sync + 'static,
     DB: Database,
-    DbRow<T>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
     fn new(
         columns: Vec<T::DbColumn>,
-        first_rows: Vec<DbRow<T>>,
+        first_rows: Vec<DbRow<T::DbValue>>,
         row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>,
     ) -> Self {
         let rdbms_type = T::default();
@@ -795,14 +795,14 @@ impl<T, DB> DbResultStream<T> for SqlxDbResultStream<'_, T, DB>
 where
     T: RdbmsType + Sync + Clone,
     DB: Database,
-    DbRow<T>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error> {
         debug!(rdbms_type = self.rdbms_type.to_string(), "get columns");
         Ok(self.columns.clone())
     }
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow<T>>>, Error> {
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
             debug!(
@@ -843,7 +843,7 @@ pub(crate) fn create_db_result<T, DB>(rows: Vec<DB::Row>) -> Result<DbResult<T>,
 where
     T: RdbmsType + Sync,
     DB: Database,
-    DbRow<T>: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
     T::DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
     if rows.is_empty() {
