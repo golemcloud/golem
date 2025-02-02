@@ -152,7 +152,7 @@ export default function WorkerInvoke() {
           </header>
           <div className="flex">
             <div className="border-r px-8 py-4 min-w-[300px]">
-              <div className="grid grid-cols-1 gap-4 overflow-scroll h-[80vh]">
+              <div className="flex flex-col gap-4 overflow-scroll h-[80vh]">
                 {componentDetails?.metadata?.exports?.map((exportItem) => (
                   <div key={exportItem.name}>
                     <div className="flex items-center justify-between">

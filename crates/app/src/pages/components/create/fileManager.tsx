@@ -1,5 +1,13 @@
 import React, { useState, useCallback } from "react";
-import { Folder, File, ChevronDown, ChevronRight, Trash } from "lucide-react";
+import {
+  Folder,
+  File,
+  ChevronDown,
+  ChevronRight,
+  Trash,
+  Lock,
+  Unlock,
+} from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { useDrag, useDrop, DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
@@ -11,6 +19,7 @@ interface FileItem {
   type: "file" | "folder";
   size?: number;
   children?: FileItem[];
+  isLocked?: boolean; // New property for lock state
 }
 
 const DraggableFileItem: React.FC<{
@@ -22,6 +31,7 @@ const DraggableFileItem: React.FC<{
   formatFileSize: (bytes?: number) => string;
   depth: number;
   renameFolder: (id: string, newName: string) => void;
+  toggleLock: (id: string) => void; // New prop for toggling lock
 }> = ({
   item,
   moveItem,
@@ -31,10 +41,12 @@ const DraggableFileItem: React.FC<{
   formatFileSize,
   depth,
   renameFolder,
+  toggleLock,
 }) => {
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: "fileItem",
     item: { id: item.id },
+    canDrag: !item.isLocked, // Disable drag if item is locked
     collect: (monitor) => ({
       isDragging: monitor.isDragging(),
     }),
@@ -42,6 +54,7 @@ const DraggableFileItem: React.FC<{
 
   const [, dropRef] = useDrop(() => ({
     accept: "fileItem",
+    canDrop: () => !item.isLocked, // Disable drop if target is locked
     drop: (draggedItem: { id: string }) => {
       if (draggedItem.id !== item.id) {
         moveItem(draggedItem.id, item.id);
@@ -53,7 +66,7 @@ const DraggableFileItem: React.FC<{
   const [newName, setNewName] = useState(item.name);
 
   const handleRename = () => {
-    if (newName.trim()) {
+    if (newName.trim() && !item.isLocked) {
       renameFolder(item.id, newName);
       setIsEditing(false);
     }
@@ -65,13 +78,14 @@ const DraggableFileItem: React.FC<{
         ref={dropRef}
         className={`flex items-center px-${depth * 2} py-2 hover:bg-gray-50 ${
           isDragging ? "opacity-50" : "opacity-100"
-        }`}
+        } ${item.isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
       >
         <span className={`w-${depth * 6}`} />
         {item.type === "folder" && (
           <button
             onClick={() => toggleFolder(item.id)}
             className="mr-2 text-gray-400"
+            disabled={item.isLocked}
           >
             {expandedFolders.has(item.id) ? (
               <ChevronDown className="h-4 w-4" />
@@ -97,11 +111,14 @@ const DraggableFileItem: React.FC<{
                 if (e.key === "Enter") handleRename();
               }}
               className="flex-1 p-1 border border-gray-300 rounded"
+              disabled={item.isLocked}
             />
           ) : (
             <span
-              className="flex-1 cursor-pointer"
-              onClick={() => setIsEditing(true)}
+              className={`flex-1 cursor-pointer ${
+                item.isLocked ? "cursor-not-allowed" : ""
+              }`}
+              onClick={() => !item.isLocked && setIsEditing(true)}
             >
               {item.name}
             </span>
@@ -113,9 +130,20 @@ const DraggableFileItem: React.FC<{
           )}
           <button
             className="p-1 text-gray-400 hover:text-gray-600"
-            onClick={() => handleDelete(item.id)}
+            onClick={() => !item.isLocked && handleDelete(item.id)}
+            disabled={item.isLocked}
           >
             <Trash className="h-4 w-4" />
+          </button>
+          <button
+            className="p-1 text-gray-400 hover:text-gray-600"
+            onClick={() => toggleLock(item.id)}
+          >
+            {item.isLocked ? (
+              <Lock className="h-4 w-4" />
+            ) : (
+              <Unlock className="h-4 w-4" />
+            )}
           </button>
         </div>
       </div>
@@ -135,6 +163,7 @@ const FileManager = () => {
       name: file.name,
       type: "file" as const,
       size: file.size,
+      isLocked: false, // Default to unlocked
     }));
     setFiles((prev) => [...prev, ...newFiles]);
   }, []);
@@ -159,6 +188,7 @@ const FileManager = () => {
       name: "New Folder",
       type: "folder",
       children: [],
+      isLocked: false, // Default to unlocked
     };
     setFiles((prev) => [...prev, newFolder]);
   };
@@ -245,6 +275,30 @@ const FileManager = () => {
     });
   };
 
+  const toggleLock = (id: string) => {
+    setFiles((prev) => {
+      const toggleLockRecursive = (items: FileItem[]): FileItem[] => {
+        return items.map((item) => {
+          if (
+            item.id === id ||
+            (item.children && item.children.some((child) => child.id === id))
+          ) {
+            const isLocked = item.id === id ? !item.isLocked : item.isLocked;
+            return {
+              ...item,
+              isLocked,
+              children: item.children
+                ? toggleLockRecursive(item.children)
+                : undefined,
+            };
+          }
+          return item;
+        });
+      };
+      return toggleLockRecursive(prev);
+    });
+  };
+
   const renderTree = (items: FileItem[], depth = 0) => {
     return items.map((item) => (
       <div key={item.id}>
@@ -257,6 +311,7 @@ const FileManager = () => {
           formatFileSize={formatFileSize}
           renameFolder={renameFolder}
           depth={depth}
+          toggleLock={toggleLock}
         />
         {item.type === "folder" &&
           expandedFolders.has(item.id) &&
