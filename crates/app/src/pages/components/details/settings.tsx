@@ -22,7 +22,7 @@ import { Separator } from "@/components/ui/separator.tsx";
 import { API } from "@/service";
 import { Worker } from "@/types/worker.ts";
 import ErrorBoundary from "@/components/errorBoundary";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 
 export default function ComponentSettings() {
   const { toast } = useToast();
@@ -30,7 +30,7 @@ export default function ComponentSettings() {
   const [isDeleting, setIsDeleting] = React.useState(false);
   const { componentId } = useParams();
   const navigate = useNavigate();
-  const [component, setComponent] = React.useState({} as Component);
+  const [component, setComponent] = React.useState({} as ComponentList);
 
   React.useEffect(() => {
     if (componentId) {
@@ -64,7 +64,7 @@ export default function ComponentSettings() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

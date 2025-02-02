@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { API } from "@/service";
 import {
-  Component,
+  ComponentList,
   ComponentExportFunction,
   Export,
 } from "@/types/component.ts";
@@ -34,7 +34,7 @@ export default function WorkerInvoke() {
   const [resultValue, setResultValue] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [componentList, setComponentList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
 
   /** Fetch function details based on URL params. */
@@ -42,12 +42,13 @@ export default function WorkerInvoke() {
     try {
       const data = await API.getComponentByIdAsKey();
       setComponentList(data);
-      const matchingComponent = data?.[componentId];
+      const matchingComponent =
+        data?.[componentId].versions?.[data?.[componentId].versions.length - 1];
       if (!matchingComponent) {
         throw new Error("Component not found.");
       }
       if (name && urlFn) {
-        const exportItem = matchingComponent.exports?.find(
+        const exportItem = matchingComponent.metadata?.exports?.find(
           (e: Export) => e.name === name
         );
         if (!exportItem) {
@@ -67,10 +68,10 @@ export default function WorkerInvoke() {
       } else if (
         !name &&
         !urlFn &&
-        matchingComponent?.exports?.[0]?.functions?.[0]
+        matchingComponent?.metadata?.exports?.[0]?.functions?.[0]
       ) {
         navigate(
-          `/components/${componentId}/workers/${workerName}/invoke?name=${matchingComponent.exports[0].name}&&fn=${matchingComponent.exports[0].functions[0].name}`
+          `/components/${componentId}/workers/${workerName}/invoke?name=${matchingComponent.metadata.exports[0].name}&&fn=${matchingComponent.metadata.exports[0].functions[0].name}`
         );
       }
     } catch (error: unknown) {
@@ -134,6 +135,11 @@ export default function WorkerInvoke() {
     navigator.clipboard.writeText(value);
   };
 
+  const componentDetails =
+    componentList[componentId]?.versions?.[
+      componentList[componentId]?.versions.length - 1
+    ] || {};
+
   return (
     <ErrorBoundary>
       <div className="flex h-screen">
@@ -147,7 +153,7 @@ export default function WorkerInvoke() {
           <div className="flex">
             <div className="border-r px-8 py-4 min-w-[300px]">
               <div className="grid grid-cols-1 gap-4 overflow-scroll h-[80vh]">
-                {componentList?.[componentId]?.exports?.map((exportItem) => (
+                {componentDetails?.metadata?.exports?.map((exportItem) => (
                   <div key={exportItem.name}>
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-gray-600 font-bold pb-4">

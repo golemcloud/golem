@@ -10,14 +10,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { HTTP_METHOD_COLOR } from "@/pages/api/details/apiLeftNav";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 
 export const ApiRoute = () => {
   const navigate = useNavigate();
   const { apiName, version } = useParams();
   const [currentRoute, setCurrentRoute] = useState({} as Route);
   const [componentList, setComponentList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
   const [queryParams] = useSearchParams();
   const path = queryParams.get("path");

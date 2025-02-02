@@ -14,9 +14,6 @@ export const ENDPOINT = {
   updateComponent: (id: string) => {
     return `/v1/components/${id}`;
   },
-  getComponentById: (id: string) => {
-    return `/v1/components/${id}/latest`;
-  },
   getApiList: () => {
     return "/v1/api/definitions";
   },
@@ -66,7 +63,7 @@ export const ENDPOINT = {
   getPluginName: (name: string) => {
     return `/v1/plugins/${name}`;
   },
-  downloadComponent: (componentId: string, version: string) => {
+  downloadComponent: (componentId: string, version: number) => {
     return `/v1/components/${componentId}/download?version=${version}`;
   },
   deletePlugin: (name: string, version: string) => {

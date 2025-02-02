@@ -81,10 +81,17 @@ export interface Component {
   installedPlugins?: unknown[];
   metadata?: Metadata;
   projectId?: string;
-  versionId?: number[];
   componentId?: string;
   exports?: Export[];
   versionedComponentId?: VersionedComponentId;
+}
+
+export interface ComponentList {
+  componentName?: string;
+  componentType?: string;
+  versions?: Component[];
+  versionList?: number[];
+  componentId?: string;
 }
 
 export interface ComponentExportFunction {

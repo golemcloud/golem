@@ -28,7 +28,7 @@ import { v4 as uuidv4 } from "uuid";
 import ErrorBoundary from "@/components/errorBoundary";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 
 const formSchema = z.object({
   componentID: z.string(),
@@ -57,7 +57,7 @@ export default function CreateWorker() {
     },
   });
 
-  const [component, setComponent] = useState({} as Component);
+  const [component, setComponent] = useState({} as ComponentList);
 
   useEffect(() => {
     if (componentId) {
@@ -112,7 +112,7 @@ export default function CreateWorker() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">

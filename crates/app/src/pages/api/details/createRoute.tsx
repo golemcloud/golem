@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import {
@@ -24,10 +24,24 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { API } from "@/service";
-import { Api, HttpMethod } from "@/types/api";
-import { Component } from "@/types/component";
+import type { Api, HttpMethod } from "@/types/api";
+import type { ComponentList } from "@/types/component";
 import ErrorBoundary from "@/components/errorBoundary";
 import { toast } from "@/hooks/use-toast";
+import { Card } from "@/components/ui/card";
+import { getCaretCoordinates } from "@/lib/worker";
+
+const extractDynamicParams = (path: string) => {
+  const regex = /{([^}]+)}/g;
+  const matches = [];
+  let match;
+
+  while ((match = regex.exec(path)) !== null) {
+    matches.push(match[1]);
+  }
+
+  return matches;
+};
 
 const HTTP_METHODS = [
   "Get",
@@ -68,7 +82,7 @@ const CreateRoute = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [componentList, setComponentList] = useState<{
-    [key: string]: Component;
+    [key: string]: ComponentList;
   }>({});
   const [isEdit, setIsEdit] = useState(false);
   const [activeApiDetails, setActiveApiDetails] = useState<Api | null>(null);
@@ -76,6 +90,24 @@ const CreateRoute = () => {
   const [queryParams] = useSearchParams();
   const path = queryParams.get("path");
   const method = queryParams.get("method");
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [cursorPosition, setCursorPosition] = useState(0);
+
+  const [responseSuggestions, setResponseSuggestions] = useState(
+    [] as string[]
+  );
+  const [filteredResponseSuggestions, setFilteredResponseSuggestions] =
+    useState<string[]>([]);
+  const [showResponseSuggestions, setShowResponseSuggestions] = useState(false);
+  const [responseMenuPosition, setResponseMenuPosition] = useState({
+    top: 0,
+    left: 0,
+  });
+  const responseTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [responseCursorPosition, setResponseCursorPosition] = useState(0);
 
   const form = useForm<RouteFormValues>({
     resolver: zodResolver(routeSchema),
@@ -145,7 +177,7 @@ const CreateRoute = () => {
           title: "API not found",
           description: "Please try again.",
           variant: "destructive",
-          duration: Infinity,
+          duration: Number.POSITIVE_INFINITY,
         });
         return;
       }
@@ -158,7 +190,7 @@ const CreateRoute = () => {
         binding: {
           componentId: {
             componentId: values.componentId,
-            version: parseInt(values.version),
+            version: Number.parseInt(values.version),
           },
           workerName: values.workerName,
           response: values.response || "",
@@ -184,6 +216,182 @@ const CreateRoute = () => {
     }
   };
 
+  const handleSuggestionClick = (suggestion: string) => {
+    const currentValue = form.getValues("workerName");
+    const textBeforeCursor = currentValue.slice(0, cursorPosition);
+    const pattern = "request.path.";
+    const startIndex = textBeforeCursor.lastIndexOf(pattern);
+
+    let newValue: string;
+    let newCursorPosition: number;
+
+    if (startIndex !== -1) {
+      // Replace any text after "request.path." with the suggestion
+      newValue =
+        currentValue.slice(0, startIndex) +
+        pattern +
+        suggestion +
+        currentValue.slice(cursorPosition);
+      newCursorPosition = startIndex + pattern.length + suggestion.length;
+    } else {
+      // If the pattern isn't found, insert it along with the suggestion at the cursor position
+      newValue =
+        currentValue.slice(0, cursorPosition) +
+        pattern +
+        suggestion +
+        currentValue.slice(cursorPosition);
+      newCursorPosition = cursorPosition + pattern.length + suggestion.length;
+    }
+
+    form.setValue("workerName", newValue);
+    setShowSuggestions(false);
+
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(
+        newCursorPosition,
+        newCursorPosition
+      );
+      setCursorPosition(newCursorPosition);
+    }
+  };
+
+  const onComponentChange = (componentId: string) => {
+    form.setValue("componentId", componentId);
+  };
+
+  const onVersionChange = (version: string) => {
+    form.setValue("version", version);
+    const componentId = form.getValues("componentId");
+    const exportedFunctions = componentList?.[componentId]?.versions?.find(
+      (data) => data.versionedComponentId?.version?.toString() === version
+    );
+    const data = exportedFunctions?.metadata?.exports || [];
+    const output = data.flatMap((item) =>
+      item.functions.map((func) => `${item.name}.{${func.name}}`)
+    );
+    setResponseSuggestions(output);
+  };
+
+  const handleWorkerNameChange = (
+    e: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    const value = e.target.value;
+    form.setValue("workerName", value);
+    const cursorPos = e.target.selectionStart || 0;
+    setCursorPosition(cursorPos);
+
+    const textBeforeCursor = value.slice(0, cursorPos);
+    // Look for the last occurrence of "request.path."
+    const pattern = "request.path.";
+    const startIndex = textBeforeCursor.lastIndexOf(pattern);
+
+    if (startIndex !== -1) {
+      // Extract the token typed after "request.path."
+      const token = textBeforeCursor.slice(startIndex + pattern.length);
+      // Retrieve the dynamic parameters (or suggestion candidates)
+      const dynamicParams = extractDynamicParams(form.getValues("path"));
+
+      // If token is empty, show all dynamicParams; otherwise filter them
+      const filteredSuggestions =
+        token.trim().length > 0
+          ? dynamicParams.filter((param) =>
+              param.toLowerCase().startsWith(token.toLowerCase())
+            )
+          : dynamicParams;
+
+      if (filteredSuggestions.length > 0) {
+        setSuggestions(filteredSuggestions);
+        updateMenuPosition();
+        setShowSuggestions(true);
+      } else {
+        setShowSuggestions(false);
+      }
+    } else {
+      setShowSuggestions(false);
+    }
+  };
+
+  const updateMenuPosition = () => {
+    if (textareaRef.current) {
+      const { selectionStart } = textareaRef.current;
+      const coords = getCaretCoordinates(textareaRef.current, selectionStart);
+      setMenuPosition({
+        top: coords.top + coords.height - textareaRef.current.scrollTop,
+        left: coords.left - textareaRef.current.scrollLeft,
+      });
+    }
+  };
+
+  const handleResponseSuggestionClick = (suggestion: string) => {
+    const currentValue = form.getValues("response") ?? "";
+    // Get text before the current cursor position.
+    const textBeforeCursor = currentValue.slice(0, responseCursorPosition);
+    // Find the last contiguous non-space token
+    const tokenMatch = textBeforeCursor.match(/(\S+)$/);
+    let tokenStart = responseCursorPosition;
+    if (tokenMatch) {
+      tokenStart = responseCursorPosition - tokenMatch[1].length;
+    }
+    // Replace the token with the suggestion.
+    const newValue =
+      currentValue.slice(0, tokenStart) +
+      suggestion +
+      currentValue.slice(responseCursorPosition);
+    form.setValue("response", newValue);
+    setShowResponseSuggestions(false);
+
+    if (responseTextareaRef.current) {
+      responseTextareaRef.current.focus();
+      const newCursorPosition = tokenStart + suggestion.length;
+      responseTextareaRef.current.setSelectionRange(
+        newCursorPosition,
+        newCursorPosition
+      );
+      setResponseCursorPosition(newCursorPosition);
+    }
+  };
+
+  const handleResponseChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    form.setValue("response", value);
+    const cursorPos = e.target.selectionStart || 0;
+    setResponseCursorPosition(cursorPos);
+
+    // Extract the last "word" (non-whitespace sequence) before the cursor.
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/(\S+)$/); // captures last token
+    const token = match ? match[1] : "";
+
+    // Filter responseSuggestions to only those that match the token (case-insensitive)
+    const filtered = responseSuggestions.filter((item) =>
+      item.toLowerCase().startsWith(token.toLowerCase())
+    );
+
+    // If there are any matches and the token is not empty, show the dropdown.
+    if (filtered.length > 0 && token.length > 0) {
+      updateResponseMenuPosition();
+      setFilteredResponseSuggestions(filtered);
+      setShowResponseSuggestions(true);
+    } else {
+      setShowResponseSuggestions(false);
+    }
+  };
+
+  const updateResponseMenuPosition = () => {
+    if (responseTextareaRef.current) {
+      const { selectionStart } = responseTextareaRef.current;
+      const coords = getCaretCoordinates(
+        responseTextareaRef.current,
+        selectionStart
+      );
+      setResponseMenuPosition({
+        top: coords.top + coords.height - responseTextareaRef.current.scrollTop,
+        left: coords.left - responseTextareaRef.current.scrollLeft,
+      });
+    }
+  };
+
   if (fetchError) {
     return (
       <div className="p-6 max-w-3xl mx-auto">
@@ -196,7 +404,6 @@ const CreateRoute = () => {
       </div>
     );
   }
-
   return (
     <ErrorBoundary>
       <div className="overflow-y-auto h-[80vh]">
@@ -295,7 +502,7 @@ const CreateRoute = () => {
                         <FormItem>
                           <FormLabel>Component</FormLabel>
                           <Select
-                            onValueChange={field.onChange}
+                            onValueChange={onComponentChange}
                             value={field.value}
                           >
                             <FormControl>
@@ -305,7 +512,7 @@ const CreateRoute = () => {
                             </FormControl>
                             <SelectContent>
                               {Object.values(componentList).map(
-                                (data: Component) => (
+                                (data: ComponentList) => (
                                   <SelectItem
                                     value={data.componentId || ""}
                                     key={data.componentName}
@@ -328,7 +535,7 @@ const CreateRoute = () => {
                         <FormItem>
                           <FormLabel>Version</FormLabel>
                           <Select
-                            onValueChange={field.onChange}
+                            onValueChange={onVersionChange}
                             value={field.value}
                             disabled={!form.watch("componentId")}
                           >
@@ -344,7 +551,7 @@ const CreateRoute = () => {
                               {form.watch("componentId") &&
                                 componentList[
                                   form.watch("componentId")
-                                ]?.versionId?.map((v: number) => (
+                                ]?.versionList?.map((v: number) => (
                                   <SelectItem value={String(v)} key={v}>
                                     v{v}
                                   </SelectItem>
@@ -364,13 +571,40 @@ const CreateRoute = () => {
                       <FormItem className="mt-4">
                         <FormLabel>Worker Name</FormLabel>
                         <FormControl>
-                          <Textarea
-                            placeholder="Interpolate variables into your Worker ID"
-                            {...field}
-                          />
+                          <div className="relative">
+                            <Textarea
+                              placeholder="Interpolate variables into your Worker ID"
+                              {...field}
+                              onChange={handleWorkerNameChange}
+                              ref={textareaRef}
+                            />
+                            {showSuggestions && (
+                              <Card
+                                className="absolute z-10 p-1 space-y-1 bg-white shadow-lg min-w-[70px]"
+                                style={{
+                                  top: `${menuPosition.top}px`,
+                                  left: `${menuPosition.left}px`,
+                                  width: "max-content",
+                                }}
+                              >
+                                {suggestions.map((suggestion) => (
+                                  <div
+                                    key={suggestion}
+                                    className="px-2 py-1 text-sm cursor-pointer hover:bg-gray-100"
+                                    onClick={() =>
+                                      handleSuggestionClick(suggestion)
+                                    }
+                                  >
+                                    {suggestion}
+                                  </div>
+                                ))}
+                              </Card>
+                            )}
+                          </div>
                         </FormControl>
                         <FormDescription>
-                          Unique identifier for your worker instance
+                          Unique identifier for your worker instance. Use ${"{"}{" "}
+                          to interpolate path parameters.
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -385,13 +619,41 @@ const CreateRoute = () => {
                     <FormItem>
                       <FormLabel>Response</FormLabel>
                       <FormControl>
-                        <Textarea
-                          placeholder="Define the HTTP response template"
-                          {...field}
-                        />
+                        <div className="relative">
+                          <Textarea
+                            placeholder="Define the HTTP response template"
+                            className="min-h-[130px]"
+                            {...field}
+                            onChange={handleResponseChange}
+                            ref={responseTextareaRef}
+                          />
+                          {showResponseSuggestions && (
+                            <Card
+                              className="absolute z-10 p-1 space-y-1 bg-white shadow-lg min-w-[200px]"
+                              style={{
+                                top: `${responseMenuPosition.top}px`,
+                                left: `${responseMenuPosition.left}px`,
+                                width: "max-content",
+                              }}
+                            >
+                              {filteredResponseSuggestions.map((suggestion) => (
+                                <div
+                                  key={suggestion}
+                                  className="px-2 py-1 text-sm cursor-pointer hover:bg-gray-100"
+                                  onClick={() =>
+                                    handleResponseSuggestionClick(suggestion)
+                                  }
+                                >
+                                  {suggestion}
+                                </div>
+                              ))}
+                            </Card>
+                          )}
+                        </div>
                       </FormControl>
                       <FormDescription>
-                        Define the HTTP response for this API Route
+                        Type 'golem:' to see available functions. Define the
+                        HTTP response for this API Route.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

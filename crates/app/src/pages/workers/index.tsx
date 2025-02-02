@@ -14,13 +14,13 @@ import ErrorBoundary from "@/components/errorBoundary";
 import ComponentLeftNav from "../components/details/componentsLeftNav";
 import { Worker } from "@/types/worker.ts";
 import { API } from "@/service";
-import { Component } from "@/types/component";
+import { ComponentList } from "@/types/component";
 
 export default function WorkerList() {
   const [workerList, setWorkerList] = useState([] as Worker[]);
   const [filteredWorkers, setFilteredWorkers] = useState([] as Worker[]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [component, setComponent] = useState({} as Component);
+  const [component, setComponent] = useState({} as ComponentList);
 
   const navigate = useNavigate();
   const { componentId } = useParams();
@@ -57,7 +57,7 @@ export default function WorkerList() {
   return (
     <ErrorBoundary>
       <div className="flex">
-        <ComponentLeftNav componentDetails={component} />
+        <ComponentLeftNav componentType={component.componentType} />
         <div className="flex-1 flex flex-col">
           <header className="w-full border-b bg-background py-4">
             <div className="mx-auto px-6 lg:px-8">
