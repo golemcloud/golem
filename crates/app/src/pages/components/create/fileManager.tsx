@@ -19,7 +19,7 @@ interface FileItem {
   type: "file" | "folder";
   size?: number;
   children?: FileItem[];
-  isLocked?: boolean; // New property for lock state
+  isLocked?: boolean;
 }
 
 const DraggableFileItem: React.FC<{
@@ -31,7 +31,7 @@ const DraggableFileItem: React.FC<{
   formatFileSize: (bytes?: number) => string;
   depth: number;
   renameFolder: (id: string, newName: string) => void;
-  toggleLock: (id: string) => void; // New prop for toggling lock
+  toggleLock: (id: string) => void;
 }> = ({
   item,
   moveItem,
@@ -44,29 +44,31 @@ const DraggableFileItem: React.FC<{
   toggleLock,
 }) => {
   const [{ isDragging }, dragRef] = useDrag(() => ({
-    type: "fileItem",
+    type: "fileItem", // Ensure this matches the useDrop accept type
     item: { id: item.id },
-    canDrag: !item.isLocked, // Disable drag if item is locked
     collect: (monitor) => ({
       isDragging: monitor.isDragging(),
     }),
   }));
 
-  const [, dropRef] = useDrop(() => ({
-    accept: "fileItem",
-    canDrop: () => !item.isLocked, // Disable drop if target is locked
-    drop: (draggedItem: { id: string }) => {
-      if (draggedItem.id !== item.id) {
-        moveItem(draggedItem.id, item.id);
-      }
-    },
-  }));
+  const [, dropRef] = useDrop(
+    () => ({
+      accept: "fileItem",
+      drop: (draggedItem: { id: string }) => {
+        if (draggedItem.id !== item.id) {
+          moveItem(draggedItem.id, item.id);
+        }
+      },
+      canDrop: () => item.type === "folder",
+    }),
+    [item]
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(item.name);
 
   const handleRename = () => {
-    if (newName.trim() && !item.isLocked) {
+    if (newName.trim()) {
       renameFolder(item.id, newName);
       setIsEditing(false);
     }
@@ -163,7 +165,7 @@ const FileManager = () => {
       name: file.name,
       type: "file" as const,
       size: file.size,
-      isLocked: false, // Default to unlocked
+      isLocked: false,
     }));
     setFiles((prev) => [...prev, ...newFiles]);
   }, []);
@@ -188,7 +190,7 @@ const FileManager = () => {
       name: "New Folder",
       type: "folder",
       children: [],
-      isLocked: false, // Default to unlocked
+      isLocked: false,
     };
     setFiles((prev) => [...prev, newFolder]);
   };
@@ -351,18 +353,27 @@ const FileManager = () => {
               <p className="text-sm text-gray-600">
                 Total Files: {files.length}
               </p>
-
-              <button
-                onClick={createNewFolder}
-                className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1 border border-gray-200 rounded"
-              >
-                New Folder
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={createNewFolder}
+                  className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1 border border-gray-200 rounded"
+                >
+                  New Folder
+                </button>
+                <button
+                  className="p-1 text-gray-400 hover:text-gray-600 bg-red-100 hover:bg-red-200 p-2"
+                  onClick={() => setFiles([])}
+                >
+                  <Trash className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
-            <div className="mt-4 p-2 border border-gray-200 rounded-lg ">
-              {renderTree(files)}
-            </div>
+            {files.length > 0 && (
+              <div className="mt-4 p-2 border border-gray-200 rounded-lg ">
+                {renderTree(files)}
+              </div>
+            )}
           </div>
         </div>
       </DndProvider>
