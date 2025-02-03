@@ -16,7 +16,6 @@ import { useDropzone } from "react-dropzone";
 import { useDrag, useDrop } from "react-dnd";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 interface FileItem {
@@ -40,7 +39,6 @@ export function FileManager() {
   );
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editingName, setEditingName] = React.useState("");
-
   const onDrop = React.useCallback((acceptedFiles: File[]) => {
     const newFiles: FileItem[] = acceptedFiles.map((file) => ({
       id: Math.random().toString(36).substring(7),
@@ -55,7 +53,9 @@ export function FileManager() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
-  const createFolder = () => {
+  const createFolder = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
     const newFolder: FileItem = {
       id: Math.random().toString(36).substring(7),
       name: "New Folder",
@@ -65,8 +65,6 @@ export function FileManager() {
       isLocked: false,
     };
     setFiles((prev) => [...prev, newFolder]);
-    setEditingId(newFolder.id);
-    setEditingName("New Folder");
   };
 
   const startEditing = (file: FileItem) => {
@@ -111,17 +109,18 @@ export function FileManager() {
       fileId: string,
       targetFolderId: string | null
     ): boolean => {
+      if (targetFolderId === null) {
+        return true;
+      }
+      // Prevent moving an item into itself.
       if (fileId === targetFolderId) return false;
-      const file = files.find((f) => f.id === fileId);
-      if (!file) return false;
-      if (file.type === "folder") {
-        // Prevent moving a folder into its own subfolder
-        let currentParent = targetFolderId;
-        while (currentParent) {
-          if (currentParent === fileId) return false;
-          const parent = files.find((f) => f.id === currentParent);
-          currentParent = parent ? parent.parentId : null;
-        }
+      // Prevent moving a folder into one of its own descendants.
+      let parent = files.find((f) => f.id === targetFolderId) || null;
+      while (parent) {
+        if (parent.id === fileId) return false;
+        parent = parent.parentId
+          ? files.find((f) => f.id === parent?.parentId) || null
+          : null;
       }
       return true;
     };
@@ -136,8 +135,7 @@ export function FileManager() {
         return file;
       })
     );
-
-    // Expand the target folder if it's not already expanded
+    // Expand the target folder if it's not already expanded.
     if (targetFolderId) {
       setExpandedFolders((prev) => new Set(prev).add(targetFolderId));
     }
@@ -175,6 +173,8 @@ export function FileManager() {
       accept: ItemTypes.FILE,
       drop: (item: { id: string; type: string }, monitor) => {
         if (!monitor.isOver({ shallow: true })) return;
+        // If dropped onto a folder, move the item into that folder.
+        // Otherwise, use the parent's folder if the target is a file.
         if (item.id !== file.id) {
           moveFile(item.id, file.type === "folder" ? file.id : file.parentId);
         }
@@ -304,39 +304,54 @@ export function FileManager() {
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto p-4">
-      <Card className="p-6">
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-2xl font-bold">Initial Files</h2>
-            <p className="text-muted-foreground">
-              Files available to your workers at runtime.
-            </p>
-          </div>
-          <div
-            {...getRootProps()}
-            className={`border-2 border-dashed rounded-lg p-8 text-center ${
-              isDragActive ? "border-primary" : "border-muted"
-            }`}
-          >
-            <input {...getInputProps()} />
-            <p>Select or Drop files</p>
-          </div>
+    <div>
+      <div className="space-y-4">
+        <div>
+          <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+            Initial Files
+          </label>
+        </div>
+        <div
+          {...getRootProps()}
+          className={`border-2 border-dashed rounded-lg p-8 text-center ${
+            isDragActive ? "border-primary" : "border-muted"
+          }`}
+        >
+          <input {...getInputProps()} />
+          <p>Select or Drop files</p>
+        </div>
+        <div className="border p-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">
+            <label className="text-sm font-bold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
               Total Files: {files.length}
-            </h3>
-            <div className="space-x-2">
-              <Button onClick={createFolder}>New Folder</Button>
+            </label>
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-x-2">
+                <Button onClick={createFolder}>New Folder</Button>
+              </div>
+              <div className="space-x-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFiles([]);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
           <div
-            className="space-y-1"
+            className="space-y-1 py-2"
             ref={
               useDrop(() => ({
                 accept: ItemTypes.FILE,
                 drop: (item: { id: string }, monitor) => {
                   if (monitor.didDrop()) return;
+                  // Dropping on the root moves the file to root level.
                   moveFile(item.id, null);
                 },
               }))[1]
@@ -347,7 +362,7 @@ export function FileManager() {
             ))}
           </div>
         </div>
-      </Card>
+      </div>
     </div>
   );
 }
