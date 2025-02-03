@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { API } from "@/service";
 import { useNavigate } from "react-router-dom";
 import ErrorBoundary from "@/components/errorBoundary";
-import FileManager from "./fileManager";
+import { FileManager } from "./fileManager";
 
 const COMPONENT_TYPES = [
   {
