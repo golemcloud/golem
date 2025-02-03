@@ -2012,6 +2012,7 @@ pub mod tests {
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
+    use golem_common::serialization::{serialize, try_deserialize};
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
@@ -2021,6 +2022,14 @@ pub mod tests {
     use wasmtime::component::ResourceTable;
 
     fn check_db_value(value: postgres_types::DbValue, resource_table: &mut ResourceTable) {
+        // FIXME bin serde test - Failed to deserialize value: Serde(AnyNotSupported) for Json and Bigdecimal
+        // let bin_value = serialize(&value).unwrap().to_vec();
+        // let value2: Result<Option<postgres_types::DbValue>, String> = try_deserialize(bin_value.as_slice());
+        // if value2.is_err() {
+        //     println!("{}  - {:?}", value, value2);
+        // }
+        // check!(value2.unwrap().unwrap() == value);
+
         let value_with_rep = DbValueWithResourceRep::new_resource_none(value.clone());
         let (wit, new_resource_reps) = from_db_value(value_with_rep, resource_table).unwrap();
 
@@ -2036,11 +2045,11 @@ pub mod tests {
             check!(new_resource_reps2 == DbValueResourceRep::None);
         }
 
-        let expected_value = to_db_value(wit, resource_table).unwrap();
-        let expected_value2 = to_db_value(wit2, resource_table).unwrap();
+        let result = to_db_value(wit, resource_table).unwrap();
+        let result2 = to_db_value(wit2, resource_table).unwrap();
 
-        check!(value == expected_value.value);
-        check!(value == expected_value2.value);
+        check!(value == result.value);
+        check!(value == result2.value);
     }
 
     #[test]
@@ -2318,6 +2327,11 @@ pub mod tests {
         value: postgres_types::DbColumnType,
         resource_table: &mut ResourceTable,
     ) {
+        let bin_value = serialize(&value).unwrap().to_vec();
+        let value2: Option<postgres_types::DbColumnType> =
+            try_deserialize(bin_value.as_slice()).unwrap();
+        check!(value2.unwrap() == value);
+
         let value_with_rep = DbColumnTypeWithResourceRep::new_resource_none(value.clone());
         let (wit, new_resource_reps) = from_db_column_type(value_with_rep, resource_table).unwrap();
 
@@ -2334,16 +2348,19 @@ pub mod tests {
             check!(new_resource_reps2 == DbColumnTypeResourceRep::None);
         }
 
-        let expected_value = to_db_column_type(wit, resource_table).unwrap();
-        let expected_value2 = to_db_column_type(wit2, resource_table).unwrap();
+        let result = to_db_column_type(wit, resource_table).unwrap();
+        let result2 = to_db_column_type(wit2, resource_table).unwrap();
 
-        check!(value == expected_value.value);
-        check!(value == expected_value2.value);
+        check!(value == result.value);
+        check!(value == result2.value);
     }
 
     #[test]
     fn test_db_column_types_conversions() {
         let mut resource_table = ResourceTable::new();
+
+        let mut values: Vec<postgres_types::DbColumnType> = vec![];
+
         let value = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
             "inventory_item".to_string(),
             vec![
@@ -2356,26 +2373,28 @@ pub mod tests {
                 ("price".to_string(), postgres_types::DbColumnType::Numeric),
             ],
         ));
-        check_db_column_type(value.clone(), &mut resource_table);
 
-        check_db_column_type(value.clone().into_array(), &mut resource_table);
+        values.push(value.clone());
+        values.push(value.clone().into_array());
 
         let value = postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
             "posint8".to_string(),
             postgres_types::DbColumnType::Int8,
         ));
 
-        check_db_column_type(value.clone(), &mut resource_table);
-
-        check_db_column_type(value.clone().into_array(), &mut resource_table);
+        values.push(value.clone());
+        values.push(value.clone().into_array());
 
         let value = postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
             "float4range".to_string(),
             postgres_types::DbColumnType::Float4,
         ));
 
-        check_db_column_type(value.clone(), &mut resource_table);
+        values.push(value.clone());
+        values.push(value.clone().into_array());
 
-        check_db_column_type(value.clone().into_array(), &mut resource_table);
+        for value in values {
+            check_db_column_type(value, &mut resource_table);
+        }
     }
 }

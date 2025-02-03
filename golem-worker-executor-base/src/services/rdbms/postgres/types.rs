@@ -453,7 +453,7 @@ pub enum DbValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
-    Numeric(#[bincode(with_serde)] BigDecimal),
+    Numeric(#[bincode(with_serde)] BigDecimal), // FIXME not working properly with bincode
     Boolean(bool),
     Timestamp(#[bincode(with_serde)] chrono::NaiveDateTime),
     Timestamptz(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
@@ -465,8 +465,8 @@ pub enum DbValue {
     Varchar(String),
     Bpchar(String),
     Bytea(Vec<u8>),
-    Json(#[bincode(with_serde)] serde_json::Value),
-    Jsonb(#[bincode(with_serde)] serde_json::Value),
+    Json(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
+    Jsonb(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
     Jsonpath(String),
     Xml(String),
     Uuid(#[bincode(with_serde)] Uuid),
@@ -477,7 +477,7 @@ pub enum DbValue {
     Varbit(#[bincode(with_serde)] BitVec),
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
-    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>),
+    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>), // FIXME not working properly with bincode
     Tsrange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDateTime>),
     Tstzrange(#[bincode(with_serde)] ValuesRange<chrono::DateTime<chrono::Utc>>),
     Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),

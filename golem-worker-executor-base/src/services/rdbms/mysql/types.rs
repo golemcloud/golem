@@ -115,7 +115,7 @@ pub enum DbValue {
     BigintUnsigned(u64),
     Float(f32),
     Double(f64),
-    Decimal(#[bincode(with_serde)] BigDecimal),
+    Decimal(#[bincode(with_serde)] BigDecimal), // FIXME not working properly with bincode
     Date(#[bincode(with_serde)] chrono::NaiveDate),
     Datetime(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
     Timestamp(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
@@ -136,7 +136,7 @@ pub enum DbValue {
     Enumeration(String),
     Set(String),
     Bit(#[bincode(with_serde)] BitVec),
-    Json(#[bincode(with_serde)] serde_json::Value),
+    Json(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
     Null,
 }
 

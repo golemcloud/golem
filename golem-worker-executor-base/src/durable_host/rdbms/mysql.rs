@@ -769,12 +769,18 @@ pub mod tests {
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
+    use golem_common::serialization::{serialize, try_deserialize};
     use serde_json::json;
     use std::str::FromStr;
     use test_r::test;
     use uuid::Uuid;
 
     fn check_db_value(value: mysql_types::DbValue) {
+        // FIXME bin serde test - Failed to deserialize value: Serde(AnyNotSupported) for Json and Bigdecimal
+        // let bin_value = serialize(&value).unwrap().to_vec();
+        // let value2: Option<mysql_types::DbValue> = try_deserialize(bin_value.as_slice()).unwrap();
+        // check!(value2.unwrap() == value);
+
         let wit: DbValue = value.clone().into();
         let value2: mysql_types::DbValue = wit.try_into().unwrap();
         check!(value == value2);
@@ -841,6 +847,11 @@ pub mod tests {
     }
 
     fn check_db_column_type(value: mysql_types::DbColumnType) {
+        let bin_value = serialize(&value).unwrap().to_vec();
+        let value2: Option<mysql_types::DbColumnType> =
+            try_deserialize(bin_value.as_slice()).unwrap();
+        check!(value2.unwrap() == value);
+
         let wit: DbColumnType = value.clone().into();
         let value2: mysql_types::DbColumnType = wit.into();
         check!(value == value2);
