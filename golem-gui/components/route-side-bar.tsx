@@ -51,7 +51,7 @@ export default function RouteSideBar() {
                     : "transparent"
                 }`}
               >
-                <ListItemText primary={route.path} />
+                <ListItemText className="break-all" primary={route.path} />
                 <ListItemIcon sx={{ minWidth: 32, color: "inherit" }}>
                   <Button2 variant="success" size="xs">
                     {route.method}
