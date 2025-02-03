@@ -144,7 +144,7 @@ async fn auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "auto_update_on_running", vec![], env)
         .await;
@@ -213,7 +213,7 @@ async fn auto_update_on_idle(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
@@ -260,7 +260,7 @@ async fn failing_auto_update_on_idle(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "failing_auto_update_on_idle", vec![], env)
         .await;
@@ -316,7 +316,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -376,7 +376,7 @@ async fn failing_auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "failing_auto_update_on_running", vec![], env)
         .await;
@@ -457,7 +457,7 @@ async fn manual_update_on_idle(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2").await;
+    let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "manual_update_on_idle", vec![], env)
         .await;
@@ -522,7 +522,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -586,7 +586,7 @@ async fn auto_update_on_running_followed_by_manual(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -678,7 +678,7 @@ async fn manual_update_on_idle_with_failing_load(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2").await;
+    let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -741,7 +741,11 @@ async fn manual_update_on_idle_using_v11(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2-11").await;
+    let component_id = executor
+        .component("update-test-v2-11")
+        .unique()
+        .store()
+        .await;
     let worker_id = executor
         .start_worker_with(
             &component_id,

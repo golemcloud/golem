@@ -92,6 +92,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 self.end_durable_function(
                     &DurableFunctionType::WriteRemoteBatched(None),
                     begin_index,
+                    false,
                 )
                 .await
                 .map_err(|err| HttpError::trap(anyhow!(err)))?;

@@ -348,14 +348,21 @@ async fn decode_param_impl(
         Type::Result(ty) => match param {
             Value::Result(result) => match result {
                 Ok(value) => {
-                    let ok_ty = ty.ok().ok_or(EncodingError::ValueMismatch {
-                        details: format!("in {context} could not get ok type"),
-                    })?;
                     let decoded_value = match value {
-                        Some(v) => Some(
-                            decode_param_impl(v, &ok_ty, resource_store, &format!("{context}.ok"))
+                        Some(v) => {
+                            let ok_ty = ty.ok().ok_or(EncodingError::ValueMismatch {
+                                details: format!("in {context} could not get ok type"),
+                            })?;
+                            Some(
+                                decode_param_impl(
+                                    v,
+                                    &ok_ty,
+                                    resource_store,
+                                    &format!("{context}.ok"),
+                                )
                                 .await?,
-                        ),
+                            )
+                        }
                         None => None,
                     };
                     match decoded_value {
@@ -367,19 +374,21 @@ async fn decode_param_impl(
                     }
                 }
                 Err(value) => {
-                    let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
-                        details: format!("in {context} could not get err type"),
-                    })?;
                     let decoded_value = match value {
-                        Some(v) => Some(
-                            decode_param_impl(
-                                v,
-                                &err_ty,
-                                resource_store,
-                                &format!("{context}.err"),
+                        Some(v) => {
+                            let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
+                                details: format!("in {context} could not get err type"),
+                            })?;
+                            Some(
+                                decode_param_impl(
+                                    v,
+                                    &err_ty,
+                                    resource_store,
+                                    &format!("{context}.err"),
+                                )
+                                .await?,
                             )
-                            .await?,
-                        ),
+                        }
                         None => None,
                     };
 

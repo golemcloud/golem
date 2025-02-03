@@ -60,7 +60,7 @@ pub async fn setup_iteration(
     // Initialize infrastructure
 
     // Upload test component
-    let component_id = deps.store_unique_component(component_name).await;
+    let component_id = deps.component(component_name).unique().store().await;
     // Create 'size' workers
     let worker_ids = generate_worker_ids(size, &component_id, worker_name_prefix);
 

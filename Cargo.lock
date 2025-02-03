@@ -4074,6 +4074,7 @@ dependencies = [
  "cli-table",
  "colored",
  "console-subscriber",
+ "futures-util",
  "golem-api-grpc",
  "golem-client",
  "golem-common",
@@ -4172,6 +4173,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-wit",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4260,7 +4262,6 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
- "cargo_metadata",
  "chrono",
  "console-subscriber",
  "dashmap",
@@ -4281,7 +4282,6 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
@@ -9557,9 +9557,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d8cb299f722f145e6379e79c8c406f923340f28b33497c3957ef9cf9fa2b225"
+checksum = "5c752de9d8ad6913f1c869438aa9a3a5ce40fa65d5c0319e77f58d3208b492dc"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9569,9 +9569,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065e701871bdcf15c796c9c12c7806b7f67b75603f54ddcf9531f927a54919bb"
+checksum = "bc0d07b4ec88b97a69cb45b6a9cfb302872f7eb1269387370ad98555454d0bbd"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9592,9 +9592,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3356b06edde5f3c37f868e1113fb86347a0f4837814fe45c98d4dc778a2f2eb2"
+checksum = "196317fa7e132bc12e40927b4e17f70e0379ed80505c753fd607b5936cc3cbeb"
 dependencies = [
  "darling",
  "proc-macro2",

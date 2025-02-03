@@ -133,7 +133,7 @@ async fn jump(
 
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -192,7 +192,7 @@ async fn explicit_oplog_commit(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let worker_id = executor
         .start_worker(&component_id, "runtime-service-explicit-oplog-commit")
@@ -223,7 +223,7 @@ async fn set_retry_policy(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "set-retry-policy-1")
         .await;
@@ -271,7 +271,7 @@ async fn atomic_region(
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -307,7 +307,7 @@ async fn idempotence_on(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -347,7 +347,7 @@ async fn idempotence_off(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -388,7 +388,7 @@ async fn persist_nothing(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -424,7 +424,7 @@ async fn golem_rust_explicit_oplog_commit(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let worker_id = executor
         .start_worker(&component_id, "golem-rust-tests-explicit-oplog-commit")
@@ -455,7 +455,7 @@ async fn golem_rust_set_retry_policy(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
     let worker_id = executor
         .start_worker(&component_id, "golem-rust-tests-set-retry-policy-1")
         .await;
@@ -503,7 +503,7 @@ async fn golem_rust_atomic_region(
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -539,7 +539,7 @@ async fn golem_rust_idempotence_on(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -584,7 +584,7 @@ async fn golem_rust_idempotence_off(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -630,7 +630,7 @@ async fn golem_rust_persist_nothing(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -679,7 +679,7 @@ async fn golem_rust_fallible_transaction(
         true,
     );
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -741,7 +741,7 @@ async fn golem_rust_infallible_transaction(
         true,
     );
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -794,7 +794,11 @@ async fn idempotency_keys_in_ephemeral_workers(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_ephemeral_component("runtime-service").await;
+    let component_id = executor
+        .component("runtime-service")
+        .ephemeral()
+        .store()
+        .await;
 
     let target_worker_id = TargetWorkerId {
         component_id,

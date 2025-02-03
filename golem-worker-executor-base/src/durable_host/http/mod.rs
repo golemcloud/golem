@@ -35,6 +35,7 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
                 ctx.end_durable_function(
                     &DurableFunctionType::WriteRemoteBatched(None),
                     *begin_index,
+                    false,
                 )
                 .await?;
                 ctx.state.open_function_table.remove(&state.root_handle);

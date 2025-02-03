@@ -37,7 +37,7 @@ async fn javascript_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-1").await;
+    let component_id = executor.component("js-1").store().await;
     let worker_id = executor.start_worker(&component_id, "js-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -106,7 +106,7 @@ async fn javascript_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-2").await;
+    let component_id = executor.component("js-2").store().await;
     let worker_id = executor.start_worker(&component_id, "js-2").await;
 
     let _ = executor
@@ -147,7 +147,7 @@ async fn csharp_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("csharp-1").await;
+    let component_id = executor.component("csharp-1").store().await;
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor

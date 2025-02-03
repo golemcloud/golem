@@ -31,7 +31,7 @@ use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentType, FilterComparator, IdempotencyKey,
+    ComponentFileSystemNodeDetails, ComponentId, FilterComparator, IdempotencyKey,
     InitialComponentFile, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
@@ -50,7 +50,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[tracing::instrument]
 #[timeout(120000)]
 async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("environment-service").await;
+    let component_id = deps.component("environment-service").store().await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "dynamic-worker-creation-1".to_string(),
@@ -117,7 +117,7 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn dynamic_worker_creation_without_name(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("environment-service").await;
+    let component_id = deps.component("environment-service").store().await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
@@ -151,7 +151,11 @@ async fn ephemeral_worker_creation_without_name(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_ephemeral_component("environment-service").await;
+    let component_id = deps
+        .component("environment-service")
+        .ephemeral()
+        .store()
+        .await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
@@ -185,7 +189,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_ephemeral_component("counters").await;
+    let component_id = deps.component("counters").ephemeral().store().await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: Some("test".to_string()),
@@ -216,7 +220,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("counters").await;
+    let component_id = deps.component("counters").unique().store().await;
     let worker_id = deps.start_worker(&component_id, "counters-1").await;
     deps.log_output(&worker_id).await;
 
@@ -335,7 +339,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("counters").await;
+    let component_id = deps.component("counters").unique().store().await;
     let worker_id = deps.start_worker(&component_id, "counters-1j").await;
     deps.log_output(&worker_id).await;
 
@@ -517,7 +521,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("counters").await;
+    let component_id = deps.component("counters").unique().store().await;
     let worker_id = deps.start_worker(&component_id, "counters-2").await;
     deps.log_output(&worker_id).await;
 
@@ -597,7 +601,7 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("counters").await;
+    let component_id = deps.component("counters").unique().store().await;
     let worker_id = deps.start_worker(&component_id, "counters-2j").await;
     deps.log_output(&worker_id).await;
 
@@ -737,7 +741,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
 #[tracing::instrument]
 #[timeout(120000)]
 async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
     let worker_id = deps.start_worker(&component_id, "shopping-cart-1").await;
 
     let _ = deps
@@ -835,8 +839,8 @@ async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let registry_component_id = deps.store_component("auction_registry_composed").await;
-    let auction_component_id = deps.store_component("auction").await;
+    let registry_component_id = deps.component("auction_registry_composed").store().await;
+    let auction_component_id = deps.component("auction").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -898,7 +902,7 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let workers_count = 150;
     let mut worker_ids = HashSet::new();
@@ -996,7 +1000,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("http-client-2").await;
+    let component_id = deps.component("http-client-2").unique().store().await;
     let host_http_port = 8585;
 
     let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -1125,7 +1129,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 #[tracing::instrument]
 #[timeout(300000)]
 async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("update-test-v1").await;
+    let component_id = deps.component("update-test-v1").unique().store().await;
     let worker_id = deps
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
@@ -1160,7 +1164,7 @@ async fn auto_update_on_idle_via_host_function(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.store_unique_component("update-test-v1").await;
+    let component_id = deps.component("update-test-v1").unique().store().await;
     let worker_id = deps
         .start_worker(&component_id, "auto_update_on_idle_via_host_function")
         .await;
@@ -1169,7 +1173,7 @@ async fn auto_update_on_idle_via_host_function(
     let target_version = deps.update_component(&component_id, "update-test-v2").await;
     info!("Updated component to version {target_version}");
 
-    let runtime_svc = deps.store_component("runtime-service").await;
+    let runtime_svc = deps.component("runtime-service").store().await;
     let runtime_svc_worker = WorkerId {
         component_id: runtime_svc,
         worker_name: "runtime-service".to_string(),
@@ -1230,7 +1234,7 @@ async fn auto_update_on_idle_via_host_function(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("runtime-service").await;
+    let component_id = deps.component("runtime-service").store().await;
 
     let worker_id = WorkerId {
         component_id,
@@ -1290,7 +1294,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("shopping-cart").await;
+    let component_id = deps.component("shopping-cart").store().await;
 
     let worker_id = WorkerId {
         component_id,
@@ -1382,7 +1386,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_unique_component("counters").await;
+    let component_id = deps.component("counters").unique().store().await;
     let worker_id = deps
         .start_worker(&component_id, "counters-recreation")
         .await;
@@ -1477,11 +1481,10 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
     ];
 
     let component_id = deps
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
 
     let worker_id = deps
@@ -1541,11 +1544,10 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     ];
 
     let component_id = deps
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
 
     let worker_id = deps
@@ -1623,11 +1625,10 @@ async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     ];
 
     let component_id = deps
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
 
     let worker_id = deps
@@ -1684,11 +1685,10 @@ async fn worker_initial_files_after_automatic_worker_update(
     ];
 
     let component_id = deps
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files1,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files1)
+        .store()
         .await;
 
     let worker_id = deps

@@ -46,7 +46,7 @@ async fn zig_example_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("zig-3").await;
+    let component_id = executor.component("zig-3").store().await;
     let worker_id = executor.start_worker(&component_id, "zig-3").await;
 
     let _ = executor
@@ -85,7 +85,7 @@ async fn tinygo_example(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("tinygo-wasi").await;
+    let component_id = executor.component("tinygo-wasi").store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -189,7 +189,7 @@ async fn tinygo_http_client(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("tinygo-wasi-http").await;
+    let component_id = executor.component("tinygo-wasi-http").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
@@ -235,7 +235,7 @@ async fn grain_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("grain-1").await;
+    let component_id = executor.component("grain-1").store().await;
     let worker_id = executor.start_worker(&component_id, "grain-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -279,7 +279,7 @@ async fn java_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("java-1").await;
+    let component_id = executor.component("java-1").store().await;
     let worker_id = executor.start_worker(&component_id, "java-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -325,7 +325,7 @@ async fn java_shopping_cart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("java-2").await;
+    let component_id = executor.component("java-2").store().await;
     let worker_id = executor.start_worker(&component_id, "java-2").await;
 
     let _ = executor
@@ -431,7 +431,7 @@ async fn c_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("c-1").await;
+    let component_id = executor.component("c-1").store().await;
     let worker_id = executor.start_worker(&component_id, "c-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -469,7 +469,7 @@ async fn c_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("c-1").await;
+    let component_id = executor.component("c-1").store().await;
     let worker_id = executor.start_worker(&component_id, "c-2").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -509,7 +509,7 @@ async fn c_example_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("large-initial-memory").await;
+    let component_id = executor.component("large-initial-memory").store().await;
     let worker_id = executor
         .start_worker(&component_id, "large-initial-memory")
         .await;
@@ -537,7 +537,7 @@ async fn c_example_4(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("large-dynamic-memory").await;
+    let component_id = executor.component("large-dynamic-memory").store().await;
     let worker_id = executor
         .start_worker(&component_id, "large-dynamic-memory")
         .await;

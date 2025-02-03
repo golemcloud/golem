@@ -19,14 +19,15 @@ use crate::components::{
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response, create_plugin_response,
-    get_component_metadata_response, get_components_response, install_plugin_response,
-    update_component_request, update_component_response, CreateComponentRequest,
-    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
-    GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
+    download_component_response, get_component_metadata_response, get_components_response,
+    install_plugin_response, update_component_request, update_component_response,
+    CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader,
+    CreatePluginRequest, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
 };
 use golem_client::api::ComponentClient as ComponentServiceHttpClient;
@@ -39,8 +40,8 @@ use golem_common::model::plugin::{
     DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile,
-    PluginInstallationId,
+    ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    InitialComponentFile, PluginInstallationId,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -82,25 +83,20 @@ pub trait ComponentService {
     async fn get_or_add_component(
         &self,
         local_path: &Path,
+        name: &str,
         component_type: ComponentType,
+        files: &[InitialComponentFile],
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        unverified: bool,
     ) -> ComponentId {
         let mut retries = 5;
         loop {
-            let mut file_name: String = local_path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            if component_type == ComponentType::Ephemeral {
-                file_name = format!("{}-ephemeral", file_name);
-            }
-
             let latest_component_id: Option<ComponentId> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
                     match client
                         .get_components(GetComponentsRequest {
                             project_id: None,
-                            component_name: Some(file_name.to_string()),
+                            component_name: Some(name.to_string()),
                         })
                         .await
                         .expect("Failed to call get-components")
@@ -136,7 +132,7 @@ pub trait ComponentService {
                     }
                 }
                 ComponentServiceClient::Http(client) => {
-                    match client.get_components(Some(&file_name)).await {
+                    match client.get_components(Some(&name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
                             result
@@ -160,35 +156,34 @@ pub trait ComponentService {
             }
 
             match self
-                .add_component_with_name(local_path, &file_name, component_type)
+                .add_component(
+                    local_path,
+                    name,
+                    component_type,
+                    files,
+                    dynamic_linking,
+                    unverified,
+                )
                 .await
             {
                 Ok(component_id) => break component_id,
                 Err(AddComponentError::AlreadyExists) => {
                     if retries > 0 {
-                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
+                        info!("Component with name {name} got created in parallel, retrying get_or_add_component");
                         retries -= 1;
                         sleep(Duration::from_secs(1)).await;
                         continue;
                     } else {
-                        panic!("Component with name {file_name} already exists in golem-component-service");
+                        panic!(
+                            "Component with name {name} already exists in golem-component-service"
+                        );
                     }
                 }
                 Err(AddComponentError::Other(message)) => {
-                    panic!("Failed to add component with name {file_name}: {message}");
+                    panic!("Failed to add component with name {name}: {message}");
                 }
             }
         }
-    }
-
-    // Forward to get_or_add_component. This method is only used in tests for adding a 'broken' component using the
-    // filesystem component service, which will skip verification here.
-    async fn get_or_add_component_unverified(
-        &self,
-        local_path: &Path,
-        component_type: ComponentType,
-    ) -> ComponentId {
-        self.get_or_add_component(local_path, component_type).await
     }
 
     async fn add_component_with_id(
@@ -205,30 +200,11 @@ pub trait ComponentService {
     async fn add_component(
         &self,
         local_path: &Path,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        let file_name = local_path.file_name().unwrap().to_string_lossy();
-        self.add_component_with_name(local_path, &file_name, component_type)
-            .await
-    }
-
-    async fn add_component_with_name(
-        &self,
-        local_path: &Path,
-        name: &str,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        self.add_component_with_files(local_path, name, component_type, &[], &HashMap::new())
-            .await
-    }
-
-    async fn add_component_with_files(
-        &self,
-        local_path: &Path,
         name: &str,
         component_type: ComponentType,
         files: &[InitialComponentFile],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        _unverified: bool,
     ) -> Result<ComponentId, AddComponentError> {
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
@@ -636,6 +612,48 @@ pub trait ComponentService {
                     )),
                 }
             }
+        }
+    }
+
+    async fn get_component_size(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> crate::Result<Option<u64>> {
+        match self.component_client() {
+            ComponentServiceClient::Grpc(mut client) => {
+                let response = client
+                    .download_component(
+                        golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
+                            component_id: Some(component_id.clone().into()),
+                            version: Some(component_version),
+                        },
+                    )
+                    .await?
+                    .into_inner();
+
+                let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
+                let bytes = chunks
+                    .into_iter()
+                    .map(|chunk| match chunk.result {
+                        None => Err(anyhow!("Empty response")),
+                        Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
+                        Some(download_component_response::Result::Error(error)) => {
+                            Err(anyhow!("Failed to download component: {error:?}"))
+                        }
+                    })
+                    .collect::<crate::Result<Vec<Vec<u8>>>>()?;
+
+                let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
+                Ok(Some(bytes.len() as u64))
+            }
+            ComponentServiceClient::Http(client) => match client
+                .download_component(&component_id.0, Some(component_version))
+                .await
+            {
+                Ok(bytes) => Ok(Some(bytes.len() as u64)),
+                Err(error) => Err(anyhow!("{error:?}")),
+            },
         }
     }
 

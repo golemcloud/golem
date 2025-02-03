@@ -34,7 +34,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("blob-store-service").await;
+    let component_id = executor.component("blob-store-service").store().await;
     let worker_name = "blob-store-service-1";
     let worker_id = executor.start_worker(&component_id, worker_name).await;
 
@@ -71,7 +71,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("blob-store-service").await;
+    let component_id = executor.component("blob-store-service").store().await;
     let worker_name = "blob-store-service-1";
     let worker_id = executor.start_worker(&component_id, worker_name).await;
 

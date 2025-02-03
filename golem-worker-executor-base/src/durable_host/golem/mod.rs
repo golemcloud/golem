@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         function_name: String,
     ) -> Result<golem::rpc::types::Uri, anyhow::Error> {
         self.observe_function_call("golem::api", "get_self_uri");
-        let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_urn(
+        let uri = golem_wasm_rpc::golem::rpc0_1_1::types::Uri::golem_urn(
             &self.owned_worker_id.worker_id,
             Some(&function_name),
         );

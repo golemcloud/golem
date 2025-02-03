@@ -62,7 +62,7 @@ async fn interruption(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("interruption").await;
+    let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
 
     let executor_clone = executor.clone();
@@ -96,7 +96,7 @@ async fn simulated_crash(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("interruption").await;
+    let component_id = executor.component("interruption").store().await;
     let worker_id = executor
         .start_worker(&component_id, "simulated-crash-1")
         .await;
@@ -142,7 +142,7 @@ async fn shopping_cart_example(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
         .start_worker(&component_id, "shopping-cart-1")
         .await;
@@ -253,7 +253,7 @@ async fn dynamic_worker_creation(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("environment-service").await;
+    let component_id = executor.component("environment-service").store().await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "dynamic-worker-creation-1".to_string(),
@@ -327,7 +327,7 @@ async fn dynamic_worker_creation_without_name(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("environment-service").await;
+    let component_id = executor.component("environment-service").store().await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
@@ -366,7 +366,9 @@ async fn ephemeral_worker_creation_without_name(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_ephemeral_component("environment-service")
+        .component("environment-service")
+        .ephemeral()
+        .store()
         .await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
@@ -405,7 +407,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_ephemeral_component("counters").await;
+    let component_id = executor.component("counters").ephemeral().store().await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: Some("test".to_string()),
@@ -444,7 +446,7 @@ async fn promise(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("promise").await;
+    let component_id = executor.component("promise").store().await;
     let worker_id = executor.start_worker(&component_id, "promise-1").await;
 
     let executor_clone = executor.clone();
@@ -500,7 +502,7 @@ async fn get_self_uri(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "runtime-service-1")
         .await;
@@ -533,7 +535,7 @@ async fn get_workers_from_worker(
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let worker_id1 = executor
         .start_worker(&component_id, "runtime-service-1")
@@ -636,7 +638,7 @@ async fn get_metadata_from_worker(
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let worker_id1 = executor
         .start_worker(&component_id, "runtime-service-1")
@@ -744,7 +746,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
         .start_worker(&component_id, "shopping-cart-2")
         .await;
@@ -809,7 +811,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
         .start_worker(&component_id, "shopping-cart-4")
         .await;
@@ -878,7 +880,7 @@ async fn optional_parameters(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "optional-service-1")
         .await;
@@ -950,7 +952,7 @@ async fn flags_parameters(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("flags-service").await;
+    let component_id = executor.component("flags-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "flags-service-1")
         .await;
@@ -1012,7 +1014,7 @@ async fn variants_with_no_payloads(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("variant-service").await;
+    let component_id = executor.component("variant-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "variant-service-1")
         .await;
@@ -1036,7 +1038,7 @@ async fn delete_worker(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "delete-worker-1")
         .await;
@@ -1101,7 +1103,7 @@ async fn get_workers(
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
 
     let workers_count = 10;
     let mut worker_ids = vec![];
@@ -1221,7 +1223,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "fewer-than-expected-parameters-1")
         .await;
@@ -1242,7 +1244,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "more-than-expected-parameters-1")
         .await;
@@ -1272,9 +1274,14 @@ async fn get_worker_metadata(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clock-service").await;
-    let component_path = executor.component_directory().join("clock-service.wasm");
-    let expected_component_size = tokio::fs::metadata(&component_path).await.unwrap().len();
+    let component_id = executor.component("clock-service").store().await;
+
+    let expected_component_size = deps
+        .component_service
+        .get_component_size(&component_id, 0)
+        .await
+        .unwrap()
+        .unwrap();
 
     let worker_id = executor
         .start_worker(&component_id, "get-worker-metadata-1")
@@ -1335,7 +1342,7 @@ async fn create_invoke_delete_create_invoke(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
         .start_worker(&component_id, "create-invoke-delete-create-invoke-1")
         .await;
@@ -1389,7 +1396,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -1471,7 +1478,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("shopping-cart").await;
+    let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -1540,7 +1547,11 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
 
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component_unverified("old-component").await;
+    let component_id = executor
+        .component("old-component")
+        .unverified()
+        .store()
+        .await;
     let result = executor
         .try_start_worker(&component_id, "old-component-1")
         .await;
@@ -1565,7 +1576,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed but wasmtime does not support it
     let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.store_component("write-stdout").await;
+    let component_id = executor.component("write-stdout").store().await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
@@ -1604,7 +1615,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.store_component("write-stdout").await;
+    let component_id = executor.component("write-stdout").store().await;
 
     let worker_id = executor
         .try_start_worker(&component_id, "bad-wasm-2")
@@ -1686,9 +1697,10 @@ async fn long_running_poll_loop_works_as_expected(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
         .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
@@ -1754,7 +1766,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
@@ -1881,7 +1893,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
@@ -1962,7 +1974,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -2033,7 +2045,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -2135,7 +2147,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -2180,7 +2192,7 @@ async fn shopping_cart_resource_example(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart-resource").await;
+    let component_id = executor.component("shopping-cart-resource").store().await;
     let worker_id = executor
         .start_worker(&component_id, "shopping-cart-resource-1")
         .await;
@@ -2328,7 +2340,7 @@ async fn counter_resource_test_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("counters").await;
+    let component_id = executor.component("counters").store().await;
     let worker_id = executor.start_worker(&component_id, "counters-1").await;
     executor.log_output(&worker_id).await;
 
@@ -2454,7 +2466,7 @@ async fn counter_resource_test_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("counters").await;
+    let component_id = executor.component("counters").store().await;
     let worker_id = executor.start_worker(&component_id, "counters-2").await;
     executor.log_output(&worker_id).await;
 
@@ -2606,7 +2618,7 @@ async fn reconstruct_interrupted_state(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("interruption").await;
+    let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
 
     let executor_clone = executor.clone();
@@ -2683,7 +2695,7 @@ async fn invocation_queue_is_persistent(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -2767,7 +2779,7 @@ async fn invoke_with_non_existing_function(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("option-service").await;
+    let component_id = executor.component("option-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "invoke_with_non_existing_function")
         .await;
@@ -2804,7 +2816,7 @@ async fn stderr_returned_for_failed_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("failing-component").await;
+    let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
         .start_worker(&component_id, "failing-worker-1")
         .await;

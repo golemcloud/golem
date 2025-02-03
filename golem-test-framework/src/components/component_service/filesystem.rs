@@ -147,29 +147,43 @@ impl ComponentService for FileSystemComponentService {
     async fn get_or_add_component(
         &self,
         local_path: &Path,
+        name: &str,
         component_type: ComponentType,
+        files: &[InitialComponentFile],
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        unverified: bool,
     ) -> ComponentId {
-        self.add_component(local_path, component_type)
-            .await
-            .expect("Failed to add component")
+        self.add_component(
+            local_path,
+            name,
+            component_type,
+            files,
+            dynamic_linking,
+            unverified,
+        )
+        .await
+        .expect("Failed to add component")
     }
 
-    async fn get_or_add_component_unverified(
+    async fn add_component(
         &self,
         local_path: &Path,
+        _name: &str,
         component_type: ComponentType,
-    ) -> ComponentId {
+        files: &[InitialComponentFile],
+        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        unverified: bool,
+    ) -> Result<ComponentId, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
             &ComponentId(Uuid::new_v4()),
             0,
             component_type,
-            &[],
-            true,
-            &HashMap::new(),
+            files,
+            unverified,
+            dynamic_linking,
         )
         .await
-        .expect("Failed to add component")
     }
 
     async fn add_component_with_id(
@@ -189,61 +203,6 @@ impl ComponentService for FileSystemComponentService {
         )
         .await?;
         Ok(())
-    }
-
-    async fn add_component(
-        &self,
-        local_path: &Path,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        self.write_component_to_filesystem(
-            local_path,
-            &ComponentId(Uuid::new_v4()),
-            0,
-            component_type,
-            &[],
-            false,
-            &HashMap::new(),
-        )
-        .await
-    }
-
-    async fn add_component_with_name(
-        &self,
-        local_path: &Path,
-        _name: &str,
-        component_type: ComponentType,
-    ) -> Result<ComponentId, AddComponentError> {
-        self.write_component_to_filesystem(
-            local_path,
-            &ComponentId(Uuid::new_v4()),
-            0,
-            component_type,
-            &[],
-            false,
-            &HashMap::new(),
-        )
-        .await
-    }
-
-    async fn add_component_with_files(
-        &self,
-        local_path: &Path,
-        _name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
-    ) -> Result<ComponentId, AddComponentError> {
-        self.write_component_to_filesystem(
-            local_path,
-            &ComponentId(Uuid::new_v4()),
-            0,
-            component_type,
-            files,
-            false,
-            dynamic_linking,
-        )
-        .await
     }
 
     async fn update_component(
@@ -303,6 +262,17 @@ impl ComponentService for FileSystemComponentService {
             .collect::<Vec<u64>>();
         versions.sort();
         *versions.last().unwrap_or(&0)
+    }
+
+    async fn get_component_size(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> crate::Result<Option<u64>> {
+        let target_dir = &self.root;
+        let path = target_dir.join(format!("{component_id}-{component_version}.wasm"));
+        let metadata = tokio::fs::metadata(&path).await?;
+        Ok(Some(metadata.len()))
     }
 
     fn private_host(&self) -> String {

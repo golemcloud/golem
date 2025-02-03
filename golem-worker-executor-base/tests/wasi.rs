@@ -31,8 +31,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
-    WorkerStatus,
+    ComponentFileSystemNodeDetails, IdempotencyKey, InitialComponentFile, WorkerStatus,
 };
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
@@ -59,7 +58,7 @@ async fn write_stdout(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("write-stdout").await;
+    let component_id = executor.component("write-stdout").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -91,7 +90,7 @@ async fn write_stderr(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("write-stderr").await;
+    let component_id = executor.component("write-stderr").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -123,7 +122,7 @@ async fn read_stdin(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("read-stdin").await;
+    let component_id = executor.component("read-stdin").store().await;
     let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
@@ -143,7 +142,7 @@ async fn clocks(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clocks").await;
+    let component_id = executor.component("clocks").store().await;
     let worker_id = executor.start_worker(&component_id, "clocks-1").await;
 
     let result = executor
@@ -193,7 +192,7 @@ async fn file_write_read_delete(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-write-read-delete").await;
+    let component_id = executor.component("file-write-read-delete").store().await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -258,11 +257,10 @@ async fn initial_file_read_write(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -335,11 +333,10 @@ async fn initial_file_listing_through_api(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -430,11 +427,10 @@ async fn initial_file_reading_through_api(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -470,7 +466,7 @@ async fn directories(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("directories").await;
+    let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
@@ -528,7 +524,7 @@ async fn directories_replay(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("directories").await;
+    let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
@@ -595,7 +591,7 @@ async fn file_write_read(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-1").await;
 
     let _ = executor
@@ -661,7 +657,7 @@ async fn http_client(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client").await;
+    let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -729,7 +725,7 @@ async fn http_client_using_reqwest(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -764,7 +760,7 @@ async fn environment_service(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("environment-service").await;
+    let component_id = executor.component("environment-service").store().await;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
@@ -850,7 +846,7 @@ async fn http_client_response_persisted_between_invocations(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client").await;
+    let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -928,7 +924,7 @@ async fn http_client_interrupting_response_stream(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -987,7 +983,7 @@ async fn sleep(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clock-service").await;
+    let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "clock-service-1")
         .await;
@@ -1028,7 +1024,7 @@ async fn resuming_sleep(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clock-service").await;
+    let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "clock-service-2")
         .await;
@@ -1082,7 +1078,7 @@ async fn failing_worker(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("failing-component").await;
+    let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
         .start_worker(&component_id, "failing-worker-1")
         .await;
@@ -1129,7 +1125,7 @@ async fn file_service_write_direct(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-2").await;
 
     let _ = executor
@@ -1174,7 +1170,7 @@ async fn filesystem_write_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1222,7 +1218,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-4").await;
 
     let _ = executor
@@ -1267,7 +1263,7 @@ async fn file_hard_link(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-5").await;
 
     let _ = executor
@@ -1321,7 +1317,7 @@ async fn filesystem_link_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-6").await;
 
     let _ = executor
@@ -1414,7 +1410,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-7").await;
 
     let _ = executor
@@ -1475,7 +1471,7 @@ async fn filesystem_symlink_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-8").await;
 
     let _ = executor
@@ -1569,7 +1565,7 @@ async fn filesystem_rename_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-9").await;
 
     let _ = executor
@@ -1679,7 +1675,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "file-service-10")
         .await;
@@ -1745,7 +1741,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1793,7 +1789,7 @@ async fn filesystem_metadata_hash(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1841,7 +1837,7 @@ async fn ip_address_resolve(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("networking").await;
+    let component_id = executor.component("networking").store().await;
     let worker_id = executor
         .start_worker(&component_id, "ip-address-resolve-1")
         .await;
@@ -1878,7 +1874,8 @@ async fn wasi_incoming_request_handler(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler")
+        .component("wasi-http-incoming-request-handler")
+        .store()
         .await;
     let worker_id = executor
         .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
@@ -1935,7 +1932,8 @@ async fn wasi_incoming_request_handler_echo(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-echo")
+        .component("wasi-http-incoming-request-handler-echo")
+        .store()
         .await;
 
     let worker_id = executor
@@ -2077,7 +2075,8 @@ async fn wasi_incoming_request_handler_state(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-state")
+        .component("wasi-http-incoming-request-handler-state")
+        .store()
         .await;
 
     let worker_id = executor

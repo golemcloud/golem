@@ -88,11 +88,15 @@ impl Benchmark for Rpc {
     ) -> Self::IterationContext {
         let child_component_id = benchmark_context
             .deps
-            .store_unique_component("child_component")
+            .component("child_component")
+            .unique()
+            .store()
             .await;
         let component_id = benchmark_context
             .deps
-            .store_unique_component("parent_component_composed")
+            .component("parent_component_composed")
+            .unique()
+            .store()
             .await;
 
         let mut worker_ids = Vec::new();
