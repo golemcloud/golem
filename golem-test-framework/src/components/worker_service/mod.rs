@@ -137,7 +137,6 @@ pub trait WorkerService {
                             .unwrap()
                             .value
                             .unwrap()
-                            .clone()
                             .into(),
                         &request.worker_id.unwrap().name,
                     )
@@ -1010,7 +1009,7 @@ fn invoke_parameters_to_grpc(parameters: Option<Vec<ValueAndType>>) -> Option<In
     parameters.map(|parameters| InvokeParameters {
         params: parameters
             .into_iter()
-            .map(|param| Value::try_from(param).unwrap().into())
+            .map(|param| param.value.into())
             .collect(),
     })
 }

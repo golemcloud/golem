@@ -36,7 +36,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::ValueAndType;
 use std::sync::Arc;
 use tonic::Streaming;
 
@@ -287,7 +287,7 @@ impl WorkerService for ForwardingWorkerService {
                         .map(|invoke_parameters| {
                             invoke_parameters
                                 .into_iter()
-                                .map(|param| Value::try_from(param).unwrap().into())
+                                .map(|param| param.value.into())
                                 .collect()
                         })
                         .unwrap_or_default(),
@@ -357,12 +357,7 @@ impl WorkerService for ForwardingWorkerService {
                     name: function.clone(),
                     input: invoke_parameters
                         .clone()
-                        .map(|params| {
-                            params
-                                .into_iter()
-                                .map(|param| Value::try_from(param).unwrap().into())
-                                .collect()
-                        })
+                        .map(|params| params.into_iter().map(|param| param.value.into()).collect())
                         .unwrap_or_default(),
                     account_id: Some(
                         AccountId {

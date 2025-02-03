@@ -475,11 +475,7 @@ async fn c_example_2(
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "print",
-            vec!["Hello C!".into_value_and_type()],
-        )
+        .invoke_and_await(&worker_id, "print", vec!["Hello C!".into_value_and_type()])
         .await
         .unwrap();
 
