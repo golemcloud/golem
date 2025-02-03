@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use std::fmt::Display;
@@ -115,7 +114,7 @@ pub enum DbValue {
     BigintUnsigned(u64),
     Float(f32),
     Double(f64),
-    Decimal(#[bincode(with_serde)] BigDecimal), // FIXME not working properly with bincode
+    Decimal(String),
     Date(#[bincode(with_serde)] chrono::NaiveDate),
     Datetime(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
     Timestamp(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
@@ -136,7 +135,7 @@ pub enum DbValue {
     Enumeration(String),
     Set(String),
     Bit(#[bincode(with_serde)] BitVec),
-    Json(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
+    Json(String),
     Null,
 }
 

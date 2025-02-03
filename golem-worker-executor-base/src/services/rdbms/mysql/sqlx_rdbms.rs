@@ -24,6 +24,7 @@ use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
@@ -137,7 +138,10 @@ fn bind_value(
         DbValue::MediumintUnsigned(v) => Ok(query.bind(v)),
         DbValue::IntUnsigned(v) => Ok(query.bind(v)),
         DbValue::BigintUnsigned(v) => Ok(query.bind(v)),
-        DbValue::Decimal(v) => Ok(query.bind(v)),
+        DbValue::Decimal(v) => {
+            let v = bigdecimal::BigDecimal::from_str(&v).map_err(|e| e.to_string())?;
+            Ok(query.bind(v))
+        }
         DbValue::Float(v) => Ok(query.bind(v)),
         DbValue::Double(v) => Ok(query.bind(v)),
         DbValue::Boolean(v) => Ok(query.bind(v)),
@@ -153,7 +157,10 @@ fn bind_value(
         DbValue::Longblob(v) => Ok(query.bind(v)),
         DbValue::Binary(v) => Ok(query.bind(v)),
         DbValue::Varbinary(v) => Ok(query.bind(v)),
-        DbValue::Json(v) => Ok(query.bind(v)),
+        DbValue::Json(v) => {
+            let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+            Ok(query.bind(v))
+        }
         DbValue::Timestamp(v) => Ok(query.bind(v)),
         DbValue::Datetime(v) => Ok(query.bind(v)),
         DbValue::Time(v) => Ok(query.bind(v)),
@@ -240,7 +247,8 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
         }
         DbColumnType::Decimal => {
             let v: Option<BigDecimal> = row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Decimal).unwrap_or(DbValue::Null)
+            v.map(|v| DbValue::Decimal(v.to_string()))
+                .unwrap_or(DbValue::Null)
         }
         DbColumnType::Text => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
@@ -268,7 +276,8 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
         }
         DbColumnType::Json => {
             let v: Option<serde_json::Value> = row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Json).unwrap_or(DbValue::Null)
+            v.map(|v| DbValue::Json(v.to_string()))
+                .unwrap_or(DbValue::Null)
         }
         DbColumnType::Enumeration => {
             let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;

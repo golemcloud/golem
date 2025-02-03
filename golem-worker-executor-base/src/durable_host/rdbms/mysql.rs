@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use bit_vec::BitVec;
 use golem_common::model::oplog::DurableFunctionType;
 use std::ops::Deref;
-use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
@@ -544,10 +543,7 @@ impl TryFrom<DbValue> for mysql_types::DbValue {
             DbValue::MediumintUnsigned(v) => Ok(Self::MediumintUnsigned(v)),
             DbValue::IntUnsigned(v) => Ok(Self::IntUnsigned(v)),
             DbValue::BigintUnsigned(v) => Ok(Self::BigintUnsigned(v)),
-            DbValue::Decimal(s) => {
-                let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
-                Ok(Self::Decimal(v))
-            }
+            DbValue::Decimal(v) => Ok(Self::Decimal(v)),
             DbValue::Float(v) => Ok(Self::Float(v)),
             DbValue::Double(v) => Ok(Self::Double(v)),
             DbValue::Text(v) => Ok(Self::Text(v)),
@@ -562,10 +558,7 @@ impl TryFrom<DbValue> for mysql_types::DbValue {
             DbValue::Tinytext(v) => Ok(Self::Tinytext(v)),
             DbValue::Mediumtext(v) => Ok(Self::Mediumtext(v)),
             DbValue::Longtext(v) => Ok(Self::Longtext(v)),
-            DbValue::Json(v) => {
-                let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-                Ok(Self::Json(v))
-            }
+            DbValue::Json(v) => Ok(Self::Json(v)),
             DbValue::Timestamp(v) => {
                 let value = v.try_into()?;
                 Ok(Self::Timestamp(value))
@@ -776,10 +769,10 @@ pub mod tests {
     use uuid::Uuid;
 
     fn check_db_value(value: mysql_types::DbValue) {
-        // FIXME bin serde test - Failed to deserialize value: Serde(AnyNotSupported) for Json and Bigdecimal
-        // let bin_value = serialize(&value).unwrap().to_vec();
-        // let value2: Option<mysql_types::DbValue> = try_deserialize(bin_value.as_slice()).unwrap();
-        // check!(value2.unwrap() == value);
+        let bin_value = serialize(&value).unwrap().to_vec();
+        let value2: Option<mysql_types::DbValue> =
+            try_deserialize(bin_value.as_slice()).ok().flatten();
+        check!(value2.unwrap() == value);
 
         let wit: DbValue = value.clone().into();
         let value2: mysql_types::DbValue = wit.try_into().unwrap();
@@ -796,7 +789,7 @@ pub mod tests {
             mysql_types::DbValue::Bigint(5),
             mysql_types::DbValue::Float(6.0),
             mysql_types::DbValue::Double(7.0),
-            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
+            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap().to_string()),
             mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
             mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
                 chrono::NaiveDateTime::new(
@@ -826,11 +819,14 @@ pub mod tests {
             mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
             mysql_types::DbValue::Enumeration("value2".to_string()),
             mysql_types::DbValue::Set("value1,value2".to_string()),
-            mysql_types::DbValue::Json(json!(
-                   {
-                      "id": 100
-                   }
-            )),
+            mysql_types::DbValue::Json(
+                json!(
+                       {
+                          "id": 100
+                       }
+                )
+                .to_string(),
+            ),
             mysql_types::DbValue::Bit(BitVec::from_iter([true, false, false])),
             mysql_types::DbValue::TinyintUnsigned(10),
             mysql_types::DbValue::SmallintUnsigned(20),

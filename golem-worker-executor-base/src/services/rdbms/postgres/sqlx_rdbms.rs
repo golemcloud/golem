@@ -34,6 +34,7 @@ use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
 use std::collections::Bound;
 use std::fmt::Display;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use try_match::try_match;
 use uuid::Uuid;
@@ -197,7 +198,11 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             try_match!(v, DbValue::Float8(r)).ok()
         }),
         DbColumnType::Numeric => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Numeric(r)).ok()
+            if let DbValue::Numeric(v) = v {
+                BigDecimal::from_str(&v).map_err(|e| e.to_string()).ok()
+            } else {
+                None
+            }
         }),
         DbColumnType::Text => setter.try_set_db_value(value, value_category, |v| {
             try_match!(v, DbValue::Text(r)).ok()
@@ -215,10 +220,22 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             try_match!(v, DbValue::Uuid(r)).ok()
         }),
         DbColumnType::Json => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Json(r)).ok()
+            if let DbValue::Json(v) = v {
+                let v: Result<serde_json::Value, String> =
+                    serde_json::from_str(&v).map_err(|e| e.to_string());
+                v.ok()
+            } else {
+                None
+            }
         }),
         DbColumnType::Jsonb => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Jsonb(r)).ok()
+            if let DbValue::Jsonb(v) = v {
+                let v: Result<serde_json::Value, String> =
+                    serde_json::from_str(&v).map_err(|e| e.to_string());
+                v.ok()
+            } else {
+                None
+            }
         }),
         DbColumnType::Jsonpath => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Jsonpath(v) = v {
@@ -291,7 +308,9 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
         }),
         DbColumnType::Numrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Numrange(v) = v {
-                Some(PgRange::from(v))
+                v.try_map(|v| BigDecimal::from_str(&v).map_err(|e| e.to_string()))
+                    .ok()
+                    .map(PgRange::from)
             } else {
                 None
             }
@@ -481,9 +500,8 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Int8 => getter.try_get_db_value::<i64>(value_category, DbValue::Int8)?,
         DbColumnType::Float4 => getter.try_get_db_value::<f32>(value_category, DbValue::Float4)?,
         DbColumnType::Float8 => getter.try_get_db_value::<f64>(value_category, DbValue::Float8)?,
-        DbColumnType::Numeric => {
-            getter.try_get_db_value::<BigDecimal>(value_category, DbValue::Numeric)?
-        }
+        DbColumnType::Numeric => getter
+            .try_get_db_value::<BigDecimal>(value_category, |v| DbValue::Numeric(v.to_string()))?,
         DbColumnType::Uuid => getter.try_get_db_value::<Uuid>(value_category, DbValue::Uuid)?,
         DbColumnType::Text => getter.try_get_db_value::<String>(value_category, DbValue::Text)?,
         DbColumnType::Varchar => {
@@ -492,12 +510,14 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Bpchar => {
             getter.try_get_db_value::<String>(value_category, DbValue::Bpchar)?
         }
-        DbColumnType::Json => {
-            getter.try_get_db_value::<serde_json::Value>(value_category, DbValue::Json)?
-        }
-        DbColumnType::Jsonb => {
-            getter.try_get_db_value::<serde_json::Value>(value_category, DbValue::Jsonb)?
-        }
+        DbColumnType::Json => getter
+            .try_get_db_value::<serde_json::Value>(value_category, |v| {
+                DbValue::Json(v.to_string())
+            })?,
+        DbColumnType::Jsonb => getter
+            .try_get_db_value::<serde_json::Value>(value_category, |v| {
+                DbValue::Jsonb(v.to_string())
+            })?,
         DbColumnType::Jsonpath => {
             getter.try_get_db_value::<PgJsonPath>(value_category, |v| DbValue::Jsonpath(v.0))?
         }
@@ -544,10 +564,12 @@ fn get_db_value_helper<G: PgValueGetter>(
             .try_get_db_value::<PgRange<chrono::NaiveDateTime>>(value_category, |v| {
                 DbValue::Tsrange(v.into())
             })?,
-        DbColumnType::Numrange => getter
-            .try_get_db_value::<PgRange<BigDecimal>>(value_category, |v| {
-                DbValue::Numrange(v.into())
-            })?,
+        DbColumnType::Numrange => {
+            getter.try_get_db_value::<PgRange<BigDecimal>>(value_category, |v| {
+                let v: ValuesRange<BigDecimal> = v.into();
+                DbValue::Numrange(v.map(|v| v.to_string()))
+            })?
+        }
         DbColumnType::Int4range => getter
             .try_get_db_value::<PgRange<i32>>(value_category, |v| DbValue::Int4range(v.into()))?,
         DbColumnType::Int8range => getter

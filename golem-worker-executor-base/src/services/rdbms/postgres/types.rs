@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use itertools::Itertools;
@@ -161,6 +160,32 @@ impl<T> ValuesRange<T> {
             Bound::Excluded(v) => Some(v),
             Bound::Unbounded => None,
         }
+    }
+
+    pub fn map<U>(self, f: impl Fn(T) -> U + Clone) -> ValuesRange<U> {
+        let start: Bound<U> = self.start.map(f.clone());
+        let end: Bound<U> = self.end.map(f.clone());
+        ValuesRange::new(start, end)
+    }
+
+    pub fn try_map<U>(
+        self,
+        f: impl Fn(T) -> Result<U, String> + Clone,
+    ) -> Result<ValuesRange<U>, String> {
+        fn to_bound<T, U>(
+            v: Bound<T>,
+            f: impl Fn(T) -> Result<U, String>,
+        ) -> Result<Bound<U>, String> {
+            match v {
+                Bound::Included(v) => Ok(Bound::Included(f(v)?)),
+                Bound::Excluded(v) => Ok(Bound::Excluded(f(v)?)),
+                Bound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        let start: Bound<U> = to_bound(self.start, f.clone())?;
+        let end: Bound<U> = to_bound(self.end, f.clone())?;
+
+        Ok(ValuesRange::new(start, end))
     }
 }
 
@@ -453,7 +478,7 @@ pub enum DbValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
-    Numeric(#[bincode(with_serde)] BigDecimal), // FIXME not working properly with bincode
+    Numeric(String),
     Boolean(bool),
     Timestamp(#[bincode(with_serde)] chrono::NaiveDateTime),
     Timestamptz(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
@@ -465,8 +490,8 @@ pub enum DbValue {
     Varchar(String),
     Bpchar(String),
     Bytea(Vec<u8>),
-    Json(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
-    Jsonb(#[bincode(with_serde)] serde_json::Value), // FIXME not working properly with bincode
+    Json(String),
+    Jsonb(String),
     Jsonpath(String),
     Xml(String),
     Uuid(#[bincode(with_serde)] Uuid),
@@ -477,7 +502,7 @@ pub enum DbValue {
     Varbit(#[bincode(with_serde)] BitVec),
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
-    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>), // FIXME not working properly with bincode
+    Numrange(ValuesRange<String>),
     Tsrange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDateTime>),
     Tstzrange(#[bincode(with_serde)] ValuesRange<chrono::DateTime<chrono::Utc>>),
     Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),
