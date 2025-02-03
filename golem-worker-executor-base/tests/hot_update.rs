@@ -21,7 +21,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
@@ -164,7 +164,7 @@ async fn auto_update_on_running(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(50)],
+                vec![50u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -272,7 +272,11 @@ async fn failing_auto_update_on_idle(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -397,7 +401,7 @@ async fn failing_auto_update_on_running(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(20)],
+                vec![20u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -465,7 +469,11 @@ async fn manual_update_on_idle(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -531,7 +539,11 @@ async fn manual_update_on_idle_without_save_snapshot(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -605,7 +617,7 @@ async fn auto_update_on_running_followed_by_manual(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(20)],
+                vec![20u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -683,7 +695,11 @@ async fn manual_update_on_idle_with_failing_load(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -742,7 +758,11 @@ async fn manual_update_on_idle_using_v11(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 

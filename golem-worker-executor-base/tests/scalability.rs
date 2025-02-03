@@ -21,7 +21,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::future::Future;
 use std::time::Duration;
 use tokio::spawn;
@@ -151,7 +151,11 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
         executor_clone
-            .invoke_and_await(&warmup_worker, "sleep-for", vec![Value::F64(15.0)])
+            .invoke_and_await(
+                &warmup_worker,
+                "sleep-for",
+                vec![15.0f64.into_value_and_type()],
+            )
             .await
             .unwrap()
     })
@@ -175,7 +179,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                     .await;
                 timed(async move {
                     executor_clone
-                        .invoke_and_await(&worker, "sleep-for", vec![Value::F64(15.0)])
+                        .invoke_and_await(&worker, "sleep-for", vec![15.0f64.into_value_and_type()])
                         .await
                         .unwrap()
                 })

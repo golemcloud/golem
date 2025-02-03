@@ -34,10 +34,11 @@ use golem_common::model::{
     ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
     WorkerStatus,
 };
+use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
@@ -602,8 +603,8 @@ async fn file_write_read(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -616,7 +617,7 @@ async fn file_write_read(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -992,7 +993,11 @@ async fn sleep(
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![10u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -1001,7 +1006,11 @@ async fn sleep(
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -1031,7 +1040,7 @@ async fn resuming_sleep(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:it/api.{sleep}",
-                vec![Value::U64(10)],
+                vec![10u64.into_value_and_type()],
             )
             .await
             .unwrap();
@@ -1050,7 +1059,11 @@ async fn resuming_sleep(
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![10u64.into_value_and_type()],
+        )
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -1075,14 +1088,18 @@ async fn failing_worker(
         .await;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{add}", vec![Value::U64(5)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![5u64.into_value_and_type()],
+        )
         .await;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:component/api.{add}",
-            vec![Value::U64(50)],
+            vec![50u64.into_value_and_type()],
         )
         .await;
 
@@ -1120,8 +1137,8 @@ async fn file_service_write_direct(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1134,7 +1151,7 @@ async fn file_service_write_direct(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1165,8 +1182,8 @@ async fn filesystem_write_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1175,7 +1192,7 @@ async fn filesystem_write_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1187,7 +1204,7 @@ async fn filesystem_write_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1212,7 +1229,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1220,7 +1237,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/".to_string())],
+            vec!["/".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1232,7 +1249,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/".to_string())],
+            vec!["/".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1258,8 +1275,8 @@ async fn file_hard_link(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1270,8 +1287,8 @@ async fn file_hard_link(
             &worker_id,
             "golem:it/api.{create-link}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("/link.txt".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1281,7 +1298,7 @@ async fn file_hard_link(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/link.txt".to_string())],
+            vec!["/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1311,7 +1328,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1319,7 +1336,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1328,8 +1345,8 @@ async fn filesystem_link_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1339,8 +1356,8 @@ async fn filesystem_link_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{create-link}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1350,7 +1367,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1358,7 +1375,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1370,7 +1387,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1378,7 +1395,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1404,7 +1421,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1412,7 +1429,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test/a".to_string())],
+            vec!["/test/a".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1420,7 +1437,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-directory}",
-            vec![Value::String("/test/a".to_string())],
+            vec!["/test/a".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1428,7 +1445,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1440,7 +1457,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1465,7 +1482,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1473,7 +1490,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1482,8 +1499,8 @@ async fn filesystem_symlink_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1493,8 +1510,8 @@ async fn filesystem_symlink_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{create-sym-link}",
             vec![
-                Value::String("../test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "../test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1504,7 +1521,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1512,7 +1529,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1525,7 +1542,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1533,7 +1550,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1559,7 +1576,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1567,7 +1584,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1576,8 +1593,8 @@ async fn filesystem_rename_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1587,8 +1604,8 @@ async fn filesystem_rename_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{rename-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1598,7 +1615,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1606,7 +1623,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1614,7 +1631,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1626,7 +1643,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1634,7 +1651,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1642,7 +1659,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1671,7 +1688,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1680,8 +1697,8 @@ async fn filesystem_remove_file_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1690,7 +1707,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
-            vec![Value::String("/test/testfile.txt".to_string())],
+            vec!["/test/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1698,7 +1715,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1710,7 +1727,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1736,8 +1753,8 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1746,7 +1763,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1758,7 +1775,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1784,8 +1801,8 @@ async fn filesystem_metadata_hash(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1794,7 +1811,7 @@ async fn filesystem_metadata_hash(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{hash}",
-            vec![Value::String("testfile.txt".to_string())],
+            vec!["testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1806,7 +1823,7 @@ async fn filesystem_metadata_hash(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{hash}",
-            vec![Value::String("testfile.txt".to_string())],
+            vec!["testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1867,20 +1884,23 @@ async fn wasi_incoming_request_handler(
         .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
         .await;
 
-    let args: Value = Value::Record(vec![
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::String("localhost:8000".to_string()),
-        Value::String("/".to_string()),
-        Value::List(vec![]),
-        Value::Option(None),
-    ]);
+    let args = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(None),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result = executor
         .invoke_and_await(
@@ -1922,50 +1942,53 @@ async fn wasi_incoming_request_handler_echo(
         .start_worker(&component_id, "wasi-http-incoming-request-handler-echo-1")
         .await;
 
-    let args: Value = Value::Record(vec![
-        Value::Variant {
-            case_idx: 2,
-            case_value: None,
-        },
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::String("localhost:8000".to_string()),
-        Value::String("/foo?bar=baz".to_string()),
-        Value::List(vec![Value::Tuple(vec![
-            Value::String("test-header".to_string()),
-            Value::List(
-                "foobar"
-                    .to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-        ])]),
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::List(
-                "test-body"
-                    .to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-            Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
-                Value::String("test-trailer".to_string()),
+    let args = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/foo?bar=baz".to_string()),
+            Value::List(vec![Value::Tuple(vec![
+                Value::String("test-header".to_string()),
                 Value::List(
-                    "barfoo"
+                    "foobar"
                         .to_string()
                         .into_bytes()
                         .into_iter()
                         .map(Value::U8)
                         .collect(),
                 ),
-            ])])))),
-        ])))),
-    ]);
+            ])]),
+            Value::Option(Some(Box::new(Value::Record(vec![
+                Value::List(
+                    "test-body"
+                        .to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .map(Value::U8)
+                        .collect(),
+                ),
+                Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
+                    Value::String("test-trailer".to_string()),
+                    Value::List(
+                        "barfoo"
+                            .to_string()
+                            .into_bytes()
+                            .into_iter()
+                            .map(Value::U8)
+                            .collect(),
+                    ),
+                ])])))),
+            ])))),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result = executor
         .invoke_and_await(
@@ -2061,44 +2084,50 @@ async fn wasi_incoming_request_handler_state(
         .start_worker(&component_id, "wasi-http-incoming-request-handler-state-1")
         .await;
 
-    let args_put: Value = Value::Record(vec![
-        Value::Variant {
-            case_idx: 3,
-            case_value: None,
-        },
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::String("localhost:8000".to_string()),
-        Value::String("/".to_string()),
-        Value::List(vec![]),
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::List(
-                "1".to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-            Value::Option(None),
-        ])))),
-    ]);
+    let args_put = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(Some(Box::new(Value::Record(vec![
+                Value::List(
+                    "1".to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .map(Value::U8)
+                        .collect(),
+                ),
+                Value::Option(None),
+            ])))),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
-    let args_get: Value = Value::Record(vec![
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::String("localhost:8000".to_string()),
-        Value::String("/".to_string()),
-        Value::List(vec![]),
-        Value::Option(None),
-    ]);
+    let args_get = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(None),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result1 = executor
         .invoke_and_await(

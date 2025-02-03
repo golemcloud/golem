@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::components::rdb::Rdb;
-use crate::components::{new_reqwest_client, wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
+use crate::components::{
+    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder, GolemEnvVars,
+};
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -731,7 +733,7 @@ async fn wait_for_startup(
     protocol: GolemClientProtocol,
     host: &str,
     grpc_port: u16,
-    _http_port: u16,
+    http_port: u16,
     timeout: Duration,
 ) {
     match protocol {
@@ -739,7 +741,7 @@ async fn wait_for_startup(
             wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
         }
         GolemClientProtocol::Http => {
-            todo!()
+            wait_for_startup_http(host, http_port, "golem-component-service", timeout).await
         }
     }
 }

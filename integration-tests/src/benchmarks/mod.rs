@@ -12,21 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, SystemTime};
-
-use clap::Parser;
-use golem_wasm_rpc::Value;
-use reqwest::{Client, Url};
-use tokio::task::JoinSet;
-use tracing::warn;
-
 use crate::benchmarks::data::Data;
+use clap::Parser;
 use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
     BenchmarkApi, BenchmarkRecorder, BenchmarkResult, ResultKey, RunConfig,
 };
 use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::{Value, ValueAndType};
+use reqwest::{Client, Url};
+use std::time::{Duration, SystemTime};
+use tokio::task::JoinSet;
+use tracing::warn;
 
 pub mod data;
 
@@ -118,7 +116,7 @@ pub async fn warmup_workers(
     deps: &CliTestDependencies,
     worker_ids: &[WorkerId],
     function: &str,
-    params: Vec<Value>,
+    params: Vec<ValueAndType>,
 ) {
     let mut fibers = JoinSet::new();
     for worker_id in worker_ids {
@@ -142,7 +140,7 @@ pub async fn benchmark_invocations(
     length: usize,
     worker_ids: &[WorkerId],
     function: &str,
-    params: Vec<Value>,
+    params: Vec<ValueAndType>,
     prefix: &str,
 ) {
     // Invoke each worker a 'length' times in parallel and record the duration
@@ -229,7 +227,7 @@ pub async fn invoke_and_await(
     deps: &impl TestDsl,
     worker_id: &WorkerId,
     function_name: &str,
-    params: Vec<Value>,
+    params: Vec<ValueAndType>,
 ) -> InvokeResult {
     const TIMEOUT: Duration = Duration::from_secs(180);
     const RETRY_DELAY: Duration = Duration::from_millis(100);

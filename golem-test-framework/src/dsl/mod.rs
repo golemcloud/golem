@@ -28,13 +28,11 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
-    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest,
+    ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{
-    log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
-};
+use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
@@ -52,7 +50,7 @@ use golem_common::model::{
     WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_service_base::model::PublicOplogEntryWithIndex;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -165,40 +163,40 @@ pub trait TestDsl {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_and_await(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_json(
         &self,
@@ -579,20 +577,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke(InvokeRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: None,
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke(
+                target_worker_id.into(),
+                None,
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -612,20 +608,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke(InvokeRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke(
+                target_worker_id.into(),
+                Some(idempotency_key.clone().into()),
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -644,7 +638,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
     }
@@ -654,7 +648,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         TestDsl::invoke_and_await_custom_with_key(
             self,
@@ -670,7 +664,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_custom_with_key(
@@ -688,20 +682,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke_and_await(InvokeAndAwaitRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke_and_await(
+                target_worker_id.into(),
+                Some(idempotency_key.clone().into()),
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -1620,27 +1612,27 @@ pub trait TestDslUnsafe {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error>;
     async fn invoke_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error>;
     async fn invoke_and_await(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_json(
         &self,
@@ -1855,7 +1847,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error> {
         <T as TestDsl>::invoke(self, worker_id, function_name, params)
             .await
@@ -1867,7 +1859,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error> {
         <T as TestDsl>::invoke_with_key(self, worker_id, idempotency_key, function_name, params)
             .await
@@ -1878,7 +1870,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error> {
         <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
             .await
@@ -1901,7 +1893,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error> {
         <T as TestDsl>::invoke_and_await_with_key(
             self,

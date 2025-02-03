@@ -5,7 +5,7 @@ mod tests {
     use test_r::{flaky, test, test_dep, timeout};
 
     use async_trait::async_trait;
-    use golem_wasm_rpc::Value;
+    use golem_wasm_rpc::IntoValueAndType;
     use rand::prelude::*;
     use std::env;
     use std::time::Duration;
@@ -400,9 +400,7 @@ mod tests {
                                     &worker_id,
                                     &idempotency_key,
                                     "golem:it/api.{echo}",
-                                    vec![Value::Option(Some(Box::new(Value::String(
-                                        "Hello".to_string(),
-                                    ))))],
+                                    vec![Some("Hello".to_string()).into_value_and_type()],
                                 )
                                 .await,
                         )

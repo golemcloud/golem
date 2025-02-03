@@ -17,7 +17,8 @@ use golem_wasm_ast::analysis::analysed_type::{
     list, option, result, result_err, result_ok, tuple, variant,
 };
 use golem_wasm_ast::analysis::{
-    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeEnum, TypeFlags,
+    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
+    TypeFlags,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -341,6 +342,46 @@ impl IntoValue for Uuid {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+impl IntoValueAndType for Vec<(String, ValueAndType)> {
+    fn into_value_and_type(self) -> ValueAndType {
+        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
+        let mut field_values = Vec::<Value>::with_capacity(self.len());
+
+        for (field_name, value_and_type) in self {
+            field_types.push(NameTypePair {
+                name: field_name,
+                typ: value_and_type.typ,
+            });
+            field_values.push(value_and_type.value);
+        }
+
+        ValueAndType {
+            value: Value::Record(field_values),
+            typ: analysed_type::record(field_types),
+        }
+    }
+}
+
+impl IntoValueAndType for Vec<(&'static str, ValueAndType)> {
+    fn into_value_and_type(self) -> ValueAndType {
+        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
+        let mut field_values = Vec::<Value>::with_capacity(self.len());
+
+        for (field_name, value_and_type) in self {
+            field_types.push(NameTypePair {
+                name: field_name.to_string(),
+                typ: value_and_type.typ,
+            });
+            field_values.push(value_and_type.value);
+        }
+
+        ValueAndType {
+            value: Value::Record(field_values),
+            typ: analysed_type::record(field_types),
+        }
     }
 }
 

@@ -341,8 +341,8 @@ impl EnvBasedTestDependencies {
                     shard_manager,
                     rdb,
                     config.default_verbosity(),
-                    config.shared_client,
                     config.keep_docker_containers,
+                    config.golem_client_protocol,
                 )
                 .await,
             )
@@ -360,7 +360,7 @@ impl EnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_stderr_level(),
-                    config.shared_client,
+                    config.golem_client_protocol,
                 )
                 .await,
             )

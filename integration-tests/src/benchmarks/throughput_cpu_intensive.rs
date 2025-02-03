@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
-use tokio::task::JoinSet;
-
 use golem_common::model::WorkerId;
 use golem_test_framework::config::{
     CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_wasm_rpc::IntoValueAndType;
 use integration_tests::benchmarks::{
     benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
     RustServiceClient,
 };
+use std::collections::HashMap;
+use std::time::SystemTime;
+use tokio::task::JoinSet;
 
 struct ThroughputCpuIntensive {
     config: RunConfig,
@@ -110,7 +108,7 @@ impl Benchmark for ThroughputCpuIntensive {
             &benchmark_context.deps,
             &context.worker_ids,
             "golem:it/api.{echo}",
-            vec![Value::String("hello".to_string())],
+            vec!["hello".into_value_and_type()],
         )
         .await;
 
@@ -131,7 +129,7 @@ impl Benchmark for ThroughputCpuIntensive {
             self.config.length,
             &context.worker_ids,
             "golem:it/api.{calculate}",
-            vec![Value::U64(calculate_iter)],
+            vec![calculate_iter.into_value_and_type()],
             "worker-calculate-",
         )
         .await;

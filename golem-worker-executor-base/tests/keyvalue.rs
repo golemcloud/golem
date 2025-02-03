@@ -18,7 +18,7 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -43,9 +43,9 @@ async fn readwrite_get_returns_the_value_that_was_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -55,10 +55,7 @@ async fn readwrite_get_returns_the_value_that_was_set(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
-            vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-            ],
+            vec!["key".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -94,8 +91,8 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -125,9 +122,9 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -138,9 +135,9 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
         .await
@@ -151,8 +148,8 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -189,9 +186,9 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -202,8 +199,8 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{delete}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -214,8 +211,8 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -245,9 +242,9 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -258,8 +255,8 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
             &worker_id,
             "golem:it/api.{exists}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -289,8 +286,8 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
             &worker_id,
             "golem:it/api.{exists}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -324,9 +321,9 @@ async fn readwrite_buckets_can_be_shared_between_workers(
             &worker_id_1,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-bucket")),
-                Value::String("key".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -337,8 +334,8 @@ async fn readwrite_buckets_can_be_shared_between_workers(
             &worker_id_2,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-bucket")),
-                Value::String("key".to_string()),
+                format!("{component_id}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
             ],
         )
         .await
@@ -375,9 +372,9 @@ async fn batch_get_many_gets_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -388,9 +385,9 @@ async fn batch_get_many_gets_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
+                vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
         .await
@@ -401,9 +398,9 @@ async fn batch_get_many_gets_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key3".to_string()),
-                Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key3".into_value_and_type(),
+                vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
         .await
@@ -414,12 +411,8 @@ async fn batch_get_many_gets_multiple_values(
             &worker_id,
             "golem:it/api.{get-many}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::List(vec![
-                    Value::String("key1".to_string()),
-                    Value::String("key2".to_string()),
-                    Value::String("key3".to_string()),
-                ]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
         .await
@@ -456,9 +449,9 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -469,9 +462,9 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
+                vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
         .await
@@ -482,12 +475,8 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
             &worker_id,
             "golem:it/api.{get-many}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::List(vec![
-                    Value::String("key1".to_string()),
-                    Value::String("key2".to_string()),
-                    Value::String("key3".to_string()),
-                ]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
         .await
@@ -517,21 +506,13 @@ async fn batch_set_many_sets_multiple_values(
             &worker_id,
             "golem:it/api.{set-many}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::List(vec![
-                    Value::Tuple(vec![
-                        Value::String("key1".to_string()),
-                        Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
-                    ]),
-                    Value::Tuple(vec![
-                        Value::String("key2".to_string()),
-                        Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
-                    ]),
-                    Value::Tuple(vec![
-                        Value::String("key3".to_string()),
-                        Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9)]),
-                    ]),
-                ]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                vec![
+                    ("key1", vec![1u8, 2u8, 3u8]),
+                    ("key2", vec![4u8, 5u8, 6u8]),
+                    ("key3", vec![7u8, 8u8, 9u8]),
+                ]
+                .into_value_and_type(),
             ],
         )
         .await
@@ -542,8 +523,8 @@ async fn batch_set_many_sets_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
             ],
         )
         .await
@@ -554,8 +535,8 @@ async fn batch_set_many_sets_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
             ],
         )
         .await
@@ -566,8 +547,8 @@ async fn batch_set_many_sets_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key3".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key3".into_value_and_type(),
             ],
         )
         .await
@@ -620,9 +601,9 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -633,9 +614,9 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
+                vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
         .await
@@ -646,9 +627,9 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key3".to_string()),
-                Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key3".into_value_and_type(),
+                vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
         .await
@@ -659,12 +640,8 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{delete-many}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::List(vec![
-                    Value::String("key1".to_string()),
-                    Value::String("key2".to_string()),
-                    Value::String("key3".to_string()),
-                ]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
         .await
@@ -675,8 +652,8 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
             ],
         )
         .await
@@ -687,8 +664,8 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
             ],
         )
         .await
@@ -699,8 +676,8 @@ async fn batch_delete_many_deletes_multiple_values(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key3".to_string()),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key3".into_value_and_type(),
             ],
         )
         .await
@@ -732,9 +709,9 @@ async fn batch_get_keys_returns_multiple_keys(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key1".to_string()),
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key1".into_value_and_type(),
+                vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
         .await
@@ -745,9 +722,9 @@ async fn batch_get_keys_returns_multiple_keys(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key2".to_string()),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key2".into_value_and_type(),
+                vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
         .await
@@ -758,9 +735,9 @@ async fn batch_get_keys_returns_multiple_keys(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                Value::String(format!("{component_id}-{worker_name}-bucket")),
-                Value::String("key3".to_string()),
-                Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9)]),
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key3".into_value_and_type(),
+                vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
         .await
@@ -770,9 +747,7 @@ async fn batch_get_keys_returns_multiple_keys(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-keys}",
-            vec![Value::String(format!(
-                "{component_id}-{worker_name}-bucket"
-            ))],
+            vec![format!("{component_id}-{worker_name}-bucket").into_value_and_type()],
         )
         .await
         .unwrap();
