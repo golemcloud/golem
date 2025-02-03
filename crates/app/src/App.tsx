@@ -33,6 +33,7 @@ import {ApiLayout} from "./pages/api/details/api-layout";
 import ComponentInvoke from "@/pages/components/details/invoke";
 import Plugins from "@/pages/components/details/plugin.tsx";
 import {ComponentLayout} from "@/pages/components/details/component-layout.tsx";
+import {WorkerLayout} from "@/pages/workers/details/worker-layout.tsx";
 
 function App() {
     return (
@@ -65,24 +66,15 @@ function App() {
                         </Route>
                         <Route
                             path="/components/:componentId/workers/:workerName"
-                            element={<WorkerDetails/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers/:workerName/environments"
-                            element={<WorkerEnvironments/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers/:workerName/manage"
-                            element={<WorkerManage/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers/:workerName/invoke"
-                            element={<WorkerInvoke/>}
-                        />
-                        <Route
-                            path="/components/:componentId/workers/:workerName/live"
-                            element={<WorkerLive/>}
-                        />
+                            element={<WorkerLayout/>}
+                        >
+                            <Route path="" element={<WorkerDetails/>}/>
+                            <Route path="environments" element={<WorkerEnvironments/>}/>
+                            <Route path="manage" element={<WorkerManage/>}/>
+                            <Route path="invoke" element={<WorkerInvoke/>}/>
+                            <Route path="live" element={<WorkerLive/>}/>
+                        </Route>
+
                         <Route path="/apis" element={<APIs/>}/>
                         <Route path="/apis/create" element={<CreateAPI/>}/>
                         <Route

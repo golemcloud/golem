@@ -10,6 +10,7 @@ import {calculateExportFunctions} from "@/lib/utils";
 
 
 export interface ExportResult {
+    package: string,
     function_name: string,
     parameter: string,
     return: string
@@ -54,6 +55,7 @@ function generateFunctionInterfaces(data: Export[]) {
             const returnType = parseType(func.results[0]?.typ) || "void";
 
             interfaces.push({
+                package: instance.name,
                 function_name: functionName,
                 parameter: parameters,
                 return: returnType
@@ -103,6 +105,7 @@ function generateFunctionInterfacesV1(data: Export[]) {
             const returnType = parseTypeV1(func.results[0]?.typ) || "void";
 
             interfaces.push({
+                package: instance.name,
                 function_name: functionName,
                 parameter: parameters,
                 return: returnType
@@ -137,6 +140,7 @@ export default function Exports() {
                     (data) => data.versionedComponentId?.version === versionChange
                 );
                 if (componentDetails) {
+                    console.log(componentDetails.metadata?.exports);
                     const exports: ExportResult[] = generateFunctionInterfacesV1(componentDetails.metadata?.exports || []);
                     setResult(exports);
                     // const functions =
@@ -218,8 +222,8 @@ export default function Exports() {
                                 <TableRow>
                                     <TableHead className="w-[250px]">Package</TableHead>
                                     <TableHead className="w-[200px]">Function</TableHead>
-                                    <TableHead className="w-[300px]">Parameters</TableHead>
-                                    <TableHead>Return Value</TableHead>
+                                    {/*<TableHead className="w-[300px]">Parameters</TableHead>*/}
+                                    {/*<TableHead>Return Value</TableHead>*/}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -227,20 +231,21 @@ export default function Exports() {
                                     result.map((fn: ExportResult) => (
                                         <TableRow key={fn.function_name}>
                                             <TableCell className="font-mono text-sm">
-                                                {fn.function_name}
+                                                {fn.package}
                                             </TableCell>
                                             <TableCell className="font-mono text-sm">
-                                                {fn.function_name}
-                                            </TableCell>
-                                            <TableCell className="font-mono text-sm">
-                                                {/*{fn.parameter})*/}
+                                                <span>{fn.function_name}</span>
                                                 (
                                                 <span dangerouslySetInnerHTML={{__html: fn.parameter}}/>
-                                                )
+                                                ) {"=>"} <span dangerouslySetInnerHTML={{__html: fn.return}}/>
                                             </TableCell>
-                                            <TableCell className="font-mono text-sm">
-                                                <div dangerouslySetInnerHTML={{__html: fn.return}}/>
-                                            </TableCell>
+                                            {/*<TableCell className="font-mono text-sm">*/}
+                                            {/*    /!*{fn.parameter})*!/*/}
+
+                                            {/*</TableCell>*/}
+                                            {/*<TableCell className="font-mono text-sm">*/}
+                                            {/*    <div dangerouslySetInnerHTML={{__html: fn.return}}/>*/}
+                                            {/*</TableCell>*/}
                                         </TableRow>
                                     ))
                                 ) : (
