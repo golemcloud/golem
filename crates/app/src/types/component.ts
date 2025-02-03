@@ -3,6 +3,8 @@ export interface Typ {
     fields?: Field[];
     cases?: Case[];
     inner?: Typ;
+    ok?: Typ;
+    err?: Typ;
 }
 
 export interface Field {
