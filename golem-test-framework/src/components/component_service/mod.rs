@@ -877,9 +877,7 @@ fn to_http_file_permissions(
 fn to_http_dynamic_linking(
     dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
 ) -> Option<golem_client::model::DynamicLinking> {
-    let Some(dynamic_linking) = dynamic_linking else {
-        return None;
-    };
+    let dynamic_linking = dynamic_linking?;
     if dynamic_linking.is_empty() {
         return None;
     }

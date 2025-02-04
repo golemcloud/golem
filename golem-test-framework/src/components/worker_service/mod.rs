@@ -30,18 +30,19 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     delete_worker_response, get_file_contents_response, get_oplog_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response,
-    list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
-    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, list_directory_response, resume_worker_response,
+    search_oplog_response, update_worker_response, ConnectWorkerRequest, DeleteWorkerRequest,
+    DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest,
+    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
+    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
@@ -272,14 +273,35 @@ pub trait WorkerService {
         }
     }
 
-    // TODO: is this used / needed?
     async fn invoke_json(&self, request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
         match self.client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.invoke_json(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(_) => {
-                todo!()
+            WorkerServiceClient::Http(client) => {
+                match client
+                    .invoke_function(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name.unwrap(),
+                        request.idempotency_key.map(|key| key.value).as_deref(),
+                        &request.function,
+                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(InvokeResponse {
+                        result: Some(invoke_response::Result::Success(Empty {})),
+                    }),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
             }
         }
     }
@@ -325,7 +347,6 @@ pub trait WorkerService {
         }
     }
 
-    // TODO: is this used / needed?
     async fn invoke_and_await_json(
         &self,
         request: InvokeAndAwaitJsonRequest,
@@ -334,8 +355,32 @@ pub trait WorkerService {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.invoke_and_await_json(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(_client) => {
-                todo!()
+            WorkerServiceClient::Http(client) => {
+                match client
+                    .invoke_and_await_function(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name.unwrap(),
+                        request.idempotency_key.map(|key| key.value).as_deref(),
+                        &request.function,
+                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                    )
+                    .await
+                {
+                    Ok(result) => Ok(InvokeAndAwaitJsonResponse {
+                        result: Some(invoke_and_await_json_response::Result::Success(
+                            serde_json::to_string(&result.result)?,
+                        )),
+                    }),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
             }
         }
     }
@@ -999,6 +1044,20 @@ fn invoke_parameters_to_http(
             Some(parameters) => parameters
                 .into_iter()
                 .map(|p| p.try_into().unwrap())
+                .collect(),
+            None => vec![],
+        },
+    }
+}
+
+fn invoke_json_parameters_to_http(
+    parameters: Option<Vec<String>>,
+) -> golem_client::model::InvokeParameters {
+    golem_client::model::InvokeParameters {
+        params: match parameters {
+            Some(parameters) => parameters
+                .into_iter()
+                .map(|p| serde_json::from_str(&p).unwrap())
                 .collect(),
             None => vec![],
         },
