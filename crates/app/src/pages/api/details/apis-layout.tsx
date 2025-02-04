@@ -1,85 +1,101 @@
 import {API} from "@/service";
-import {useEffect, useState} from "react";
+import {useCallback, useEffect, useMemo, useState} from "react";
 import {Outlet, useLocation, useNavigate, useParams} from "react-router-dom";
 import {SidebarInset, SidebarProvider, SidebarTrigger,} from "@/components/ui/sidebar.tsx";
 import {SidebarMenu} from "@/components/sidebar.tsx";
 import {Separator} from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
-import {ComponentList} from "@/types/component.ts";
-import {Container, Home, Settings, Tv, Workflow,} from "lucide-react";
+import {CircleFadingPlusIcon, Home, Settings,} from "lucide-react";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
+import {Api} from "@/types/api.ts";
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/components/ui/select.tsx";
+import {NavRoutes} from "@/components/nav-route.tsx";
 
-const MenuItems = (componentId: string, workerName: string) => [
+const MenuItems = (apiName: string, version: string) => [
     {
         title: "Overview",
-        url: `/components/${componentId}/workers/${workerName}`,
+        url: `/apis/${apiName}/version/${version}`,
         icon: Home,
     },
     {
-        title: "Live",
-        url: `/components/${componentId}/workers/${workerName}/live`,
-        icon: Tv,
-    },
-    {
-        title: "Environment",
-        url: `/components/${componentId}/workers/${workerName}/environments`,
-        icon: Container,
-    },
-    {
-        title: "Invoke",
-        url: `/components/${componentId}/workers/${workerName}/invoke`,
-        icon: Workflow,
-    },
-    {
-        title: "Manage",
-        url: `/components/${componentId}/workers/${workerName}/manage`,
+        title: "Settings",
+        url: `/apis/${apiName}/version/${version}/settings`,
         icon: Settings,
+    },
+    {
+        title: "New Version",
+        url: `/apis/${apiName}/version/${version}/newversion`,
+        icon: CircleFadingPlusIcon,
     }
 ];
 
-export const WorkerLayout = () => {
+export const ApiLayout = () => {
+    const {apiName, version} = useParams();
     const navigate = useNavigate();
-    const location = useLocation();
-    const {componentId = "", workerName = ""} = useParams();
-    const [currentComponent, setCurrentComponent] = useState({} as ComponentList);
+    const [apiDetails, setApiDetails] = useState([] as Api[]);
+
+    const [currentApiDetails, setCurrentApiDetails] = useState({} as Api);
     const [currentMenu, setCurrentMenu] = useState("Overview");
 
-    useEffect(() => {
-        if (componentId) {
-            API.getComponentByIdAsKey().then((response) => {
-                setCurrentComponent(response[componentId]);
-            });
-        }
-    }, [componentId]);
+
+    const basePath = useLocation().pathname.replace(
+        `/apis/${apiName}/version/${version}`,
+        ""
+    );
+    const sortedVersions = useMemo(() => {
+        return [...apiDetails].sort((a, b) =>
+            b.version.localeCompare(a.version, undefined, {numeric: true})
+        );
+    }, [apiDetails]);
 
     useEffect(() => {
-        if (location.pathname.includes("live")) setCurrentMenu("Live");
-        else if (location.pathname.includes("environments")) setCurrentMenu("Environment");
-        else if (location.pathname.includes("invoke")) setCurrentMenu("Invoke");
+        API.getApi(apiName!).then(async (response) => {
+            setApiDetails(response);
+            const selectedApi = response.find((api) => api.version === version);
+            if (selectedApi) {
+                setCurrentApiDetails(selectedApi);
+            }
+        });
+        if (location.pathname.includes("settings")) setCurrentMenu("Settings");
+        else if (location.pathname.includes("routes")) setCurrentMenu("Routes");
+        else if (location.pathname.includes("newversion")) setCurrentMenu("New Version");
         else if (location.pathname.includes("manage")) setCurrentMenu("Manage");
-    }, [location.pathname]);
+    }, [apiName, version]);
 
-    const navigateHome = () => {
-        navigate(`/components/${componentId}/workers/${workerName}`);
+
+    const handleNavigateHome = useCallback(() => {
+        navigate(`/apis/${apiName}/version/${version}`);
         setCurrentMenu("Overview");
-    };
+    }, [navigate, apiName, version]);
 
     return (
         <ErrorBoundary>
             <SidebarProvider>
                 <SidebarMenu
-                    menus={MenuItems(componentId, workerName)}
+                    menus={MenuItems(apiName!, version!)}
                     activeItem={currentMenu}
                     setActiveItem={setCurrentMenu}
                     title={"Worker"}
-                />
+                >
+                    <NavRoutes
+                        routes={(currentApiDetails?.routes || []).map(route => {
+                                return {
+                                    method: route.method,
+                                    name: route.path,
+                                    url: `/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`
+                                }
+                            }
+                        )}
+                        newRouteEndpoint={`/apis/${apiName}/version/${version}/routes/add?`}
+                        setActiveItem={() => setCurrentMenu("Route")}/>
+                </SidebarMenu>
                 <SidebarInset>
                     <header
                         className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 border-b">
@@ -91,17 +107,10 @@ export const WorkerLayout = () => {
                                 <BreadcrumbList>
                                     <BreadcrumbItem className="hidden md:block cursor-pointer">
                                         <BreadcrumbLink asChild>
-                      <span onClick={() => navigate(`/components/${componentId}`)}>
-                        {currentComponent.componentName}
+                      <span onClick={handleNavigateHome}>
+                        {apiName}
                       </span>
-                                        </BreadcrumbLink>
-                                    </BreadcrumbItem>
-                                    <BreadcrumbSeparator className="hidden md:block"/>
-                                    <BreadcrumbItem>
-                                        <BreadcrumbLink asChild>
-                      <span onClick={() => navigateHome()}>
-                        {workerName}
-                      </span>
+
                                         </BreadcrumbLink>
                                     </BreadcrumbItem>
                                     <BreadcrumbSeparator className="hidden md:block"/>
@@ -110,6 +119,35 @@ export const WorkerLayout = () => {
                                     </BreadcrumbItem>
                                 </BreadcrumbList>
                             </Breadcrumb>
+                        </div>
+                        {/*push this to right*/}
+                        <div className={"flex items-center gap-4"}>
+                            <div className="flex items-center gap-2">
+                                <Select
+                                    defaultValue={version}
+                                    onValueChange={(version) => {
+                                        const selectedApi = apiDetails.find(
+                                            (api) => api.version === version
+                                        );
+                                        if (selectedApi) {
+                                            navigate(
+                                                `/apis/${apiName}/version/${version}${basePath}`
+                                            );
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue>{version}</SelectValue>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {sortedVersions.map((api) => (
+                                            <SelectItem value={api.version} key={api.version}>
+                                                {api.version} {api.draft ? "(Draft)" : "(Published)"}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
                     </header>
                     <ErrorBoundary>
