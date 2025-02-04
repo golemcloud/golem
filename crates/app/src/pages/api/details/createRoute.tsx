@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Info } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,6 +11,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+
 import {
   Form,
   FormControl,
@@ -55,6 +61,17 @@ const HTTP_METHODS = [
   "Connect",
 ] as const;
 
+const interpolations = [
+  { label: "Path Parameters", expression: "${request.path.<PATH_PARAM_NAME>}" },
+  {
+    label: "Query Parameters",
+    expression: "${request.path.<QUERY_PARAM_NAME>}",
+  },
+  { label: "Request Body", expression: "${request.body}" },
+  { label: "Request Body Field", expression: "${request.body.<FIELD_NAME>}" },
+  { label: "Request Headers", expression: "${request.header.<HEADER_NAME>}" },
+];
+
 const routeSchema = z.object({
   method: z.enum(HTTP_METHODS),
   path: z
@@ -95,6 +112,7 @@ const CreateRoute = () => {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [cursorPosition, setCursorPosition] = useState(0);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
 
   const [responseSuggestions, setResponseSuggestions] = useState(
     [] as string[]
@@ -392,6 +410,10 @@ const CreateRoute = () => {
     }
   };
 
+  const togglePopover = () => {
+    setIsPopoverOpen((prev) => !prev);
+  };
+
   if (fetchError) {
     return (
       <div className="p-6 max-w-3xl mx-auto">
@@ -580,7 +602,7 @@ const CreateRoute = () => {
                             />
                             {showSuggestions && (
                               <Card
-                                className="absolute z-10 p-1 space-y-1 bg-white shadow-lg min-w-[70px]"
+                                className="absolute z-10 p-1 space-y-1 shadow-lg min-w-[70px]"
                                 style={{
                                   top: `${menuPosition.top}px`,
                                   left: `${menuPosition.left}px`,
@@ -590,7 +612,7 @@ const CreateRoute = () => {
                                 {suggestions.map((suggestion) => (
                                   <div
                                     key={suggestion}
-                                    className="px-2 py-1 text-sm cursor-pointer hover:bg-gray-100"
+                                    className="px-2 py-1 text-sm cursor-pointer hover:bg-accent"
                                     onClick={() =>
                                       handleSuggestionClick(suggestion)
                                     }
@@ -603,8 +625,43 @@ const CreateRoute = () => {
                           </div>
                         </FormControl>
                         <FormDescription>
-                          Unique identifier for your worker instance. Use ${"{"}{" "}
-                          to interpolate path parameters.
+                          <div className="flex gap-1 items-center">
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <button
+                                  className="p-1 hover:bg-muted rounded-full transition-colors"
+                                  aria-label="Show interpolation info"
+                                >
+                                  <Info className="w-4 h-4 text-muted-foreground" />
+                                </button>
+                              </PopoverTrigger>
+                              <PopoverContent
+                                className="w-[450px] p-4"
+                                align="start"
+                                sideOffset={5}
+                              >
+                                <h3 className="text-[13px] font-medium text-card-foreground mb-4 border-b pb-2">
+                                  Common Interpolation Expressions
+                                </h3>
+                                <div className="space-y-3">
+                                  {interpolations.map((row) => (
+                                    <div
+                                      key={row.label}
+                                      className="flex items-center justify-between"
+                                    >
+                                      <span className="text-[12px] px-2.5 py-0.5 bg-secondary rounded-full text-secondary-foreground font-medium">
+                                        {row.label}
+                                      </span>
+                                      <code className="text-[12px] font-mono text-muted-foreground">
+                                        {row.expression}
+                                      </code>
+                                    </div>
+                                  ))}
+                                </div>
+                              </PopoverContent>
+                            </Popover>
+                            Interpolate variables into your Worker ID
+                          </div>
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -617,7 +674,69 @@ const CreateRoute = () => {
                   name="response"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Response</FormLabel>
+                      <FormLabel>
+                        <div className="flex gap-1 items-center">
+                          Response
+                          <Popover
+                            open={isPopoverOpen}
+                            onOpenChange={setIsPopoverOpen}
+                          >
+                            <PopoverTrigger asChild>
+                              <button
+                                className="p-1 hover:bg-muted rounded-full transition-colors"
+                                aria-label="Show interpolation info"
+                                onClick={togglePopover}
+                              >
+                                <Info className="w-4 h-4 text-muted-foreground" />
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              className={`${
+                                responseSuggestions.length === 0
+                                  ? "max-w-[450px]"
+                                  : "w-[450px]"
+                              }  p-4`}
+                              align="start"
+                              sideOffset={5}
+                            >
+                              {responseSuggestions.length > 0 ? (
+                                <div>
+                                  <h3 className="text-[13px] font-medium text-card-foreground mb-4 border-b pb-2">
+                                    Available Functions
+                                  </h3>
+                                  <div className="space-y-3 overflow-y-auto max-h-[300px]">
+                                    {responseSuggestions.map((row) => (
+                                      <div
+                                        key={row}
+                                        className="flex items-center justify-between"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          navigator.clipboard.writeText(
+                                            `${row} `
+                                          );
+                                          toast({
+                                            title: "Copied to clipboard",
+                                            duration: 3000,
+                                          });
+                                          setIsPopoverOpen(false);
+                                        }}
+                                      >
+                                        <span className="text-[12px] min-h-[20px] font-mono text-muted-foreground hover:border-b cursor-pointer">
+                                          {row}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-center text-muted-foreground">
+                                  No component version selected
+                                </div>
+                              )}
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+                      </FormLabel>
                       <FormControl>
                         <div className="relative">
                           <Textarea
@@ -629,7 +748,7 @@ const CreateRoute = () => {
                           />
                           {showResponseSuggestions && (
                             <Card
-                              className="absolute z-10 p-1 space-y-1 bg-white shadow-lg min-w-[200px]"
+                              className="absolute z-10 p-1 space-y-1 shadow-lg min-w-[200px]"
                               style={{
                                 top: `${responseMenuPosition.top}px`,
                                 left: `${responseMenuPosition.left}px`,
@@ -639,7 +758,7 @@ const CreateRoute = () => {
                               {filteredResponseSuggestions.map((suggestion) => (
                                 <div
                                   key={suggestion}
-                                  className="px-2 py-1 text-sm cursor-pointer hover:bg-gray-100"
+                                  className="px-2 py-1 text-sm cursor-pointer hover:bg-accent"
                                   onClick={() =>
                                     handleResponseSuggestionClick(suggestion)
                                   }
@@ -651,10 +770,6 @@ const CreateRoute = () => {
                           )}
                         </div>
                       </FormControl>
-                      <FormDescription>
-                        Type 'golem:' to see available functions. Define the
-                        HTTP response for this API Route.
-                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
