@@ -1,11 +1,14 @@
 import { lazy, Suspense } from "react";
+// BrowserRouter is used for client-side routing
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+// ThemeProvider provides theming support
 import { ThemeProvider } from "@/components/theme-provider.tsx";
 import Navbar from "@/components/navbar.tsx";
 import ErrorBoundary from "@/components/errorBoundary";
 import { Dashboard } from "@/pages/dashboard";
 
-// Lazy load route components for better initial load performance
+// Lazy load route components for code splitting and performance improvement
+// Lazy-loading improves initial load times by loading components only when needed.
 const Components = lazy(() => import("@/pages/components"));
 const CreateComponent = lazy(() => import("@/pages/components/create"));
 const APIs = lazy(() =>
@@ -68,7 +71,7 @@ const WorkerLayout = lazy(() =>
   }))
 );
 
-// Route configuration constants
+// Route configuration constants for ease of maintenance
 const ROUTES = {
   DASHBOARD: "/",
   COMPONENTS: "/components",
@@ -90,10 +93,11 @@ function App() {
     <ThemeProvider defaultTheme="system" storageKey="golem-theme">
       <Router>
         <div className="min-h-screen">
+          {/* Wrap Navbar with ErrorBoundary to catch errors in navigation */}
           <ErrorBoundary>
             <Navbar />
           </ErrorBoundary>
-          {/* Wrap Routes in Suspense for lazy loading */}
+          {/* Suspense provides a fallback UI while lazy-loaded components are being fetched */}
           <Suspense
             fallback={
               <div className="flex items-center justify-center min-h-screen">

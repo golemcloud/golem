@@ -7,34 +7,51 @@ import {
   CardContent,
   CardDescription,
   CardTitle,
-} from "@/components/ui/card.tsx";
+} from "@/components/ui/card";
 import {
   Form,
   FormControl,
   FormField,
   FormItem,
   FormLabel,
-} from "@/components/ui/form.tsx";
-import { Input } from "@/components/ui/input.tsx";
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
 import { FileUp } from "lucide-react";
-import { Button } from "@/components/ui/button.tsx";
+import { Button } from "@/components/ui/button";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { API } from "@/service";
-import { toast } from "@/hooks/use-toast.ts";
+import { toast } from "@/hooks/use-toast";
 import { FileManager } from "../create/fileManager";
 
+/**
+ * Example Zod schema that checks:
+ * - File instance
+ * - File size < 50MB
+ * - (Optional) Basic file extension check for .wasm
+ */
 const formSchema = z.object({
-  component: z.instanceof(File).refine((file) => file.size < 50000000, {
-    message: "Your resume must be less than 50MB.",
-  }),
+  component: z
+    .instanceof(File)
+    .refine((file) => file.size < 50_000_000, {
+      message: "Your file must be less than 50MB.",
+    })
+    .refine((file) => file.name.toLowerCase().endsWith(".wasm"), {
+      message: "Only .wasm files are allowed.",
+    }),
 });
 
 export default function ComponentUpdate() {
   const { componentId } = useParams();
   const [file, setFile] = useState<File | null>(null);
+
+  // Reference for manually triggering the file input
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * react-hook-form setup
+   */
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -42,36 +59,45 @@ export default function ComponentUpdate() {
     },
   });
 
-  // const [component, setComponent] = useState({} as ComponentList);
+  /**
+   * Form submit handler
+   */
+  async function onSubmit() {
+    if (!file) {
+      toast({
+        title: "No file selected",
+        description: "Please select a .wasm file before updating.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  // useEffect(() => {
-  //     if (componentId) {
-  //         API.getComponentByIdAsKey().then((response) => {
-  //             setComponent(response[componentId]);
-  //         });
-  //     }
-  // }, [componentId]);
+    try {
+      const formData = new FormData();
+      formData.append("component", file);
+      await API.updateComponent(componentId!, formData);
 
-  function onSubmit() {
-    const formData = new FormData();
-    formData.append("component", file!);
-    API.updateComponent(componentId!, formData).then(() => {
       form.reset();
       setFile(null);
+
       toast({
         title: "Component was updated successfully",
         duration: 3000,
       });
-    });
+    } catch (err) {
+      console.error("Error updating component:", err);
+      toast({
+        title: "Failed to update component",
+        description: String(err),
+        variant: "destructive",
+      });
+    }
   }
 
   return (
     <div className="flex">
       <div className="flex-1 p-8">
-        <Card
-          className="max-w-4xl mx-auto border-0 shadow-none"
-          key={"component.componentName"}
-        >
+        <Card className="max-w-4xl mx-auto border-0 shadow-none">
           <CardTitle>
             <h1 className="text-2xl font-semibold mb-1">Update Component</h1>
           </CardTitle>
@@ -80,12 +106,14 @@ export default function ComponentUpdate() {
               Components are the building blocks
             </p>
           </CardDescription>
+
           <CardContent className="p-6">
             <Form {...form}>
               <form
                 onSubmit={form.handleSubmit(onSubmit)}
                 className="space-y-8"
               >
+                {/* COMPONENT FILE */}
                 <FormField
                   control={form.control}
                   name="component"
@@ -95,13 +123,13 @@ export default function ComponentUpdate() {
                       <FormControl>
                         <div
                           className="border-2 border-dashed border-gray-200 rounded-lg p-8 cursor-pointer hover:border-gray-400"
-                          onClick={() => fileInputRef?.current?.click()}
+                          onClick={() => fileInputRef.current?.click()}
                         >
                           <div className="flex flex-col items-center justify-center text-center">
                             <FileUp className="h-8 w-8 text-gray-400 mb-3" />
                             <Input
                               type="file"
-                              accept="application/wasm,.wasm"
+                              accept=".wasm"
                               className="hidden"
                               name={name}
                               onBlur={onBlur}
@@ -112,10 +140,10 @@ export default function ComponentUpdate() {
                                 ).current = e; // Assign to your local ref
                               }}
                               onChange={(event) => {
-                                const file = event.target.files?.[0];
-                                if (file) {
-                                  setFile(file);
-                                  onChange(file);
+                                const selectedFile = event.target.files?.[0];
+                                if (selectedFile) {
+                                  setFile(selectedFile);
+                                  onChange(selectedFile);
                                 }
                               }}
                             />
@@ -131,9 +159,12 @@ export default function ComponentUpdate() {
                     </FormItem>
                   )}
                 />
+
+                {/* DRAG & DROP FILE MANAGER */}
                 <DndProvider backend={HTML5Backend}>
                   <FileManager />
                 </DndProvider>
+
                 <div className="flex justify-end">
                   <Button type="submit">Update</Button>
                 </div>

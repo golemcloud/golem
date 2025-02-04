@@ -12,6 +12,7 @@ import {
 import { Separator } from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary";
 
+// Chart configuration with type safety via `satisfies`
 const chartConfig = {
   value: {
     label: "Worker Count",
@@ -39,9 +40,51 @@ export function WorkerStatus({
 }: {
   workerStatus: IWorkerStatus;
 }) {
+  // Calculate total workers and memoize the result
   const total = React.useMemo(() => {
     return Object.values(workerStatus).reduce((acc, val) => acc + val, 0);
   }, [workerStatus]);
+
+  // Prepare data for the pie chart from workerStatus
+  const pieData = React.useMemo(
+    () =>
+      Object.entries(workerStatus).map(([key, value]) => ({
+        key,
+        value,
+      })),
+    [workerStatus]
+  );
+
+  // Extracted render function for the chart label for clarity
+  const renderChartLabel = ({ viewBox }: { viewBox?: any }) => {
+    if (viewBox && "cx" in viewBox && "cy" in viewBox) {
+      return (
+        <text
+          x={viewBox.cx}
+          y={viewBox.cy}
+          textAnchor="middle"
+          dominantBaseline="middle"
+        >
+          <tspan
+            x={viewBox.cx}
+            y={viewBox.cy}
+            className="fill-foreground text-3xl font-bold"
+          >
+            {total.toLocaleString()}
+          </tspan>
+          <tspan
+            x={viewBox.cx}
+            y={(viewBox.cy || 0) + 24}
+            className="fill-muted-foreground"
+          >
+            Total Workers
+          </tspan>
+        </text>
+      );
+    }
+    // Optionally return null or fallback content if viewBox is undefined
+    return null;
+  };
 
   return (
     <ErrorBoundary>
@@ -62,44 +105,13 @@ export function WorkerStatus({
                 content={<ChartTooltipContent hideLabel />}
               />
               <Pie
-                data={Object.entries(workerStatus).map(([key, value]) => ({
-                  key,
-                  value,
-                }))}
+                data={pieData}
                 dataKey="value"
                 nameKey="key"
                 innerRadius={60}
                 strokeWidth={5}
               >
-                <Label
-                  content={({ viewBox }) => {
-                    if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                      return (
-                        <text
-                          x={viewBox.cx}
-                          y={viewBox.cy}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                        >
-                          <tspan
-                            x={viewBox.cx}
-                            y={viewBox.cy}
-                            className="fill-foreground text-3xl font-bold"
-                          >
-                            {total.toLocaleString()}
-                          </tspan>
-                          <tspan
-                            x={viewBox.cx}
-                            y={(viewBox.cy || 0) + 24}
-                            className="fill-muted-foreground"
-                          >
-                            Total Workers
-                          </tspan>
-                        </text>
-                      );
-                    }
-                  }}
-                />
+                <Label content={renderChartLabel} />
               </Pie>
             </PieChart>
           </ChartContainer>

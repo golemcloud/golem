@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { LayoutGrid, PlusCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
 import { useNavigate } from "react-router-dom";
 import { API } from "@/service";
 import { ComponentList } from "@/types/component";
@@ -12,7 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { calculateExportFunctions } from "@/lib/utils";
 
-// Constants
+/**
+ * Worker status metrics used to categorize workers
+ */
 const WORKER_STATUS_METRICS = [
   "Idle",
   "Running",
@@ -20,23 +21,45 @@ const WORKER_STATUS_METRICS = [
   "Failed",
 ] as const;
 type WorkerStatusType = (typeof WORKER_STATUS_METRICS)[number];
+
+/**
+ * Debounce delay (in milliseconds) for search functionality
+ */
 const SEARCH_DEBOUNCE_MS = 300;
 
-// Types
+/**
+ * Shape of the worker status for any single component
+ */
 type ComponentWorkerStatus = {
   [K in WorkerStatusType]: number;
 };
 
+/**
+ * Mapping of component IDs to their worker statuses
+ */
 type WorkerStatusMap = {
   [key: string]: ComponentWorkerStatus;
 };
 
+/**
+ * Mapping of component IDs to their details
+ */
 type ComponentMap = {
   [key: string]: ComponentList;
 };
 
 /**
- * Component card that displays component information
+ * Default worker status used when no workers or statuses are found
+ * for a given component.
+ */
+const DEFAULT_WORKER_STATUS: ComponentWorkerStatus =
+  WORKER_STATUS_METRICS.reduce((acc, metric) => {
+    acc[metric] = 0;
+    return acc;
+  }, {} as ComponentWorkerStatus);
+
+/**
+ * Card representing a single component's details and worker status
  */
 const ComponentCard = React.memo(
   ({
@@ -48,15 +71,21 @@ const ComponentCard = React.memo(
     workerStatus: ComponentWorkerStatus;
     onCardClick: (componentId: string) => void;
   }) => {
+    // Retrieve the latest version from the versions array
     const latestVersion = data.versions?.[data.versions?.length - 1];
+    // Count total exports using a helper function
     const exportCount = calculateExportFunctions(
       latestVersion?.metadata?.exports || []
     ).length;
+    // Convert component size from bytes to kilobytes
     const componentSize = Math.round(
       (latestVersion?.componentSize || 0) / 1024
     );
 
-    // Ensure componentId exists before calling onCardClick
+    /**
+     * Handles a click on the entire card.
+     * Only triggers if componentId is present.
+     */
     const handleClick = () => {
       if (data.componentId) {
         onCardClick(data.componentId);
@@ -69,8 +98,12 @@ const ComponentCard = React.memo(
           <CardTitle>{data.componentName || "Unnamed Component"}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Worker Status Section */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 :grid-cols-4  gap-2">
+          {/* Worker Status Grid */}
+          {/*
+            Removed the extra ":grid-cols-4" class which appeared to be a typo.
+            Adjust classes to a responsive 2-column (mobile) to 4-column (desktop) layout.
+          */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {WORKER_STATUS_METRICS.map((metric) => (
               <div key={metric} className="flex flex-col items-start space-y-1">
                 <span className="text-sm text-muted-foreground">{metric}</span>
@@ -80,6 +113,8 @@ const ComponentCard = React.memo(
               </div>
             ))}
           </div>
+
+          {/* Component Metadata Badges */}
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="secondary" className="rounded-md">
               V{data.versionList?.[data.versionList?.length - 1] || "0"}
@@ -103,7 +138,7 @@ const ComponentCard = React.memo(
 ComponentCard.displayName = "ComponentCard";
 
 /**
- * Components page that displays a list of all components
+ * Main component for listing and searching project components
  */
 const Components = () => {
   const navigate = useNavigate();
@@ -114,15 +149,18 @@ const Components = () => {
   const [workerList, setWorkerList] = useState<WorkerStatusMap>({});
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Fetch components and their metrics
+  /**
+   * Fetch all components, then fetch worker status for each component in parallel
+   */
   const fetchComponentsAndMetrics = useCallback(async () => {
     try {
       const response = await API.getComponentByIdAsKey();
       setComponentList(response);
       setFilteredComponents(response);
 
-      // Fetch worker status for each component
       const componentStatus: WorkerStatusMap = {};
+
+      // Map over each component to fetch worker info
       const workerPromises = Object.values(response).map(async (comp) => {
         if (comp.componentId) {
           const worker = await API.findWorker(comp.componentId, {
@@ -131,16 +169,13 @@ const Components = () => {
           });
 
           // Initialize status with all metrics set to 0
-          const status = WORKER_STATUS_METRICS.reduce((acc, metric) => {
-            acc[metric] = 0;
-            return acc;
-          }, {} as ComponentWorkerStatus);
+          const status = { ...DEFAULT_WORKER_STATUS };
 
           // Update counts for existing statuses
-          worker.workers.forEach((worker: Worker) => {
-            const workerStatus = worker.status as WorkerStatusType;
-            if (workerStatus && status[workerStatus] !== undefined) {
-              status[workerStatus] += 1;
+          worker.workers.forEach((w: Worker) => {
+            const wStatus = w.status as WorkerStatusType;
+            if (wStatus && status[wStatus] !== undefined) {
+              status[wStatus] += 1;
             }
           });
 
@@ -155,11 +190,16 @@ const Components = () => {
     }
   }, []);
 
+  /**
+   * On mount, fetch components and their worker statuses
+   */
   useEffect(() => {
     fetchComponentsAndMetrics();
   }, [fetchComponentsAndMetrics]);
 
-  // Filter components based on search query
+  /**
+   * Debounce-based search filter for components by name
+   */
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       if (!searchQuery) {
@@ -167,6 +207,7 @@ const Components = () => {
         return;
       }
 
+      // Filter matches where the component name includes the user’s search text
       const filtered = Object.entries(componentList).reduce(
         (acc, [key, component]) => {
           const componentName = component.componentName?.toLowerCase() || "";
@@ -184,7 +225,9 @@ const Components = () => {
     return () => clearTimeout(timeoutId);
   }, [searchQuery, componentList]);
 
-  // Memoize the empty state component
+  /**
+   * Memoized empty state component to render when no components are found
+   */
   const EmptyState = useMemo(
     () => (
       <div className="border-2 border-dashed border-gray-200 rounded-lg p-12 flex flex-col items-center justify-center">
@@ -202,6 +245,9 @@ const Components = () => {
     []
   );
 
+  /**
+   * Handler for card click, navigates to the individual component details page
+   */
   const handleCardClick = useCallback(
     (componentId: string) => {
       navigate(`/components/${componentId}`);
@@ -212,10 +258,12 @@ const Components = () => {
   return (
     <ErrorBoundary>
       <div className="container mx-auto px-4 py-8">
+        {/* Page Header */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Components</h1>
           <div className="flex gap-4">
             <div className="w-64">
+              {/* Search Input */}
               <Input
                 type="text"
                 placeholder="Search components..."
@@ -224,6 +272,7 @@ const Components = () => {
                 className="w-full"
               />
             </div>
+            {/* Create Component Button */}
             <Button onClick={() => navigate("/components/create")}>
               <PlusCircle className="h-4 w-4 mr-2" />
               Create Component
@@ -231,6 +280,7 @@ const Components = () => {
           </div>
         </div>
 
+        {/* Main Content: Grid of components or empty state */}
         {Object.keys(filteredComponents).length === 0 ? (
           EmptyState
         ) : (
@@ -240,11 +290,7 @@ const Components = () => {
                 key={data.componentId}
                 data={data}
                 workerStatus={
-                  workerList[data.componentId || ""] ||
-                  WORKER_STATUS_METRICS.reduce((acc, metric) => {
-                    acc[metric] = 0;
-                    return acc;
-                  }, {} as ComponentWorkerStatus)
+                  workerList[data.componentId || ""] || DEFAULT_WORKER_STATUS
                 }
                 onCardClick={handleCardClick}
               />
