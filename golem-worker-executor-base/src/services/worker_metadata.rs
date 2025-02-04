@@ -32,7 +32,7 @@ use tracing::{debug, warn};
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
-pub trait WorkerService {
+pub trait WorkerMetadataService {
     async fn add(
         &self,
         worker_metadata: &WorkerMetadata,
@@ -56,13 +56,13 @@ pub trait WorkerService {
 }
 
 #[derive(Clone)]
-pub struct DefaultWorkerService {
+pub struct DefaultWorkerMetadataService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
 }
 
-impl DefaultWorkerService {
+impl DefaultWorkerMetadataService {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
@@ -108,7 +108,7 @@ impl DefaultWorkerService {
 }
 
 #[async_trait]
-impl WorkerService for DefaultWorkerService {
+impl WorkerMetadataService for DefaultWorkerMetadataService {
     async fn add(
         &self,
         worker_metadata: &WorkerMetadata,

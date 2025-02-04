@@ -49,7 +49,7 @@ use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
-use crate::services::worker::{DefaultWorkerService, WorkerService};
+use crate::services::worker_metadata::{DefaultWorkerMetadataService, WorkerMetadataService};
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::worker_enumeration::{
     DefaultWorkerEnumerationService, RunningWorkerEnumerationService,
@@ -186,7 +186,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -514,7 +514,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         plugins.clone(),
     ));
 
-    let worker_service = Arc::new(DefaultWorkerService::new(
+    let worker_service = Arc::new(DefaultWorkerMetadataService::new(
         key_value_storage.clone(),
         shard_service.clone(),
         oplog_service.clone(),

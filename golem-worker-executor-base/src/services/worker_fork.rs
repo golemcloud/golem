@@ -32,7 +32,7 @@ use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    shard, shard_manager, worker_metadata, worker_activator, worker_enumeration, HasActiveWorkers,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
     HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService,
     HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
@@ -64,7 +64,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub runtime: Handle,
     pub component_service: Arc<dyn component::ComponentService + Send + Sync>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-    pub worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    pub worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
     pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     pub worker_enumeration_service:
         Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
@@ -114,7 +114,7 @@ impl<Ctx: WorkerCtx> HasConfig for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasWorkerService for DefaultWorkerFork<Ctx> {
-    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
+    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
         self.worker_service.clone()
     }
 }
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,

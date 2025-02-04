@@ -2,7 +2,7 @@ use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
-use crate::services::worker::WorkerService;
+use crate::services::worker_metadata::WorkerMetadataService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
@@ -82,14 +82,14 @@ pub trait WorkerEnumerationService {
 
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     golem_config: Arc<GolemConfig>,
 }
 
 impl DefaultWorkerEnumerationService {
     pub fn new(
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
@@ -158,7 +158,7 @@ impl HasOplogService for DefaultWorkerEnumerationService {
 }
 
 impl HasWorkerService for DefaultWorkerEnumerationService {
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync> {
+    fn worker_service(&self) -> Arc<dyn WorkerMetadataService + Send + Sync> {
         self.worker_service.clone()
     }
 }

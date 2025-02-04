@@ -38,7 +38,7 @@ use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
-use crate::services::worker::WorkerService;
+use crate::services::worker_metadata::WorkerMetadataService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
@@ -142,7 +142,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -1796,7 +1796,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     oplog: Arc<dyn Oplog + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -1832,7 +1832,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         oplog: Arc<dyn Oplog + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,

@@ -38,7 +38,7 @@ pub mod rpc;
 pub mod scheduler;
 pub mod shard;
 pub mod shard_manager;
-pub mod worker;
+pub mod worker_metadata;
 pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
@@ -68,7 +68,7 @@ pub trait HasWorkerForkService {
 }
 
 pub trait HasWorkerService {
-    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync>;
+    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>;
 }
 
 pub trait HasWorkerEnumerationService {
@@ -222,7 +222,7 @@ pub struct All<Ctx: WorkerCtx> {
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
-    worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
-        worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -421,7 +421,7 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerForkService for T {
 }
 
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerService for T {
-    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
+    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
         self.all().worker_service.clone()
     }
 }

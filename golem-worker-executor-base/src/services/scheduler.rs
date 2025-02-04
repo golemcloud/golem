@@ -29,7 +29,7 @@ use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
-use crate::services::worker::WorkerService;
+use crate::services::worker_metadata::WorkerMetadataService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::HasOplog;
 use crate::storage::keyvalue::{
@@ -81,7 +81,7 @@ pub struct SchedulerServiceDefault {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
@@ -91,7 +91,7 @@ impl SchedulerServiceDefault {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -346,7 +346,7 @@ mod tests {
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
-    use crate::services::worker::{DefaultWorkerService, WorkerService};
+    use crate::services::worker_metadata::{DefaultWorkerMetadataService, WorkerMetadataService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;
@@ -405,8 +405,8 @@ mod tests {
         kvs: Arc<InMemoryKeyValueStorage>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-    ) -> Arc<dyn WorkerService + Send + Sync> {
-        Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
+    ) -> Arc<dyn WorkerMetadataService + Send + Sync> {
+        Arc::new(DefaultWorkerMetadataService::new(kvs, shard_service, oplog_service))
     }
 
     #[test]
