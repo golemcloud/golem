@@ -23,6 +23,7 @@ async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
 async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
 async-scoped = "0.9.0"
 async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -43,6 +44,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true }

@@ -1722,7 +1722,7 @@ async fn worker_initial_files_after_automatic_worker_update(
         .update_component_with_files(
             &component_id,
             "initial-file-read-write",
-            &Some(component_files2),
+            Some(&component_files2),
         )
         .await;
     deps.auto_update_worker(&worker_id, target_version).await;

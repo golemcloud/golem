@@ -187,7 +187,7 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
@@ -432,6 +432,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey {
+        // TODO: should not upload when using HTTP client with component service
         let source_path = self.component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await
@@ -446,7 +447,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .update_component(component_id, &source_path, ComponentType::Durable)
+            .update_component(
+                component_id,
+                &source_path,
+                ComponentType::Durable,
+                None,
+                None,
+            )
             .await
     }
 
@@ -454,16 +461,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .update_component_with_files(
+            .update_component(
                 component_id,
                 &source_path,
                 ComponentType::Durable,
                 files,
-                &HashMap::new(),
+                None,
             )
             .await
     }
@@ -1570,7 +1577,7 @@ pub trait TestDslUnsafe {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion;
     async fn add_initial_component_file(
         &self,
@@ -1757,7 +1764,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }

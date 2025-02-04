@@ -19,6 +19,8 @@ use crate::components::{
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
@@ -46,9 +48,11 @@ use golem_common::model::{
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
+use tokio::fs;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
@@ -297,14 +301,30 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
+                let archive = build_ifs_archive(Some(files)).await.map_err(|error| {
+                    AddComponentError::Other(format!(
+                        "Failed to build IFS archive golem-component-service add component: {error:?}"
+                    ))
+                })?;
+
+                let archive_file = match &archive {
+                    Some((_, path)) =>
+                        Some(File::open(path).await.map_err(|error| {
+                            AddComponentError::Other(format!(
+                                "Failed to open IFS archive golem-component-service add component: {error:?}"
+                            ))
+                        })?),
+                    None => None,
+                };
+
                 match client
                     .create_component(
                         name,
                         Some(&component_type),
                         file,
                         to_http_file_permissions(files).as_ref(),
-                        None::<File>, // TODO: zipped files
-                        to_http_dynamic_linking(dynamic_linking).as_ref(),
+                        archive_file,
+                        to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
                     )
                     .await
                 {
@@ -332,24 +352,8 @@ pub trait ComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
-    ) -> u64 {
-        self.update_component_with_files(
-            component_id,
-            local_path,
-            component_type,
-            &None,
-            &HashMap::new(),
-        )
-        .await
-    }
-
-    async fn update_component_with_files(
-        &self,
-        component_id: &ComponentId,
-        local_path: &Path,
-        component_type: ComponentType,
-        files: &Option<Vec<InitialComponentFile>>,
-        dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        files: Option<&[InitialComponentFile]>,
+        dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let mut file = File::open(local_path)
             .await
@@ -364,7 +368,7 @@ pub trait ComponentService {
 
                 let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> =
                     files
-                        .iter()
+                        .into_iter()
                         .flatten()
                         .map(|f| f.clone().into())
                         .collect::<Vec<_>>();
@@ -378,7 +382,8 @@ pub trait ComponentService {
                             files,
                             dynamic_linking: HashMap::from_iter(
                                 dynamic_linking
-                                    .iter()
+                                    .into_iter()
+                                    .flatten()
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                         },
@@ -424,6 +429,24 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
+                let archive = match build_ifs_archive(files).await {
+                    Ok(archive) => archive,
+                    Err(error) => panic!(
+                        "Failed to build IFS archive in golem-component-service update component: {error:?}"
+                    )
+                };
+
+                let archive_file = match &archive {
+                    Some((_, path)) =>
+                        match File::open(path).await {
+                            Ok(file) => Some(file),
+                            Err(error) => panic!(
+                                "Failed to open IFS archive in golem-component-service update component: {error:?}"
+                            )
+                        }
+                    None => None,
+                };
+
                 match client
                     .update_component(
                         &component_id.0,
@@ -433,7 +456,7 @@ pub trait ComponentService {
                             .as_ref()
                             .and_then(|files| to_http_file_permissions(files))
                             .as_ref(),
-                        None::<File>, // TODO: zipped files
+                        archive_file,
                         to_http_dynamic_linking(dynamic_linking).as_ref(),
                     )
                     .await
@@ -852,29 +875,62 @@ fn to_http_file_permissions(
 }
 
 fn to_http_dynamic_linking(
-    dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+    dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
 ) -> Option<golem_client::model::DynamicLinking> {
+    let Some(dynamic_linking) = dynamic_linking else {
+        return None;
+    };
     if dynamic_linking.is_empty() {
-        None
-    } else {
-        Some(golem_client::model::DynamicLinking {
-            dynamic_linking: dynamic_linking
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        match v {
-                            DynamicLinkedInstance::WasmRpc(link) => {
-                                golem_client::model::DynamicLinkedInstance::WasmRpc(
-                                    golem_client::model::DynamicLinkedWasmRpc {
-                                        target_interface_name: link.target_interface_name.clone(),
-                                    },
-                                )
-                            }
-                        },
-                    )
-                })
-                .collect(),
-        })
+        return None;
     }
+
+    Some(golem_client::model::DynamicLinking {
+        dynamic_linking: dynamic_linking
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    match v {
+                        DynamicLinkedInstance::WasmRpc(link) => {
+                            golem_client::model::DynamicLinkedInstance::WasmRpc(
+                                golem_client::model::DynamicLinkedWasmRpc {
+                                    target_interface_name: link.target_interface_name.clone(),
+                                },
+                            )
+                        }
+                    },
+                )
+            })
+            .collect(),
+    })
+}
+
+async fn build_ifs_archive(
+    files: Option<&[InitialComponentFile]>,
+) -> crate::Result<Option<(TempDir, PathBuf)>> {
+    static ARCHIVE_NAME: &str = "ifs.zip";
+
+    let Some(files) = files else { return Ok(None) };
+    if files.is_empty() {
+        return Ok(None);
+    }
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("golem-test-framework-ifs-zip")
+        .tempdir()?;
+    let temp_file = File::create(temp_dir.path().join(ARCHIVE_NAME)).await?;
+    let mut zip_writer = ZipFileWriter::with_tokio(temp_file);
+
+    for file in files {
+        zip_writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(file.key.0.clone().into(), Compression::Deflate),
+                &(fs::read(Path::new(file.path.as_path())).await?),
+            )
+            .await?;
+    }
+
+    zip_writer.close().await?;
+    let file_path = temp_dir.path().join(ARCHIVE_NAME);
+    Ok(Some((temp_dir, file_path)))
 }

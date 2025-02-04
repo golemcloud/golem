@@ -210,6 +210,8 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        files: Option<&[InitialComponentFile]>,
+        dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let target_dir = &self.root;
 
@@ -226,14 +228,15 @@ impl ComponentService for FileSystemComponentService {
         let last_version = self.get_latest_version(component_id).await;
         let new_version = last_version + 1;
 
+        let empty_linking = HashMap::<String, DynamicLinkedInstance>::new();
         self.write_component_to_filesystem(
             local_path,
             component_id,
             new_version,
             component_type,
-            &[],
+            files.unwrap_or_default(),
             false,
-            &HashMap::new(),
+            dynamic_linking.unwrap_or(&empty_linking),
         )
         .await
         .expect("Failed to write component to filesystem");
