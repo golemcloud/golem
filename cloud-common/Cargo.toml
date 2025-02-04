@@ -19,9 +19,11 @@ golem-wasm-rpc = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 async-trait = { workspace = true }
+axum = { workspace = true }
 bincode = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
+headers = { workspace = true }
 http = { workspace = true }
 num-traits = { workspace = true }
 poem = { workspace = true, features = ["test"] }

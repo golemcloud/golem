@@ -1,54 +1,53 @@
 ## Generated from default config
-[golem_config]
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
 port = 9000
 tracing_file_name_with_port = true
 
-[golem_config.active_workers]
+[active_workers]
 drop_when_full = 0.25
 ttl = "8h"
 
-[golem_config.blob_storage]
+[blob_storage]
 type = "LocalFileSystem"
 
-[golem_config.blob_storage.config]
+[blob_storage.config]
 root = "../data/blob_storage"
 
-[golem_config.compiled_component_service]
+[compiled_component_service]
 type = "Enabled"
 
-[golem_config.compiled_component_service.config]
+[compiled_component_service.config]
 
-[golem_config.component_cache]
+[component_cache]
 max_capacity = 32
 max_metadata_capacity = 16384
 time_to_idle = "12h"
 
-[golem_config.component_service]
+[component_service]
 type = "Grpc"
 
-[golem_config.component_service.config]
+[component_service.config]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
 max_component_size = 52428800
 port = 9090
 
-[golem_config.component_service.config.retries]
+[component_service.config.retries]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[golem_config.indexed_storage]
+[indexed_storage]
 type = "KVStoreRedis"
 
-[golem_config.key_value_storage]
+[key_value_storage]
 type = "Redis"
 
-[golem_config.key_value_storage.config]
+[key_value_storage.config]
 database = 0
 host = "localhost"
 key_prefix = ""
@@ -56,14 +55,14 @@ pool_size = 8
 port = 6380
 tracing = false
 
-[golem_config.key_value_storage.config.retries]
+[key_value_storage.config.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[golem_config.limits]
+[limits]
 epoch_interval = "10ms"
 epoch_ticks = 1
 event_broadcast_capacity = 16
@@ -73,18 +72,18 @@ invocation_result_broadcast_capacity = 100000
 max_active_workers = 1024
 max_concurrent_streams = 1024
 
-[golem_config.memory]
+[memory]
 acquire_retry_delay = "500ms"
 worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
-[golem_config.memory.oom_retry_config]
+[memory.oom_retry_config]
 max_attempts = 4294967295
 max_delay = "5s"
 min_delay = "100ms"
 multiplier = 2.0
 
-[golem_config.oplog]
+[oplog]
 archive_interval = "1day"
 blob_storage_layers = 1
 entry_count_limit = 1024
@@ -93,50 +92,50 @@ max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 512
 max_payload_size = 65536
 
-[golem_config.plugin_service]
+[plugin_service]
 type = "Grpc"
 
-[golem_config.plugin_service.config]
+[plugin_service.config]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
 plugin_cache_size = 1024
 port = 9090
 
-[golem_config.plugin_service.config.retries]
+[plugin_service.config.retries]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[golem_config.public_worker_api]
+[public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
 port = 9007
 
-[golem_config.retry]
+[retry]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[golem_config.scheduler]
+[scheduler]
 refresh_interval = "2s"
 
-[golem_config.shard_manager_service]
+[shard_manager_service]
 type = "Disabled"
 
-[golem_config.suspend]
+[suspend]
 suspend_after = "10s"
 
-[golem_config.tracing]
+[tracing]
 console = false
 dtor_friendly = false
 file_name = "worker-executor.log"
 file_truncate = true
 
-[golem_config.tracing.file]
+[tracing.file]
 ansi = false
 compact = false
 enabled = false
@@ -148,7 +147,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[golem_config.tracing.stdout]
+[tracing.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -162,56 +161,55 @@ without_time = false
 
 
 ## Generated from example config: default-debug-config
-# [golem_config]
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
 # port = 9000
 # tracing_file_name_with_port = true
 # 
-# [golem_config.active_workers]
+# [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
-# [golem_config.blob_storage]
+# [blob_storage]
 # type = "LocalFileSystem"
 # 
-# [golem_config.blob_storage.config]
+# [blob_storage.config]
 # root = "../data/blob_storage"
 # 
-# [golem_config.compiled_component_service]
+# [compiled_component_service]
 # type = "Enabled"
 # 
-# [golem_config.compiled_component_service.config]
+# [compiled_component_service.config]
 # 
-# [golem_config.component_cache]
+# [component_cache]
 # max_capacity = 32
 # max_metadata_capacity = 16384
 # time_to_idle = "12h"
 # 
-# [golem_config.component_service]
+# [component_service]
 # type = "Grpc"
 # 
-# [golem_config.component_service.config]
+# [component_service.config]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # max_component_size = 52428800
 # port = 9090
 # 
-# [golem_config.component_service.config.retries]
+# [component_service.config.retries]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [golem_config.indexed_storage]
+# [indexed_storage]
 # type = "KVStoreRedis"
 # 
-# [golem_config.key_value_storage]
+# [key_value_storage]
 # type = "Redis"
 # 
-# [golem_config.key_value_storage.config]
+# [key_value_storage.config]
 # database = 0
 # host = "localhost"
 # key_prefix = ""
@@ -219,14 +217,14 @@ without_time = false
 # port = 6380
 # tracing = false
 # 
-# [golem_config.key_value_storage.config.retries]
+# [key_value_storage.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
-# [golem_config.limits]
+# [limits]
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 16
@@ -236,18 +234,18 @@ without_time = false
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
 # 
-# [golem_config.memory]
+# [memory]
 # acquire_retry_delay = "500ms"
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
-# [golem_config.memory.oom_retry_config]
+# [memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
-# [golem_config.oplog]
+# [oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
 # entry_count_limit = 1024
@@ -256,50 +254,50 @@ without_time = false
 # max_operations_before_commit_ephemeral = 512
 # max_payload_size = 65536
 # 
-# [golem_config.plugin_service]
+# [plugin_service]
 # type = "Grpc"
 # 
-# [golem_config.plugin_service.config]
+# [plugin_service.config]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # plugin_cache_size = 1024
 # port = 9090
 # 
-# [golem_config.plugin_service.config.retries]
+# [plugin_service.config.retries]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [golem_config.public_worker_api]
+# [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # host = "localhost"
 # port = 9007
 # 
-# [golem_config.retry]
+# [retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [golem_config.scheduler]
+# [scheduler]
 # refresh_interval = "2s"
 # 
-# [golem_config.shard_manager_service]
+# [shard_manager_service]
 # type = "Disabled"
 # 
-# [golem_config.suspend]
+# [suspend]
 # suspend_after = "10s"
 # 
-# [golem_config.tracing]
+# [tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
 # 
-# [golem_config.tracing.file]
+# [tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -311,7 +309,7 @@ without_time = false
 # span_events_full = false
 # without_time = false
 # 
-# [golem_config.tracing.stdout]
+# [tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true
@@ -322,3 +320,29 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
+## Generated from default config
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+
+## Generated from example config: default-additional-config
+# [cloud_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 8080
+# 
+# [cloud_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0

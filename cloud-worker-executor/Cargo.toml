@@ -44,7 +44,7 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.1"
 lazy_static = { workspace = true }
-log = "0.4.22"
+log = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rustix = { version = "0.38.30", features = ["event"] }

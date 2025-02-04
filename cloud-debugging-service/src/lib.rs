@@ -1,9 +1,14 @@
 use crate::additional_deps::AdditionalDeps;
-use crate::config::DebugConfig;
+use crate::auth::{AuthService, AuthServiceDefault};
+use crate::config::{AdditionalDebugConfig, DebugConfig};
 use crate::context::DebugContext;
-use crate::services::debug_service;
-use anyhow::Error;
+use crate::services::debug_service::DebugServiceDefault;
+use anyhow::{Context, Error};
 use async_trait::async_trait;
+use axum::routing::any;
+use axum::Router;
+use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
+use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
@@ -13,7 +18,7 @@ use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
+use golem_worker_executor_base::services::golem_config::{ComponentServiceConfig, GolemConfig};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::oplog::OplogService;
@@ -32,15 +37,17 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{plugins, All};
+use golem_worker_executor_base::services::{plugins, All, HasConfig, HasExtraDeps};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::WorkerCtx;
 use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, Instrument};
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -52,8 +59,17 @@ pub mod config;
 pub mod context;
 pub mod debug;
 pub mod services;
+pub mod websocket;
 
-struct ServerBootstrap {}
+mod auth;
+pub mod debug_request;
+mod debug_session;
+mod jrpc;
+mod model;
+
+struct ServerBootstrap {
+    additional_config: AdditionalDebugConfig,
+}
 
 #[async_trait]
 impl Bootstrap<DebugContext> for ServerBootstrap {
@@ -66,10 +82,40 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
     async fn run_server(
         &self,
-        _service_dependencies: All<DebugContext>,
+        service_dependencies: All<DebugContext>,
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
-        _join_set: &mut JoinSet<Result<(), Error>>,
+        join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<()> {
+        let additional_deps = service_dependencies.extra_deps();
+        let debug_service = additional_deps.get_debug_service();
+
+        let handle_ws = |ws| websocket::handle_ws(ws, debug_service);
+
+        let config = service_dependencies.config();
+
+        let app = Router::new().route("/ws", any(handle_ws));
+
+        let addr = SocketAddrV4::new(
+            config
+                .http_address
+                .parse::<Ipv4Addr>()
+                .context("http_address configuration")?,
+            config.port,
+        );
+
+        let listener = TcpListener::bind(addr).await?;
+        let local_addr = listener.local_addr()?;
+
+        join_set.spawn(
+            async move {
+                axum::serve(listener, app).await?;
+                Ok(())
+            }
+            .in_current_span(),
+        );
+
+        info!("Jrpc server started on {local_addr}");
+
         Ok(())
     }
 
@@ -114,7 +160,34 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<DebugContext>> {
-        let debug_service = debug_service::configured();
+        let config: ComponentServiceConfig = golem_config.component_service.clone();
+
+        let remote_cloud_service_config = self.additional_config.cloud_service.clone();
+
+        let project_service: Arc<dyn ProjectService + Send + Sync> =
+            Arc::new(ProjectServiceDefault::new(&remote_cloud_service_config));
+        let grant_service: Arc<dyn GrantService + Send + Sync> =
+            Arc::new(GrantServiceDefault::new(&remote_cloud_service_config));
+
+        let component_service_grpc_config = match config {
+            ComponentServiceConfig::Grpc(grpc) => Ok(grpc),
+            ComponentServiceConfig::Local(_) => {
+                Err(anyhow::Error::msg("Cannot create auth_service for debugging service with local component service config".to_string()))
+            }
+        }?;
+
+        let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(AuthServiceDefault::new(
+            project_service.clone(),
+            grant_service.clone(),
+            component_service_grpc_config,
+        ));
+
+        let debug_session = Arc::new(debug_session::DebugSessionDefault::new());
+
+        let debug_service = Arc::new(DebugServiceDefault::new(
+            auth_service.clone(),
+            debug_session.clone(),
+        ));
 
         let additional_deps = AdditionalDeps::new(debug_service);
 
@@ -222,12 +295,13 @@ fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext
 
 pub async fn run(
     debug_config: DebugConfig,
+    additional_config: AdditionalDebugConfig,
     prometheus_registry: Registry,
     runtime: Handle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Golem Debug Worker Executor starting up...");
     let mut join_set = JoinSet::new();
-    ServerBootstrap {}
+    ServerBootstrap { additional_config }
         .run(
             debug_config.golem_config,
             prometheus_registry,

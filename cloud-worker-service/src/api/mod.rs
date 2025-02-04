@@ -37,12 +37,12 @@ pub fn make_open_api_service(services: ApiServices) -> OpenApiService<WorkerServ
             WorkerApi::new(
                 services.component_service.clone(),
                 services.worker_service.clone(),
-                services.auth_service.clone(),
+                services.worker_auth_service.clone(),
             ),
             ApiDefinitionApi::new(services.definition_service.clone()),
             ApiDeploymentApi::new(
                 services.deployment_service,
-                services.auth_service.clone(),
+                services.worker_auth_service.clone(),
                 services.domain_route,
             ),
             ApiCertificateApi::new(services.certificate_service),
@@ -58,7 +58,7 @@ pub fn management_routes(services: ApiServices) -> Route {
     let api_service = make_open_api_service(services.clone());
     let connect_services = worker_connect::ConnectService::new(
         services.worker_service.clone(),
-        services.auth_service.clone(),
+        services.worker_auth_service.clone(),
     );
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();

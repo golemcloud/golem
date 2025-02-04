@@ -7,8 +7,12 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 use crate::model::TokenSecret;
+use axum::http::header;
 use bincode::{Decode, Encode};
 use golem_common::model::{AccountId, HasAccountId, ProjectId};
+use headers::authorization::Bearer as HBearer;
+use headers::Cookie as HCookie;
+use poem::web::headers::{Authorization, HeaderMapExt};
 use serde::Deserialize;
 use std::str::FromStr;
 
@@ -21,6 +25,26 @@ pub enum GolemSecurityScheme {
 impl GolemSecurityScheme {
     pub fn secret(self) -> TokenSecret {
         Into::<TokenSecret>::into(self)
+    }
+
+    pub fn from_header_map(
+        header_map: &header::HeaderMap,
+    ) -> Result<GolemSecurityScheme, &'static str> {
+        if let Some(auth_bearer) = header_map.typed_get::<Authorization<HBearer>>() {
+            return TokenSecret::from_str(auth_bearer.token())
+                .map(|token| GolemSecurityScheme::Bearer(GolemBearer(token)))
+                .map_err(|_| "Invalid Bearer token");
+        };
+
+        if let Some(cookie_header) = header_map.typed_get::<HCookie>() {
+            if let Some(session_id) = cookie_header.get(COOKIE_KEY) {
+                return TokenSecret::from_str(session_id)
+                    .map(|token| GolemSecurityScheme::Cookie(GolemCookie(token)))
+                    .map_err(|_| "Invalid session ID");
+            }
+        }
+
+        Err("Authentication failed")
     }
 }
 

@@ -218,7 +218,7 @@ impl From<AuthServiceError> for WorkerError {
 pub struct WorkerApi {
     component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
-    auth_service: Arc<dyn AuthService + Send + Sync>,
+    worker_auth_service: Arc<dyn AuthService + Send + Sync>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
@@ -231,7 +231,7 @@ impl WorkerApi {
         Self {
             component_service,
             worker_service,
-            auth_service,
+            worker_auth_service: auth_service,
         }
     }
 
@@ -283,7 +283,7 @@ impl WorkerApi {
             let worker_id = validated_worker_id(component_id, name)?;
 
             let namespace = self
-                .auth_service
+                .worker_auth_service
                 .is_authorized_by_component(
                     &worker_id.component_id,
                     ProjectAction::CreateWorker,
@@ -333,7 +333,7 @@ impl WorkerApi {
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
             .await?;
         let response = self
@@ -375,7 +375,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -424,7 +424,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(
                 &target_worker_id.component_id,
                 ProjectAction::UpdateWorker,
@@ -478,7 +478,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -528,7 +528,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(
                 &target_worker_id.component_id,
                 ProjectAction::UpdateWorker,
@@ -579,7 +579,7 @@ impl WorkerApi {
         let CompleteParameters { oplog_idx, data } = params.0;
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -620,7 +620,7 @@ impl WorkerApi {
             recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -673,7 +673,7 @@ impl WorkerApi {
             recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
         let response = self
@@ -733,7 +733,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
             .await?;
         let response = {
@@ -813,7 +813,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
             .await?;
         let response = self
@@ -854,7 +854,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -887,7 +887,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
         let response = self
@@ -928,7 +928,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
@@ -1006,7 +1006,7 @@ impl WorkerApi {
         let path = make_component_file_path(file_name.0)?;
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
@@ -1045,7 +1045,7 @@ impl WorkerApi {
         let path = make_component_file_path(file_name.0)?;
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
             .await?;
 
@@ -1089,7 +1089,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 
@@ -1129,7 +1129,7 @@ impl WorkerApi {
         );
 
         let namespace = self
-            .auth_service
+            .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
 

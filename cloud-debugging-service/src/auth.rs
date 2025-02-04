@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
+use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
 use cloud_common::clients::grant::GrantService;
 use cloud_common::clients::project::ProjectService;
 use cloud_common::model::{ProjectAction, Role};
@@ -12,17 +12,14 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
-use golem_worker_service_base::app_config::ComponentServiceConfig;
-use golem_worker_service_base::service::component::ComponentServiceError;
-use golem_worker_service_base::service::with_metadata;
+use golem_worker_executor_base::services::golem_config::ComponentServiceGrpcConfig;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic::Status;
 use tracing::error;
 
-// A wrapper over base auth service to be used by worker-service as well as debug-service (both being directly user facing).
-// Debug service requires similar authentication when trying to create a worker in debug mode.
 #[async_trait]
 pub trait AuthService: BaseAuthService {
     async fn is_authorized_by_component(
@@ -33,21 +30,69 @@ pub trait AuthService: BaseAuthService {
     ) -> Result<CloudNamespace, AuthServiceError>;
 }
 
-pub struct CloudAuthService {
-    common_auth: cloud_common::clients::auth::CloudAuthService,
-    component_service_config: ComponentServiceConfig,
+#[derive(Debug, thiserror::Error)]
+pub enum DebuggingServiceAuthError {
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Bad Request: {}", .0.join(", "))]
+    BadRequest(Vec<String>),
+    #[error("Internal component service error: {0}")]
+    Internal(String),
+    #[error("Internal error: {0}")]
+    FailedGrpcStatus(Status),
+    #[error("Internal error: {0}")]
+    FailedTransport(tonic::transport::Error),
+}
+
+impl From<Status> for DebuggingServiceAuthError {
+    fn from(status: Status) -> Self {
+        DebuggingServiceAuthError::FailedGrpcStatus(status)
+    }
+}
+
+impl From<tonic::transport::Error> for DebuggingServiceAuthError {
+    fn from(error: tonic::transport::Error) -> Self {
+        DebuggingServiceAuthError::FailedTransport(error)
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::v1::ComponentError>
+    for DebuggingServiceAuthError
+{
+    fn from(error: golem_api_grpc::proto::golem::component::v1::ComponentError) -> Self {
+        use golem_api_grpc::proto::golem::component::v1::component_error::Error;
+        match error.error {
+            Some(Error::BadRequest(errors)) => DebuggingServiceAuthError::BadRequest(errors.errors),
+            Some(Error::Unauthorized(error)) => {
+                DebuggingServiceAuthError::Unauthorized(error.error)
+            }
+            Some(Error::LimitExceeded(error)) => DebuggingServiceAuthError::Forbidden(error.error),
+            Some(Error::NotFound(error)) => DebuggingServiceAuthError::NotFound(error.error),
+            Some(Error::AlreadyExists(error)) => DebuggingServiceAuthError::Internal(error.error),
+            Some(Error::InternalError(error)) => DebuggingServiceAuthError::Internal(error.error),
+            None => DebuggingServiceAuthError::Internal("Unknown error".to_string()),
+        }
+    }
+}
+
+pub struct AuthServiceDefault {
+    common_auth: CloudAuthService,
+    component_service_grpc_config: ComponentServiceGrpcConfig,
     component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
 
-impl CloudAuthService {
+impl AuthServiceDefault {
     pub fn new(
         project_service: Arc<dyn ProjectService + Send + Sync>,
         grant_service: Arc<dyn GrantService + Send + Sync>,
-        component_service_config: ComponentServiceConfig,
+        component_service_grpc_config: ComponentServiceGrpcConfig,
     ) -> Self {
-        let common_auth =
-            cloud_common::clients::auth::CloudAuthService::new(project_service, grant_service);
+        let common_auth = CloudAuthService::new(project_service, grant_service);
 
         let component_service_client = GrpcClient::new(
             "auth_service",
@@ -56,10 +101,10 @@ impl CloudAuthService {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            component_service_config.uri(),
+            component_service_grpc_config.uri(),
             GrpcClientConfig {
-                retries_on_unavailable: component_service_config.retries.clone(),
-                ..Default::default()
+                retries_on_unavailable: component_service_grpc_config.retries.clone(),
+                ..Default::default() // TODO
             },
         );
 
@@ -76,7 +121,7 @@ impl CloudAuthService {
 
         Self {
             common_auth,
-            component_service_config,
+            component_service_grpc_config,
             component_service_client,
             component_project_cache,
         }
@@ -89,7 +134,7 @@ impl CloudAuthService {
     ) -> Result<ProjectId, AuthServiceError> {
         let id = component_id.clone();
         let metadata = metadata.clone();
-        let retries = self.component_service_config.retries.clone();
+        let retries = self.component_service_grpc_config.retries.clone();
         let client = self.component_service_client.clone();
 
         self.component_project_cache
@@ -116,7 +161,7 @@ impl CloudAuthService {
                                     .into_inner();
 
                                 match response.result {
-                                    None => Err(ComponentServiceError::Internal(
+                                    None => Err(DebuggingServiceAuthError::Unauthorized(
                                         "Empty response".to_string(),
                                     )),
                                     Some(get_component_metadata_response::Result::Success(
@@ -126,7 +171,7 @@ impl CloudAuthService {
                                         .and_then(|c| c.project_id)
                                         .and_then(|id| id.try_into().ok())
                                         .ok_or_else(|| {
-                                            ComponentServiceError::Internal(
+                                            DebuggingServiceAuthError::Unauthorized(
                                                 "Empty project id".to_string(),
                                             )
                                         }),
@@ -153,7 +198,7 @@ impl CloudAuthService {
 }
 
 #[async_trait]
-impl BaseAuthService for CloudAuthService {
+impl BaseAuthService for AuthServiceDefault {
     async fn authorize_role(
         &self,
         role: Role,
@@ -175,7 +220,7 @@ impl BaseAuthService for CloudAuthService {
 }
 
 #[async_trait]
-impl AuthService for CloudAuthService {
+impl AuthService for AuthServiceDefault {
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,
@@ -189,26 +234,30 @@ impl AuthService for CloudAuthService {
     }
 }
 
-fn is_retriable(error: &ComponentServiceError) -> bool {
+fn is_retriable(error: &DebuggingServiceAuthError) -> bool {
     matches!(
         error,
-        ComponentServiceError::FailedGrpcStatus(_) | ComponentServiceError::FailedTransport(_)
+        DebuggingServiceAuthError::FailedTransport(_)
+            | DebuggingServiceAuthError::FailedGrpcStatus(_)
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use test_r::test;
+pub fn with_metadata<T, I, K, V>(request: T, metadata: I) -> tonic::Request<T>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut req = tonic::Request::new(request);
+    let req_metadata = req.metadata_mut();
 
-    use golem_worker_service_base::service::with_metadata;
-    use uuid::Uuid;
-
-    #[test]
-    fn test_uuid_aut() {
-        let uuid = Uuid::new_v4();
-        let metadata = vec![("authorization".to_string(), format!("Bearer {}", uuid))];
-
-        let result = with_metadata((), metadata);
-        assert_eq!(1, result.metadata().len())
+    for (key, value) in metadata {
+        let key = tonic::metadata::MetadataKey::from_bytes(key.as_ref().as_bytes());
+        let value = value.as_ref().parse();
+        if let (Ok(key), Ok(value)) = (key, value) {
+            req_metadata.insert(key, value);
+        }
     }
+
+    req
 }

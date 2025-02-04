@@ -77,7 +77,7 @@ use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct ApiServices {
-    pub auth_service: Arc<dyn AuthService + Send + Sync>,
+    pub worker_auth_service: Arc<dyn AuthService + Send + Sync>,
     pub project_service: Arc<dyn ProjectService + Send + Sync>,
     pub limit_service: Arc<dyn LimitService + Send + Sync>,
     pub definition_service: Arc<dyn ApiDefinitionService + Send + Sync>,
@@ -428,7 +428,7 @@ impl ApiServices {
         ));
 
         Ok(Self {
-            auth_service,
+            worker_auth_service: auth_service,
             limit_service,
             project_service,
             definition_service,
