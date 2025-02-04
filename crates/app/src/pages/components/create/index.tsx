@@ -72,6 +72,8 @@ const CreateComponent = () => {
   });
 
   function onSubmit(values: z.infer<typeof formSchema>) {
+    console.log(values);
+    return;
     const formData = new FormData();
     formData.append("name", values.name!);
     formData.append("component", file!);

@@ -15,9 +15,14 @@ import {
 import { useDropzone } from "react-dropzone";
 import { useDrag, useDrop } from "react-dnd";
 
+import JSZip from "jszip";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+/**
+ * Interface representing a file or folder in the file manager
+ */
 interface FileItem {
   id: string;
   name: string;
@@ -25,6 +30,7 @@ interface FileItem {
   type: "file" | "folder";
   parentId: string | null;
   isLocked: boolean;
+  fileObject?: File;
 }
 
 const ItemTypes = {
@@ -39,6 +45,7 @@ export function FileManager() {
   );
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editingName, setEditingName] = React.useState("");
+
   const onDrop = React.useCallback((acceptedFiles: File[]) => {
     const newFiles: FileItem[] = acceptedFiles.map((file) => ({
       id: Math.random().toString(36).substring(7),
@@ -47,6 +54,7 @@ export function FileManager() {
       type: "file",
       parentId: null,
       isLocked: false,
+      fileObject: file,
     }));
     setFiles((prev) => [...prev, ...newFiles]);
   }, []);
@@ -303,6 +311,57 @@ export function FileManager() {
     );
   };
 
+  async function addFilesToZip(zipFolder: JSZip, parentId: string | null) {
+    const children = files.filter((file) => file.parentId === parentId);
+    for (const child of children) {
+      if (child.type === "folder") {
+        const folder = zipFolder.folder(child.name);
+        if (folder) {
+          await addFilesToZip(folder, child.id);
+        }
+      } else if (child.type === "file") {
+        if (child.fileObject) {
+          zipFolder.file(child.name, child.fileObject);
+        }
+      }
+    }
+  }
+
+  // Recursive helper function to compute full path of a file item.
+  function getFullPath(file: FileItem, allFiles: FileItem[]): string {
+    if (!file.parentId) return file.name;
+    const parent = allFiles.find((f) => f.id === file.parentId);
+    if (!parent) return file.name;
+    return `${getFullPath(parent, allFiles)}/${file.name}`;
+  }
+
+  // Returns metadata of all files in the required format.
+  function captureFileMetadata(allFiles: FileItem[]) {
+    return {
+      values: allFiles.map((file) => ({
+        path: getFullPath(file, allFiles),
+        permissions: "read-only",
+      })),
+    };
+  }
+
+  async function handleSubmit() {
+    const zip = new JSZip();
+    await addFilesToZip(zip, null);
+    const blob = await zip.generateAsync({ type: "blob" });
+
+    // Capture file metadata in the required format and log it
+    const capturedFiles = captureFileMetadata(files);
+    console.log("Captured Files Metadata:", capturedFiles);
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "files.zip";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       <div className="space-y-4">
@@ -363,6 +422,9 @@ export function FileManager() {
             ))}
           </div>
         </div>
+        {/* <div className="pt-4">
+          <Button onClick={handleSubmit}>Submit &amp; Download Zip</Button>
+        </div> */}
       </div>
     </div>
   );
