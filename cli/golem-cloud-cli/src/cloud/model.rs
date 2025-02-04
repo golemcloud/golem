@@ -389,6 +389,43 @@ pub enum CloudComponentUriOrName {
     Name(ComponentName, ProjectRef),
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CloudComponentUrisArg {
+    pub uris: Vec<ComponentUri>,
+    pub explicit_name: bool,
+}
+
+impl clap::Args for CloudComponentUrisArg {
+    fn augment_args(_cmd: clap::Command) -> clap::Command {
+        todo!("cmd")
+    }
+
+    fn augment_args_for_update(_cmd: clap::Command) -> clap::Command {
+        todo!("augment_args_for_update")
+    }
+}
+
+impl FromArgMatches for CloudComponentUrisArg {
+    fn from_arg_matches(_matches: &ArgMatches) -> Result<Self, Error> {
+        todo!("from_arg_matches")
+    }
+
+    fn update_from_arg_matches(&mut self, _matches: &ArgMatches) -> Result<(), Error> {
+        todo!("update_from_arg_matches")
+    }
+}
+
+impl ComponentRefsSplit<ProjectRef> for CloudComponentUrisArg {
+    fn split(
+        self,
+    ) -> Option<(
+        Vec<golem_common::uri::oss::uri::ComponentUri>,
+        Option<ProjectRef>,
+    )> {
+        todo!("split")
+    }
+}
+
 impl ComponentRefSplit<ProjectRef> for CloudComponentUriOrName {
     fn split(
         self,
