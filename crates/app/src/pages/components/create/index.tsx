@@ -6,6 +6,8 @@ import {
 } from "@/components/ui/card.tsx";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
+import { DndProvider } from "react-dnd";
+import { HTML5Backend } from "react-dnd-html5-backend";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Form,
@@ -24,7 +26,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { API } from "@/service";
 import { useNavigate } from "react-router-dom";
 import ErrorBoundary from "@/components/errorBoundary";
-import FileManager from "./fileManager";
+import { FileManager } from "./fileManager";
 
 const COMPONENT_TYPES = [
   {
@@ -200,7 +202,9 @@ const CreateComponent = () => {
                     </FormItem>
                   )}
                 />
-                <FileManager />
+                <DndProvider backend={HTML5Backend}>
+                  <FileManager />
+                </DndProvider>
                 <div className="flex justify-between">
                   <Button
                     type="button"

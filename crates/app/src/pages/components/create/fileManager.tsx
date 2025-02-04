@@ -1,176 +1,145 @@
-import React, { useState, useCallback } from "react";
+"use client";
+
+import * as React from "react";
 import {
-  Folder,
-  File,
-  ChevronDown,
   ChevronRight,
-  Trash,
+  File,
+  Folder,
   Lock,
+  Trash2,
   Unlock,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
-import { useDrag, useDrop, DndProvider } from "react-dnd";
-import { HTML5Backend } from "react-dnd-html5-backend";
-import ErrorBoundary from "@/components/errorBoundary";
+import { useDrag, useDrop } from "react-dnd";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface FileItem {
   id: string;
   name: string;
+  size: number;
   type: "file" | "folder";
-  size?: number;
-  children?: FileItem[];
-  isLocked?: boolean;
+  parentId: string | null;
+  isLocked: boolean;
 }
 
-const DraggableFileItem: React.FC<{
-  item: FileItem;
-  moveItem: (draggedId: string, targetId: string) => void;
-  toggleFolder: (folderId: string) => void;
-  expandedFolders: Set<string>;
-  handleDelete: (id: string) => void;
-  formatFileSize: (bytes?: number) => string;
-  depth: number;
-  renameFolder: (id: string, newName: string) => void;
-  toggleLock: (id: string) => void;
-}> = ({
-  item,
-  moveItem,
-  toggleFolder,
-  expandedFolders,
-  handleDelete,
-  formatFileSize,
-  depth,
-  renameFolder,
-  toggleLock,
-}) => {
-  const [{ isDragging }, dragRef] = useDrag(() => ({
-    type: "fileItem", // Ensure this matches the useDrop accept type
-    item: { id: item.id },
-    collect: (monitor) => ({
-      isDragging: monitor.isDragging(),
-    }),
-  }));
-
-  const [, dropRef] = useDrop(
-    () => ({
-      accept: "fileItem",
-      drop: (draggedItem: { id: string }) => {
-        if (draggedItem.id !== item.id) {
-          moveItem(draggedItem.id, item.id);
-        }
-      },
-      canDrop: () => item.type === "folder",
-    }),
-    [item]
-  );
-
-  const [isEditing, setIsEditing] = useState(false);
-  const [newName, setNewName] = useState(item.name);
-
-  const handleRename = () => {
-    if (newName.trim()) {
-      renameFolder(item.id, newName);
-      setIsEditing(false);
-    }
-  };
-
-  return (
-    <ErrorBoundary>
-      <div
-        ref={dropRef}
-        className={`flex items-center px-${depth * 2} py-2 hover:bg-gray-50 ${
-          isDragging ? "opacity-50" : "opacity-100"
-        } ${item.isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
-      >
-        <span className={`w-${depth * 6}`} />
-        {item.type === "folder" && (
-          <button
-            onClick={() => toggleFolder(item.id)}
-            className="mr-2 text-gray-400"
-            disabled={item.isLocked}
-          >
-            {expandedFolders.has(item.id) ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
-          </button>
-        )}
-
-        <div ref={dragRef} className="flex items-center w-full">
-          {item.type === "folder" ? (
-            <Folder className="h-5 w-5 text-gray-400 mr-2" />
-          ) : (
-            <File className="h-5 w-5 text-gray-400 mr-2" />
-          )}
-          {isEditing ? (
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onBlur={handleRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRename();
-              }}
-              className="flex-1 p-1 border border-gray-300 rounded"
-              disabled={item.isLocked}
-            />
-          ) : (
-            <span
-              className={`flex-1 cursor-pointer ${
-                item.isLocked ? "cursor-not-allowed" : ""
-              }`}
-              onClick={() => !item.isLocked && setIsEditing(true)}
-            >
-              {item.name}
-            </span>
-          )}
-          {item.size && (
-            <span className="text-sm text-gray-500 mr-4">
-              {formatFileSize(item.size)}
-            </span>
-          )}
-          <button
-            className="p-1 text-gray-400 hover:text-gray-600"
-            onClick={() => !item.isLocked && handleDelete(item.id)}
-            disabled={item.isLocked}
-          >
-            <Trash className="h-4 w-4" />
-          </button>
-          <button
-            className="p-1 text-gray-400 hover:text-gray-600"
-            onClick={() => toggleLock(item.id)}
-          >
-            {item.isLocked ? (
-              <Lock className="h-4 w-4" />
-            ) : (
-              <Unlock className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-      </div>
-    </ErrorBoundary>
-  );
+const ItemTypes = {
+  FILE: "file",
+  FOLDER: "folder",
 };
 
-const FileManager = () => {
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
+export function FileManager() {
+  const [files, setFiles] = React.useState<FileItem[]>([]);
+  const [expandedFolders, setExpandedFolders] = React.useState<Set<string>>(
     new Set()
   );
-
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles = acceptedFiles.map((file) => ({
-      id: Math.random().toString(36).substr(2, 9),
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editingName, setEditingName] = React.useState("");
+  const onDrop = React.useCallback((acceptedFiles: File[]) => {
+    const newFiles: FileItem[] = acceptedFiles.map((file) => ({
+      id: Math.random().toString(36).substring(7),
       name: file.name,
-      type: "file" as const,
       size: file.size,
+      type: "file",
+      parentId: null,
       isLocked: false,
     }));
     setFiles((prev) => [...prev, ...newFiles]);
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
+
+  const createFolder = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const newFolder: FileItem = {
+      id: Math.random().toString(36).substring(7),
+      name: "New Folder",
+      size: 0,
+      type: "folder",
+      parentId: null,
+      isLocked: false,
+    };
+    setFiles((prev) => [...prev, newFolder]);
+  };
+
+  const startEditing = (file: FileItem) => {
+    setEditingId(file.id);
+    setEditingName(file.name);
+  };
+
+  const saveEditing = () => {
+    if (editingId) {
+      setFiles((prev) =>
+        prev.map((file) =>
+          file.id === editingId ? { ...file, name: editingName } : file
+        )
+      );
+      setEditingId(null);
+    }
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+  };
+
+  const toggleLock = (fileId: string) => {
+    setFiles((prev) =>
+      prev.map((file) => {
+        if (file.id === fileId || file.parentId === fileId) {
+          return { ...file, isLocked: !file.isLocked };
+        }
+        return file;
+      })
+    );
+  };
+
+  const deleteFile = (fileId: string) => {
+    setFiles((prev) =>
+      prev.filter((file) => file.id !== fileId && file.parentId !== fileId)
+    );
+  };
+
+  const moveFile = (fileId: string, targetFolderId: string | null) => {
+    const isValidMove = (
+      fileId: string,
+      targetFolderId: string | null
+    ): boolean => {
+      if (targetFolderId === null) {
+        return true;
+      }
+      // Prevent moving an item into itself.
+      if (fileId === targetFolderId) return false;
+      // Prevent moving a folder into one of its own descendants.
+      let parent = files.find((f) => f.id === targetFolderId) || null;
+      while (parent) {
+        if (parent.id === fileId) return false;
+        parent = parent.parentId
+          ? files.find((f) => f.id === parent?.parentId) || null
+          : null;
+      }
+      return true;
+    };
+
+    if (!isValidMove(fileId, targetFolderId)) return;
+
+    setFiles((prev) =>
+      prev.map((file) => {
+        if (file.id === fileId) {
+          return { ...file, parentId: targetFolderId };
+        }
+        return file;
+      })
+    );
+    // Expand the target folder if it's not already expanded.
+    if (targetFolderId) {
+      setExpandedFolders((prev) => new Set(prev).add(targetFolderId));
+    }
+  };
 
   const toggleFolder = (folderId: string) => {
     setExpandedFolders((prev) => {
@@ -184,201 +153,217 @@ const FileManager = () => {
     });
   };
 
-  const createNewFolder = () => {
-    const newFolder: FileItem = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: "New Folder",
-      type: "folder",
-      children: [],
-      isLocked: false,
-    };
-    setFiles((prev) => [...prev, newFolder]);
-  };
+  const rootFiles = files.filter((file) => file.parentId === null);
+  const getChildFiles = (parentId: string) =>
+    files.filter((file) => file.parentId === parentId);
 
-  const formatFileSize = (bytes?: number) => {
-    if (!bytes) return "";
-    const kb = bytes / 1024;
-    return `${kb.toFixed(0)} KB`;
-  };
+  const DraggableItem = ({ file }: { file: FileItem }) => {
+    const isExpanded = expandedFolders.has(file.id);
+    const childFiles = file.type === "folder" ? getChildFiles(file.id) : [];
 
-  const handleDelete = (id: string) => {
-    setFiles((prev) => prev.filter((item) => item.id !== id));
-  };
+    const [{ isDragging }, drag] = useDrag(() => ({
+      type: ItemTypes.FILE,
+      item: { id: file.id, type: file.type },
+      collect: (monitor) => ({
+        isDragging: monitor.isDragging(),
+      }),
+    }));
 
-  const moveItem = (draggedId: string, targetId: string) => {
-    const findAndRemoveItem = (
-      items: FileItem[],
-      id: string
-    ): [FileItem | null, FileItem[]] => {
-      let removedItem: FileItem | null = null;
-      const updatedItems = items
-        .map((item) => {
-          if (item.id === id) {
-            removedItem = item;
-            return null;
-          }
-          if (item.children) {
-            const [childItem, updatedChildren] = findAndRemoveItem(
-              item.children,
-              id
-            );
-            if (childItem) removedItem = childItem;
-            return { ...item, children: updatedChildren };
-          }
-          return item;
-        })
-        .filter(Boolean) as FileItem[];
-      return [removedItem, updatedItems];
-    };
-
-    const insertIntoFolder = (
-      items: FileItem[],
-      targetId: string,
-      itemToInsert: FileItem
-    ): FileItem[] => {
-      return items.map((item) => {
-        if (item.id === targetId && item.type === "folder") {
-          return {
-            ...item,
-            children: [...(item.children || []), itemToInsert],
-          };
+    const [{ isOver }, drop] = useDrop(() => ({
+      accept: ItemTypes.FILE,
+      drop: (item: { id: string; type: string }, monitor) => {
+        if (!monitor.isOver({ shallow: true })) return;
+        // If dropped onto a folder, move the item into that folder.
+        // Otherwise, use the parent's folder if the target is a file.
+        if (item.id !== file.id) {
+          moveFile(item.id, file.type === "folder" ? file.id : file.parentId);
         }
-        if (item.children) {
-          return {
-            ...item,
-            children: insertIntoFolder(item.children, targetId, itemToInsert),
-          };
-        }
-        return item;
-      });
-    };
+      },
+      collect: (monitor) => ({
+        isOver: monitor.isOver({ shallow: true }),
+      }),
+    }));
 
-    setFiles((prev) => {
-      const [draggedItem, remainingFiles] = findAndRemoveItem(prev, draggedId);
-      if (!draggedItem) return prev;
-      return insertIntoFolder(remainingFiles, targetId, draggedItem);
-    });
-  };
+    return (
+      <div
+        ref={(node) => drag(drop(node))}
+        className={`${isDragging ? "opacity-50" : ""} ${
+          isOver ? "bg-muted/50" : ""
+        }`}
+      >
+        <div className="flex items-center gap-2 py-1 px-2 rounded-md hover:bg-muted/50">
+          {file.type === "folder" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-4 w-4"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFolder(file.id);
+              }}
+            >
+              <ChevronRight
+                className={`h-4 w-4 transition-transform ${
+                  isExpanded ? "rotate-90" : ""
+                }`}
+              />
+            </Button>
+          )}
+          {file.type === "folder" ? (
+            <Folder className="h-4 w-4" />
+          ) : (
+            <File className="h-4 w-4" />
+          )}
 
-  const renameFolder = (id: string, newName: string) => {
-    setFiles((prev) => {
-      const updateItemName = (items: FileItem[]): FileItem[] => {
-        return items.map((item) => {
-          if (item.id === id) {
-            return { ...item, name: newName };
-          }
-          if (item.children) {
-            return { ...item, children: updateItemName(item.children) };
-          }
-          return item;
-        });
-      };
-      return updateItemName(prev);
-    });
-  };
-
-  const toggleLock = (id: string) => {
-    setFiles((prev) => {
-      const toggleLockRecursive = (items: FileItem[]): FileItem[] => {
-        return items.map((item) => {
-          if (
-            item.id === id ||
-            (item.children && item.children.some((child) => child.id === id))
-          ) {
-            const isLocked = item.id === id ? !item.isLocked : item.isLocked;
-            return {
-              ...item,
-              isLocked,
-              children: item.children
-                ? toggleLockRecursive(item.children)
-                : undefined,
-            };
-          }
-          return item;
-        });
-      };
-      return toggleLockRecursive(prev);
-    });
-  };
-
-  const renderTree = (items: FileItem[], depth = 0) => {
-    return items.map((item) => (
-      <div key={item.id}>
-        <DraggableFileItem
-          item={item}
-          moveItem={moveItem}
-          toggleFolder={toggleFolder}
-          expandedFolders={expandedFolders}
-          handleDelete={handleDelete}
-          formatFileSize={formatFileSize}
-          renameFolder={renameFolder}
-          depth={depth}
-          toggleLock={toggleLock}
-        />
-        {item.type === "folder" &&
-          expandedFolders.has(item.id) &&
-          item.children &&
-          renderTree(item.children, depth + 1)}
+          {editingId === file.id ? (
+            <div className="flex items-center gap-2 flex-1">
+              <Input
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                className="h-7 py-1"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveEditing();
+                  if (e.key === "Escape") cancelEditing();
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={saveEditing}
+              >
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={cancelEditing}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <>
+              <span className="flex-1">{file.name}</span>
+              {file.type === "file" && (
+                <span className="text-sm text-muted-foreground">
+                  {Math.round(file.size / 1024)} KB
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startEditing(file);
+                }}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLock(file.id);
+                }}
+              >
+                {file.isLocked ? (
+                  <Lock className="h-4 w-4" />
+                ) : (
+                  <Unlock className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteFile(file.id);
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+        </div>
+        {file.type === "folder" && isExpanded && (
+          <div className="ml-6">
+            {childFiles.map((childFile) => (
+              <DraggableItem key={childFile.id} file={childFile} />
+            ))}
+          </div>
+        )}
       </div>
-    ));
+    );
   };
 
   return (
-    <ErrorBoundary>
-      <DndProvider backend={HTML5Backend}>
+    <div>
+      <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
             Initial Files
           </label>
-
-          <p className="text-sm text-gray-600 mb-3">
-            Files available to your workers at runtime.
-          </p>
-
-          <div
-            {...getRootProps()}
-            className="border-2 border-dashed border-gray-200 rounded-lg p-8 hover:border-gray-400"
-          >
-            <input {...getInputProps()} />
-
-            <div className="flex flex-col items-center justify-center text-center">
-              <p className="text-sm text-gray-600">
-                {isDragActive ? "Drop files here" : "Select or Drop files"}
-              </p>
+        </div>
+        <div
+          {...getRootProps()}
+          className={`border-2 border-dashed rounded-lg p-8 text-center ${
+            isDragActive ? "border-primary" : "border-muted"
+          }`}
+        >
+          <input {...getInputProps()} />
+          <p>Select or Drop files</p>
+        </div>
+        <div className="border p-4">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-bold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+              Total Files: {files.length}
+            </label>
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-x-2">
+                <Button onClick={createFolder}>New Folder</Button>
+              </div>
+              <div className="space-x-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    setFiles([]);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
-
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-gray-600">
-                Total Files: {files.length}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={createNewFolder}
-                  className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1 border border-gray-200 rounded"
-                >
-                  New Folder
-                </button>
-                <button
-                  className="p-1 text-gray-400 hover:text-gray-600 bg-red-100 hover:bg-red-200 p-2"
-                  onClick={() => setFiles([])}
-                >
-                  <Trash className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {files.length > 0 && (
-              <div className="mt-4 p-2 border border-gray-200 rounded-lg ">
-                {renderTree(files)}
-              </div>
-            )}
+          <div
+            className="space-y-1 py-2"
+            ref={
+              useDrop(() => ({
+                accept: ItemTypes.FILE,
+                drop: (item: { id: string }, monitor) => {
+                  if (monitor.didDrop()) return;
+                  // Dropping on the root moves the file to root level.
+                  moveFile(item.id, null);
+                },
+              }))[1]
+            }
+          >
+            {rootFiles.map((file) => (
+              <DraggableItem key={file.id} file={file} />
+            ))}
           </div>
         </div>
-      </DndProvider>
-    </ErrorBoundary>
+      </div>
+    </div>
   );
-};
-
-export default FileManager;
+}
