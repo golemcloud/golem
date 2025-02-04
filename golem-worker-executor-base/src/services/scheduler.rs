@@ -81,7 +81,7 @@ pub struct SchedulerServiceDefault {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
@@ -91,7 +91,7 @@ impl SchedulerServiceDefault {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -100,7 +100,7 @@ impl SchedulerServiceDefault {
             shard_service,
             promise_service,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             worker_access,
         };
         let svc = Arc::new(svc);
@@ -220,7 +220,7 @@ impl SchedulerServiceDefault {
                                                 "Deleting cached status of fully archived worker"
                                             );
                                             // The oplog is fully archived, so we can also delete the cached worker status
-                                            self.worker_service
+                                            self.worker_metadata_service
                                                 .remove_cached_status(&owned_worker_id)
                                                 .await;
                                         }
@@ -401,7 +401,7 @@ mod tests {
         )
     }
 
-    fn create_worker_service_mock(
+    fn create_worker_metadata_service_mock(
         kvs: Arc<InMemoryKeyValueStorage>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
@@ -445,8 +445,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -454,7 +454,7 @@ mod tests {
             promise_service,
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -562,8 +562,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -571,7 +571,7 @@ mod tests {
             promise_service,
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -664,8 +664,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -673,7 +673,7 @@ mod tests {
             promise_service.clone(),
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -771,8 +771,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -780,7 +780,7 @@ mod tests {
             promise_service.clone(),
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -876,8 +876,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -885,7 +885,7 @@ mod tests {
             promise_service.clone(),
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -987,8 +987,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let worker_metadata_service =
+            create_worker_metadata_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -996,7 +996,7 @@ mod tests {
             promise_service.clone(),
             worker_access,
             oplog_service,
-            worker_service,
+            worker_metadata_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 

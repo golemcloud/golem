@@ -82,19 +82,19 @@ pub trait WorkerEnumerationService {
 
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
-    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     golem_config: Arc<GolemConfig>,
 }
 
 impl DefaultWorkerEnumerationService {
     pub fn new(
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
-            worker_service,
+            worker_metadata_service,
             oplog_service,
             golem_config,
         }
@@ -119,7 +119,7 @@ impl DefaultWorkerEnumerationService {
 
         for owned_worker_id in keys {
             let worker_metadata = self
-                .worker_service
+                .worker_metadata_service
                 .get(&owned_worker_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
                 .await;
@@ -158,8 +158,8 @@ impl HasOplogService for DefaultWorkerEnumerationService {
 }
 
 impl HasWorkerService for DefaultWorkerEnumerationService {
-    fn worker_service(&self) -> Arc<dyn WorkerMetadataService + Send + Sync> {
-        self.worker_service.clone()
+    fn worker_metadata_service(&self) -> Arc<dyn WorkerMetadataService + Send + Sync> {
+        self.worker_metadata_service.clone()
     }
 }
 

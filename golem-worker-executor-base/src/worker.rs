@@ -696,7 +696,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.oplog().commit(CommitLevel::DurableOnly).await;
         // Storing the status in the key-value storage
         let component_type = self.execution_status.read().unwrap().component_type();
-        self.worker_service()
+        self.worker_metadata_service()
             .update_status(&self.owned_worker_id, &status_value, component_type)
             .await;
         // Updating the status in memory
@@ -1075,7 +1075,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_version,
             )
             .await?;
-        match this.worker_service().get(owned_worker_id).await {
+        match this.worker_metadata_service().get(owned_worker_id).await {
             None => {
                 let initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
@@ -1105,7 +1105,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 };
                 let execution_status = this
-                    .worker_service()
+                    .worker_metadata_service()
                     .add(&worker_metadata, component_metadata.component_type)
                     .await?;
                 Ok((worker_metadata, execution_status))
@@ -1346,7 +1346,7 @@ impl RunningWorker {
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
             component_metadata.clone(),
             parent.promise_service(),
-            parent.worker_service(),
+            parent.worker_metadata_service(),
             parent.worker_enumeration_service(),
             parent.key_value_service(),
             parent.blob_store_service(),

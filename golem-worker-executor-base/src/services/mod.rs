@@ -68,7 +68,7 @@ pub trait HasWorkerForkService {
 }
 
 pub trait HasWorkerService {
-    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>;
+    fn worker_metadata_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>;
 }
 
 pub trait HasWorkerEnumerationService {
@@ -222,7 +222,7 @@ pub struct All<Ctx: WorkerCtx> {
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
-    worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
+    worker_metadata_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
@@ -257,7 +257,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_fork: self.worker_fork.clone(),
-            worker_service: self.worker_service.clone(),
+            worker_metadata_service: self.worker_metadata_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             promise_service: self.promise_service.clone(),
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
-        worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -324,7 +324,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             component_service,
             shard_manager_service,
             worker_fork,
-            worker_service,
+            worker_metadata_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
             promise_service,
@@ -354,7 +354,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.component_service(),
             this.shard_manager_service(),
             this.worker_fork_service(),
-            this.worker_service(),
+            this.worker_metadata_service(),
             this.worker_enumeration_service(),
             this.running_worker_enumeration_service(),
             this.promise_service(),
@@ -421,8 +421,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerForkService for T {
 }
 
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerService for T {
-    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
-        self.all().worker_service.clone()
+    fn worker_metadata_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
+        self.all().worker_metadata_service.clone()
     }
 }
 

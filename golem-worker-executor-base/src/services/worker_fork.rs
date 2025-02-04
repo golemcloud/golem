@@ -64,7 +64,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub runtime: Handle,
     pub component_service: Arc<dyn component::ComponentService + Send + Sync>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-    pub worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
+    pub worker_metadata_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
     pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     pub worker_enumeration_service:
         Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
@@ -114,8 +114,8 @@ impl<Ctx: WorkerCtx> HasConfig for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasWorkerService for DefaultWorkerFork<Ctx> {
-    fn worker_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
-        self.worker_service.clone()
+    fn worker_metadata_service(&self) -> Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync> {
+        self.worker_metadata_service.clone()
     }
 }
 
@@ -258,7 +258,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
-            worker_service: self.worker_service.clone(),
+            worker_metadata_service: self.worker_metadata_service.clone(),
             worker_proxy: self.worker_proxy.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn worker_metadata::WorkerMetadataService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -323,7 +323,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
-            worker_service,
+            worker_metadata_service,
             worker_proxy,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -360,7 +360,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_target_worker_id = OwnedWorkerId::new(account_id, target_worker_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
+        let target_metadata = self.worker_metadata_service.get(&owned_target_worker_id).await;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -372,7 +372,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
 
-        self.worker_service
+        self.worker_metadata_service
             .get(&owned_source_worker_id)
             .await
             .ok_or(GolemError::worker_not_found(source_worker_id.clone()))?;

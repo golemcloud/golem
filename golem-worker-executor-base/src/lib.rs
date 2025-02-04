@@ -186,7 +186,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -514,13 +514,13 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         plugins.clone(),
     ));
 
-    let worker_service = Arc::new(DefaultWorkerMetadataService::new(
+    let worker_metadata_service = Arc::new(DefaultWorkerMetadataService::new(
         key_value_storage.clone(),
         shard_service.clone(),
         oplog_service.clone(),
     ));
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
+        worker_metadata_service.clone(),
         oplog_service.clone(),
         golem_config.clone(),
     ));
@@ -531,7 +531,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         promise_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx> + Send + Sync>),
         oplog_service.clone(),
-        worker_service.clone(),
+        worker_metadata_service.clone(),
         golem_config.scheduler.refresh_interval,
     );
 
@@ -543,7 +543,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             runtime.clone(),
             component_service,
             shard_manager_service,
-            worker_service,
+            worker_metadata_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
             promise_service,

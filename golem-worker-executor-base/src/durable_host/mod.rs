@@ -142,7 +142,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -221,7 +221,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog,
                 promise_service,
                 scheduler_service,
-                worker_service,
+                worker_metadata_service,
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
@@ -814,7 +814,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_worker_status(&self) -> WorkerStatus {
-        match self.state.worker_service.get(&self.owned_worker_id).await {
+        match self.state.worker_metadata_service.get(&self.owned_worker_id).await {
             Some(metadata) => {
                 if metadata.last_known_status.oplog_idx
                     == self.state.oplog.current_oplog_index().await
@@ -1473,7 +1473,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         info!("Recovering workers");
 
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this.worker_metadata_service().get_running_workers_in_shards().await;
 
         debug!("Recovering running workers: {:?}", workers);
 
@@ -1796,7 +1796,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     oplog: Arc<dyn Oplog + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-    worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -1832,7 +1832,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         oplog: Arc<dyn Oplog + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
@@ -1862,7 +1862,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             oplog: oplog.clone(),
             promise_service,
             scheduler_service,
-            worker_service,
+            worker_metadata_service,
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
