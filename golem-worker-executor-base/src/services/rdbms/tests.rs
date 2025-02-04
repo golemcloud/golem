@@ -2729,7 +2729,7 @@ async fn postgres_query_err_test(
             postgres_types::DbValue::Int8(0),
         ])],
         Error::QueryParameterFailure(
-            "Array element '0' with index 1 has different type than expected".to_string(),
+            "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
     .await;
@@ -2763,7 +2763,7 @@ async fn postgres_execute_err_test(
             postgres_types::DbValue::Int8(0),
         ])],
         Error::QueryParameterFailure(
-            "Array element '0' with index 1 has different type than expected".to_string(),
+            "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
     .await;

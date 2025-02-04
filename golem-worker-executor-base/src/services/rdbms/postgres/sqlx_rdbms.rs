@@ -31,7 +31,6 @@ use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
-use std::collections::Bound;
 use std::fmt::Display;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -141,19 +140,24 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
             let base_type: DbColumnType = *t.clone();
             match base_type {
                 DbColumnType::Enum(_) => {
-                    let values: Vec<_> =
-                        get_array_plain_values(value, |v| try_match!(v, DbValue::Enum(r)).ok())?;
+                    let values: Vec<_> = get_array_plain_values(value, |v| {
+                        try_match!(v, DbValue::Enum(r))
+                            .map_err(|_| get_unexpected_value_error(&base_type))
+                    })?;
                     setter.try_set_value(PgEnums(values))
                 }
                 DbColumnType::Composite(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Composite(r)).ok()
+                        try_match!(v, DbValue::Composite(r))
+                            .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgComposites(values))
                 }
                 DbColumnType::Domain(_) => {
-                    let values: Vec<_> =
-                        get_array_plain_values(value, |v| try_match!(v, DbValue::Domain(r)).ok())?;
+                    let values: Vec<_> = get_array_plain_values(value, |v| {
+                        try_match!(v, DbValue::Domain(r))
+                            .map_err(|_| get_unexpected_value_error(&base_type))
+                    })?;
                     setter.try_set_value(PgDomains(values))
                 }
                 DbColumnType::Range(t) => {
@@ -177,194 +181,197 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
 ) -> Result<(), String> {
     match column_type {
         DbColumnType::Boolean => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Boolean(r)).ok()
+            try_match!(v, DbValue::Boolean(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Character => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Character(r)).ok()
+            try_match!(v, DbValue::Character(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int2 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int2(r)).ok()
+            try_match!(v, DbValue::Int2(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int4 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int4(r)).ok()
+            try_match!(v, DbValue::Int4(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int8 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Int8(r)).ok()
+            try_match!(v, DbValue::Int8(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Float4 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Float4(r)).ok()
+            try_match!(v, DbValue::Float4(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Float8 => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Float8(r)).ok()
+            try_match!(v, DbValue::Float8(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Numeric => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Numeric(v) = v {
-                BigDecimal::from_str(&v).map_err(|e| e.to_string()).ok()
+                BigDecimal::from_str(&v).map_err(|e| e.to_string())
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Text => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Text(r)).ok()
+            try_match!(v, DbValue::Text(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Varchar => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Varchar(r)).ok()
+            try_match!(v, DbValue::Varchar(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bpchar => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bpchar(r)).ok()
+            try_match!(v, DbValue::Bpchar(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bytea => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bytea(r)).ok()
+            try_match!(v, DbValue::Bytea(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Uuid => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Uuid(r)).ok()
+            try_match!(v, DbValue::Uuid(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Json => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Json(v) = v {
                 let v: Result<serde_json::Value, String> =
                     serde_json::from_str(&v).map_err(|e| e.to_string());
-                v.ok()
+                v
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Jsonb => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Jsonb(v) = v {
                 let v: Result<serde_json::Value, String> =
                     serde_json::from_str(&v).map_err(|e| e.to_string());
-                v.ok()
+                v
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Jsonpath => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Jsonpath(v) = v {
-                Some(PgJsonPath(v))
+                Ok(PgJsonPath(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Xml => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Xml(v) = v {
-                Some(PgXml(v))
+                Ok(PgXml(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Timestamptz => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamptz(r)).ok()
+            try_match!(v, DbValue::Timestamptz(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timestamp => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamp(r)).ok()
+            try_match!(v, DbValue::Timestamp(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Date => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Date(r)).ok()
+            try_match!(v, DbValue::Date(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Time => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Time(r)).ok()
+            try_match!(v, DbValue::Time(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timetz => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Timetz(v) = v {
-                PgTimeTz::try_from(v).ok()
+                PgTimeTz::try_from(v)
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Interval => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Interval(v) = v {
-                Some(PgInterval::from(v))
+                Ok(PgInterval::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Inet => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Inet(r)).ok()
+            try_match!(v, DbValue::Inet(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Cidr => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Cidr(r)).ok()
+            try_match!(v, DbValue::Cidr(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Macaddr => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Macaddr(r)).ok()
+            try_match!(v, DbValue::Macaddr(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bit(r)).ok()
+            try_match!(v, DbValue::Bit(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Varbit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Varbit(r)).ok()
+            try_match!(v, DbValue::Varbit(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int4range => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Int4range(v) = v {
-                Some(PgRange::from(v))
+                Ok(PgRange::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Int8range => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Int8range(v) = v {
-                Some(PgRange::from(v))
+                Ok(PgRange::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Numrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Numrange(v) = v {
                 v.try_map(|v| BigDecimal::from_str(&v).map_err(|e| e.to_string()))
-                    .ok()
                     .map(PgRange::from)
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Tsrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Tsrange(v) = v {
-                Some(PgRange::from(v))
+                Ok(PgRange::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Tstzrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Tstzrange(v) = v {
-                Some(PgRange::from(v))
+                Ok(PgRange::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Daterange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Daterange(v) = v {
-                Some(PgRange::from(v))
+                Ok(PgRange::from(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Oid => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Oid(v) = v {
-                Some(Oid(v))
+                Ok(Oid(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Money => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Money(v) = v {
-                Some(PgMoney(v))
+                Ok(PgMoney(v))
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Null => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Null = v {
-                Some(PgNull {})
+                Ok(PgNull {})
             } else {
-                None
+                Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Enum(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Enum(r)).ok()
+            try_match!(v, DbValue::Enum(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Composite(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Composite(r)).ok()
+            try_match!(v, DbValue::Composite(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Domain(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Domain(r)).ok()
+            try_match!(v, DbValue::Domain(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         _ => Err(format!(
             "{} do not support '{}' value",
@@ -375,7 +382,7 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
 
 fn get_array_plain_values<T>(
     value: DbValue,
-    f: impl Fn(DbValue) -> Option<T>,
+    f: impl Fn(DbValue) -> Result<T, String>,
 ) -> Result<Vec<T>, String> {
     match value {
         DbValue::Array(vs) => get_plain_values(vs, f),
@@ -385,18 +392,21 @@ fn get_array_plain_values<T>(
 
 fn get_plain_values<T>(
     values: Vec<DbValue>,
-    f: impl Fn(DbValue) -> Option<T>,
+    f: impl Fn(DbValue) -> Result<T, String>,
 ) -> Result<Vec<T>, String> {
     let mut result: Vec<T> = Vec::with_capacity(values.len());
     for (index, value) in values.iter().enumerate() {
-        if let Some(v) = f(value.clone()) {
-            result.push(v);
-        } else {
-            Err(format!(
-                "Array element '{}' with index {} has different type than expected",
-                value.clone(),
-                index
-            ))?
+        match f(value.clone()) {
+            Ok(v) => result.push(v),
+            Err(e) => {
+                let suffix = if e.is_empty() { e } else { format!(" ({})", e) };
+                Err(format!(
+                    "Array element '{}' with index {} has different type than expected{}",
+                    value.clone(),
+                    index,
+                    suffix
+                ))?
+            }
         }
     }
     Ok(result)
@@ -404,33 +414,18 @@ fn get_plain_values<T>(
 
 fn get_pg_range<T: Clone>(
     value: Range,
-    f: impl Fn(DbValue) -> Option<T> + Clone,
+    f: impl Fn(DbValue) -> Result<T, String> + Clone,
 ) -> Result<PgCustomRange<T>, String> {
-    fn to_value<T: Clone>(v: DbValue, f: impl Fn(DbValue) -> Option<T>) -> Result<T, String> {
-        f(v.clone()).ok_or(format!(
-            "Bound element '{}' has different type than expected",
-            v
-        ))
-    }
-
-    fn to_bound<T: Clone>(
-        v: Bound<DbValue>,
-        f: impl Fn(DbValue) -> Option<T>,
-    ) -> Result<Bound<T>, String> {
-        match v {
-            Bound::Included(v) => Ok(Bound::Included(to_value(v, f)?)),
-            Bound::Excluded(v) => Ok(Bound::Excluded(to_value(v, f)?)),
-            Bound::Unbounded => Ok(Bound::Unbounded),
-        }
-    }
-
     let name = value.name;
     let value = *value.value;
-
-    let start = to_bound(value.start, f.clone())?;
-    let end = to_bound(value.end, f.clone())?;
-
-    Ok(PgCustomRange::new(name, PgRange { start, end }))
+    let value = value.try_map(f)?;
+    Ok(PgCustomRange::new(
+        name,
+        PgRange {
+            start: value.start,
+            end: value.end,
+        },
+    ))
 }
 
 fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> DbValue {
@@ -439,6 +434,10 @@ fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> Db
     let end = value.value.end.map(f.clone());
     let value = ValuesRange { start, end };
     DbValue::Range(Range::new(name, value))
+}
+
+fn get_unexpected_value_error(column_type: &DbColumnType) -> String {
+    format!("value do not have '{}' type", column_type)
 }
 
 impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
@@ -592,7 +591,7 @@ fn get_db_value_helper<G: PgValueGetter>(
             getter.try_get_db_value::<Domain>(value_category, DbValue::Domain)?
         }
         _ => Err(format!(
-            "{} of {} is not supported",
+            "{} of '{}' is not supported",
             value_category, column_type
         ))?,
     };
@@ -858,7 +857,7 @@ trait PgValueSetter<'a> {
         &mut self,
         value: DbValue,
         value_category: DbValueCategory,
-        f: impl Fn(DbValue) -> Option<T> + Clone,
+        f: impl Fn(DbValue) -> Result<T, String> + Clone,
     ) -> Result<(), String>
     where
         T: 'a
@@ -874,7 +873,7 @@ trait PgValueSetter<'a> {
                     value_category, value
                 )),
                 _ => {
-                    let v = f(value);
+                    let v = f(value)?;
                     self.try_set_value(v)
                 }
             },
@@ -899,9 +898,9 @@ trait PgValueSetter<'a> {
             DbValueCategory::RangeArray => {
                 let vs: Vec<PgCustomRange<T>> = get_array_plain_values(value, |v| {
                     if let DbValue::Range(r) = v {
-                        get_pg_range(r, f.clone()).ok()
+                        get_pg_range(r, f.clone())
                     } else {
-                        None
+                        Err("value do not have 'range' type".to_string())
                     }
                 })?;
                 if vs.is_empty() {
