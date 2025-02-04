@@ -33,7 +33,6 @@ use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
 use std::fmt::Display;
 use std::net::IpAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 use try_match::try_match;
 use uuid::Uuid;
@@ -203,11 +202,7 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             try_match!(v, DbValue::Float8(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Numeric => setter.try_set_db_value(value, value_category, |v| {
-            if let DbValue::Numeric(v) = v {
-                BigDecimal::from_str(&v).map_err(|e| e.to_string())
-            } else {
-                Err(get_unexpected_value_error(column_type))
-            }
+            try_match!(v, DbValue::Numeric(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Text => setter.try_set_db_value(value, value_category, |v| {
             try_match!(v, DbValue::Text(r)).map_err(|_| get_unexpected_value_error(column_type))
@@ -315,8 +310,7 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
         }),
         DbColumnType::Numrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Numrange(v) = v {
-                v.try_map(|v| BigDecimal::from_str(&v).map_err(|e| e.to_string()))
-                    .map(PgRange::from)
+                Ok(PgRange::from(v))
             } else {
                 Err(get_unexpected_value_error(column_type))
             }
@@ -499,8 +493,9 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Int8 => getter.try_get_db_value::<i64>(value_category, DbValue::Int8)?,
         DbColumnType::Float4 => getter.try_get_db_value::<f32>(value_category, DbValue::Float4)?,
         DbColumnType::Float8 => getter.try_get_db_value::<f64>(value_category, DbValue::Float8)?,
-        DbColumnType::Numeric => getter
-            .try_get_db_value::<BigDecimal>(value_category, |v| DbValue::Numeric(v.to_string()))?,
+        DbColumnType::Numeric => {
+            getter.try_get_db_value::<BigDecimal>(value_category, DbValue::Numeric)?
+        }
         DbColumnType::Uuid => getter.try_get_db_value::<Uuid>(value_category, DbValue::Uuid)?,
         DbColumnType::Text => getter.try_get_db_value::<String>(value_category, DbValue::Text)?,
         DbColumnType::Varchar => {
@@ -563,12 +558,10 @@ fn get_db_value_helper<G: PgValueGetter>(
             .try_get_db_value::<PgRange<chrono::NaiveDateTime>>(value_category, |v| {
                 DbValue::Tsrange(v.into())
             })?,
-        DbColumnType::Numrange => {
-            getter.try_get_db_value::<PgRange<BigDecimal>>(value_category, |v| {
-                let v: ValuesRange<BigDecimal> = v.into();
-                DbValue::Numrange(v.map(|v| v.to_string()))
-            })?
-        }
+        DbColumnType::Numrange => getter
+            .try_get_db_value::<PgRange<BigDecimal>>(value_category, |v| {
+                DbValue::Numrange(v.into())
+            })?,
         DbColumnType::Int4range => getter
             .try_get_db_value::<PgRange<i32>>(value_category, |v| DbValue::Int4range(v.into()))?,
         DbColumnType::Int8range => getter

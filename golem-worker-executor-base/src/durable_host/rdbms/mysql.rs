@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use bit_vec::BitVec;
 use golem_common::model::oplog::DurableFunctionType;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
@@ -543,7 +544,10 @@ impl TryFrom<DbValue> for mysql_types::DbValue {
             DbValue::MediumintUnsigned(v) => Ok(Self::MediumintUnsigned(v)),
             DbValue::IntUnsigned(v) => Ok(Self::IntUnsigned(v)),
             DbValue::BigintUnsigned(v) => Ok(Self::BigintUnsigned(v)),
-            DbValue::Decimal(v) => Ok(Self::Decimal(v)),
+            DbValue::Decimal(v) => {
+                let v = bigdecimal::BigDecimal::from_str(&v).map_err(|e| e.to_string())?;
+                Ok(Self::Decimal(v))
+            }
             DbValue::Float(v) => Ok(Self::Float(v)),
             DbValue::Double(v) => Ok(Self::Double(v)),
             DbValue::Text(v) => Ok(Self::Text(v)),
@@ -789,7 +793,7 @@ pub mod tests {
             mysql_types::DbValue::Bigint(5),
             mysql_types::DbValue::Float(6.0),
             mysql_types::DbValue::Double(7.0),
-            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap().to_string()),
+            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
             mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
             mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
                 chrono::NaiveDateTime::new(

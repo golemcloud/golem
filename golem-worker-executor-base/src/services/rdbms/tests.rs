@@ -523,7 +523,7 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Int8(3),
                 postgres_types::DbValue::Float4(4.0),
                 postgres_types::DbValue::Float8(5.0),
-                postgres_types::DbValue::Numeric(BigDecimal::from(48888).to_string()),
+                postgres_types::DbValue::Numeric(BigDecimal::from(48888)),
                 postgres_types::DbValue::Boolean(true),
                 postgres_types::DbValue::Text("text".to_string()),
                 postgres_types::DbValue::Varchar("varchar".to_string()),
@@ -581,8 +581,8 @@ async fn postgres_create_insert_select_test(
                     Bound::Unbounded,
                 )),
                 postgres_types::DbValue::Numrange(postgres_types::ValuesRange::new(
-                    Bound::Included(BigDecimal::from(11).to_string()),
-                    Bound::Excluded(BigDecimal::from(221).to_string()),
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
                 )),
                 postgres_types::DbValue::Tsrange(tsbounds),
                 postgres_types::DbValue::Tstzrange(tstzbounds),
@@ -604,7 +604,7 @@ async fn postgres_create_insert_select_test(
                         postgres_types::DbValue::Uuid(Uuid::new_v4()),
                         postgres_types::DbValue::Text("text".to_string()),
                         postgres_types::DbValue::Int4(i as i32),
-                        postgres_types::DbValue::Numeric(BigDecimal::from(111).to_string()),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                     ],
                 )),
                 postgres_types::DbValue::Domain(postgres_types::Domain::new(
@@ -1259,7 +1259,7 @@ async fn postgres_create_insert_select_array_test(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
-                    BigDecimal::from(48888).to_string(),
+                    BigDecimal::from(48888),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text(
@@ -1348,8 +1348,8 @@ async fn postgres_create_insert_select_array_test(
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
                     postgres_types::ValuesRange::new(
-                        Bound::Included(BigDecimal::from(11).to_string()),
-                        Bound::Excluded(BigDecimal::from(221).to_string()),
+                        Bound::Included(BigDecimal::from(11)),
+                        Bound::Excluded(BigDecimal::from(221)),
                     ),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
@@ -1381,7 +1381,7 @@ async fn postgres_create_insert_select_array_test(
                             postgres_types::DbValue::Uuid(Uuid::new_v4()),
                             postgres_types::DbValue::Text("text".to_string()),
                             postgres_types::DbValue::Int4(i as i32),
-                            postgres_types::DbValue::Numeric(BigDecimal::from(111).to_string()),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                         ],
                     )),
                     postgres_types::DbValue::Composite(postgres_types::Composite::new(
@@ -1390,7 +1390,7 @@ async fn postgres_create_insert_select_array_test(
                             postgres_types::DbValue::Uuid(Uuid::new_v4()),
                             postgres_types::DbValue::Text("text".to_string()),
                             postgres_types::DbValue::Int4(2 + i as i32),
-                            postgres_types::DbValue::Numeric(BigDecimal::from(111).to_string()),
+                            postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                         ],
                     )),
                 ]),
@@ -2124,7 +2124,7 @@ async fn mysql_create_insert_select_test(
                 mysql_types::DbValue::Bigint(5),
                 mysql_types::DbValue::Float(6.0),
                 mysql_types::DbValue::Double(7.0),
-                mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap().to_string()),
+                mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
                 mysql_types::DbValue::Date(
                     chrono::NaiveDate::from_ymd_opt(2030 + i as i32, 10, 12).unwrap(),
                 ),

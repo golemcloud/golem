@@ -28,9 +28,11 @@ use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::oplog::DurableFunctionType;
 use std::ops::{Bound, Deref};
+use std::str::FromStr;
 use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::WasiView;
@@ -750,14 +752,18 @@ impl From<Int8range> for postgres_types::ValuesRange<i64> {
     }
 }
 
-impl TryFrom<Numrange> for postgres_types::ValuesRange<String> {
+impl TryFrom<Numrange> for postgres_types::ValuesRange<BigDecimal> {
     type Error = String;
 
     fn try_from(value: Numrange) -> Result<Self, Self::Error> {
-        fn to_bounds(v: Numbound) -> Result<Bound<String>, String> {
+        fn to_bounds(v: Numbound) -> Result<Bound<BigDecimal>, String> {
             match v {
-                Numbound::Included(v) => Ok(Bound::Included(v)),
-                Numbound::Excluded(v) => Ok(Bound::Excluded(v)),
+                Numbound::Included(v) => Ok(Bound::Included(
+                    BigDecimal::from_str(&v).map_err(|e| e.to_string())?,
+                )),
+                Numbound::Excluded(v) => Ok(Bound::Excluded(
+                    BigDecimal::from_str(&v).map_err(|e| e.to_string())?,
+                )),
                 Numbound::Unbounded => Ok(Bound::Unbounded),
             }
         }
@@ -854,12 +860,12 @@ impl From<postgres_types::ValuesRange<i64>> for Int8range {
     }
 }
 
-impl From<postgres_types::ValuesRange<String>> for Numrange {
-    fn from(value: postgres_types::ValuesRange<String>) -> Self {
-        fn to_bounds(v: Bound<String>) -> Numbound {
+impl From<postgres_types::ValuesRange<BigDecimal>> for Numrange {
+    fn from(value: postgres_types::ValuesRange<BigDecimal>) -> Self {
+        fn to_bounds(v: Bound<BigDecimal>) -> Numbound {
             match v {
-                Bound::Included(v) => Numbound::Included(v),
-                Bound::Excluded(v) => Numbound::Excluded(v),
+                Bound::Included(v) => Numbound::Included(v.to_string()),
+                Bound::Excluded(v) => Numbound::Excluded(v.to_string()),
                 Bound::Unbounded => Numbound::Unbounded,
             }
         }
@@ -1149,9 +1155,12 @@ fn to_db_value(
         DbValue::Int8(i) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Int8(i),
         )),
-        DbValue::Numeric(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Numeric(v),
-        )),
+        DbValue::Numeric(v) => {
+            let v = bigdecimal::BigDecimal::from_str(&v).map_err(|e| e.to_string())?;
+            Ok(DbValueWithResourceRep::new_resource_none(
+                postgres_types::DbValue::Numeric(v),
+            ))
+        }
         DbValue::Float4(f) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Float4(f),
         )),
@@ -1401,7 +1410,9 @@ fn from_db_value(
         postgres_types::DbValue::Int2(i) => Ok((DbValue::Int2(i), DbValueResourceRep::None)),
         postgres_types::DbValue::Int4(i) => Ok((DbValue::Int4(i), DbValueResourceRep::None)),
         postgres_types::DbValue::Int8(i) => Ok((DbValue::Int8(i), DbValueResourceRep::None)),
-        postgres_types::DbValue::Numeric(s) => Ok((DbValue::Numeric(s), DbValueResourceRep::None)),
+        postgres_types::DbValue::Numeric(s) => {
+            Ok((DbValue::Numeric(s.to_string()), DbValueResourceRep::None))
+        }
         postgres_types::DbValue::Float4(f) => Ok((DbValue::Float4(f), DbValueResourceRep::None)),
         postgres_types::DbValue::Float8(f) => Ok((DbValue::Float8(f), DbValueResourceRep::None)),
         postgres_types::DbValue::Boolean(b) => Ok((DbValue::Boolean(b), DbValueResourceRep::None)),
@@ -2076,7 +2087,7 @@ pub mod tests {
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float4(4.0)]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Float8(5.0)]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numeric(
-                BigDecimal::from(48888).to_string(),
+                BigDecimal::from(48888),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Boolean(true)]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Text("text".to_string())]),
@@ -2162,8 +2173,8 @@ pub mod tests {
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
                 postgres_types::ValuesRange::new(
-                    Bound::Included(BigDecimal::from(11).to_string()),
-                    Bound::Excluded(BigDecimal::from(221).to_string()),
+                    Bound::Included(BigDecimal::from(11)),
+                    Bound::Excluded(BigDecimal::from(221)),
                 ),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tsrange(tsbounds)]),
@@ -2191,7 +2202,7 @@ pub mod tests {
                         postgres_types::DbValue::Uuid(Uuid::new_v4()),
                         postgres_types::DbValue::Text("text".to_string()),
                         postgres_types::DbValue::Int4(3),
-                        postgres_types::DbValue::Numeric(BigDecimal::from(111).to_string()),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                     ],
                 )),
                 postgres_types::DbValue::Composite(postgres_types::Composite::new(
@@ -2200,7 +2211,7 @@ pub mod tests {
                         postgres_types::DbValue::Uuid(Uuid::new_v4()),
                         postgres_types::DbValue::Text("text".to_string()),
                         postgres_types::DbValue::Int4(4),
-                        postgres_types::DbValue::Numeric(BigDecimal::from(111).to_string()),
+                        postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                     ],
                 )),
             ]),
