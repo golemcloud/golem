@@ -46,32 +46,76 @@ export default function TryItOut({
 
     const responseInput = route?.binding?.responseMappingInput?.types?.request;
 
-    const addFieldIfUsed = (
-      fields: Parameter[],
-      fieldName: string,
-      source: AnalysedType
-    ) => {
-      const field =
-        source.type === "Record" &&
-        source.fields?.find((f: Parameter) => f.name === fieldName);
-
-      if (
-        field &&
-        !fields.find((_field: Parameter) => _field.name == field.name)
-      ) {
-        fields.push(field);
-      }
-    };
-
     if (responseInput && meta?.typ?.type === "Record" && meta?.typ?.fields) {
-      addFieldIfUsed(meta.typ.fields, "body", responseInput);
-      addFieldIfUsed(meta.typ.fields, "path", responseInput);
+      const bodyFields =
+        (responseInput.type === "Record" &&
+          responseInput.fields?.filter((field) => field.name === "body")) ||
+        [];
+
+      if (bodyFields.length > 0) {
+        meta.typ.fields.push(bodyFields[0]);
+      } else {
+        meta.typ.fields.push({
+          name: "body",
+          typ: {
+            type: "Record",
+            fields: [],
+          } as AnalysedType_TypeRecord,
+        });
+      }
+
+      const pathFields =
+        (responseInput.type === "Record" &&
+          responseInput.fields?.filter((field) => field.name === "path")) ||
+        [];
+
+      if (pathFields.length > 0) {
+        meta.typ.fields.push(pathFields[0]);
+      } else {
+        meta.typ.fields.push({
+          name: "path",
+          typ: {
+            type: "Record",
+            fields: [],
+          } as AnalysedType_TypeRecord,
+        });
+      }
     }
 
     const workerInput = route?.binding?.workerNameInput?.types?.request;
     if (workerInput && meta?.typ?.type === "Record" && meta?.typ?.fields) {
-      addFieldIfUsed(meta.typ.fields, "body", workerInput);
-      addFieldIfUsed(meta.typ.fields, "path", workerInput);
+      const bodyFields =
+        (workerInput.type === "Record" &&
+          workerInput.fields?.filter((field) => field.name === "body")) ||
+        [];
+      if (bodyFields.length > 0) {
+        meta.typ.fields.push(bodyFields[0]);
+      } else {
+        meta.typ.fields.push({
+          name: "body",
+          typ: {
+            type: "Record",
+            fields: [],
+          } as AnalysedType_TypeRecord,
+        });
+      }
+
+      const pathFields =
+        (workerInput.type === "Record" &&
+          workerInput.fields?.filter((field) => field.name === "path")) ||
+        [];
+
+      if (pathFields.length > 0) {
+        meta.typ.fields.push(pathFields[0]);
+      } else {
+        meta.typ.fields.push({
+          name: "path",
+          typ: {
+            type: "Record",
+            fields: [],
+          } as AnalysedType_TypeRecord,
+        });
+      }
     }
 
     return [meta];
