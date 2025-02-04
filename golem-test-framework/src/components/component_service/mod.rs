@@ -136,7 +136,7 @@ pub trait ComponentService {
                     }
                 }
                 ComponentServiceClient::Http(client) => {
-                    match client.get_components(Some(&name)).await {
+                    match client.get_components(Some(name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
                             result
