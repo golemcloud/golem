@@ -18,7 +18,9 @@ use crate::model::{
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
-use golem_client::model::{InvokeParameters, InvokeResult, ScanCursor, WorkerFilter, WorkerId};
+use golem_client::model::{
+    InvokeParameters, InvokeResult, RevertWorkerTarget, ScanCursor, WorkerFilter, WorkerId,
+};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
@@ -110,6 +112,12 @@ pub trait WorkerClient {
         worker_urn: WorkerUrn,
         query: String,
     ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError>;
+
+    async fn revert(
+        &self,
+        worker_urn: WorkerUrn,
+        target: RevertWorkerTarget,
+    ) -> Result<(), GolemError>;
 }
 
 pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {

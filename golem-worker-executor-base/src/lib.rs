@@ -14,9 +14,7 @@
 
 pub mod durable_host;
 pub mod error;
-pub mod function_result_interpreter;
 pub mod grpc;
-pub mod invocation;
 pub mod metrics;
 pub mod model;
 pub mod preview2;

@@ -21,8 +21,8 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
-use crate::function_result_interpreter::interpret_function_results;
-use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::function_result_interpreter::interpret_function_results;
+use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -44,8 +44,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::status::{calculate_last_known_status};
+use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationHooks,
     InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,

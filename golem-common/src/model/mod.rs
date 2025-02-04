@@ -225,6 +225,12 @@ impl Display for OwnedWorkerId {
     }
 }
 
+impl AsRef<WorkerId> for OwnedWorkerId {
+    fn as_ref(&self) -> &WorkerId {
+        &self.worker_id
+    }
+}
+
 /// Actions that can be scheduled to be executed at a given point in time
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {

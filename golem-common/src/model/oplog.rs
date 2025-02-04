@@ -402,6 +402,11 @@ pub enum OplogEntry {
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     },
+    // Similar to `Jump` but caused by an external revert request. TODO: Golem 2.0 should probably merge with Jump
+    Revert {
+        timestamp: Timestamp,
+        dropped_region: OplogRegion,
+    },
 }
 
 impl OplogEntry {
@@ -597,6 +602,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn revert(dropped_region: OplogRegion) -> OplogEntry {
+        OplogEntry::Revert {
+            timestamp: Timestamp::now_utc(),
+            dropped_region,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -649,6 +661,7 @@ impl OplogEntry {
                 | OplogEntry::Restart { .. }
                 | OplogEntry::ActivatePlugin { .. }
                 | OplogEntry::DeactivatePlugin { .. }
+                | OplogEntry::Revert { .. }
         )
     }
 
@@ -683,7 +696,8 @@ impl OplogEntry {
             | OplogEntry::CreateV1 { timestamp, .. }
             | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
-            | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
+            | OplogEntry::DeactivatePlugin { timestamp, .. }
+            | OplogEntry::Revert { timestamp, .. } => *timestamp,
         }
     }
 

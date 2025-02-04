@@ -26,8 +26,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
-    InvokeAndAwaitWorkerSuccess, ListDirectoryRequest, ListDirectoryResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitWorkerSuccess, ListDirectoryRequest, ListDirectoryResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -235,37 +236,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     fn ensure_worker_belongs_to_this_executor(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl AsRef<WorkerId>,
     ) -> Result<(), GolemError> {
-        self.shard_service().check_worker(worker_id)
+        self.shard_service().check_worker(worker_id.as_ref())
     }
 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
     ) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into();
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(limits) = request.account_limits {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
+            Ctx::record_last_known_limits(self, &owned_worker_id.account_id, &limits.into())
+                .await?;
         }
 
         let component_version = request.component_version;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
         if existing_worker.is_some() {
-            return Err(GolemError::worker_already_exists(worker_id.clone()));
+            return Err(GolemError::worker_already_exists(
+                owned_worker_id.worker_id(),
+            ));
         }
 
         let args = request.args;
@@ -317,34 +312,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<golem::workerexecutor::v1::CompletePromiseSuccess, GolemError> {
         let promise_id = request
             .promise_id
+            .as_ref()
             .ok_or(GolemError::invalid_request("promise_id not found"))?;
+        let owned_worker_id = extract_owned_worker_id(
+            &(&request, promise_id.clone()),
+            |(_, r)| &r.worker_id,
+            |(r, _)| &r.account_id,
+        )?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
         let data = request.data;
 
-        let worker_id: WorkerId = promise_id
-            .worker_id
+        let promise_id: common_model::PromiseId = promise_id
             .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
             .try_into()
             .map_err(GolemError::invalid_request)?;
-
-        let account_id: AccountId = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
-
-        let promise_id: common_model::PromiseId =
-            promise_id.try_into().map_err(GolemError::invalid_request)?;
         let completed = self.promise_service().complete(promise_id, data).await?;
 
         let metadata = self
             .worker_service()
             .get(&owned_worker_id)
             .await
-            .ok_or(GolemError::worker_not_found(worker_id.clone()))?;
+            .ok_or(GolemError::worker_not_found(owned_worker_id.worker_id()))?;
 
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &Some(metadata.clone()))
@@ -370,21 +359,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(success)
     }
 
-    async fn delete_worker_internal(&self, inner: DeleteWorkerRequest) -> Result<(), GolemError> {
-        let worker_id: WorkerId = inner
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)?;
-
-        let account_id: AccountId = inner
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+    async fn delete_worker_internal(&self, request: DeleteWorkerRequest) -> Result<(), GolemError> {
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
@@ -412,9 +390,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             worker.stop().await;
         }
 
-        Ctx::on_worker_deleted(self, &worker_id).await?;
+        Ctx::on_worker_deleted(self, &owned_worker_id.worker_id).await?;
         self.worker_service().remove(&owned_worker_id).await;
-        self.active_workers().remove(&worker_id);
+        self.active_workers().remove(&owned_worker_id.worker_id);
 
         Ok(())
     }
@@ -470,22 +448,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
+    async fn revert_worker_internal(&self, request: RevertWorkerRequest) -> Result<(), GolemError> {
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let target = request
+            .target
+            .ok_or(GolemError::invalid_request("target not found"))?;
+        let target = target.try_into().map_err(GolemError::invalid_request)?;
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+
+        match metadata {
+            Some(_) => {
+                let worker =
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
+                        .await?;
+                worker.revert(target).await?;
+                Ok(())
+            }
+            None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
+        }
+    }
+
     async fn interrupt_worker_internal(
         &self,
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
     ) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
@@ -496,7 +489,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if let Some((_, worker)) = self
                 .active_workers()
                 .iter()
-                .find(|(id, _)| *id == worker_id)
+                .find(|(id, _)| id == &owned_worker_id.worker_id)
             {
                 worker
                     .set_interrupting(if request.recover_immediately {
@@ -528,7 +521,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                self.active_workers().remove(&worker_id);
+                self.active_workers().remove(&owned_worker_id.worker_id);
             }
             WorkerStatus::Retrying => {
                 debug!("Marking worker scheduled to be retried as interrupted");
@@ -537,7 +530,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                self.active_workers().remove(&worker_id);
+                self.active_workers().remove(&owned_worker_id.worker_id);
             }
             WorkerStatus::Running => {
                 let worker =
@@ -552,7 +545,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await;
 
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                self.active_workers().remove(&worker_id);
+                self.active_workers().remove(&owned_worker_id.worker_id);
             }
         }
 
@@ -563,20 +556,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::ResumeWorkerRequest,
     ) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let force_resume = request.force.unwrap_or(false);
 
@@ -591,7 +573,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match &worker_status.status {
             WorkerStatus::Suspended | WorkerStatus::Interrupted | WorkerStatus::Idle => {
                 info!(
-                    "Activating {:?} worker {worker_id} due to explicit resume request",
+                    "Activating {:?} worker {owned_worker_id} due to explicit resume request",
                     worker_status.status
                 );
                 let _ = Worker::get_or_create_running(
@@ -607,7 +589,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             _ if force_resume => {
                 info!(
-                    "Force activating {:?} worker {worker_id} due to explicit resume request",
+                    "Force activating {:?} worker {owned_worker_id} due to explicit resume request",
                     worker_status.status
                 );
                 let _ = Worker::get_or_create_running(
@@ -623,7 +605,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             _ => Err(GolemError::invalid_request(format!(
                 "Worker {worker_id} is not suspended, interrupted or idle",
-                worker_id = worker_id
+                worker_id = owned_worker_id.worker_id
             ))),
         }
     }
@@ -714,7 +696,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
@@ -804,26 +785,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::GetWorkerMetadataRequest,
     ) -> Result<golem::worker::WorkerMetadata, GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-
-        let worker_id: WorkerId = worker_id
-            .clone()
-            .try_into()
-            .map_err(GolemError::invalid_request)?;
-        let account_id: AccountId = account_id.clone().into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = self
             .worker_service()
             .get(&owned_worker_id)
             .await
-            .ok_or(GolemError::worker_not_found(worker_id.clone()))?;
+            .ok_or(GolemError::worker_not_found(owned_worker_id.worker_id()))?;
 
         let latest_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &Some(metadata.clone()))
@@ -926,23 +896,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 
     async fn update_worker_internal(&self, request: UpdateWorkerRequest) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let mut worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
-        let metadata = metadata.ok_or(GolemError::worker_not_found(worker_id.clone()))?;
+        let metadata = metadata.ok_or(GolemError::worker_not_found(owned_worker_id.worker_id()))?;
 
         if metadata.last_known_status.component_version == request.target_version {
             return Err(GolemError::invalid_request(
@@ -953,8 +914,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                &account_id,
-                &worker_id.component_id,
+                &owned_worker_id.account_id,
+                &owned_worker_id.worker_id.component_id,
                 Some(metadata.last_known_status.component_version),
             )
             .await?;
@@ -1088,7 +1049,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(GolemError::invalid_request("missing account_id"))?
             .into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
@@ -1129,19 +1089,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetOplogRequest,
     ) -> Result<GetOplogResponse, GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1209,19 +1159,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: SearchOplogRequest,
     ) -> Result<SearchOplogResponse, GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1413,15 +1353,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ActivatePluginRequest,
     ) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let plugin_installation_id = request
             .installation_id
@@ -1429,8 +1363,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let plugin_installation_id: PluginInstallationId = plugin_installation_id
             .try_into()
             .map_err(GolemError::invalid_request)?;
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
@@ -1450,8 +1382,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &account_id,
-                            &worker_id.component_id,
+                            &owned_worker_id.account_id,
+                            &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )
                         .await?;
@@ -1479,7 +1411,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
             }
-            None => Err(GolemError::worker_not_found(worker_id)),
+            None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
         }
     }
 
@@ -1487,15 +1419,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: DeactivatePluginRequest,
     ) -> Result<(), GolemError> {
-        let worker_id = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?;
-        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
-
-        let account_id = request
-            .account_id
-            .ok_or(GolemError::invalid_request("account_id not found"))?;
-        let account_id: AccountId = account_id.into();
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let plugin_installation_id = request
             .installation_id
@@ -1503,8 +1429,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let plugin_installation_id: PluginInstallationId = plugin_installation_id
             .try_into()
             .map_err(GolemError::invalid_request)?;
-
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
@@ -1524,8 +1448,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &account_id,
-                            &worker_id.component_id,
+                            &owned_worker_id.account_id,
+                            &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )
                         .await?;
@@ -1553,7 +1477,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
             }
-            None => Err(GolemError::worker_not_found(worker_id)),
+            None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
         }
     }
 
@@ -2338,6 +2262,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn revert_worker(
+        &self,
+        request: Request<RevertWorkerRequest>,
+    ) -> Result<Response<RevertWorkerResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "revert_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .revert_worker_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(RevertWorkerResponse {
+                result: Some(
+                    golem::workerexecutor::v1::revert_worker_response::Result::Success(
+                        golem::common::Empty {},
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(RevertWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::revert_worker_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
     async fn list_directory(
         &self,
         request: Request<ListDirectoryRequest>,
@@ -2725,4 +2686,25 @@ impl Stream for WorkerEventStream {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+fn extract_owned_worker_id<T>(
+    request: &T,
+    get_worker_id: impl FnOnce(&T) -> &Option<golem::worker::WorkerId>,
+    get_account_id: impl FnOnce(&T) -> &Option<golem::common::AccountId>,
+) -> Result<OwnedWorkerId, GolemError> {
+    let worker_id = get_worker_id(request)
+        .as_ref()
+        .ok_or(GolemError::invalid_request("worker_id not found"))?;
+    let worker_id = worker_id
+        .clone()
+        .try_into()
+        .map_err(GolemError::invalid_request)?;
+
+    let account_id = get_account_id(request)
+        .as_ref()
+        .ok_or(GolemError::invalid_request("account_id not found"))?;
+    let account_id: AccountId = account_id.clone().into();
+
+    Ok(OwnedWorkerId::new(&account_id, &worker_id))
 }
