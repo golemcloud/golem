@@ -1,5 +1,5 @@
 import {API} from "@/service";
-import {useEffect, useState} from "react";
+import {useCallback, useEffect, useMemo, useState} from "react";
 import {Outlet, useLocation, useNavigate, useParams} from "react-router-dom";
 import {SidebarInset, SidebarProvider, SidebarTrigger,} from "@/components/ui/sidebar.tsx";
 import {SidebarMenu} from "@/components/sidebar.tsx";
@@ -8,15 +8,22 @@ import ErrorBoundary from "@/components/errorBoundary.tsx";
 import {ComponentList} from "@/types/component.ts";
 import {ArrowRightFromLine, Home, Info, Pencil, Pickaxe, Settings, ToyBrick, Workflow,} from "lucide-react";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
+import {SidebarMenuProps} from "@/components/nav-main.tsx";
 
-const MenuItems = (componentId: string, componentType: string) => [
+/**
+ * Creates menu items for the component sidebar
+ */
+const createMenuItems = (
+    componentId: string,
+    componentType: string
+): SidebarMenuProps[] => [
     {
         title: "Overview",
         url: `/components/${componentId}`,
@@ -61,21 +68,34 @@ const MenuItems = (componentId: string, componentType: string) => [
     },
 ];
 
+/**
+ * Layout component for the component details page
+ */
 export const ComponentLayout = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const {componentId = ""} = useParams();
-    const [currentComponent, setCurrentComponent] = useState({} as ComponentList);
+    const [currentComponent, setCurrentComponent] =
+        useState<ComponentList | null>(null);
     const [currentMenu, setCurrentMenu] = useState("Overview");
 
-    useEffect(() => {
+    // Fetch component data
+    const fetchComponent = useCallback(async () => {
         if (componentId) {
-            API.getComponentByIdAsKey().then((response) => {
+            try {
+                const response = await API.getComponentByIdAsKey();
                 setCurrentComponent(response[componentId]);
-            });
+            } catch (error) {
+                console.error("Error fetching component:", error);
+            }
         }
     }, [componentId]);
 
+    useEffect(() => {
+        fetchComponent();
+    }, [fetchComponent]);
+
+    // Update current menu based on location
     useEffect(() => {
         if (location.pathname.includes("workers")) setCurrentMenu("Workers");
         else if (location.pathname.includes("invoke")) setCurrentMenu("Invoke");
@@ -84,46 +104,64 @@ export const ComponentLayout = () => {
         else if (location.pathname.includes("plugins")) setCurrentMenu("Plugins");
         else if (location.pathname.includes("info")) setCurrentMenu("Info");
         else if (location.pathname.includes("settings")) setCurrentMenu("Settings");
+        else setCurrentMenu("Overview");
     }, [location.pathname]);
 
-    const navigateHome = () => {
+    // Memoize menu items
+    const menuItems = useMemo(() => {
+        return createMenuItems(componentId, currentComponent?.componentType || "");
+    }, [componentId, currentComponent?.componentType]);
+
+    const handleNavigateHome = useCallback(() => {
         navigate(`/components/${componentId}`);
         setCurrentMenu("Overview");
-    };
+    }, [navigate, componentId]);
+
+    // Memoize header component
+    const Header = useMemo(
+        () => (
+            <header
+                className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 border-b">
+                <div className="flex items-center gap-2 px-4">
+                    <SidebarTrigger className="-ml-1"/>
+                    <Separator orientation="vertical" className="mr-2 h-4"/>
+
+                    <Breadcrumb>
+                        <BreadcrumbList>
+                            <BreadcrumbItem className="hidden md:block cursor-pointer">
+                                <BreadcrumbLink asChild>
+                  <span onClick={handleNavigateHome}>
+                    {currentComponent?.componentName || "Loading..."}
+                  </span>
+                                </BreadcrumbLink>
+                            </BreadcrumbItem>
+                            <BreadcrumbSeparator className="hidden md:block"/>
+                            <BreadcrumbItem>
+                                <BreadcrumbPage>{currentMenu}</BreadcrumbPage>
+                            </BreadcrumbItem>
+                        </BreadcrumbList>
+                    </Breadcrumb>
+                </div>
+            </header>
+        ),
+        [currentComponent?.componentName, currentMenu, handleNavigateHome]
+    );
+
+    if (!currentComponent) {
+        return <div>Loading...</div>;
+    }
 
     return (
         <ErrorBoundary>
             <SidebarProvider>
                 <SidebarMenu
-                    menus={MenuItems(componentId, currentComponent.componentType!)}
+                    menus={menuItems}
                     activeItem={currentMenu}
                     setActiveItem={setCurrentMenu}
                     title={"Component"}
                 />
                 <SidebarInset>
-                    <header
-                        className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 border-b">
-                        <div className="flex items-center gap-2 px-4">
-                            <SidebarTrigger className="-ml-1"/>
-                            <Separator orientation="vertical" className="mr-2 h-4"/>
-
-                            <Breadcrumb>
-                                <BreadcrumbList>
-                                    <BreadcrumbItem className="hidden md:block cursor-pointer">
-                                        <BreadcrumbLink asChild>
-                      <span onClick={() => navigateHome()}>
-                        {currentComponent.componentName}
-                      </span>
-                                        </BreadcrumbLink>
-                                    </BreadcrumbItem>
-                                    <BreadcrumbSeparator className="hidden md:block"/>
-                                    <BreadcrumbItem>
-                                        <BreadcrumbPage>{currentMenu}</BreadcrumbPage>
-                                    </BreadcrumbItem>
-                                </BreadcrumbList>
-                            </Breadcrumb>
-                        </div>
-                    </header>
+                    {Header}
                     <ErrorBoundary>
                         <Outlet/>
                     </ErrorBoundary>
@@ -132,3 +170,5 @@ export const ComponentLayout = () => {
         </ErrorBoundary>
     );
 };
+
+export default ComponentLayout;
