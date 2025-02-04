@@ -1,7 +1,9 @@
 use crate::additional_deps::AdditionalDeps;
 use crate::auth::{AuthService, AuthServiceDefault};
 use crate::config::{AdditionalDebugConfig, DebugConfig};
-use crate::context::DebugContext;
+use crate::debug_context::DebugContext;
+use crate::debug_session::{DebugSessions, DebugSessionsDefault};
+use crate::oplog::debug_oplog_service::DebugOplogService;
 use crate::services::debug_service::DebugServiceDefault;
 use anyhow::{Context, Error};
 use async_trait::async_trait;
@@ -37,7 +39,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{plugins, All, HasConfig, HasExtraDeps};
+use golem_worker_executor_base::services::{plugins, All, HasConfig};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::WorkerCtx;
 use golem_worker_executor_base::Bootstrap;
@@ -56,8 +58,7 @@ test_r::enable!();
 
 pub mod additional_deps;
 pub mod config;
-pub mod context;
-pub mod debug;
+pub mod debug_context;
 pub mod services;
 pub mod websocket;
 
@@ -66,6 +67,7 @@ pub mod debug_request;
 mod debug_session;
 mod jrpc;
 mod model;
+mod oplog;
 
 struct ServerBootstrap {
     additional_config: AdditionalDebugConfig,
@@ -86,8 +88,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
         join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<()> {
-        let additional_deps = service_dependencies.extra_deps();
-        let debug_service = additional_deps.get_debug_service();
+        let debug_service = Arc::new(DebugServiceDefault::new(service_dependencies.clone()));
 
         let handle_ws = |ws| websocket::handle_ws(ws, debug_service);
 
@@ -182,14 +183,15 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             component_service_grpc_config,
         ));
 
-        let debug_session = Arc::new(debug_session::DebugSessionDefault::new());
+        let debug_sessions: Arc<dyn DebugSessions + Sync + Send> =
+            Arc::new(DebugSessionsDefault::new());
 
-        let debug_service = Arc::new(DebugServiceDefault::new(
-            auth_service.clone(),
-            debug_session.clone(),
+        let oplog_service = Arc::new(DebugOplogService::new(
+            oplog_service,
+            Arc::clone(&debug_sessions),
         ));
 
-        let additional_deps = AdditionalDeps::new(debug_service);
+        let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -218,7 +220,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
-            additional_deps.clone(),
+            addition_deps.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -248,7 +250,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
-            additional_deps.clone(),
+            addition_deps.clone(),
         ));
 
         Ok(All::new(
@@ -276,7 +278,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
-            additional_deps,
+            addition_deps,
         ))
     }
 

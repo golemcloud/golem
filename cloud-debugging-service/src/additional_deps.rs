@@ -1,17 +1,29 @@
-use crate::services::debug_service::DebugService;
+use crate::auth::AuthService;
+use crate::debug_session::DebugSessions;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AdditionalDeps {
-    debug_service: Arc<dyn DebugService + Sync + Send>,
+    auth_service: Arc<dyn AuthService + Sync + Send>,
+    debug_session: Arc<dyn DebugSessions + Sync + Send>,
 }
 
 impl AdditionalDeps {
-    pub fn new(debug_service: Arc<dyn DebugService + Sync + Send>) -> Self {
-        Self { debug_service }
+    pub fn new(
+        auth_service: Arc<dyn AuthService + Sync + Send>,
+        debug_session: Arc<dyn DebugSessions + Sync + Send>,
+    ) -> Self {
+        Self {
+            auth_service,
+            debug_session,
+        }
     }
 
-    pub fn get_debug_service(&self) -> Arc<dyn DebugService + Sync + Send> {
-        self.debug_service.clone()
+    pub fn auth_service(&self) -> Arc<dyn AuthService + Sync + Send> {
+        self.auth_service.clone()
+    }
+
+    pub fn debug_session(&self) -> Arc<dyn DebugSessions + Sync + Send> {
+        self.debug_session.clone()
     }
 }

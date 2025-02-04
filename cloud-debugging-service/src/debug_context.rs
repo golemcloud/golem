@@ -9,11 +9,13 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, HostFutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem::rpc::types::{
+    FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
-use golem_wasm_rpc::{HostWasmRpc, Pollable, RpcError, Uri, WitValue};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };

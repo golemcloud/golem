@@ -1,0 +1,139 @@
+use crate::debug_session::{DebugSessionId, DebugSessions};
+use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
+use async_trait::async_trait;
+use axum::body::Bytes;
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
+use golem_worker_executor_base::error::GolemError;
+use golem_worker_executor_base::model::ExecutionStatus;
+use golem_worker_executor_base::services::oplog::{OpenOplogs, Oplog, OplogService};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, RwLock};
+
+pub struct DebugOplogService {
+    pub inner: Arc<dyn OplogService + Send + Sync>,
+    oplogs: OpenOplogs,
+    pub debug_session: Arc<dyn DebugSessions + Send + Sync>,
+}
+
+impl DebugOplogService {
+    pub fn new(
+        inner: Arc<dyn OplogService + Send + Sync>,
+        debug_session: Arc<dyn DebugSessions + Send + Sync>,
+    ) -> Self {
+        Self {
+            inner,
+            debug_session,
+            oplogs: OpenOplogs::new("debugging_oplog_service"),
+        }
+    }
+}
+
+impl Debug for DebugOplogService {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DebugOplogService").finish()
+    }
+}
+
+#[async_trait]
+impl OplogService for DebugOplogService {
+    async fn create(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        self.oplogs
+            .get_or_open(
+                &owned_worker_id.worker_id,
+                CreateDebugOplogConstructor::new(
+                    owned_worker_id.clone(),
+                    initial_entry,
+                    self.inner.clone(),
+                    self.debug_session.clone(),
+                    execution_status,
+                    initial_worker_metadata,
+                ),
+            )
+            .await
+    }
+
+    async fn open(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        last_oplog_index: OplogIndex,
+        initial_worker_metadata: WorkerMetadata,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        self.inner
+            .open(
+                owned_worker_id,
+                last_oplog_index,
+                initial_worker_metadata,
+                execution_status,
+            )
+            .await
+    }
+
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+
+        let debug_session_data = self
+            .debug_session
+            .get(&debug_session_id)
+            .await
+            .expect("Internal Error. Debug session not found");
+
+        debug_session_data
+            .target_oplog_index_at_invocation_boundary
+            .expect("Internal Error. Target oplog index not found")
+    }
+
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+        self.inner.delete(owned_worker_id).await
+    }
+
+    async fn read(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read(owned_worker_id, idx, n).await
+    }
+
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+        self.inner.exists(owned_worker_id).await
+    }
+
+    async fn scan_for_component(
+        &self,
+        account_id: &AccountId,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+        self.inner
+            .scan_for_component(account_id, component_id, cursor, count)
+            .await
+    }
+
+    // DebugService shouldn't upload any data to the oplog
+    async fn upload_payload(
+        &self,
+        _owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String> {
+        Ok(OplogPayload::Inline(data.to_vec()))
+    }
+
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String> {
+        self.inner.download_payload(owned_worker_id, payload).await
+    }
+}

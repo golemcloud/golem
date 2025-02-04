@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use cloud_common::auth::CloudNamespace;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId, WorkerMetadata};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 // A shared debug session which will be internally used by the custom oplog service
 // dedicated to running debug executor
 #[async_trait]
-pub trait DebugSession {
+pub trait DebugSessions {
     async fn insert(
         &self,
         debug_session_id: DebugSessionId,
@@ -19,12 +19,18 @@ pub trait DebugSession {
     async fn get(&self, debug_session_id: &DebugSessionId) -> Option<DebugSessionData>;
 
     async fn remove(&self, debug_session_id: DebugSessionId) -> Option<DebugSessionData>;
+
+    async fn update(
+        &self,
+        debug_session_id: DebugSessionId,
+        target_oplog_index: OplogIndex,
+    ) -> Option<DebugSessionData>;
 }
-pub struct DebugSessionDefault {
+pub struct DebugSessionsDefault {
     pub session: Arc<Mutex<HashMap<DebugSessionId, DebugSessionData>>>,
 }
 
-impl DebugSessionDefault {
+impl DebugSessionsDefault {
     pub fn new() -> Self {
         Self {
             session: Arc::new(Mutex::new(HashMap::new())),
@@ -33,7 +39,7 @@ impl DebugSessionDefault {
 }
 
 #[async_trait]
-impl DebugSession for DebugSessionDefault {
+impl DebugSessions for DebugSessionsDefault {
     async fn insert(
         &self,
         debug_session_id: DebugSessionId,
@@ -53,11 +59,27 @@ impl DebugSession for DebugSessionDefault {
         let mut session = self.session.lock().unwrap();
         session.remove(&debug_session_id)
     }
+
+    async fn update(
+        &self,
+        debug_session_id: DebugSessionId,
+        target_oplog_index: OplogIndex,
+    ) -> Option<DebugSessionData> {
+        let mut session = self.session.lock().unwrap();
+        let session_data = session.get_mut(&debug_session_id);
+        if let Some(session_data) = session_data {
+            session_data.target_oplog_index_at_invocation_boundary = Some(target_oplog_index);
+            Some(session_data.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct DebugSessionData {
-    pub target_oplog_index: Option<OplogIndex>, // Add more info here
+    pub worker_metadata: Option<WorkerMetadata>,
+    pub target_oplog_index_at_invocation_boundary: Option<OplogIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
