@@ -28,12 +28,13 @@ import {
 import { calculateExportFunctions } from "@/lib/utils";
 
 // ---------- Shadcn UI Tooltip Imports ----------
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
+import { ClipboardCopy } from "lucide-react";
 
 /**
  * The interface for each export/function row
@@ -58,58 +59,102 @@ function parseTypeForTooltip(typ: Typ | undefined): {
   }
 
   switch (typ.type) {
-    case "Str":
-      return { short: "string", full: "string" };
-    case "U64":
-      return { short: "number", full: "number" };
     case "Bool":
-      return { short: "boolean", full: "boolean" };
-
-    case "Option": {
-      const inner = parseTypeForTooltip(typ.inner);
-      return {
-        short: `option<${inner.short}>`,
-        full: `option<${inner.full}>`,
-      };
-    }
-
+      return { short: "bool", full: "bool" };
+    case "S8":
+    case "S16":
+    case "S32":
+    case "S64":
+      return { short: `i${typ.type.slice(1)}`, full: `i${typ.type.slice(1)}` };
+    case "U8":
+    case "U16":
+    case "U32":
+    case "U64":
+      return { short: `u${typ.type.slice(1)}`, full: `u${typ.type.slice(1)}` };
+    case "F32":
+    case "F64":
+      return { short: typ.type.toLowerCase(), full: typ.type.toLowerCase() };
+    case "Char":
+      return { short: "char", full: "char" };
+    case "Str":
+      return { short: "string", full: "String" };
     case "List": {
       const inner = parseTypeForTooltip(typ.inner);
       return {
         short: `list<${inner.short}>`,
-        full: `list<${inner.full}>`,
+        full: `Vec<${inner.full}>`,
       };
     }
-
+    case "Option": {
+      const inner = parseTypeForTooltip(typ.inner);
+      return {
+        short: `option<${inner.short}>`,
+        full: `Option<${inner.full}>`,
+      };
+    }
+    case "Result": {
+      const okParsed = parseTypeForTooltip(typ.ok);
+      const errParsed = parseTypeForTooltip(typ.err);
+      return {
+        short: `result<${okParsed.short}, ${errParsed.short}>`,
+        full: `Result<${okParsed.full}, ${errParsed.full}>`,
+      };
+    }
+    case "Tuple": {
+      const elements = (typ.elements || []).map((element) =>
+        parseTypeForTooltip(element)
+      );
+      return {
+        short: `tuple<${elements.map((e) => e.short).join(", ")}>`,
+        full: `(${elements.map((e) => e.full).join(", ")})`,
+      };
+    }
     case "Record": {
-      // "short" is just 'record'; "full" is multiline representation
       const fields = (typ.fields || []).map((field) => {
         const parsed = parseTypeForTooltip(field.typ);
         return `  ${field.name}: ${parsed.full}`;
       });
       return {
         short: "record",
-        full: `record {\n${fields.join("\n")}\n}`,
+        full: `{\n${fields.join("\n")}\n}`,
       };
     }
-
+    case "Variant": {
+      const cases = (typ.cases || []).map((c) => {
+        if (typeof c === "string") {
+          return c.charAt(0).toUpperCase() + c.slice(1);
+        } else {
+          const parsed = parseTypeForTooltip(c.typ);
+          return `${c.name.charAt(0).toUpperCase() + c.name.slice(1)}(${
+            parsed.full
+          })`;
+        }
+      });
+      return {
+        short: "variant",
+        full: `enum {\n  ${cases.join(",\n  ")}\n}`,
+      };
+    }
     case "Enum": {
-      const cases = typ.cases?.map((c) => `'${c}'`).join(" | ") || "";
+      const cases = (typ.cases || []).map(
+        (c) => c.charAt(0).toUpperCase() + c.slice(1)
+      );
       return {
         short: "enum",
-        full: `enum {\n  ${cases}\n}`,
+        full: `enum (\n  ${cases.join(",\n  ")}\n)`,
       };
     }
-
-    case "Result": {
-      const okParsed = parseTypeForTooltip(typ.ok);
-      const errParsed = parseTypeForTooltip(typ.err);
+    case "Flags": {
+      const flags = (typ.flags || []).map((flag, index) => {
+        return `const ${flag.toUpperCase()} = 1 << ${index};`;
+      });
       return {
-        short: `result<${okParsed.short}, ${errParsed.short}>`,
-        full: `result<\n  ${okParsed.full},\n  ${errParsed.full}\n>`,
+        short: "flags",
+        full: `bitflags! { pub struct ${typ.name}: u8 {\n  ${flags.join(
+          "\n  "
+        )}\n}}`,
       };
     }
-
     default:
       return { short: "unknown", full: "unknown" };
   }
@@ -119,17 +164,42 @@ function parseTypeForTooltip(typ: Typ | undefined): {
  * A small component that renders the short name in a TooltipTrigger,
  * and shows the full multiline text in TooltipContent.
  */
-function TypeWithTooltip({ typ }: { typ: Typ | undefined }) {
+function TypeWithPopover({ typ }: { typ: Typ | undefined }) {
   const { short, full } = parseTypeForTooltip(typ);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(full).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000); // Reset after 2 seconds
+    });
+  };
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="cursor-help text-blue-600">{short}</span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <pre className="whitespace-pre-wrap text-sm">{full}</pre>
-      </TooltipContent>
-    </Tooltip>
+    <Popover>
+      <PopoverTrigger asChild>
+        <span className="cursor-help text-blue-600 dark:text-blue-400">
+          {short}
+        </span>
+      </PopoverTrigger>
+      <PopoverContent className="p-4 bg-gray-100 dark:bg-gray-800 rounded-md shadow-lg">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            Type Details
+          </span>
+          <button
+            onClick={handleCopy}
+            className="flex items-center text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            <ClipboardCopy className="w-4 h-4 mr-1" />
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+        <pre className="whitespace-pre-wrap text-sm bg-white dark:bg-gray-900 p-2 rounded-md border dark:border-gray-700 text-gray-900 dark:text-gray-100">
+          {full}
+        </pre>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -143,7 +213,7 @@ function buildParameterNodes(params: Parameter[]): React.ReactNode {
       <span key={param.name}>
         <span className="text-yellow-600">{param.name}</span>
         {": "}
-        <TypeWithTooltip typ={param.typ} />
+        <TypeWithPopover typ={param.typ} />
         {index < params.length - 1 && ", "}
       </span>
     );
@@ -167,7 +237,7 @@ function generateFunctionInterfacesV1(data: Export[]): ExportResult[] {
       const paramNodes = buildParameterNodes(func.parameters);
 
       const returnNode = func.results?.[0]?.typ ? (
-        <TypeWithTooltip typ={func.results[0].typ} />
+        <TypeWithPopover typ={func.results[0].typ} />
       ) : (
         <>void</>
       );
@@ -213,8 +283,10 @@ export default function Exports() {
   }, [componentId]);
 
   useEffect(() => {
-    if (!component.versions?.length || versionChange === 0) return;
+    console.log("component", component);
+    if (!component.versions?.length) return;
 
+    console.log("component.versions", component.versions);
     const componentDetails = component.versions.find(
       (data) => data.versionedComponentId?.version === versionChange
     );
@@ -322,9 +394,11 @@ export default function Exports() {
                       </TableRow>
                     ))
                   ) : (
-                    <div className="p-4 align-center grid">
-                      No exports found.
-                    </div>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-center">
+                        No exports found.
+                      </TableCell>
+                    </TableRow>
                   )}
                 </TableBody>
               </Table>

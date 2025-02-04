@@ -42,7 +42,7 @@ export function NavRoutes({
             <SidebarGroupLabel>Routes</SidebarGroupLabel>
             <SidebarMenu>
                 {routes.map((item) => (
-                    <SidebarMenuItem key={item.name}>
+                    <SidebarMenuItem key={`${item.name}-${item.method}`}>
                         <SidebarMenuButton onClick={() => setActiveItem(item.name)} asChild>
                             <a href={item.url}>
                                 <Badge
