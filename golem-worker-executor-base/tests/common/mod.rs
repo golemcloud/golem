@@ -45,7 +45,7 @@ use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::worker_metadata::WorkerMetadataService;
+use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{plugins, All, HasAll, HasConfig, HasOplogService};
@@ -651,7 +651,7 @@ impl WorkerCtx for TestWorkerCtx {
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -917,7 +917,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,

@@ -48,7 +48,7 @@ use golem_worker_executor_base::services::plugins::Plugins;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::worker_metadata::WorkerMetadataService;
+use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
@@ -305,7 +305,7 @@ impl WorkerCtx for Context {
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,

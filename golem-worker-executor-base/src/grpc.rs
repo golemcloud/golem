@@ -263,7 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let existing_worker = self.worker_metadata_service().get(&owned_worker_id).await;
+        let existing_worker = self.worker_service().get(&owned_worker_id).await;
         if existing_worker.is_some() {
             return Err(GolemError::worker_already_exists(worker_id.clone()));
         }
@@ -341,7 +341,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let completed = self.promise_service().complete(promise_id, data).await?;
 
         let metadata = self
-            .worker_metadata_service()
+            .worker_service()
             .get(&owned_worker_id)
             .await
             .ok_or(GolemError::worker_not_found(worker_id.clone()))?;
@@ -386,7 +386,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
@@ -413,7 +413,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         Ctx::on_worker_deleted(self, &worker_id).await?;
-        self.worker_metadata_service().remove(&owned_worker_id).await;
+        self.worker_service().remove(&owned_worker_id).await;
         self.active_workers().remove(&worker_id);
 
         Ok(())
@@ -487,7 +487,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
@@ -580,7 +580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let force_resume = request.force.unwrap_or(false);
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
 
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
@@ -717,7 +717,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
 
@@ -820,7 +820,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let metadata = self
-            .worker_metadata_service()
+            .worker_service()
             .get(&owned_worker_id)
             .await
             .ok_or(GolemError::worker_not_found(worker_id.clone()))?;
@@ -939,7 +939,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id: AccountId = account_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         let mut worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
         let metadata = metadata.ok_or(GolemError::worker_not_found(worker_id.clone()))?;
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         if metadata.is_some() {
             let worker_status = self
                 .validate_worker_status(&owned_worker_id, &metadata)
@@ -1432,7 +1432,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
@@ -1506,7 +1506,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-        let metadata = self.worker_metadata_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 

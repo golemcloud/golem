@@ -517,7 +517,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "get_worker_metadata");
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
-        let metadata = self.state.worker_metadata_service.get(&owned_worker_id).await;
+        let metadata = self.state.worker_service.get(&owned_worker_id).await;
 
         match metadata {
             Some(metadata) => {

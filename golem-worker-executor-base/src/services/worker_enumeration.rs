@@ -2,7 +2,7 @@ use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
-use crate::services::worker_metadata::WorkerMetadataService;
+use crate::services::worker::WorkerService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
@@ -82,19 +82,19 @@ pub trait WorkerEnumerationService {
 
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
-    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+    worker_service: Arc<dyn WorkerService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     golem_config: Arc<GolemConfig>,
 }
 
 impl DefaultWorkerEnumerationService {
     pub fn new(
-        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
-            worker_metadata_service,
+            worker_service,
             oplog_service,
             golem_config,
         }
@@ -119,7 +119,7 @@ impl DefaultWorkerEnumerationService {
 
         for owned_worker_id in keys {
             let worker_metadata = self
-                .worker_metadata_service
+                .worker_service
                 .get(&owned_worker_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
                 .await;
@@ -158,8 +158,8 @@ impl HasOplogService for DefaultWorkerEnumerationService {
 }
 
 impl HasWorkerService for DefaultWorkerEnumerationService {
-    fn worker_metadata_service(&self) -> Arc<dyn WorkerMetadataService + Send + Sync> {
-        self.worker_metadata_service.clone()
+    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync> {
+        self.worker_service.clone()
     }
 }
 

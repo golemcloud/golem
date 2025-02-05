@@ -39,7 +39,7 @@ use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, Remot
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::worker_metadata::WorkerMetadataService;
+use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
@@ -92,7 +92,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,

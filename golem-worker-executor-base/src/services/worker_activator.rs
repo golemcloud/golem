@@ -157,7 +157,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
     for DefaultWorkerActivator<Ctx, Svcs>
 {
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
-        let metadata = self.all.worker_metadata_service().get(owned_worker_id).await;
+        let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
             Some(_) => {
                 if let Err(err) = Worker::get_or_create_running(

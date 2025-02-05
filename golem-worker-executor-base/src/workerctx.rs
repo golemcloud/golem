@@ -31,7 +31,7 @@ use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
-use crate::services::worker_metadata::WorkerMetadataService;
+use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
@@ -89,7 +89,7 @@ pub trait WorkerCtx:
     /// - `owned_worker_id`: The worker ID (consists of the component id and worker name as well as the worker's owner account)
     /// - `component_metadata`: Metadata associated with the worker's component
     /// - `promise_service`: The service for managing promises
-    /// - `worker_metadata_service`: The service for managing workers
+    /// - `worker_service`: The service for managing workers
     /// - `key_value_service`: The service for storing key-value pairs
     /// - `blob_store_service`: The service for storing arbitrary blobs
     /// - `event_service`: The service for publishing worker events
@@ -109,7 +109,7 @@ pub trait WorkerCtx:
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
         >,
