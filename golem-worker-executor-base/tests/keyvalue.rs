@@ -55,7 +55,10 @@ async fn readwrite_get_returns_the_value_that_was_set(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
-            vec!["key".into_value_and_type()],
+            vec![
+                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                "key".into_value_and_type(),
+            ],
         )
         .await
         .unwrap();
