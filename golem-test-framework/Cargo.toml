@@ -50,6 +50,7 @@ testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

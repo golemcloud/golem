@@ -22,6 +22,8 @@ use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::stream::SplitStream;
+use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
@@ -56,15 +58,22 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::Context;
+use golem_common::model::WorkerEvent;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use tokio::net::TcpStream;
+use tokio::{task, time};
+use tokio_tungstenite::tungstenite::protocol::frame::Payload;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 use url::Url;
+use uuid::Uuid;
 
 pub mod docker;
 pub mod forwarding;
@@ -388,14 +397,14 @@ pub trait WorkerService {
     async fn connect_worker(
         &self,
         request: ConnectWorkerRequest,
-    ) -> crate::Result<Streaming<LogEvent>> {
+    ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         match self.client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                Ok(client.connect_worker(request).await?.into_inner())
-            }
-            WorkerServiceClient::Http(_client) => {
-                todo!()
-            }
+            WorkerServiceClient::Grpc(client) => Ok(Box::new(
+                GrpcWorkerLogEventStream::new(client, request).await?,
+            )),
+            WorkerServiceClient::Http(client) => Ok(Box::new(
+                HttpWorkerLogEventStream::new(client, request).await?,
+            )),
         }
     }
 
@@ -642,11 +651,11 @@ pub trait WorkerService {
                         result: Some(list_directory_response::Result::Success(
                             ListDirectorySuccessResponse {
                                 nodes: result.nodes.into_iter().map(|node|
-                                    FileSystemNode{
+                                    FileSystemNode {
                                         value: Some(
                                             match node.kind {
                                                 golem_client::model::FlatComponentFileSystemNodeKind::Directory => {
-                                                    file_system_node::Value::File(FileFileSystemNode{
+                                                    file_system_node::Value::File(FileFileSystemNode {
                                                         name: node.name,
                                                         last_modified: node.last_modified,
                                                         size: node.size.unwrap(),
@@ -661,7 +670,7 @@ pub trait WorkerService {
                                                     })
                                                 }
                                                 golem_client::model::FlatComponentFileSystemNodeKind::File => {
-                                                    file_system_node::Value::Directory(DirectoryFileSystemNode{
+                                                    file_system_node::Value::Directory(DirectoryFileSystemNode {
                                                         name: node.name,
                                                         last_modified: node.last_modified,
                                                     })
@@ -732,8 +741,7 @@ pub trait WorkerService {
                 Ok(client.fork_worker(fork_worker_request).await?.into_inner())
             }
             WorkerServiceClient::Http(_client) => {
-                // TODO: is fork missing from http?
-                todo!()
+                panic!("Fork worker is not available on HTTP API");
             }
         }
     }
@@ -1071,4 +1079,113 @@ fn invoke_parameters_to_grpc(parameters: Option<Vec<ValueAndType>>) -> Option<In
             .map(|param| param.value.into())
             .collect(),
     })
+}
+
+#[async_trait]
+pub trait WorkerLogEventStream: Send {
+    async fn message(&mut self) -> crate::Result<Option<LogEvent>>;
+}
+
+pub struct GrpcWorkerLogEventStream {
+    streaming: Streaming<LogEvent>,
+}
+
+impl GrpcWorkerLogEventStream {
+    async fn new(
+        mut client: WorkerServiceGrpcClient<Channel>,
+        request: ConnectWorkerRequest,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            streaming: client.connect_worker(request).await?.into_inner(),
+        })
+    }
+}
+
+#[async_trait]
+impl WorkerLogEventStream for GrpcWorkerLogEventStream {
+    async fn message(&mut self) -> crate::Result<Option<LogEvent>> {
+        Ok(self.streaming.message().await?)
+    }
+}
+
+struct HttpWorkerLogEventStream {
+    read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+}
+
+impl HttpWorkerLogEventStream {
+    async fn new(
+        client: Arc<WorkerServiceHttpClientLive>,
+        request: ConnectWorkerRequest,
+    ) -> crate::Result<Self> {
+        let url = format!(
+            "ws://{}:{}/v1/components/{}/workers/{}/connect",
+            client.context.base_url.host().unwrap(),
+            client.context.base_url.port_or_known_default().unwrap(),
+            Uuid::from(
+                request
+                    .worker_id
+                    .as_ref()
+                    .unwrap()
+                    .component_id
+                    .unwrap()
+                    .value
+                    .unwrap()
+            ),
+            request.worker_id.unwrap().name,
+        );
+
+        let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
+            url,
+            None,
+            false,
+            Some(Connector::Plain),
+        )
+        .await?;
+        let (mut write, read) = stream.split();
+
+        static PING_HELLO: &str = "hello";
+        task::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                match write
+                    .send(Message::Ping(Payload::from(PING_HELLO.as_bytes())))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(error) => break error,
+                };
+            }
+        });
+
+        Ok(Self { read })
+    }
+}
+
+#[async_trait]
+impl WorkerLogEventStream for HttpWorkerLogEventStream {
+    async fn message(&mut self) -> crate::Result<Option<LogEvent>> {
+        match self.read.next().await {
+            Some(Ok(message)) => match message {
+                Message::Text(payload) => Ok(Some(
+                    serde_json::from_str::<WorkerEvent>(payload.as_str())?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                )),
+                Message::Binary(payload) => Ok(Some(
+                    serde_json::from_slice::<WorkerEvent>(payload.as_slice())?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                )),
+                Message::Ping(_) => self.message().await,
+                Message::Pong(_) => self.message().await,
+                Message::Close(_) => Ok(None),
+                Message::Frame(_) => {
+                    panic!("Raw frames should not be received")
+                }
+            },
+            Some(Err(error)) => Err(anyhow!(error)),
+            None => Ok(None),
+        }
+    }
 }

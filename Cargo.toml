@@ -202,6 +202,7 @@ tokio = { version = "1.42", features = [
 tokio-postgres = "0.7.12"
 tokio-rustls = { version = "0.26.1" }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-tungstenite = { version = "0.25.0" }
 tokio-util = "0.7.13"
 toml = "0.8.19"
 tonic = { version = "0.12.3", features = ["gzip"] }
@@ -217,6 +218,7 @@ tracing-subscriber = { version = "0.3.19", features = [
     "json",
 ] }
 tracing-test = "0.2.5"
+tungstenite = "0.25.0"
 typed-path = "0.10.0"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }

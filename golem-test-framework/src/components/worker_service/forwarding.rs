@@ -14,7 +14,7 @@
 
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::{WorkerService, WorkerServiceClient};
+use crate::components::worker_service::{WorkerLogEventStream, WorkerService, WorkerServiceClient};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -417,7 +417,7 @@ impl WorkerService for ForwardingWorkerService {
     async fn connect_worker(
         &self,
         request: ConnectWorkerRequest,
-    ) -> crate::Result<Streaming<LogEvent>> {
+    ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self
@@ -448,7 +448,9 @@ impl WorkerService for ForwardingWorkerService {
         };
         let result = result?.into_inner();
 
-        Ok(result)
+        Ok(Box::new(
+            GrpcForwardingWorkerLogEventStream::new(result).await?,
+        ))
     }
 
     async fn resume_worker(
@@ -892,4 +894,21 @@ impl WorkerService for ForwardingWorkerService {
     }
 
     async fn kill(&self) {}
+}
+
+pub struct GrpcForwardingWorkerLogEventStream {
+    streaming: Streaming<LogEvent>,
+}
+
+impl GrpcForwardingWorkerLogEventStream {
+    async fn new(streaming: Streaming<LogEvent>) -> crate::Result<Self> {
+        Ok(Self { streaming })
+    }
+}
+
+#[async_trait]
+impl WorkerLogEventStream for GrpcForwardingWorkerLogEventStream {
+    async fn message(&mut self) -> crate::Result<Option<LogEvent>> {
+        Ok(self.streaming.message().await?)
+    }
 }
