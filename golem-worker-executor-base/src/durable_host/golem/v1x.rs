@@ -224,6 +224,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+
+    fn schedule_invocation(
+        &mut self,
+        _: crate::preview2::wasi::clocks::wall_clock::Datetime,
+        _: latest_golem_api::host::WorkerId,
+        _: String,
+        _: Vec<crate::preview2::golem::rpc::types::WitValue>
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
 }
 
 #[async_trait]
@@ -304,7 +314,7 @@ pub struct GetOplogEntry {
     pub page_size: usize,
 }
 
-impl crate::durable_host::golem::v11::GetOplogEntry {
+impl crate::durable_host::golem::v1x::GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: golem_common::model::oplog::OplogIndex,
@@ -749,7 +759,7 @@ impl From<WorkerAnyFilter> for golem::api0_2_0::host::WorkerAnyFilter {
     }
 }
 
-impl From<golem_common::model::WorkerId> for golem::api1_1_2::host::WorkerId {
+impl From<golem_common::model::WorkerId> for latest_golem_api::host::WorkerId {
     fn from(worker_id: golem_common::model::WorkerId) -> Self {
         latest_golem_api::host::WorkerId {
             component_id: worker_id.component_id.into(),
@@ -776,7 +786,7 @@ impl From<latest_golem_api::host::ComponentId> for golem_common::model::Componen
     }
 }
 
-impl From<golem_common::model::ComponentId> for golem::api1_1_2::host::ComponentId {
+impl From<golem_common::model::ComponentId> for latest_golem_api::host::ComponentId {
     fn from(component_id: golem_common::model::ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
@@ -789,7 +799,7 @@ impl From<golem_common::model::ComponentId> for golem::api1_1_2::host::Component
     }
 }
 
-impl From<golem_common::model::PromiseId> for golem::api1_1_2::host::PromiseId {
+impl From<golem_common::model::PromiseId> for latest_golem_api::host::PromiseId {
     fn from(promise_id: golem_common::model::PromiseId) -> Self {
         latest_golem_api::host::PromiseId {
             worker_id: promise_id.worker_id.into(),
@@ -807,7 +817,7 @@ impl From<latest_golem_api::host::PromiseId> for golem_common::model::PromiseId 
     }
 }
 
-impl From<&RetryConfig> for crate::preview2::golem::api1_1_2::host::RetryPolicy {
+impl From<&RetryConfig> for latest_golem_api::host::RetryPolicy {
     fn from(value: &RetryConfig) -> Self {
         Self {
             max_attempts: value.max_attempts,

@@ -34,8 +34,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
-        "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
-        "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+        "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
+        "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
     },
 });
 
@@ -65,4 +65,4 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
 }
 
 // reexport so that we don't have to change version numbers everywhere
-pub use self::golem::api1_1_2 as latest_golem_api;
+pub use self::golem::api1_2_0 as latest_golem_api;

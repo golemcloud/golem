@@ -1,8 +1,8 @@
 [all]
-url = "https://github.com/golemcloud/golem-wit/archive/33db0c8eccd228c07fa47f2aee8b5d1728afe77f.tar.gz"
+url = "https://github.com/golemcloud/golem-wit/archive/54383cebd9e416424510a4b9bf47507eda701307.tar.gz"
 sha256 = "6ac4f1553003474229bb40a885b48d1eaa4bea2f9d679a115da9afede30b5ad4"
 sha512 = "ced8c18a35dc04123386465d98d2aeba54c486e4e22a30e7efac0548974e176528fcba36c64942d67fa35d9135806ff0fcde259eb4af051c4a29fcb397e9af1c"
-deps = ["blobstore", "cli", "clocks", "filesystem", "golem", "golem-1.1", "golem-durability", "http", "io", "keyvalue", "logging", "random", "sockets", "wasm-rpc"]
+deps = ["blobstore", "cli", "clocks", "filesystem", "golem", "golem-1.x", "golem-durability", "http", "io", "keyvalue", "logging", "random", "sockets", "wasm-rpc"]
 
 [blobstore]
 sha256 = "eb50ec776eac937b2ef90b41a281d0dd7c94f0b076466d917bd0f2ed5b01d39d"
@@ -24,13 +24,13 @@ sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00
 sha256 = "074fdcdb57d6ea7f30143d2978819675e422c4f412291e22d0da2b57ed3d185f"
 sha512 = "0702740609fa353d2fa67b26d56fa3d9e8f59b43b87c6ac584a9db668ee4384de660824a7116ee8a85368249976730baf5676167857aa4d1af68c9082002fd9d"
 
-["golem-1.1"]
-sha256 = "e38036517e997cb4b564ea84888fd77a1ac5f1036731cd7319dfee3ae5dd7029"
-sha512 = "d5314be4761a41e290087e8eca4379fb30567d4fa148be55281919e144625ae520c102cd76f43522702d3479d3704d599fd8fc41ce1c820d58828942a83255da"
+["golem-1.x"]
+sha256 = "8a411deb994bffd60b796b05af1a29fe580c1e6d2290359538d8da9592f0e352"
+sha512 = "86ac6f05c85821b84ee79d38dd184e6039f83c79f8d082df4292457866f070a5d64846b157687e92cef82c6a9e85d750f8476ffc379aa37b8d5eb10b2f57247a"
 
 [golem-durability]
-sha256 = "d63c4231a6d5a81f6056befd26c8214387b589cd323ec56fadfd416d43f2fbf0"
-sha512 = "6e52c13d5ed7416fffa6557e098977f54912a03eba99c4a5dd5f380473910e177a4abe31105b641911622212680a6b67d9d38cf7889854bfc11df42eb9d3cd99"
+sha256 = "66b982406ff2d167ee7be19cc9167e9d3025475ecae0c662f2ecb0b4aaa37ad5"
+sha512 = "fb4cd4b328cd28aaee6b3ee75fa3ae2b78ff13028460c024d758b30c65fbd1ee83cd36da9d22d0e17cfff7ce270893eff7666187bcf07be0a8ea13fc27141806"
 
 [http]
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
