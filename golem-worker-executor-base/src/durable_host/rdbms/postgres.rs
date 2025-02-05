@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::rdbms::postgres::{
@@ -152,7 +153,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = (pool_key.masked_address(), statement.clone(), params);
+            let input = RdbmsRequest::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -165,34 +166,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             }
             Err(e) => Ok(Err(e.into())),
         }
-
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<PostgresDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        //
-        // match to_db_values(params, self.as_wasi_view().table()) {
-        //     Ok(params) => {
-        //         let result = self
-        //             .state
-        //             .rdbms_service
-        //             .postgres()
-        //             .query(&pool_key, &worker_id, &statement, params)
-        //             .await;
-        //
-        //         match result {
-        //             Ok(result) => {
-        //                 let result = from_db_result(result, self.as_wasi_view().table())
-        //                     .map_err(Error::QueryResponseFailure);
-        //                 Ok(result)
-        //             }
-        //             Err(e) => Ok(Err(e.into())),
-        //         }
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn execute(
@@ -234,35 +207,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = (pool_key.masked_address(), statement.clone(), params);
+            let input = RdbmsRequest::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
         };
 
         Ok(result.map_err(Error::from))
-
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<PostgresDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        //
-        // match to_db_values(params, self.as_wasi_view().table()) {
-        //     Ok(params) => {
-        //         let result = self
-        //             .state
-        //             .rdbms_service
-        //             .postgres()
-        //             .execute(&pool_key, &worker_id, &statement, params)
-        //             .await
-        //             .map_err(|e| e.into());
-        //
-        //         Ok(result)
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn begin_transaction(
@@ -540,7 +491,7 @@ impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
         &mut self,
         value: DbColumnType,
     ) -> anyhow::Result<Resource<LazyDbColumnTypeEntry>> {
-        self.observe_function_call("rdbms::postgres::lazy-db-column-type", "create");
+        self.observe_function_call("rdbms::postgres::lazy-db-column-type", "new");
         let value = to_db_column_type(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
             .as_wasi_view()
@@ -593,7 +544,7 @@ impl LazyDbValueEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
-        self.observe_function_call("rdbms::postgres::lazy-db-value", "create");
+        self.observe_function_call("rdbms::postgres::lazy-db-value", "new");
         let value = to_db_value(value, self.as_wasi_view().table()).map_err(Error::Other)?;
         let result = self
             .as_wasi_view()
@@ -2035,8 +1986,8 @@ pub mod tests {
         let result = to_db_value(wit, resource_table).unwrap();
         let result2 = to_db_value(wit2, resource_table).unwrap();
 
-        check!(value == result.value);
-        check!(value == result2.value);
+        check!(result.value == value);
+        check!(result2.value == value);
     }
 
     #[test]
@@ -2344,8 +2295,8 @@ pub mod tests {
         let result = to_db_column_type(wit, resource_table).unwrap();
         let result2 = to_db_column_type(wit2, resource_table).unwrap();
 
-        check!(value == result.value);
-        check!(value == result2.value);
+        check!(result.value == value);
+        check!(result2.value == value);
     }
 
     #[test]

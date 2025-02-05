@@ -14,4 +14,5 @@
 
 pub mod mysql;
 pub mod postgres;
+pub mod serialized;
 pub mod types;

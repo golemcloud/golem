@@ -2541,7 +2541,7 @@ async fn rdbms_test<T: RdbmsType + Clone + 'static>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
+    check!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
     let results = execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &worker_id, test.clone()).await;
 
@@ -2565,7 +2565,7 @@ fn check_test_results<T: RdbmsType + Clone>(
                         if let Some(expected) = expected.expected {
                             check!(
                                 result == expected,
-                                "execute result for worker {worker_id} and test statement with index {i} do not match"
+                                "execute result for worker {worker_id} and test statement with index {i} match"
                             );
                         }
                     }
@@ -2581,10 +2581,10 @@ fn check_test_results<T: RdbmsType + Clone>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query result columns for worker {worker_id} and test statement with index {i} do not match");
+                            check!(result.columns == expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} do not match");
+                            check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
@@ -2599,10 +2599,10 @@ fn check_test_results<T: RdbmsType + Clone>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} do not match");
+                            check!(result.columns == expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} do not match");
+                            check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
@@ -2667,7 +2667,7 @@ async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
 
         check!(
             worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
-            "worker {worker_id} not found in pool {pool_key}"
+            "worker {worker_id} found in pool {pool_key}"
         );
     }
 
@@ -2839,12 +2839,12 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     let worker_id = new_worker_id();
     let result = rdbms.create(db_address, &worker_id).await;
 
-    check!(result.is_err(), "connection to {db_address} is not error");
+    check!(result.is_err(), "connection to {db_address} is error");
 
     let error = result.err().unwrap();
     check!(
         error == expected,
-        "connection error for {db_address} do not match"
+        "connection error for {db_address} - response error match"
     );
 }
 
@@ -2857,7 +2857,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
+    check!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms
@@ -2866,7 +2866,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
 
     check!(
         result.is_err(),
-        "query {} (executed on {}) - response is not error",
+        "query {} (executed on {}) - result is error",
         query,
         pool_key
     );
@@ -2874,7 +2874,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     let error = result.err().unwrap();
     check!(
         error == expected,
-        "query {} (executed on {}) - response error do not match",
+        "query {} (executed on {}) - result error match",
         query,
         pool_key
     );
@@ -2891,14 +2891,14 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} failed", db_address);
+    check!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
 
     check!(
         result.is_err(),
-        "query {} (executed on {}) - response is not error",
+        "query {} (executed on {}) - result is error",
         query,
         pool_key
     );
@@ -2906,7 +2906,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     let error = result.err().unwrap();
     check!(
         error == expected,
-        "query {} (executed on {}) - response error do not match",
+        "query {} (executed on {}) - result error match",
         query,
         pool_key
     );

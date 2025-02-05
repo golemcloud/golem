@@ -701,7 +701,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 
         check!(
             result.is_ok(),
-            "result {fn_name} for worker {worker_id} is error"
+            "result {fn_name} for worker {worker_id} is ok"
         );
 
         let response = result.clone().unwrap().to_json_value();
@@ -726,7 +726,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
                                 // println!("{}", response);
                                 check!(
                                     response == expected,
-                                    "result {fn_name} {action} with index {index} for worker {worker_id}"
+                                    "result {fn_name} {action} with index {index} for worker {worker_id} match"
                                 );
                             }
                             None => {
@@ -792,7 +792,7 @@ fn query_ok_response(
           "ok":{
              "query":{
                  "columns": columns,
-                 "rows":rows
+                 "rows": rows
              }
            }
        }

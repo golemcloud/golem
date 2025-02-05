@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::rdbms::mysql::{
@@ -85,11 +86,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .get::<MysqlDbConnection>(&self_)?
             .pool_key
             .clone();
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+        match to_db_values(params) {
             Ok(params) => {
                 let result = self
                     .state
@@ -135,11 +132,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let params = params
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<mysql_types::DbValue>, String>>()
-                .map_err(RdbmsError::QueryParameterFailure);
+            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
 
             let (params, result) = match params {
                 Ok(params) => {
@@ -153,36 +146,12 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = (pool_key.masked_address(), statement.clone(), params);
+            let input = RdbmsRequest::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
         };
         Ok(result.map(DbResult::from).map_err(Error::from))
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<MysqlDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        // match params
-        //     .into_iter()
-        //     .map(|v| v.try_into())
-        //     .collect::<Result<Vec<_>, String>>()
-        // {
-        //     Ok(params) => {
-        //         let result = self
-        //             .state
-        //             .rdbms_service
-        //             .mysql()
-        //             .query(&pool_key, &worker_id, &statement, params)
-        //             .await
-        //             .map(DbResult::from)
-        //             .map_err(Error::from);
-        //         Ok(result)
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn execute(
@@ -208,11 +177,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let params = params
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<mysql_types::DbValue>, String>>()
-                .map_err(RdbmsError::QueryParameterFailure);
+            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
 
             let (params, result) = match params {
                 Ok(params) => {
@@ -226,44 +191,12 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = (pool_key.masked_address(), statement.clone(), params);
+            let input = RdbmsRequest::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
         };
         Ok(result.map_err(Error::from))
-        // match result {
-        //     Ok(result) => Ok(result),
-        //     Err(error) => {
-        //         Ok(Err(error))
-        //     }
-        // }
-
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<MysqlDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        //
-        // match params
-        //     .into_iter()
-        //     .map(|v| v.try_into())
-        //     .collect::<Result<Vec<_>, String>>()
-        // {
-        //     Ok(params) => {
-        //         let result = self
-        //             .state
-        //             .rdbms_service
-        //             .mysql()
-        //             .execute(&pool_key, &worker_id, &statement, params)
-        //             .await
-        //             .map_err(|e| e.into());
-        //
-        //         Ok(result)
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn begin_transaction(
@@ -403,11 +336,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
         self.observe_function_call("rdbms::mysql::db-transaction", "query");
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+        match to_db_values(params) {
             Ok(params) => {
                 let internal = self
                     .as_wasi_view()
@@ -433,11 +362,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
         self.observe_function_call("rdbms::mysql::db-transaction", "query-stream");
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+        match to_db_values(params) {
             Ok(params) => {
                 let internal = self
                     .as_wasi_view()
@@ -466,11 +391,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
         self.observe_function_call("rdbms::mysql::db-transaction", "execute");
-        match params
-            .into_iter()
-            .map(|v| v.try_into())
-            .collect::<Result<Vec<_>, String>>()
-        {
+        match to_db_values(params) {
             Ok(params) => {
                 let internal = self
                     .as_wasi_view()
@@ -759,6 +680,15 @@ impl From<crate::services::rdbms::Error> for Error {
     }
 }
 
+fn to_db_values(values: Vec<DbValue>) -> Result<Vec<mysql_types::DbValue>, String> {
+    let mut result: Vec<mysql_types::DbValue> = Vec::with_capacity(values.len());
+    for value in values {
+        let v = value.try_into()?;
+        result.push(v);
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 pub mod tests {
     use crate::preview2::wasi::rdbms::mysql::{DbColumnType, DbValue};
@@ -780,7 +710,7 @@ pub mod tests {
 
         let wit: DbValue = value.clone().into();
         let value2: mysql_types::DbValue = wit.try_into().unwrap();
-        check!(value == value2);
+        check!(value2 == value);
     }
 
     #[test]
@@ -854,7 +784,7 @@ pub mod tests {
 
         let wit: DbColumnType = value.clone().into();
         let value2: mysql_types::DbColumnType = wit.into();
-        check!(value == value2);
+        check!(value2 == value);
     }
 
     #[test]
