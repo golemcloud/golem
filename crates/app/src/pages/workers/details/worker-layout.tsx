@@ -6,14 +6,14 @@ import {SidebarMenu} from "@/components/sidebar.tsx";
 import {Separator} from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import {ComponentList} from "@/types/component.ts";
-import {Container, Home, Settings, Tv, Workflow,} from "lucide-react";
+import {Container, Home, Info, Settings, Tv, Workflow,} from "lucide-react";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
 
 const MenuItems = (componentId: string, workerName: string) => [
@@ -36,6 +36,11 @@ const MenuItems = (componentId: string, workerName: string) => [
         title: "Invoke",
         url: `/components/${componentId}/workers/${workerName}/invoke`,
         icon: Workflow,
+    },
+    {
+        title: "Info",
+        url: `/components/${componentId}/workers/${workerName}/info`,
+        icon: Info,
     },
     {
         title: "Manage",
@@ -64,6 +69,7 @@ export const WorkerLayout = () => {
         else if (location.pathname.includes("environments")) setCurrentMenu("Environment");
         else if (location.pathname.includes("invoke")) setCurrentMenu("Invoke");
         else if (location.pathname.includes("manage")) setCurrentMenu("Manage");
+        else if (location.pathname.includes("info")) setCurrentMenu("Info");
     }, [location.pathname]);
 
     const navigateHome = () => {
