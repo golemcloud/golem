@@ -432,7 +432,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey {
-        if !self.component_service().handles_ifs_upload() {
+        if self.component_service().handles_ifs_upload() {
             return InitialComponentFileKey("dummy-ifs-key".to_string());
         }
 
