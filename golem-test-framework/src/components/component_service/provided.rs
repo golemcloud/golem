@@ -24,6 +24,7 @@ pub struct ProvidedComponentService {
     host: String,
     http_port: u16,
     grpc_port: u16,
+    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
 }
@@ -40,6 +41,7 @@ impl ProvidedComponentService {
             host: host.clone(),
             http_port,
             grpc_port,
+            client_protocol,
             component_client: new_component_client(client_protocol, &host, grpc_port, http_port)
                 .await,
             plugin_client: new_plugin_client(client_protocol, &host, grpc_port, http_port).await,
@@ -49,6 +51,10 @@ impl ProvidedComponentService {
 
 #[async_trait]
 impl ComponentService for ProvidedComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }

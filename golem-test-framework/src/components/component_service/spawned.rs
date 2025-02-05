@@ -32,6 +32,7 @@ pub struct SpawnedComponentService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
+    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
 }
@@ -124,6 +125,7 @@ impl SpawnedComponentService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
+            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 "localhost",
@@ -139,6 +141,10 @@ impl SpawnedComponentService {
 
 #[async_trait]
 impl ComponentService for SpawnedComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }

@@ -81,8 +81,16 @@ pub enum PluginServiceClient {
 
 #[async_trait]
 pub trait ComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol;
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
+
+    fn handles_ifs_upload(&self) -> bool {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => false,
+            GolemClientProtocol::Http => true,
+        }
+    }
 
     async fn get_or_add_component(
         &self,

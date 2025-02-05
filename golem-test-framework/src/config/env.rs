@@ -50,7 +50,7 @@ use tracing::Level;
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
     pub number_of_shards_override: Option<usize>,
-    pub shared_client: bool, // TODO: check for usages
+    pub shared_client: bool,
     pub db_type: DbType,
     pub quiet: bool,
     pub golem_docker_services: bool,

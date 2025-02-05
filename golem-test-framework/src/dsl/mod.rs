@@ -432,7 +432,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey {
-        // TODO: should not upload when using HTTP client with component service
+        if !self.component_service().handles_ifs_upload() {
+            return InitialComponentFileKey("dummy-ifs-key".to_string());
+        }
+
         let source_path = self.component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await

@@ -15,6 +15,7 @@
 use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
+use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginInstallation;
@@ -136,6 +137,14 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("No real component service running")
+    }
+
+    fn handles_ifs_upload(&self) -> bool {
+        true
+    }
+
     fn component_client(&self) -> ComponentServiceClient {
         panic!("No real component service running")
     }

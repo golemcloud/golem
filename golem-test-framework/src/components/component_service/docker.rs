@@ -35,6 +35,7 @@ pub struct DockerComponentService {
     keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
+    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
 }
@@ -103,6 +104,7 @@ impl DockerComponentService {
             keep_container,
             public_http_port,
             public_grpc_port,
+            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 "localhost",
@@ -123,6 +125,10 @@ impl DockerComponentService {
 
 #[async_trait]
 impl ComponentService for DockerComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }

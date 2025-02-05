@@ -43,6 +43,7 @@ pub struct K8sComponentService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
+    client_protocol: GolemClientProtocol,
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
 }
@@ -213,6 +214,7 @@ impl K8sComponentService {
             service: Arc::new(Mutex::new(Some(managed_service))),
             grpc_routing: Arc::new(Mutex::new(Some(grpc_routing.routing))),
             http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
+            client_protocol,
             component_client: new_component_client(
                 client_protocol,
                 &grpc_routing.hostname,
@@ -233,6 +235,10 @@ impl K8sComponentService {
 
 #[async_trait]
 impl ComponentService for K8sComponentService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
     fn component_client(&self) -> ComponentServiceClient {
         self.component_client.clone()
     }
