@@ -5,6 +5,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::WorkerMetadata;
 use golem_worker_executor_base::model::ExecutionStatus;
 use golem_worker_executor_base::services::oplog::{CommitLevel, Oplog};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +31,18 @@ impl DebugOplog {
         };
 
         Self { inner, oplog_state }
+    }
+
+    pub async fn get_oplog_entry_applying_overrides(
+        playback_overrides: HashMap<OplogIndex, OplogEntry>,
+        oplog_index: OplogIndex,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+    ) -> OplogEntry {
+        if let Some(entry) = playback_overrides.get(&oplog_index) {
+            entry.clone()
+        } else {
+            oplog.read(oplog_index).await
+        }
     }
 }
 
@@ -75,7 +88,21 @@ impl Oplog for DebugOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        self.inner.read(oplog_index).await
+        let debug_session_data = self
+            .oplog_state
+            .debug_session
+            .get(&self.oplog_state.debug_session_id)
+            .await
+            .expect("Internal Error. Debug session not found");
+
+        let playback_overrides = debug_session_data.playback_overrides.clone();
+
+        Self::get_oplog_entry_applying_overrides(
+            playback_overrides.overrides,
+            oplog_index,
+            self.inner.clone(),
+        )
+        .await
     }
 
     async fn length(&self) -> u64 {

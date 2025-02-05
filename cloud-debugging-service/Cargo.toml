@@ -15,6 +15,7 @@ test = false
 golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
 golem-wasm-rpc = { workspace = true }
+golem-wasm-ast = { workspace = true }
 golem-worker-executor-base = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
@@ -23,6 +24,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 axum-jrpc = {workspace = true}
+bincode = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }

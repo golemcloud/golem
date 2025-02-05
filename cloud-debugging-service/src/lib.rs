@@ -65,6 +65,7 @@ pub mod websocket;
 mod auth;
 pub mod debug_request;
 mod debug_session;
+pub mod from_value;
 mod jrpc;
 mod model;
 mod oplog;

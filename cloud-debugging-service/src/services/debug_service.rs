@@ -1,6 +1,7 @@
 use crate::auth::AuthService;
 use crate::debug_context::DebugContext;
-use crate::debug_session::{ActiveSession, DebugSessionData, DebugSessionId, DebugSessions};
+use crate::debug_session::{ActiveSession, PlaybackOverridesInternal};
+use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
@@ -8,12 +9,12 @@ use cloud_common::auth::CloudAuthCtx;
 use cloud_common::model::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
+use golem_worker_executor_base::model::InterruptKind;
+use golem_worker_executor_base::services::oplog::Oplog;
 use golem_worker_executor_base::services::{All, HasExtraDeps, HasOplog, HasWorkerService};
 use golem_worker_executor_base::worker::Worker;
 use serde_json::Value;
 use std::fmt::Display;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use tracing::error;
 
@@ -61,6 +62,11 @@ pub enum DebugServiceError {
         worker_id: WorkerId,
         message: String,
     },
+
+    ValidationFailed {
+        worker_id: Option<WorkerId>,
+        errors: Vec<String>,
+    },
 }
 
 impl Display for DebugServiceError {
@@ -69,6 +75,9 @@ impl Display for DebugServiceError {
             DebugServiceError::Internal { message, .. } => write!(f, "Internal error: {}", message),
             DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {}", message),
             DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {}", message),
+            DebugServiceError::ValidationFailed { errors, .. } => {
+                write!(f, "Validation failed: {:?}", errors.join(", "))
+            }
         }
     }
 }
@@ -86,11 +95,16 @@ impl DebugServiceError {
         DebugServiceError::Internal { worker_id, message }
     }
 
+    pub fn validation_failed(errors: Vec<String>, worker_id: Option<WorkerId>) -> Self {
+        DebugServiceError::ValidationFailed { errors, worker_id }
+    }
+
     pub fn get_worker_id(&self) -> Option<WorkerId> {
         match self {
             DebugServiceError::Internal { worker_id, .. } => worker_id.clone(),
             DebugServiceError::Unauthorized { .. } => None,
             DebugServiceError::Conflict { worker_id, .. } => Some(worker_id.clone()),
+            DebugServiceError::ValidationFailed { worker_id, .. } => worker_id.clone(),
         }
     }
 
@@ -109,6 +123,11 @@ impl DebugServiceError {
             DebugServiceError::Conflict { message, .. } => JsonRpcError::new(
                 JsonRpcErrorReason::ApplicationError(-32002),
                 message.to_string(),
+                Value::Null,
+            ),
+            DebugServiceError::ValidationFailed { errors, .. } => JsonRpcError::new(
+                JsonRpcErrorReason::ApplicationError(-32004),
+                errors.join(", "),
                 Value::Null,
             ),
         }
@@ -180,12 +199,107 @@ impl DebugServiceDefault {
         }
     }
 
+    async fn rewind(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        target_index: &OplogIndex,
+    ) -> Result<RewindResult, DebugServiceError> {
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+
+        let debug_session_data =
+            self.debug_session
+                .get(&debug_session_id)
+                .await
+                .ok_or(DebugServiceError::internal(
+                    "No debug session found. Rewind can be called ".to_string(),
+                    Some(owned_worker_id.worker_id.clone()),
+                ))?;
+
+        if let Some(current_oplog_index) =
+            debug_session_data.target_oplog_index_at_invocation_boundary
+        {
+            let worker = Worker::get_or_create_suspended(
+                &self.all,
+                owned_worker_id,
+                debug_session_data
+                    .worker_metadata
+                    .as_ref()
+                    .map(|m| m.args.clone()),
+                debug_session_data
+                    .worker_metadata
+                    .as_ref()
+                    .map(|m| m.env.clone()),
+                debug_session_data
+                    .worker_metadata
+                    .as_ref()
+                    .map(|m| m.last_known_status.component_version),
+                debug_session_data
+                    .worker_metadata
+                    .as_ref()
+                    .and_then(|m| m.parent.clone()),
+            )
+            .await
+            .map_err(|e| {
+                DebugServiceError::internal(e.to_string(), Some(owned_worker_id.worker_id.clone()))
+            })?;
+
+            let target_index_at_invocation_boundary =
+                Self::get_target_oplog_index_at_invocation_boundary(
+                    worker.oplog(),
+                    *target_index,
+                    current_oplog_index,
+                )
+                .await
+                .map_err(|e| {
+                    DebugServiceError::internal(e, Some(owned_worker_id.worker_id.clone()))
+                })?;
+
+            if target_index_at_invocation_boundary > current_oplog_index {
+                return Err(DebugServiceError::validation_failed(
+                    vec![
+                        format!(
+                            "Target oplog index {} (corresponding to an invocation boundary) for rewind is greater than the existing target oplog index {}",
+                            target_index,
+                            current_oplog_index
+                        )],
+                        Some(owned_worker_id.worker_id.clone()))
+                 );
+            };
+
+            self.debug_session
+                .update(debug_session_id, target_index_at_invocation_boundary, None)
+                .await;
+
+            // we restart regardless of the current status of the worker such that it restarts
+            worker.set_interrupting(InterruptKind::Restart).await;
+
+            Ok(RewindResult {
+                worker_id: owned_worker_id.worker_id.clone(),
+                stopped_at_index: target_index_at_invocation_boundary,
+                success: true,
+                message: format!("Rewinding the worker to index {}", target_index),
+            })
+        } else {
+            // If this is the first step in a debugging session, then rewind is more or less
+            // playback to that index
+            self.playback(owned_worker_id.clone(), *target_index, None)
+                .await
+                .map(|result| RewindResult {
+                    worker_id: owned_worker_id.worker_id.clone(),
+                    stopped_at_index: result.stopped_at_index,
+                    success: true,
+                    message: format!("Rewinding the worker to index {}", target_index),
+                })
+        }
+    }
+
     async fn resume_replay_with_target_index(
         &self,
         worker_id: &WorkerId,
         account_id: &AccountId,
         previous_target_oplog_index: Option<OplogIndex>,
         target_index: OplogIndex,
+        playback_overrides: Option<Vec<PlaybackOverride>>,
     ) -> Result<OplogIndex, DebugServiceError> {
         let owned_worker_id = OwnedWorkerId::new(account_id, worker_id);
 
@@ -231,10 +345,21 @@ impl DebugServiceDefault {
             // such that it is always in an invocation boundary
             let new_target_index = Self::new_target_index(&worker, target_index).await;
 
+            let mut playback_overrides_validated = None;
+
+            if let Some(overrides) = playback_overrides {
+                playback_overrides_validated =
+                    Some(Self::validate_playback_overrides(worker_id.clone(), overrides).await?);
+            }
+
             // We update the session with the new target index
             // before starting the worker
             self.debug_session
-                .update(debug_session_id.clone(), new_target_index)
+                .update(
+                    debug_session_id.clone(),
+                    new_target_index,
+                    playback_overrides_validated,
+                )
                 .await;
 
             worker
@@ -251,21 +376,30 @@ impl DebugServiceDefault {
         }
     }
 
+    pub async fn validate_playback_overrides(
+        worker_id: WorkerId,
+        overrides: Vec<PlaybackOverride>,
+    ) -> Result<PlaybackOverridesInternal, DebugServiceError> {
+        PlaybackOverridesInternal::from_playback_override(overrides).map_err(|err| {
+            DebugServiceError::ValidationFailed {
+                worker_id: Some(worker_id.clone()),
+                errors: vec![err],
+            }
+        })
+    }
+
     pub async fn new_target_index(
         worker: &Arc<Worker<DebugContext>>,
         target_oplog_index: OplogIndex,
     ) -> OplogIndex {
         // New target index to be calculated here
-        let oplog = worker.oplog();
+        let oplog: Arc<dyn Oplog + Send + Sync> = worker.oplog();
 
         let original_current_oplog_index = oplog.current_oplog_index().await;
 
         if target_oplog_index < original_current_oplog_index {
             Self::get_target_oplog_index_at_invocation_boundary(
-                |index| {
-                    let inner = oplog.clone();
-                    Box::pin(async move { inner.read(index).await })
-                },
+                oplog,
                 target_oplog_index,
                 original_current_oplog_index,
             )
@@ -276,18 +410,15 @@ impl DebugServiceDefault {
         }
     }
 
-    pub async fn get_target_oplog_index_at_invocation_boundary<F>(
-        read_oplog_entry: F,
+    pub async fn get_target_oplog_index_at_invocation_boundary(
+        oplog: Arc<dyn Oplog + Send + Sync>,
         target_oplog_index: OplogIndex,
         original_last_oplog_index: OplogIndex,
-    ) -> Result<OplogIndex, String>
-    where
-        F: Fn(OplogIndex) -> Pin<Box<dyn Future<Output = OplogEntry> + Send>>,
-    {
+    ) -> Result<OplogIndex, String> {
         let mut new_target_oplog_index = target_oplog_index;
 
         loop {
-            let entry = read_oplog_entry(new_target_oplog_index).await;
+            let entry = oplog.read(new_target_oplog_index).await;
 
             match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
@@ -356,6 +487,7 @@ impl DebugService for DebugServiceDefault {
                 DebugSessionData {
                     worker_metadata: Some(metadata),
                     target_oplog_index_at_invocation_boundary: None,
+                    playback_overrides: PlaybackOverridesInternal::empty(),
                 },
             )
             .await;
@@ -371,7 +503,7 @@ impl DebugService for DebugServiceDefault {
         &self,
         owned_worker_id: OwnedWorkerId,
         target_index: OplogIndex,
-        _overrides: Option<Vec<PlaybackOverride>>,
+        overrides: Option<Vec<PlaybackOverride>>,
     ) -> Result<PlaybackResult, DebugServiceError> {
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -392,6 +524,7 @@ impl DebugService for DebugServiceDefault {
                 &owned_worker_id.account_id,
                 existing_target_index,
                 target_index,
+                overrides,
             )
             .await?;
 
@@ -411,17 +544,7 @@ impl DebugService for DebugServiceDefault {
         owned_worker_id: OwnedWorkerId,
         target_oplog_index: OplogIndex,
     ) -> Result<RewindResult, DebugServiceError> {
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
-
-        self.debug_session
-            .update(debug_session_id, target_oplog_index)
-            .await;
-
-        Ok(RewindResult {
-            worker_id: owned_worker_id.worker_id,
-            success: true,
-            message: format!("Rewinding the worker to index {}", target_oplog_index),
-        })
+        self.rewind(&owned_worker_id, &target_oplog_index).await
     }
 
     async fn fork(
@@ -461,12 +584,15 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
+    use std::fmt::{Debug, Formatter};
+    use std::time::Duration;
     use test_r::test;
 
     use super::*;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;
+    use golem_worker_executor_base::services::oplog::CommitLevel;
 
     #[test]
     async fn test_get_target_oplog_index_at_invocation_boundary_1() {
@@ -474,7 +600,7 @@ mod tests {
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
         let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
-            read_oplog(5),
+            Arc::new(TestOplog::new(5)),
             target_oplog_index,
             original_last_oplog_index,
         )
@@ -489,7 +615,7 @@ mod tests {
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
         let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
-            read_oplog(11),
+            Arc::new(TestOplog::new(11)),
             target_oplog_index,
             original_last_oplog_index,
         )
@@ -498,24 +624,71 @@ mod tests {
         assert!(result.is_err());
     }
 
-    type OplogEntryFuture = Pin<Box<dyn Future<Output = OplogEntry> + Send>>;
+    struct TestOplog {
+        invocation_completion_index: u64,
+    }
 
-    fn read_oplog(invocation_completion_index: u64) -> Box<dyn Fn(OplogIndex) -> OplogEntryFuture> {
-        Box::new(move |index: OplogIndex| {
-            Box::pin(async move {
-                if index == OplogIndex::from_u64(invocation_completion_index) {
-                    OplogEntry::ExportedFunctionCompleted {
-                        timestamp: Timestamp::now_utc(),
-                        response: OplogPayload::Inline(Bytes::new().into()),
-                        consumed_fuel: 0,
-                    }
-                } else {
-                    // Any other oplog entry other than export function completed
-                    OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                    }
+    impl TestOplog {
+        fn new(invocation_completion_index: u64) -> Self {
+            Self {
+                invocation_completion_index,
+            }
+        }
+    }
+
+    impl Debug for TestOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "TestOplog")
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for TestOplog {
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
+                OplogEntry::ExportedFunctionCompleted {
+                    timestamp: Timestamp::now_utc(),
+                    response: OplogPayload::Inline(Bytes::new().into()),
+                    consumed_fuel: 0,
                 }
-            })
-        })
+            } else {
+                // Any other oplog entry other than export function completed
+                OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                }
+            }
+        }
+
+        async fn add(&self, _entry: OplogEntry) {
+            unimplemented!()
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {
+            unimplemented!()
+        }
+
+        async fn commit(&self, _level: CommitLevel) {
+            unimplemented!()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unimplemented!()
+        }
+
+        async fn length(&self) -> u64 {
+            unimplemented!()
+        }
+
+        async fn upload_payload(&self, _data: &[u8]) -> Result<OplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_payload(&self, _payload: &OplogPayload) -> Result<Bytes, String> {
+            unimplemented!()
+        }
     }
 }

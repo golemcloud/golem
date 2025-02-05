@@ -1,8 +1,8 @@
 use cloud_common::model::TokenSecret;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::WorkerId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Deserialize, Debug)]
 pub struct ConnectParams {
@@ -16,10 +16,10 @@ pub struct PlaybackParams {
     pub overrides: Option<Vec<PlaybackOverride>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct PlaybackOverride {
     pub index: OplogIndex,
-    pub result: Value,
+    pub oplog: PublicOplogEntry,
 }
 
 #[derive(Deserialize, Debug)]
@@ -50,6 +50,7 @@ pub struct PlaybackResult {
 #[derive(Serialize, Debug)]
 pub struct RewindResult {
     pub worker_id: WorkerId,
+    pub stopped_at_index: OplogIndex,
     pub success: bool,
     pub message: String,
 }
