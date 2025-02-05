@@ -40,6 +40,8 @@ use golem_common::model::RetryConfig;
 use std::time::Duration;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+use golem_common::model::ScheduledAction;
+use golem_common::model::IdempotencyKey;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -227,12 +229,37 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn schedule_invocation(
         &mut self,
-        _: crate::preview2::wasi::clocks::wall_clock::Datetime,
-        _: golem_api_1_x::host::WorkerId,
-        _: String,
-        _: Vec<crate::preview2::golem::rpc::types::WitValue>
+        datetime: crate::preview2::wasi::clocks::wall_clock::Datetime,
+        worker_id: golem_api_1_x::host::WorkerId,
+        full_function_name: String,
+        function_input: Vec<crate::preview2::golem::rpc::types::WitValue>
     ) -> anyhow::Result<()> {
-        todo!()
+        let account_id = self.owned_worker_id.account_id();
+        let worker_id: golem_common::model::WorkerId = worker_id.into();
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        let current_idempotency_key = self
+            .state
+            .get_current_idempotency_key()
+            .expect("Expected to get an idempotency key as we are inside an invocation");
+
+        let current_oplog_index = self.state.current_oplog_index().await;
+
+        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
+
+        let action = ScheduledAction::Invoke {
+            owned_worker_id,
+            idempotency_key,
+            full_function_name,
+            function_input: function_input.into_iter().map(|e| e.into()).collect()
+        };
+
+        // The scheduler uses the (deterministic) datetime to deduplicate scheduled actions.
+        // The worker executor uses the idempotency key to deduplicate invocation.
+        // With both together we don't need any extra idempotency handling here.
+        self.state.scheduler_service.schedule(datetime.into(), action).await;
+
+        Ok(())
     }
 }
 

@@ -264,6 +264,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         }
     }
 
+    // TODO: take these from ${workspace_root}/wit instead of the golem-wit crate.
     write_embedded_source(
         &target_deps.join("wasm-rpc"),
         "wasm-rpc.wit",

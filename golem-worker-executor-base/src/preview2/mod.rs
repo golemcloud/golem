@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{DateTime, Utc};
 use golem_wasm_rpc::ValueAndType;
 use std::mem;
 
@@ -50,8 +51,21 @@ impl From<golem_wasm_rpc::WitValue> for golem::rpc::types::WitValue {
     }
 }
 
+impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::WitValue {
+    fn from(value: golem::rpc::types::WitValue) -> Self {
+        unsafe { mem::transmute(value) }
+    }
+}
+
 impl From<golem_wasm_rpc::Value> for golem::rpc::types::WitValue {
     fn from(value: golem_wasm_rpc::Value) -> Self {
+        let wit_value: golem_wasm_rpc::WitValue = value.into();
+        wit_value.into()
+    }
+}
+
+impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::Value {
+    fn from(value: golem::rpc::types::WitValue) -> Self {
         let wit_value: golem_wasm_rpc::WitValue = value.into();
         wit_value.into()
     }
@@ -61,6 +75,12 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
     fn from(value: ValueAndType) -> Self {
         let wit_value: golem_wasm_rpc::WitValue = value.into();
         wit_value.into()
+    }
+}
+
+impl From<self::wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
+    fn from(value: self::wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
+        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds).expect("Received invalid datetime from wasi")
     }
 }
 

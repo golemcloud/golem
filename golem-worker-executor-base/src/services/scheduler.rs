@@ -168,6 +168,10 @@ impl SchedulerServiceDefault {
         let previous_hour_key = Self::schedule_key_from_timestamp(previous_hours_since_epoch);
         let current_hour_key = Self::schedule_key_from_timestamp(hours_since_epoch);
 
+        // TODO: couple of issues with this implementation
+        // 1: We only query scheduled actions for the current hour - 1. If we are unavailable for longer than that actions will not be run.
+        // 2: We use the timestamp of the scheduled action as a unique key. If we have 2 actions scheduled for the same point in time one will be silently discarded.
+
         let all_from_prev_hour: Vec<(f64, ScheduledAction)> = self
             .key_value_storage
             .with_entity("scheduler", "process", "scheduled_action")
@@ -216,6 +220,7 @@ impl SchedulerServiceDefault {
                         .complete(promise_id.clone(), vec![])
                         .await;
 
+                    // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
                     match result {
                         Ok(_) => {
                             // activate worker so it starts processing the newly completed promises
@@ -292,6 +297,8 @@ impl SchedulerServiceDefault {
                     }
                 },
                 ScheduledAction::Invoke { owned_worker_id, idempotency_key, full_function_name, function_input } => {
+                    // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
+                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self.worker_access.activate_and_invoke(
                         owned_worker_id.clone(),
                         idempotency_key,
