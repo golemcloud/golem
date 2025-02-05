@@ -395,7 +395,6 @@ mod tests {
 
     use async_trait::async_trait;
     use bincode::Encode;
-    use tracing_subscriber::layer::Context;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -413,8 +412,6 @@ mod tests {
     use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-    use crate::worker::Worker;
-    use crate::workerctx::WorkerCtx;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId
