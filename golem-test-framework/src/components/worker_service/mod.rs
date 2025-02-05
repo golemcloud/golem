@@ -988,60 +988,69 @@ fn grpc_string_filter_comparator_to_http(comparator: i32) -> &'static str {
 }
 
 fn grpc_filter_to_http_filter(filter: Filter) -> Vec<String> {
-    let filter = match filter {
-        Filter::Name(WorkerNameFilter { comparator, value }) => {
-            format!(
-                "name {} {}",
-                grpc_string_filter_comparator_to_http(comparator),
-                value
-            )
-        }
-        Filter::Version(WorkerVersionFilter { comparator, value }) => {
-            format!(
-                "version {} {}",
-                grpc_filter_comparator_to_http(comparator),
-                value
-            )
-        }
-        Filter::Status(WorkerStatusFilter { comparator, value }) => {
-            format!(
-                "status {} {}",
-                grpc_filter_comparator_to_http(comparator),
-                value
-            )
-        }
-        Filter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
-            format!(
-                "name {} {}",
-                grpc_filter_comparator_to_http(comparator),
-                value.unwrap()
-            )
-        }
-        Filter::Env(WorkerEnvFilter {
-            name,
-            comparator,
-            value,
-        }) => {
-            format!(
-                "env.{} {} {}",
+    fn convert_filter(filter: Filter, allow_and: bool) -> Vec<String> {
+        match filter {
+            Filter::Name(WorkerNameFilter { comparator, value }) => {
+                vec![format!(
+                    "name {} {}",
+                    grpc_string_filter_comparator_to_http(comparator),
+                    value
+                )]
+            }
+            Filter::Version(WorkerVersionFilter { comparator, value }) => {
+                vec![format!(
+                    "version {} {}",
+                    grpc_filter_comparator_to_http(comparator),
+                    value
+                )]
+            }
+            Filter::Status(WorkerStatusFilter { comparator, value }) => {
+                vec![format!(
+                    "status {} {}",
+                    grpc_filter_comparator_to_http(comparator),
+                    value
+                )]
+            }
+            Filter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
+                vec![format!(
+                    "name {} {}",
+                    grpc_filter_comparator_to_http(comparator),
+                    value.unwrap()
+                )]
+            }
+            Filter::Env(WorkerEnvFilter {
                 name,
-                grpc_string_filter_comparator_to_http(comparator),
-                value
-            )
+                comparator,
+                value,
+            }) => {
+                vec![format!(
+                    "env.{} {} {}",
+                    name,
+                    grpc_string_filter_comparator_to_http(comparator),
+                    value
+                )]
+            }
+            Filter::And(and_filter) => {
+                if !allow_and {
+                    panic!("'And' filters are only supported on the root level on the HTTP API")
+                }
+                and_filter
+                    .filters
+                    .into_iter()
+                    .filter_map(|filter| filter.filter)
+                    .flat_map(|filter| convert_filter(filter, false))
+                    .collect()
+            }
+            Filter::Or(_) => {
+                panic!("Or filters are not supported for HTTP client")
+            }
+            Filter::Not(_) => {
+                panic!("Not filters are not supported for HTTP client")
+            }
         }
-        Filter::And(_) => {
-            // TODO: "And" filters are only supported on the root level by passing a list of filters
-            panic!("And filters are not supported for HTTP client")
-        }
-        Filter::Or(_) => {
-            panic!("Or filters are not supported for HTTP client")
-        }
-        Filter::Not(_) => {
-            panic!("Not filters are not supported for HTTP client")
-        }
-    };
+    }
 
-    vec![filter]
+    convert_filter(filter, true)
 }
 
 fn invoke_parameters_to_http(
