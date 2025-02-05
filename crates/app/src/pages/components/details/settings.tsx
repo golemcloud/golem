@@ -3,13 +3,13 @@ import {useNavigate, useParams} from "react-router-dom";
 import {useToast} from "@/hooks/use-toast";
 import {Button} from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
 } from "@/components/ui/dialog";
 import {Card, CardContent, CardDescription, CardTitle,} from "@/components/ui/card.tsx";
 import {Separator} from "@/components/ui/separator.tsx";
@@ -22,15 +22,6 @@ export default function ComponentSettings() {
     const [isDeleting, setIsDeleting] = React.useState(false);
     const {componentId} = useParams();
     const navigate = useNavigate();
-    // const [component, setComponent] = React.useState({} as ComponentList);
-    //
-    // React.useEffect(() => {
-    //     if (componentId) {
-    //         API.getComponentByIdAsKey().then((response) => {
-    //             setComponent(response[componentId]);
-    //         });
-    //     }
-    // }, [componentId]);
 
     const handleDeleteAll = async () => {
         setIsDeleting(true);
