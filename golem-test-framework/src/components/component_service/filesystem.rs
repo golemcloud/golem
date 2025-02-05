@@ -142,7 +142,7 @@ impl ComponentService for FileSystemComponentService {
     }
 
     fn handles_ifs_upload(&self) -> bool {
-        true
+        false
     }
 
     fn component_client(&self) -> ComponentServiceClient {
