@@ -1,6 +1,7 @@
 import { useParams } from "react-router-dom";
 import { useRef, useState } from "react";
 import { DndProvider } from "react-dnd";
+import JSZip from "jszip";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import {
   Card,
@@ -23,7 +24,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { API } from "@/service";
 import { toast } from "@/hooks/use-toast";
-import { FileManager } from "../create/fileManager";
+import { FileManager, FileItem } from "../create/fileManager";
 
 /**
  * Example Zod schema that checks:
@@ -44,6 +45,7 @@ const formSchema = z.object({
 
 export default function ComponentUpdate() {
   const { componentId } = useParams();
+  const [fileSystem, setFileSystem] = useState<FileItem[] | []>([]);
   const [file, setFile] = useState<File | null>(null);
 
   // Reference for manually triggering the file input
@@ -58,6 +60,43 @@ export default function ComponentUpdate() {
       component: undefined,
     },
   });
+
+  async function addFilesToZip(zipFolder: JSZip, parentId: string | null) {
+    const children = fileSystem.filter((file) => file.parentId === parentId);
+    for (const child of children) {
+      if (child.type === "folder") {
+        const folder = zipFolder.folder(child.name);
+        if (folder) {
+          await addFilesToZip(folder, child.id);
+        }
+      } else if (child.type === "file") {
+        if (child.fileObject) {
+          zipFolder.file(child.name, child.fileObject);
+        }
+      }
+    }
+  }
+
+  // Recursive helper function to compute full path of a file item.
+  function getFullPath(file: FileItem, allFiles: FileItem[]): string {
+    if (!file.parentId) return `/${file.name}`;
+    const parent = allFiles.find((f) => f.id === file.parentId);
+    if (!parent) return file.name;
+    return `${getFullPath(parent, allFiles)}/${file.name}`;
+  }
+
+  function captureFileMetadata(allFiles: FileItem[]) {
+    const filesPath: { path: string; permissions: string }[] = [];
+    allFiles.forEach((file) => {
+      if (file.type != "folder") {
+        filesPath.push({
+          path: getFullPath(file, allFiles),
+          permissions: file.isLocked ? "read-only" : "read-write",
+        });
+      }
+    });
+    return { values: filesPath };
+  }
 
   /**
    * Form submit handler
@@ -75,6 +114,16 @@ export default function ComponentUpdate() {
     try {
       const formData = new FormData();
       formData.append("component", file);
+      if (fileSystem.length > 0) {
+        const zip = new JSZip();
+        await addFilesToZip(zip, null);
+        const blob = await zip.generateAsync({ type: "blob" });
+        formData.append(
+          "filesPermissions",
+          JSON.stringify(captureFileMetadata(fileSystem))
+        );
+        formData.append("files", blob, "temp.zip");
+      }
       await API.updateComponent(componentId!, formData);
 
       form.reset();
@@ -159,10 +208,8 @@ export default function ComponentUpdate() {
                     </FormItem>
                   )}
                 />
-
-                {/* DRAG & DROP FILE MANAGER */}
                 <DndProvider backend={HTML5Backend}>
-                  <FileManager />
+                  <FileManager files={fileSystem} setFiles={setFileSystem} />
                 </DndProvider>
 
                 <div className="flex justify-end">
