@@ -67,7 +67,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
+tokio-tungstenite = { workspace = true }
 tower = "0.4.13"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
