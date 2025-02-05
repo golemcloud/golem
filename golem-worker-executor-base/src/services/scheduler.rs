@@ -55,6 +55,14 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
+
+    async fn activate_and_invoke(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError>;
 }
 
 #[async_trait]
@@ -72,21 +80,44 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
             .await?;
         Ok(worker.oplog())
     }
+
+    async fn activate_and_invoke(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError> {
+        let worker = self.get_or_create_running(
+            &owned_worker_id,
+            None,
+            None,
+            None,
+            None
+        ).await?;
+
+        worker.invoke(
+            idempotency_key,
+            full_function_name,
+            function_input
+        ).await?;
+
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
-pub struct SchedulerServiceDefault<Ctx> {
+pub struct SchedulerServiceDefault {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>
+    worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>
 }
 
-impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
+impl SchedulerServiceDefault {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
@@ -94,7 +125,6 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -104,8 +134,7 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
             promise_service,
             oplog_service,
             worker_metadata_service,
-            worker_access,
-            worker_activator
+            worker_access
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -177,19 +206,10 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
             })
             .collect::<Vec<_>>();
 
-        // We need to activate workers so they process newly completed promises, but only if they were not activated for other reasons.
-        let mut worker_ids_to_activate = HashSet::new();
-
-        // ! Do not exist early from this loop, as it will cause all other actions to be skipped.
+        // ! Do not exist early from this loop because of failed actions, as it will cause all other actions to be skipped.
         // ! Errors will only be logged anyway, so just log them inline here and ignore.
         for (key, action) in matching {
-            // TODO: We probably need to do this _after_ we have completed the scheduled action so we don't lose actions in the presence of failures
-            self.key_value_storage
-                .with_entity("scheduler", "process", "scheduled_action")
-                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
-                .await?;
-
-            match action {
+            match action.clone() {
                 ScheduledAction::CompletePromise { promise_id, account_id } => {
                     let owned_worker_id = OwnedWorkerId::new(&account_id, &promise_id.worker_id);
 
@@ -199,7 +219,20 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
 
                     match result {
                         Ok(_) => {
-                            worker_ids_to_activate.insert(owned_worker_id.clone());
+                            // activate worker so it starts processing the newly completed promises
+                            {
+                                let span = span!(
+                                    Level::INFO,
+                                    "scheduler",
+                                    worker_id = owned_worker_id.worker_id.to_string()
+                                );
+                                self.worker_access
+                                    .activate_worker(&owned_worker_id)
+                                    .instrument(span)
+                                    .await;
+                            }
+
+                            record_scheduled_promise_completed();
                         }
                         Err(e) => {
                             error!(
@@ -209,8 +242,6 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
                             );
                         }
                     }
-
-                    record_scheduled_promise_completed();
                 }
                 ScheduledAction::ArchiveOplog {
                     owned_worker_id,
@@ -224,8 +255,6 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self.worker_access.open_oplog(&owned_worker_id).await {
                                 Ok(oplog) => {
-                                    worker_ids_to_activate.remove(&owned_worker_id);
-
                                     let start = Instant::now();
                                     if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                         record_scheduled_archive(start.elapsed(), more);
@@ -264,64 +293,29 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
                     }
                 },
                 ScheduledAction::Invoke { owned_worker_id, idempotency_key, full_function_name, function_input } => {
-                    let result = self.handle_invoke_action(
+                    let result = self.worker_access.activate_and_invoke(
                         owned_worker_id.clone(),
                         idempotency_key,
                         full_function_name.clone(),
                         function_input
                     ).await;
 
-                    match result {
-                        Ok(_) => {
-                            worker_ids_to_activate.remove(&owned_worker_id);
-                        }
-                        Err(e) => {
-                            error!(
-                                worker_id = owned_worker_id.to_string(),
-                                full_function_name = full_function_name,
-                                "Failed to invoke worker with scheduled invocation: {e}"
-                            );
-                        }
-                    }
+                    if let Err(e) = result {
+                        error!(
+                            worker_id = owned_worker_id.to_string(),
+                            full_function_name = full_function_name,
+                            "Failed to invoke worker with scheduled invocation: {e}"
+                        );
+                    };
                 }
             }
+
+            // We are completely done with the action, purge it from the queue
+            self.key_value_storage
+                .with_entity("scheduler", "process", "scheduled_action")
+                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
+                .await?;
         }
-
-        for owned_worker_id in worker_ids_to_activate {
-            let span = span!(
-                Level::INFO,
-                "scheduler",
-                worker_id = owned_worker_id.worker_id.to_string()
-            );
-            self.worker_access
-                .activate_worker(&owned_worker_id)
-                .instrument(span)
-                .await;
-        }
-
-        Ok(())
-    }
-
-    async fn handle_invoke_action(
-        &self,
-        owned_worker_id: OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-    ) -> Result<(), GolemError> {
-        let worker = self.worker_activator.get_or_create_running(
-            &owned_worker_id,
-            None,
-            None,
-            None,
-            None
-        ).await?;
-
-        worker.invoke(
-            idempotency_key,
-            full_function_name,
-            function_input
-        ).await?;
 
         Ok(())
     }
@@ -344,7 +338,7 @@ impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
     }
 }
 
-impl <Ctx> Drop for SchedulerServiceDefault<Ctx> {
+impl Drop for SchedulerServiceDefault {
     fn drop(&mut self) {
         if let Some(handle) = self.background_handle.lock().unwrap().take() {
             handle.abort();
@@ -353,7 +347,7 @@ impl <Ctx> Drop for SchedulerServiceDefault<Ctx> {
 }
 
 #[async_trait]
-impl <Ctx: WorkerCtx> SchedulerService for SchedulerServiceDefault<Ctx> {
+impl SchedulerService for SchedulerServiceDefault {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
         let (hours_since_epoch, remainder) = Self::split_time(time);
 
@@ -402,6 +396,7 @@ mod tests {
 
     use async_trait::async_trait;
     use bincode::Encode;
+    use tracing_subscriber::layer::Context;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -416,15 +411,19 @@ mod tests {
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
+    use crate::services::worker_activator::{self, WorkerActivator};
     use crate::services::worker_metadata::{DefaultWorkerMetadataService, WorkerMetadataService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use crate::worker::Worker;
+    use crate::workerctx::WorkerCtx;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use uuid::Uuid;
+    use golem_wasm_rpc::Value;
 
     struct SchedulerWorkerAccessMock;
 
@@ -435,6 +434,15 @@ mod tests {
             &self,
             _owned_worker_id: &OwnedWorkerId,
         ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+            unimplemented!()
+        }
+        async fn activate_and_invoke(
+            &self,
+            _owned_worker_id: OwnedWorkerId,
+            _idempotency_key: IdempotencyKey,
+            _full_function_name: String,
+            _function_input: Vec<Value>,
+        ) -> Result<(), GolemError> {
             unimplemented!()
         }
     }
