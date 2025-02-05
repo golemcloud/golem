@@ -7,12 +7,12 @@ import {Separator} from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import {CircleFadingPlusIcon, Home, Settings} from "lucide-react";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
 import {Api} from "@/types/api.ts";
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select.tsx";
@@ -62,7 +62,6 @@ export const ApiLayout = () => {
                 setCurrentApiDetails(selectedApi);
             }
         });
-        console.log(location.pathname);
         if (location.pathname.includes("settings")) setCurrentMenu("Settings");
         else if (location.pathname.includes("routes/add"))
             setCurrentMenu("Add New Route");

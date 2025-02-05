@@ -148,7 +148,6 @@ export default function WorkerInfo() {
         if (componentId && workerName) {
             API.getParticularWorker(componentId, workerName).then((response) => {
                 setWorkerDetails(response);
-                console.log("response", response);
             });
         }
     }, [componentId, workerName]);
