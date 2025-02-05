@@ -4,42 +4,43 @@ use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::WorkerId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectParams {
     pub worker_id: WorkerId,
     pub token: TokenSecret,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PlaybackParams {
     pub target_index: OplogIndex,
     pub overrides: Option<Vec<PlaybackOverride>>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlaybackOverride {
     pub index: OplogIndex,
     pub oplog: PublicOplogEntry,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RewindParams {
     pub target_index: OplogIndex,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ForkParams {
     pub target_worker_id: WorkerId,
+    pub oplog_index_cut_off: OplogIndex,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectResult {
     pub worker_id: WorkerId,
     pub success: bool,
     pub message: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PlaybackResult {
     pub worker_id: WorkerId,
     pub stopped_at_index: OplogIndex,
@@ -47,7 +48,7 @@ pub struct PlaybackResult {
     pub message: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RewindResult {
     pub worker_id: WorkerId,
     pub stopped_at_index: OplogIndex,
@@ -55,7 +56,7 @@ pub struct RewindResult {
     pub message: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ForkResult {
     pub source_worker_id: WorkerId,
     pub target_worker_id: WorkerId,

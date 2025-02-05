@@ -7,16 +7,20 @@ use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::model::ProjectAction;
+use gethostname::gethostname;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
 use golem_worker_executor_base::model::InterruptKind;
 use golem_worker_executor_base::services::oplog::Oplog;
-use golem_worker_executor_base::services::{All, HasExtraDeps, HasOplog, HasWorkerService};
+use golem_worker_executor_base::services::{
+    All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
+    HasWorkerForkService, HasWorkerService,
+};
 use golem_worker_executor_base::worker::Worker;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, info};
 
 #[async_trait]
 pub trait DebugService {
@@ -44,6 +48,7 @@ pub trait DebugService {
         &self,
         source_owned_worker_id: OwnedWorkerId,
         target_worker_id: WorkerId,
+        oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError>;
 
     async fn terminate_session(&self, worker_id: OwnedWorkerId) -> Result<(), DebugServiceError>;
@@ -165,6 +170,27 @@ impl DebugServiceDefault {
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
         // This is only used to get the existing metadata that was/is running in the real executor
         let existing_metadata = self.all.worker_service().get(&owned_worker_id).await;
+
+        let host = gethostname().to_string_lossy().to_string();
+
+        let port = self.all.config().port;
+
+        info!(
+            "Registering worker {} with host {} and port {}",
+            worker_id, host, port
+        );
+
+        let shard_assignment = self
+            .all
+            .shard_manager_service()
+            .register(host, port)
+            .await
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+
+        self.all.shard_service().register(
+            shard_assignment.number_of_shards,
+            &shard_assignment.shard_ids,
+        );
 
         if let Some(existing_metadata) = existing_metadata {
             let worker_args = existing_metadata.args;
@@ -297,7 +323,7 @@ impl DebugServiceDefault {
         &self,
         worker_id: &WorkerId,
         account_id: &AccountId,
-        previous_target_oplog_index: Option<OplogIndex>,
+        existing_target_oplog_index: Option<OplogIndex>,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
     ) -> Result<OplogIndex, DebugServiceError> {
@@ -314,11 +340,11 @@ impl DebugServiceDefault {
                     Some(worker_id.clone()),
                 ))?;
 
-        if let Some(existing_target_index) = previous_target_oplog_index {
+        if let Some(existing_target_index) = existing_target_oplog_index {
             if target_index < existing_target_index {
                 return Err(DebugServiceError::internal(
                     format!(
-                        "Target oplog index {} is less than the existing target oplog index {}",
+                        "Target oplog index {} for playback is less than the existing target oplog index {}. Use rewind instead",
                         target_index, existing_target_index
                     ),
                     Some(debug_session_id.worker_id()),
@@ -343,7 +369,7 @@ impl DebugServiceDefault {
 
             // We select a new target index based on the given target index
             // such that it is always in an invocation boundary
-            let new_target_index = Self::new_target_index(&worker, target_index).await;
+            let new_target_index = Self::new_target_index(worker_id, &worker, target_index).await?;
 
             let mut playback_overrides_validated = None;
 
@@ -362,10 +388,15 @@ impl DebugServiceDefault {
                 )
                 .await;
 
-            worker
-                .resume_replay()
-                .await
-                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+            if existing_target_oplog_index.is_some() {
+                worker.resume_replay().await.map_err(|e| {
+                    DebugServiceError::internal(e.to_string(), Some(worker_id.clone()))
+                })?;
+            } else {
+                Worker::start_if_needed(worker).await.map_err(|e| {
+                    DebugServiceError::internal(e.to_string(), Some(worker_id.clone()))
+                })?;
+            }
 
             Ok(new_target_index)
         } else {
@@ -389,25 +420,22 @@ impl DebugServiceDefault {
     }
 
     pub async fn new_target_index(
+        worker_id: &WorkerId,
         worker: &Arc<Worker<DebugContext>>,
         target_oplog_index: OplogIndex,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, DebugServiceError> {
         // New target index to be calculated here
         let oplog: Arc<dyn Oplog + Send + Sync> = worker.oplog();
 
         let original_current_oplog_index = oplog.current_oplog_index().await;
 
-        if target_oplog_index < original_current_oplog_index {
-            Self::get_target_oplog_index_at_invocation_boundary(
-                oplog,
-                target_oplog_index,
-                original_current_oplog_index,
-            )
-            .await
-            .expect("Internal Error. Invocation boundary not found")
-        } else {
-            original_current_oplog_index
-        }
+        Self::get_target_oplog_index_at_invocation_boundary(
+            oplog,
+            target_oplog_index,
+            original_current_oplog_index,
+        )
+        .await
+        .map_err(|e| DebugServiceError::internal(e, Some(worker_id.clone())))
     }
 
     pub async fn get_target_oplog_index_at_invocation_boundary(
@@ -544,6 +572,11 @@ impl DebugService for DebugServiceDefault {
         owned_worker_id: OwnedWorkerId,
         target_oplog_index: OplogIndex,
     ) -> Result<RewindResult, DebugServiceError> {
+        info!(
+            "Rewinding worker {} to index {}",
+            owned_worker_id.worker_id, target_oplog_index
+        );
+
         self.rewind(&owned_worker_id, &target_oplog_index).await
     }
 
@@ -551,7 +584,24 @@ impl DebugService for DebugServiceDefault {
         &self,
         source_worker_id: OwnedWorkerId,
         target_worker_id: WorkerId,
+        oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError> {
+        info!(
+            "Forking worker {} to new worker {}",
+            source_worker_id.worker_id, target_worker_id
+        );
+
+        // Fork internally proxies the resume of worker using worker-proxy
+        // making sure the worker is initiated in the regular worker executor, and not
+        // debugging executor
+        self.all
+            .worker_fork_service()
+            .fork(&source_worker_id, &target_worker_id, oplog_index_cut_off)
+            .await
+            .map_err(|e| {
+                DebugServiceError::internal(e.to_string(), Some(source_worker_id.worker_id.clone()))
+            })?;
+
         Ok(ForkResult {
             source_worker_id: source_worker_id.worker_id.clone(),
             target_worker_id: target_worker_id.clone(),

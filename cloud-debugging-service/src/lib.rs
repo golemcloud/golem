@@ -57,21 +57,20 @@ use wasmtime::Engine;
 test_r::enable!();
 
 pub mod additional_deps;
+pub mod auth;
 pub mod config;
 pub mod debug_context;
+pub mod debug_request;
+pub mod debug_session;
+pub mod from_value;
+pub mod jrpc;
+pub mod model;
+pub mod oplog;
 pub mod services;
 pub mod websocket;
 
-mod auth;
-pub mod debug_request;
-mod debug_session;
-pub mod from_value;
-mod jrpc;
-mod model;
-mod oplog;
-
-struct ServerBootstrap {
-    additional_config: AdditionalDebugConfig,
+pub struct ServerBootstrap {
+    pub additional_config: AdditionalDebugConfig,
 }
 
 #[async_trait]
@@ -185,15 +184,16 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         ));
 
         let debug_sessions: Arc<dyn DebugSessions + Sync + Send> =
-            Arc::new(DebugSessionsDefault::new());
+            Arc::new(DebugSessionsDefault::default());
 
-        let oplog_service = Arc::new(DebugOplogService::new(
-            oplog_service,
+        let debug_oplog_service = Arc::new(DebugOplogService::new(
+            Arc::clone(&oplog_service),
             Arc::clone(&debug_sessions),
         ));
 
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
+        // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -214,6 +214,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             shard_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            // When it comes to fork, it reads using the debug oplog service
+            // (the worker instance's oplog) but writes using the live oplog service)
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
@@ -244,7 +246,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             shard_manager_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
-            oplog_service.clone(),
+            debug_oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
@@ -270,7 +272,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
-            oplog_service,
+            debug_oplog_service,
             rpc,
             scheduler_service,
             worker_activator.clone(),

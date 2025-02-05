@@ -3,20 +3,23 @@ name = "cloud-debugging-service"
 version = "0.1.0"
 edition = "2021"
 
+autotests = false
+
 [lib]
 harness = false
 
 [[bin]]
 name = "cloud-debugging-service"
 path = "src/server.rs"
-test = false
 
 [dependencies]
 golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-wasm-ast = { workspace = true }
+golem-service-base = { workspace = true }
 golem-worker-executor-base = { workspace = true }
+
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
 
@@ -25,20 +28,31 @@ async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 axum-jrpc = {workspace = true}
 bincode = { workspace = true }
+futures-util = { workspace = true }
+gethostname = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror ={ workspace = true }
 uuid = { workspace = true }
-tonic = {workspace = true}
+url = { workspace = true }
 
 wasmtime = { version = "=27.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=27.0.0" }
 wasmtime-wasi-http = { version = "=27.0.0" }
 
+
 [dev-dependencies]
 test-r = { workspace = true }
+golem-test-framework = { git = "https://github.com/golemcloud/golem.git", tag = "v1.1.15" }
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false

@@ -15,7 +15,7 @@ impl Default for DebugConfig {
     fn default() -> Self {
         Self {
             golem_config: GolemConfig {
-                shard_manager_service: ShardManagerServiceConfig::Disabled,
+                shard_manager_service: ShardManagerServiceConfig::SingleShard,
                 ..GolemConfig::default()
             },
         }

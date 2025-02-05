@@ -72,7 +72,11 @@ pub async fn jrpc_handler(
 
                 let params: ForkParams = parse_params(&jrpc_id, json_rpc_request.params)?;
                 let result = debug_service
-                    .fork(owned_worker_id, params.target_worker_id)
+                    .fork(
+                        owned_worker_id,
+                        params.target_worker_id,
+                        params.oplog_index_cut_off,
+                    )
                     .await;
                 to_json_rpc_result(&jrpc_id, result)
             } else {

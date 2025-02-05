@@ -76,11 +76,15 @@ impl Oplog for DebugOplog {
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Debug session not found");
+            .expect("Internal Error. Current Oplog Index failed. Debug session not found");
 
-        debug_session_data
-            .target_oplog_index_at_invocation_boundary
-            .expect("Internal Error. Target oplog index not found")
+        // If a debug session not found but hasn't been set up with a target index,
+        // it implies, we only connected to the worker and haven't started debugging yet.
+        if let Some(index) = debug_session_data.target_oplog_index_at_invocation_boundary {
+            index
+        } else {
+            self.inner.current_oplog_index().await
+        }
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
@@ -93,7 +97,7 @@ impl Oplog for DebugOplog {
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Debug session not found");
+            .expect("Internal Error. Read failed. Debug session not found");
 
         let playback_overrides = debug_session_data.playback_overrides.clone();
 

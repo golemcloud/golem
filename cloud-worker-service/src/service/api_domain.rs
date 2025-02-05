@@ -1004,8 +1004,6 @@ mod tests {
             .await
             .unwrap();
 
-        dbg!("The result is {}", result.clone());
-
         assert!(result.is_some());
         assert!(!result.unwrap_or_default().is_empty());
     }
@@ -1037,8 +1035,6 @@ mod tests {
         let get_result = get_name_servers(&test_domain.domain_name, client)
             .await
             .unwrap();
-
-        dbg!("The result is {}", register_result.clone());
 
         assert!(!register_result.is_empty());
 
@@ -1119,8 +1115,6 @@ mod tests {
         let result = AwsRoute53HostedZone::with_client(&client, "myapplication.com")
             .await
             .unwrap();
-
-        dbg!("The result is {}", result.clone());
 
         assert_eq!(result.name, "myapplication.com.");
     }

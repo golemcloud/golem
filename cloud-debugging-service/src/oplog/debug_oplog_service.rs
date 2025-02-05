@@ -50,7 +50,8 @@ impl OplogService for DebugOplogService {
                 &owned_worker_id.worker_id,
                 CreateDebugOplogConstructor::new(
                     owned_worker_id.clone(),
-                    initial_entry,
+                    Some(initial_entry),
+                    OplogIndex::INITIAL,
                     self.inner.clone(),
                     self.debug_session.clone(),
                     execution_status,
@@ -67,12 +68,18 @@ impl OplogService for DebugOplogService {
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Arc<dyn Oplog + Send + Sync + 'static> {
-        self.inner
-            .open(
-                owned_worker_id,
-                last_oplog_index,
-                initial_worker_metadata,
-                execution_status,
+        self.oplogs
+            .get_or_open(
+                &owned_worker_id.worker_id,
+                CreateDebugOplogConstructor::new(
+                    owned_worker_id.clone(),
+                    None,
+                    last_oplog_index,
+                    self.inner.clone(),
+                    self.debug_session.clone(),
+                    execution_status,
+                    initial_worker_metadata,
+                ),
             )
             .await
     }
@@ -80,15 +87,16 @@ impl OplogService for DebugOplogService {
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
-        let debug_session_data = self
+        let result = self
             .debug_session
             .get(&debug_session_id)
             .await
-            .expect("Internal Error. Debug session not found");
+            .and_then(|debug_session| debug_session.target_oplog_index_at_invocation_boundary);
 
-        debug_session_data
-            .target_oplog_index_at_invocation_boundary
-            .expect("Internal Error. Target oplog index not found")
+        match result {
+            Some(index) => index,
+            None => self.inner.get_last_index(owned_worker_id).await,
+        }
     }
 
     async fn delete(&self, owned_worker_id: &OwnedWorkerId) {

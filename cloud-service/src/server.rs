@@ -67,8 +67,6 @@ async fn async_main(
     let grpc_port = config.grpc_port;
     let http_port = config.http_port;
 
-    dbg!("Starting cloud server", http_port, grpc_port);
-
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
     match config.db.clone() {
         DbConfig::Postgres(c) => {

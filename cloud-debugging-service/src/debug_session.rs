@@ -65,8 +65,8 @@ pub struct DebugSessionsDefault {
     pub session: Arc<Mutex<HashMap<DebugSessionId, DebugSessionData>>>,
 }
 
-impl DebugSessionsDefault {
-    pub fn new() -> Self {
+impl Default for DebugSessionsDefault {
+    fn default() -> Self {
         Self {
             session: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -115,7 +115,7 @@ impl DebugSessions for DebugSessionsDefault {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DebugSessionData {
     pub worker_metadata: Option<WorkerMetadata>,
     pub target_oplog_index_at_invocation_boundary: Option<OplogIndex>,
