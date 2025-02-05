@@ -64,5 +64,6 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
     }
 }
 
-// reexport so that we don't have to change version numbers everywhere
-pub use self::golem::api1_2_0 as latest_golem_api;
+// reexports so that we don't have to change version numbers everywhere
+pub use self::golem::api0_2_0 as golem_api_0_2_x;
+pub use self::golem::api1_2_0 as golem_api_1_x;
