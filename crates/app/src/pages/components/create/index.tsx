@@ -116,16 +116,14 @@ const CreateComponent = () => {
     formData.append("component", file!);
     formData.append("componentType", values.type!);
     // file system to zip
-    if (fileSystem.length > 0) {
-      const zip = new JSZip();
-      await addFilesToZip(zip, null);
-      const blob = await zip.generateAsync({ type: "blob" });
-      formData.append(
-        "filesPermissions",
-        JSON.stringify(captureFileMetadata(fileSystem))
-      );
-      formData.append("files", blob, "temp.zip");
-    }
+    const zip = new JSZip();
+    await addFilesToZip(zip, null);
+    const blob = await zip.generateAsync({ type: "blob" });
+    formData.append(
+      "filesPermissions",
+      JSON.stringify(captureFileMetadata(fileSystem))
+    );
+    formData.append("files", blob, "temp.zip");
     API.createComponent(formData).then((res) => {
       if (res?.versionedComponentId?.componentId) {
         navigate(`/components/${res.versionedComponentId.componentId}`);

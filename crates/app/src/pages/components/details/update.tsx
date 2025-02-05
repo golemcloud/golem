@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useRef, useState } from "react";
 import { DndProvider } from "react-dnd";
 import JSZip from "jszip";
@@ -45,6 +45,7 @@ const formSchema = z.object({
 
 export default function ComponentUpdate() {
   const { componentId } = useParams();
+  const navigate = useNavigate();
   const [fileSystem, setFileSystem] = useState<FileItem[] | []>([]);
   const [file, setFile] = useState<File | null>(null);
 
@@ -114,25 +115,25 @@ export default function ComponentUpdate() {
     try {
       const formData = new FormData();
       formData.append("component", file);
-      if (fileSystem.length > 0) {
-        const zip = new JSZip();
-        await addFilesToZip(zip, null);
-        const blob = await zip.generateAsync({ type: "blob" });
-        formData.append(
-          "filesPermissions",
-          JSON.stringify(captureFileMetadata(fileSystem))
-        );
-        formData.append("files", blob, "temp.zip");
-      }
+      const zip = new JSZip();
+      await addFilesToZip(zip, null);
+      const blob = await zip.generateAsync({ type: "blob" });
+      formData.append(
+        "filesPermissions",
+        JSON.stringify(captureFileMetadata(fileSystem))
+      );
+      formData.append("files", blob, "temp.zip");
       await API.updateComponent(componentId!, formData);
 
       form.reset();
       setFile(null);
+      setFileSystem([]);
 
       toast({
         title: "Component was updated successfully",
         duration: 3000,
       });
+      navigate(`/components/${componentId}`);
     } catch (err) {
       console.error("Error updating component:", err);
       toast({
