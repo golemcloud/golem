@@ -23,7 +23,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 
 use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValue, Value};
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::de::Unexpected;
@@ -226,7 +226,7 @@ impl Display for OwnedWorkerId {
 }
 
 /// Actions that can be scheduled to be executed at a given point in time
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
@@ -241,6 +241,14 @@ pub enum ScheduledAction {
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
+    /// Invoke the given action on the worker. The invocation will only
+    /// be persisted in the oplog when it's actually getting scheduled.
+    Invoke {
+        owned_worker_id: OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>
+    }
 }
 
 impl ScheduledAction {
@@ -253,6 +261,7 @@ impl ScheduledAction {
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
+            ScheduledAction::Invoke { owned_worker_id, .. } => owned_worker_id.clone()
         }
     }
 }
@@ -268,6 +277,7 @@ impl Display for ScheduledAction {
             } => {
                 write!(f, "archive[{}]", owned_worker_id)
             }
+            ScheduledAction::Invoke { owned_worker_id, .. } => write!(f, "invoke[{}]", owned_worker_id)
         }
     }
 }

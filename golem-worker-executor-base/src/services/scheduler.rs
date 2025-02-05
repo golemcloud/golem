@@ -36,7 +36,8 @@ use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_wasm_rpc::Value;
 
 #[async_trait]
 pub trait SchedulerService {
@@ -74,7 +75,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
 }
 
 #[derive(Clone)]
-pub struct SchedulerServiceDefault {
+pub struct SchedulerServiceDefault<Ctx> {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
@@ -82,9 +83,10 @@ pub struct SchedulerServiceDefault {
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>
 }
 
-impl SchedulerServiceDefault {
+impl <Ctx: WorkerCtx> SchedulerServiceDefault<Ctx> {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
@@ -92,6 +94,7 @@ impl SchedulerServiceDefault {
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         worker_metadata_service: Arc<dyn WorkerMetadataService + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -102,6 +105,7 @@ impl SchedulerServiceDefault {
             oplog_service,
             worker_metadata_service,
             worker_access,
+            worker_activator
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -127,6 +131,7 @@ impl SchedulerServiceDefault {
 
         svc
     }
+
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
         let (hours_since_epoch, remainder) = Self::split_time(now);
@@ -172,20 +177,38 @@ impl SchedulerServiceDefault {
             })
             .collect::<Vec<_>>();
 
-        let mut owned_worker_ids = HashSet::new();
+        // We need to activate workers so they process newly completed promises, but only if they were not activated for other reasons.
+        let mut worker_ids_to_activate = HashSet::new();
+
+        // ! Do not exist early from this loop, as it will cause all other actions to be skipped.
+        // ! Errors will only be logged anyway, so just log them inline here and ignore.
         for (key, action) in matching {
-            owned_worker_ids.insert(action.owned_worker_id().clone());
+            // TODO: We probably need to do this _after_ we have completed the scheduled action so we don't lose actions in the presence of failures
             self.key_value_storage
                 .with_entity("scheduler", "process", "scheduled_action")
                 .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
                 .await?;
 
             match action {
-                ScheduledAction::CompletePromise { promise_id, .. } => {
-                    self.promise_service
-                        .complete(promise_id, vec![])
-                        .await
-                        .map_err(|golem_err| format!("{golem_err}"))?;
+                ScheduledAction::CompletePromise { promise_id, account_id } => {
+                    let owned_worker_id = OwnedWorkerId::new(&account_id, &promise_id.worker_id);
+
+                    let result = self.promise_service
+                        .complete(promise_id.clone(), vec![])
+                        .await;
+
+                    match result {
+                        Ok(_) => {
+                            worker_ids_to_activate.insert(owned_worker_id.clone());
+                        }
+                        Err(e) => {
+                            error!(
+                                worker_id = owned_worker_id.to_string(),
+                                promise_id = promise_id.to_string(),
+                                "Failed to complete promise: {e}"
+                            );
+                        }
+                    }
 
                     record_scheduled_promise_completed();
                 }
@@ -201,6 +224,8 @@ impl SchedulerServiceDefault {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self.worker_access.open_oplog(&owned_worker_id).await {
                                 Ok(oplog) => {
+                                    worker_ids_to_activate.remove(&owned_worker_id);
+
                                     let start = Instant::now();
                                     if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                         record_scheduled_archive(start.elapsed(), more);
@@ -237,11 +262,32 @@ impl SchedulerServiceDefault {
 
                         // TODO: metrics
                     }
+                },
+                ScheduledAction::Invoke { owned_worker_id, idempotency_key, full_function_name, function_input } => {
+                    let result = self.handle_invoke_action(
+                        owned_worker_id.clone(),
+                        idempotency_key,
+                        full_function_name.clone(),
+                        function_input
+                    ).await;
+
+                    match result {
+                        Ok(_) => {
+                            worker_ids_to_activate.remove(&owned_worker_id);
+                        }
+                        Err(e) => {
+                            error!(
+                                worker_id = owned_worker_id.to_string(),
+                                full_function_name = full_function_name,
+                                "Failed to invoke worker with scheduled invocation: {e}"
+                            );
+                        }
+                    }
                 }
             }
         }
 
-        for owned_worker_id in owned_worker_ids {
+        for owned_worker_id in worker_ids_to_activate {
             let span = span!(
                 Level::INFO,
                 "scheduler",
@@ -252,6 +298,30 @@ impl SchedulerServiceDefault {
                 .instrument(span)
                 .await;
         }
+
+        Ok(())
+    }
+
+    async fn handle_invoke_action(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError> {
+        let worker = self.worker_activator.get_or_create_running(
+            &owned_worker_id,
+            None,
+            None,
+            None,
+            None
+        ).await?;
+
+        worker.invoke(
+            idempotency_key,
+            full_function_name,
+            function_input
+        ).await?;
 
         Ok(())
     }
@@ -274,7 +344,7 @@ impl SchedulerServiceDefault {
     }
 }
 
-impl Drop for SchedulerServiceDefault {
+impl <Ctx> Drop for SchedulerServiceDefault<Ctx> {
     fn drop(&mut self) {
         if let Some(handle) = self.background_handle.lock().unwrap().take() {
             handle.abort();
@@ -283,7 +353,7 @@ impl Drop for SchedulerServiceDefault {
 }
 
 #[async_trait]
-impl SchedulerService for SchedulerServiceDefault {
+impl <Ctx: WorkerCtx> SchedulerService for SchedulerServiceDefault<Ctx> {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
         let (hours_since_epoch, remainder) = Self::split_time(time);
 
