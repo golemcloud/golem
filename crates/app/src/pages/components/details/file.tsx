@@ -1,22 +1,24 @@
 import {FolderStructure} from "@/components/file-manager.tsx";
-
-const data = [
-    {
-        key: "deb45168f29df0d0d70c5679d9e525881d4bc010e812eeb1d992febab02c35f1",
-        path: "/__MACOSX/temp/._name.json",
-        permissions: "read-only",
-    },
-    {
-        key: "9ae32b02af5738242717782409d5e64544ca0eaf2575bddf8121446f3b958372",
-        path: "/temp/name.json",
-        permissions: "read-only",
-    },
-]
+import {useParams} from "react-router-dom";
+import {useEffect, useState} from "react";
+import {API} from "@/service";
+import {Component} from "@/types/component.ts";
 
 export default function FileManager() {
+    const {componentId = ""} = useParams();
+    const [component, setComponent] = useState({} as Component);
+
+    useEffect(() => {
+        if (!componentId) return;
+        // Fetch entire list of components by ID
+        API.getComponentById(componentId).then((response) => {
+            if (!response) return;
+            setComponent(response[0]);
+        });
+    }, [componentId]);
     return (
         <div className="container mx-auto p-4">
-            <FolderStructure data={data}/>
+            <FolderStructure data={component.files || []}/>
         </div>
     )
 }

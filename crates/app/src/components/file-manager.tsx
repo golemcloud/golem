@@ -4,7 +4,8 @@ import type React from "react"
 import {useState} from "react"
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from "@/components/ui/collapsible"
 import {ChevronDown, ChevronRight, File, Folder} from "lucide-react"
-import {cn, FileStructure, parseFileStructure} from "@/lib/utils"
+import {cn, parseFileStructure} from "@/lib/utils"
+import {FileStructure} from "@/types/component.ts";
 
 interface FileNode {
     name: string
@@ -18,7 +19,7 @@ interface FolderStructureProps {
 }
 
 const FolderStructureNode: React.FC<{ node: FileNode; level: number }> = ({node, level}) => {
-    const [isOpen, setIsOpen] = useState(false)
+    const [isOpen, setIsOpen] = useState(true)
 
 
     const indent = level * 16

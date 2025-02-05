@@ -1,5 +1,5 @@
 import {Api} from "@/types/api";
-import {ComponentExportFunction, Export} from "@/types/component";
+import {ComponentExportFunction, Export, FileStructure} from "@/types/component";
 import {type ClassValue, clsx} from "clsx";
 import {twMerge} from "tailwind-merge";
 
@@ -145,13 +145,7 @@ interface FileNode {
     permissions?: string
 }
 
-export interface FileStructure {
-    key: string
-    path: string
-    permissions: string
-}
-
-export function parseFileStructure(data: any[]): FileNode {
+export function parseFileStructure(data: FileStructure[]): FileNode {
     const root: FileNode = {name: "root", type: "folder", children: []}
 
     data.forEach((item) => {

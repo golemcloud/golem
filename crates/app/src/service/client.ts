@@ -24,6 +24,11 @@ export class Service {
         return r as Component[];
     };
 
+    public getComponentById = async (id: string) => {
+        const r = await this.callApi(ENDPOINT.getComponentById(id));
+        return r as Component[];
+    };
+
     public getComponentByIdAndVersion = async (id: string, version: number) => {
         const r = await this.callApi(
             ENDPOINT.getComponentByIdAndVersion(id, version)

@@ -85,19 +85,20 @@ function parseTypeForTooltip(typ: Typ | undefined): {
             };
         }
         case "Record": {
-            const fields = (typ.fields || []).map((field) => {
+            const result: Record<string, unknown> = {};
+            (typ.fields || []).forEach((field) => {
                 const parsed = parseTypeForTooltip(field.typ);
-                return `  ${field.name}: ${parsed.full}`;
+                result[field.name] = parsed.full;
             });
             return {
                 short: "record",
-                full: `{\n${fields.join("\n")}\n}`,
+                full: JSON.stringify(result, null, 2),
             };
         }
         case "Variant": {
             const cases = (typ.cases || []).map((c) => {
                 const parsed = parseTypeForTooltip(c.typ);
-                return `${c.name.charAt(0).toUpperCase() + c.name.slice(1)}(${
+                return `${c.charAt(0).toUpperCase() + c.slice(1)}(${
                     parsed.full
                 })`;
             });
@@ -107,9 +108,7 @@ function parseTypeForTooltip(typ: Typ | undefined): {
             };
         }
         case "Enum": {
-            const cases = (typ.cases || []).map(
-                (c) => c.name.charAt(0).toUpperCase() + c.name.slice(1)
-            );
+            const cases = (typ.cases || []).map((c) => c.charAt(0).toUpperCase() + c.slice(1));
             return {
                 short: "enum",
                 full: `enum (\n  ${cases.join(",\n  ")}\n)`,
