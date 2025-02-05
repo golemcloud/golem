@@ -5,7 +5,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/
 import {useEffect, useState} from "react";
 import {API} from "@/service";
 import {useParams} from "react-router-dom";
-import {ComponentList, Export, Parameter, Typ,} from "@/types/component";
+import {Case, ComponentList, Export, Parameter, Typ,} from "@/types/component";
 
 // ---------- Shadcn UI Tooltip Imports ----------
 import {TooltipProvider} from "@/components/ui/tooltip";
@@ -96,9 +96,9 @@ function parseTypeForTooltip(typ: Typ | undefined): {
             };
         }
         case "Variant": {
-            const cases = (typ.cases || []).map((c) => {
+            const cases = (typ.cases as Case[] || []).map((c) => {
                 const parsed = parseTypeForTooltip(c.typ);
-                return `${c.charAt(0).toUpperCase() + c.slice(1)}(${
+                return `${c.name.charAt(0).toUpperCase() + c.name.slice(1)}(${
                     parsed.full
                 })`;
             });
@@ -108,7 +108,7 @@ function parseTypeForTooltip(typ: Typ | undefined): {
             };
         }
         case "Enum": {
-            const cases = (typ.cases || []).map((c) => c.charAt(0).toUpperCase() + c.slice(1));
+            const cases = (typ.cases as string[] || []).map((c) => c.charAt(0).toUpperCase() + c.slice(1));
             return {
                 short: "enum",
                 full: `enum (\n  ${cases.join(",\n  ")}\n)`,
@@ -220,7 +220,7 @@ export default function Exports() {
     const [versionList, setVersionList] = useState<number[]>([]);
     const [versionChange, setVersionChange] = useState<number>(0);
     const [result, setResult] = useState<ExportResult[]>([]);
-
+    const [functions, setFunctions] = useState<ExportResult[]>([]);
     // const [functions, setFunctions] = useState<ComponentExportFunction[]>([]);
 
     useEffect(() => {
@@ -252,6 +252,7 @@ export default function Exports() {
         );
         if (!componentDetails) {
             setResult([]);
+            setFunctions([]);
             return;
         }
 
@@ -261,6 +262,7 @@ export default function Exports() {
             componentDetails.metadata?.exports || []
         );
         setResult(exportsResult);
+        setFunctions(exportsResult);
 
         // If you want to maintain a separate array of raw functions for searching:
         // const rawFunctions: ComponentExportFunction[] = calculateExportFunctions(
@@ -276,15 +278,10 @@ export default function Exports() {
     const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value.toLowerCase();
 
-        // const searchResult = calculateExportFunctions(
-        //     component.versions?.find(
-        //         (data) => data.versionedComponentId?.version === versionChange
-        //     )?.metadata?.exports || []
-        // ).filter((fn: ComponentExportFunction) =>
-        //     fn.name.toLowerCase().includes(value)
-        // );
-
-        // setFunctions(searchResult);
+        const searchResult = functions.filter((fn: ExportResult) =>
+            fn.function_name.toLowerCase().includes(value)
+        );
+        setResult(searchResult);
     };
 
     return (
