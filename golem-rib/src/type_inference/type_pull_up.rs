@@ -1273,7 +1273,8 @@ mod type_pull_up_tests {
 
         let mut expr = Expr::from_text(rib).unwrap();
         let function_registry = FunctionTypeRegistry::empty();
-        expr.infer_types_initial_phase(&function_registry).unwrap();
+        expr.infer_types_initial_phase(&function_registry, None)
+            .unwrap();
         expr.infer_all_identifiers().unwrap();
         let new_expr = expr.pull_types_up().unwrap();
 

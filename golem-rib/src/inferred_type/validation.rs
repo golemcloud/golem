@@ -99,7 +99,7 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
         }
         resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
         InferredType::OneOf(possibilities) => Err(format!("Cannot resolve {:?}", possibilities)),
-        InferredType::AllOf(possibilities) => Err(format!("Cannot be all of {:?}", possibilities)),
+        InferredType::AllOf(possibilities) => coerce_to_numerical_type(possibilities).map(Unified),
         InferredType::Unknown => Err("Unknown".to_string()),
         inferred_type @ InferredType::Sequence(inferred_types) => {
             for typ in inferred_types {
@@ -108,5 +108,43 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
 
             Ok(Unified(inferred_type.clone()))
         }
+    }
+}
+
+fn coerce_to_numerical_type(possibilities: &Vec<InferredType>) -> Result<InferredType, String> {
+    let mut number_type: Option<InferredType> = None;
+    let mut has_string = false;
+
+    for ty in possibilities {
+        match ty {
+            InferredType::Str => has_string = true,
+            InferredType::U8
+            | InferredType::U16
+            | InferredType::U32
+            | InferredType::U64
+            | InferredType::S8
+            | InferredType::S16
+            | InferredType::S32
+            | InferredType::S64
+            | InferredType::F32
+            | InferredType::F64 => {
+                if let Some(existing) = &number_type {
+                    if existing != ty {
+                        return Err("Cannot coerce to a mixed number type".to_string());
+                    }
+                } else {
+                    number_type = Some(ty.clone());
+                }
+            }
+            _ => return Err(format!("Cannot be all of {:?}", possibilities)),
+        }
+    }
+
+    if let Some(num) = number_type {
+        Ok(num)
+    } else if has_string {
+        Ok(InferredType::Str)
+    } else {
+        Err("No valid number or string type found".to_string())
     }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey};
+use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey, TypeDefault};
 use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
@@ -27,10 +27,12 @@ impl InferredExpr {
     pub fn from_expr(
         expr: &Expr,
         function_type_registry: &FunctionTypeRegistry,
+        type_default: Option<&TypeDefault>,
     ) -> Result<InferredExpr, String> {
         let mut mutable_expr = expr.clone();
+
         mutable_expr
-            .infer_types(function_type_registry)
+            .infer_types(function_type_registry, type_default)
             .map_err(|err| err.join("\n"))?;
         Ok(InferredExpr(mutable_expr))
     }

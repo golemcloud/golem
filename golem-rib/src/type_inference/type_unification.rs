@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ArmPattern, Expr};
+use crate::{text, ArmPattern, Expr};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
     let mut queue = vec![];
@@ -299,8 +299,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of identifier {:?}",
-                            expr
+                            "Unable to resolve the type of identifier {}",
+                            text::to_string(expr).unwrap()
                         ));
                         errors.push(e);
                     }

@@ -573,18 +573,22 @@ pub fn unify_with_required(
                 result.unify_with_required(inferred_type)
             }
 
-            (inferred_type1, inferred_type2) => {
-                if inferred_type1 == inferred_type2 {
-                    Ok(inferred_type1.clone())
-                } else if inferred_type1.is_number() && inferred_type2.is_number() {
+            (inferred_type_left, inferred_type_right) => {
+                if inferred_type_left == inferred_type_right {
+                    Ok(inferred_type_left.clone())
+                } else if inferred_type_left.is_number() && inferred_type_right.is_number() {
                     Ok(InferredType::AllOf(vec![
-                        inferred_type1.clone(),
-                        inferred_type2.clone(),
+                        inferred_type_left.clone(),
+                        inferred_type_right.clone(),
                     ]))
+                } else if inferred_type_left.is_string() && inferred_type_right.is_number() {
+                    Ok(inferred_type_right.clone())
+                } else if inferred_type_left.is_number() && inferred_type_right.is_string() {
+                    Ok(inferred_type_left.clone())
                 } else {
                     Err(format!(
                         "Types do not match. Inferred to be both {:?} and {:?}",
-                        inferred_type1, inferred_type2
+                        inferred_type_left, inferred_type_right
                     ))
                 }
             }
