@@ -6,6 +6,7 @@ import {ThemeProvider} from "@/components/theme-provider.tsx";
 import Navbar from "@/components/navbar.tsx";
 import ErrorBoundary from "@/components/errorBoundary";
 import {Dashboard} from "@/pages/dashboard";
+import FileManager from "@/pages/components/details/file.tsx";
 
 // Lazy load route components for code splitting and performance improvement
 // Lazy-loading improves initial load times by loading components only when needed.
@@ -122,6 +123,7 @@ function App() {
                                 <Route path="info" element={<ComponentInfo/>}/>
                                 <Route path="exports" element={<Exports/>}/>
                                 <Route path="plugins" element={<Plugins/>}/>
+                                <Route path="files" element={<FileManager/>}/>
                                 <Route path="invoke" element={<ComponentInvoke/>}/>
                                 <Route path="workers" element={<WorkerList/>}/>
                                 <Route path="workers/create" element={<CreateWorker/>}/>

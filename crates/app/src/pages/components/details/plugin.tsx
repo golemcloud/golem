@@ -24,6 +24,18 @@ import {
   InstalledPlugin,
 } from "@/types/component.ts";
 import { toast } from "@/hooks/use-toast.ts";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Plugin, PluginList } from "@/types/plugin";
+import { object } from "zod";
 
 export default function Plugins() {
   const { componentId = "" } = useParams();
@@ -34,12 +46,45 @@ export default function Plugins() {
   const [filteredPlugins, setFilteredPlugins] = useState<InstalledPlugin[]>([]);
   const [versionList, setVersionList] = useState<number[]>([]);
   const [versionChange, setVersionChange] = useState(0);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [newPlugin, setNewPlugin] = useState({
+    name: "",
+    priority: 1,
+    version: "",
+  });
+  const [availabePlugin, setAvailabePlugin] = useState<
+    Record<string, string[]>
+  >({});
 
   // Fetch component versions & plugins on mount
+
   useEffect(() => {
+    const fetchPlugins = async () => {
+      try {
+        const plugins = await API.getPlugins();
+        const pluginMap: Record<string, string[]> = {};
+
+        plugins.forEach(({ name, version }) => {
+          if (!pluginMap[name]) {
+            pluginMap[name] = [];
+          }
+          pluginMap[name].push(version);
+        });
+        setAvailabePlugin(pluginMap);
+      } catch (error) {
+        toast({
+          title: "Failed to fetch plugins",
+          description: "An error occurred while fetching the plugin list.",
+          variant: "destructive",
+          duration: 5000,
+        });
+      }
+    };
+
+    fetchPlugins();
     if (!componentId) return;
     refreshComponent();
-  }, [componentId]);
+  }, []);
 
   const refreshComponent = () => {
     API.getComponentByIdAsKey().then((response) => {
@@ -94,6 +139,33 @@ export default function Plugins() {
     }
   };
 
+  const handleAddPlugin = () => {
+    const pluginData = {
+      name: newPlugin.name,
+      priority: newPlugin.priority,
+      version: newPlugin.version,
+      parameters: {},
+    };
+    API.addPluginToComponent(componentId, pluginData)
+      .then(() => {
+        toast({
+          title: "Plugin added successfully",
+          description: "The new plugin has been added successfully.",
+          duration: 3000,
+        });
+        refreshComponent();
+        setIsDialogOpen(false);
+      })
+      .catch((error) => {
+        toast({
+          title: "Failed to add plugin",
+          description: "An error occurred while adding the plugin.",
+          variant: "destructive",
+          duration: 5000,
+        });
+      });
+  };
+
   return (
     <div className="flex">
       <div className="flex-1 p-8">
@@ -127,6 +199,88 @@ export default function Plugins() {
                 </SelectContent>
               </Select>
             )}
+
+            {/* Add Plugin Button */}
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button>Add Plugin</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogTitle>Add New Plugin</DialogTitle>
+                <DialogDescription>
+                  Enter the details of the new plugin you want to add.
+                </DialogDescription>
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="plugin-name">Plugin Name</Label>
+                    <Select
+                      onValueChange={(value) => {
+                        setNewPlugin({ ...newPlugin, name: value });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue>
+                          {newPlugin.name || "Select a plugin"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.keys(availabePlugin).map((plugin) => (
+                          <SelectItem key={plugin} value={plugin}>
+                            {plugin}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="plugin-version">Version</Label>
+                    <Select
+                      id="plugin-version"
+                      placeholder="Version"
+                      disabled={!newPlugin.name}
+                      onValueChange={(value) => {
+                        setNewPlugin({ ...newPlugin, version: value });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue>
+                          {newPlugin.version || "Select a Plugin Version"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(availabePlugin[newPlugin.name || ""] || []).map(
+                          (version) => (
+                            <SelectItem key={version} value={version}>
+                              {version}
+                            </SelectItem>
+                          )
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="plugin-priority">Priority</Label>
+                    <Input
+                      id="plugin-priority"
+                      placeholder="Priority"
+                      value={newPlugin.priority}
+                      onChange={(e) =>
+                        setNewPlugin({
+                          ...newPlugin,
+                          priority: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end mt-4 gap-2">
+                  <DialogClose asChild>
+                    <Button variant="outline">Cancel</Button>
+                  </DialogClose>
+                  <Button onClick={handleAddPlugin}>Add</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
 
           {/* Plugins Table */}

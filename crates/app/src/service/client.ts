@@ -25,10 +25,11 @@ export class Service {
     };
 
     public getComponentByIdAndVersion = async (id: string, version: number) => {
-        const r = await this.callApi(ENDPOINT.getComponentByIdAndVersion(id, version));
+        const r = await this.callApi(
+            ENDPOINT.getComponentByIdAndVersion(id, version)
+        );
         return r as Component;
     };
-
 
     public createComponent = async (form: FormData) => {
         const response = await fetch(`${this.baseUrl}/v1/components`, {
@@ -39,7 +40,9 @@ export class Service {
     };
 
     public getComponentByName = async (name: string) => {
-        const r = await this.callApi(`${ENDPOINT.getComponents()}?component-name=${name}`);
+        const r = await this.callApi(
+            `${ENDPOINT.getComponents()}?component-name=${name}`
+        );
         return r as Component;
     };
 
@@ -54,28 +57,42 @@ export class Service {
         return response;
     };
 
-    public deletePluginToComponent = async (id: string, installation_id: string) => {
-        return await this.callApi(ENDPOINT.deletePluginToComponent(id, installation_id), "DELETE");
+    public deletePluginToComponent = async (
+        id: string,
+        installation_id: string
+    ) => {
+        return await this.callApi(
+            ENDPOINT.deletePluginToComponent(id, installation_id),
+            "DELETE"
+        );
     };
 
-    public addPluginToComponent = async (id: string, form: string) => {
-        const response = await fetch(
-            `${this.baseUrl}/v1/components/${id}/latest/plugins/installs`,
+    public addPluginToComponent = async (id: string, form: any) => {
+        return await this.callApi(
+            ENDPOINT.addPluginToComponent(id),
+            "POST",
+            JSON.stringify(form)
+        );
+    };
+
+    public upgradeWorker = async (
+        componentId: string,
+        workerName: string,
+        version: number
+    ) => {
+        console.log("upgradeWorker", ENDPOINT.updateWorker(componentId, workerName), version);
+        return await this.callApi(
+            ENDPOINT.updateWorker(componentId, workerName),
+            "POST",
+            JSON.stringify({
+                "mode": "Automatic",
+                "targetVersion": version
+            }),
             {
-                method: "POST",
-                body: form,
+                "Content-Type": "application/json; charset=utf-8"
             }
-        ).then((res) => res.json());
-        return response;
+        );
     };
-
-    public upgradeWorker = async (componentId: string, workerName: string, version: number) => {
-        return await this.callApi(ENDPOINT.updateWorker(componentId, workerName), "POST", JSON.stringify({
-            targetVersion: version,
-            "mode": "Manual"
-        }));
-    };
-
 
     public findWorker = async (
         componentId: string,

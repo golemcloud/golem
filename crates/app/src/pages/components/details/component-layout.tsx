@@ -6,7 +6,7 @@ import {SidebarMenu} from "@/components/sidebar.tsx";
 import {Separator} from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import {ComponentList} from "@/types/component.ts";
-import {ArrowRightFromLine, Home, Info, Pencil, Pickaxe, Settings, ToyBrick, Workflow,} from "lucide-react";
+import {ArrowRightFromLine, Folder, Home, Info, Pencil, Pickaxe, Settings, ToyBrick, Workflow,} from "lucide-react";
 import {
     Breadcrumb,
     BreadcrumbItem,
@@ -50,6 +50,11 @@ const createMenuItems = (
         title: "Update",
         url: `/components/${componentId}/update`,
         icon: Pencil,
+    },
+    {
+        title: "Files",
+        url: `/components/${componentId}/files`,
+        icon: Folder,
     },
     {
         title: "Plugins",
@@ -104,6 +109,7 @@ export const ComponentLayout = () => {
         else if (location.pathname.includes("plugins")) setCurrentMenu("Plugins");
         else if (location.pathname.includes("info")) setCurrentMenu("Info");
         else if (location.pathname.includes("settings")) setCurrentMenu("Settings");
+        else if (location.pathname.includes("files")) setCurrentMenu("Files");
         else setCurrentMenu("Overview");
     }, [location.pathname]);
 
