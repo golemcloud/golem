@@ -3917,7 +3917,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit",
+ "golem-wit 1.1.7",
  "include_dir",
  "itertools 0.14.0",
  "nanoid",
@@ -4171,7 +4171,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
+ "golem-wit 0.0.0",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4199,6 +4199,11 @@ dependencies = [
  "wit-encoder",
  "wit-parser 0.221.2",
 ]
+
+[[package]]
+name = "golem-wit"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem-wit.git?branch=scheduled-invocation#33db0c8eccd228c07fa47f2aee8b5d1728afe77f"
 
 [[package]]
 name = "golem-wit"

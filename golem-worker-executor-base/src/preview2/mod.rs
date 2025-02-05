@@ -63,3 +63,6 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
         wit_value.into()
     }
 }
+
+// reexport so that we don't have to change version numbers everywhere
+pub use self::golem::api1_1_2 as latest_golem_api;
