@@ -1,0 +1,13 @@
+package golem:it;
+
+interface scheduled-invocation-api {
+  add: func(value: u64);
+  get: func() -> u64;
+  run: func() -> ();
+}
+
+world scheduled-invocation {
+  import golem:api/host@1.2.0;
+
+  export scheduled-invocation-api;
+}
