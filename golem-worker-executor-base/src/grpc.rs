@@ -977,11 +977,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             // with an update.
                             worker_status.status = WorkerStatus::Retrying;
                         }
-                        let mut deleted_regions = worker_status.deleted_regions.clone();
-                        let (pending_updates, extra_deleted_regions) = worker.pending_updates();
-                        deleted_regions.set_override(extra_deleted_regions);
+                        let mut skipped_regions = worker_status.skipped_regions.clone();
+                        let (pending_updates, temporary_skipped_regions) = worker.pending_updates();
+                        skipped_regions.set_override(temporary_skipped_regions);
                         worker_status.pending_updates = pending_updates;
-                        worker_status.deleted_regions = deleted_regions;
+                        worker_status.skipped_regions = skipped_regions;
                         worker.update_status(worker_status).await;
 
                         debug!("Resuming initialization to perform the update",);

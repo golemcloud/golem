@@ -29,6 +29,7 @@ use golem_common::model::{
     WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use tracing::{debug, warn};
+use golem_common::model::regions::DeletedRegions;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -267,8 +268,9 @@ impl WorkerService for DefaultWorkerService {
                         component_version,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
-                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                        extensions: WorkerStatusRecordExtensions::Extension2 {
                             active_plugins: initial_active_plugins,
+                            deleted_regions: DeletedRegions::new()
                         },
                         ..WorkerStatusRecord::default()
                     },

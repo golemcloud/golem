@@ -321,6 +321,9 @@ pub enum OplogEntry {
         invocation: WorkerInvocation,
     },
     /// An update request arrived and will be applied as soon the worker restarts
+    ///
+    /// For automatic updates worker is expected to immediately get interrupted and restarted after inserting this entry.
+    /// For manual updates, this entry is only inserted when the worker is idle, and it is also restarted.
     PendingUpdate {
         timestamp: Timestamp,
         description: UpdateDescription,

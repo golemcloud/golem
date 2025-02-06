@@ -320,11 +320,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_known_status()
             .clone();
 
-        let mut deleted_regions = self.state.replay_state.deleted_regions().await;
+        let mut skipped_regions = self.state.replay_state.skipped_regions().await;
         let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();
-        deleted_regions.set_override(extra_deleted_regions);
+        skipped_regions.set_override(extra_deleted_regions);
 
-        status.deleted_regions = deleted_regions;
+        status.skipped_regions = skipped_regions;
         status
             .overridden_retry_config
             .clone_from(&self.state.overridden_retry_policy);
@@ -1096,7 +1096,10 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 timestamp,
                 target_version,
                 details: details.clone(),
-            })
+            });
+            if status.skipped_regions.is_overridden() {
+                status.skipped_regions.drop_override()
+            }
         })
         .await;
 
@@ -1129,6 +1132,9 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_version,
             });
             *status.active_plugins_mut() = new_active_plugins;
+            if status.skipped_regions.is_overridden() {
+                status.skipped_regions.merge_override()
+            }
         })
         .await;
     }

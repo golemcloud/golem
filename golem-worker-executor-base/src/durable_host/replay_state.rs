@@ -41,7 +41,7 @@ pub struct ReplayState {
 
 #[derive(Clone)]
 struct InternalReplayState {
-    pub deleted_regions: DeletedRegions,
+    pub skipped_regions: DeletedRegions,
     pub next_deleted_region: Option<OplogRegion>,
     /// Hashes of log entries persisted since the last read non-hint oplog entry
     pub log_hashes: HashSet<(u64, u64)>,
@@ -55,7 +55,7 @@ impl ReplayState {
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
     ) -> Self {
-        let next_deleted_region = deleted_regions.find_next_deleted_region(OplogIndex::NONE);
+        let next_skipped_region = deleted_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut result = Self {
             owned_worker_id,
             oplog_service,
@@ -63,8 +63,8 @@ impl ReplayState {
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
             internal: Arc::new(RwLock::new(InternalReplayState {
-                deleted_regions,
-                next_deleted_region,
+                skipped_regions: deleted_regions,
+                next_deleted_region: next_skipped_region,
                 log_hashes: HashSet::new(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
@@ -85,19 +85,19 @@ impl ReplayState {
         self.replay_target.get()
     }
 
-    pub async fn deleted_regions(&self) -> DeletedRegions {
+    pub async fn skipped_regions(&self) -> DeletedRegions {
         let internal = self.internal.read().await;
-        internal.deleted_regions.clone()
+        internal.skipped_regions.clone()
     }
 
     pub async fn add_deleted_region(&mut self, region: OplogRegion) {
         let mut internal = self.internal.write().await;
-        internal.deleted_regions.add(region);
+        internal.skipped_regions.add(region);
     }
 
     pub async fn is_in_deleted_region(&self, oplog_index: OplogIndex) -> bool {
         let internal = self.internal.read().await;
-        internal.deleted_regions.is_in_deleted_region(oplog_index)
+        internal.skipped_regions.is_in_deleted_region(oplog_index)
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
@@ -330,7 +330,7 @@ impl ReplayState {
 
             if update_next_deleted_region {
                 internal.next_deleted_region = internal
-                    .deleted_regions
+                    .skipped_regions
                     .find_next_deleted_region(self.last_replayed_index.get());
             }
         }

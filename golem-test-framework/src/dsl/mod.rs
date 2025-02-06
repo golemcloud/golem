@@ -1466,7 +1466,7 @@ pub fn to_worker_metadata(
                 oplog_idx: OplogIndex::default(),
                 status: metadata.status.try_into().expect("invalid status"),
                 overridden_retry_config: None, // not passed through gRPC
-                deleted_regions: DeletedRegions::new(),
+                skipped_regions: DeletedRegions::new(),
                 pending_invocations: vec![],
                 pending_updates: metadata
                     .updates
@@ -1539,7 +1539,7 @@ pub fn to_worker_metadata(
                         )
                     })
                     .collect(),
-                extensions: WorkerStatusRecordExtensions::Extension1 {
+                extensions: WorkerStatusRecordExtensions::Extension2 {
                     active_plugins: HashSet::from_iter(
                         metadata
                             .active_plugins
@@ -1547,6 +1547,7 @@ pub fn to_worker_metadata(
                             .cloned()
                             .map(|id| id.try_into().expect("invalid plugin installation id")),
                     ),
+                    deleted_regions: DeletedRegions::new()
                 },
             },
             parent: None,

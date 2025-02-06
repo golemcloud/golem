@@ -44,37 +44,42 @@ where
             )
             .await;
 
-        let mut initial_deleted_regions = last_known.deleted_regions.clone();
-        if initial_deleted_regions.is_overridden() {
-            initial_deleted_regions.drop_override(); // TODO: this seems to be incorrect
-        }
-        let deleted_regions = calculate_deleted_regions(initial_deleted_regions, &new_entries);
+        let deleted_regions =
+            calculate_deleted_regions(last_known.deleted_regions().clone(), &new_entries);
+        let skipped_regions = calculate_skipped_regions(
+            last_known.skipped_regions.clone(),
+            &deleted_regions,
+            &new_entries,
+        );
 
         // If the last known status is from a deleted region based on the latest deleted region status,
         // we cannot fold the new status from the new entries only, and need to recalculate the whole status
         // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
         // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
         // the revert is applied)
-        if deleted_regions.is_in_deleted_region(last_known.oplog_idx) {
+        if skipped_regions.is_in_deleted_region(last_known.oplog_idx) {
             calculate_last_known_status(this, owned_worker_id, &None).await
         } else {
             let active_plugins = last_known.active_plugins().clone();
 
             let overridden_retry_config = calculate_overridden_retry_policy(
                 last_known.overridden_retry_config.clone(),
-                &deleted_regions,
+                &skipped_regions,
                 &new_entries,
             );
             let status = calculate_latest_worker_status(
                 &last_known.status,
                 &this.config().retry,
                 last_known.overridden_retry_config.clone(),
-                &deleted_regions,
+                &skipped_regions,
                 &new_entries,
             );
 
-            let pending_invocations =
-                calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+            let pending_invocations = calculate_pending_invocations(
+                last_known.pending_invocations,
+                &deleted_regions,
+                &new_entries,
+            );
             let (
                 pending_updates,
                 failed_updates,
@@ -87,20 +92,9 @@ where
                 last_known.successful_updates,
                 last_known.component_version,
                 last_known.component_size,
+                &deleted_regions,
                 &new_entries,
             );
-
-            // TODO: this seems to be incorrect
-            // if let Some(TimestampedUpdateDescription {
-            //                 oplog_index,
-            //                 description: UpdateDescription::SnapshotBased { .. },
-            //                 ..
-            //             }) = pending_updates.front()
-            // {
-            //     deleted_regions.set_override(DeletedRegions::from_regions(vec![
-            //         OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=*oplog_index),
-            //     ]));
-            // }
 
             let (invocation_results, current_idempotency_key) = calculate_invocation_results(
                 last_known.invocation_results,
@@ -111,13 +105,13 @@ where
 
             let total_linear_memory_size = calculate_total_linear_memory_size(
                 last_known.total_linear_memory_size,
-                &deleted_regions,
+                &skipped_regions,
                 &new_entries,
             );
 
             let owned_resources = calculate_owned_resources(
                 last_known.owned_resources,
-                &deleted_regions,
+                &skipped_regions,
                 &new_entries,
             );
 
@@ -129,7 +123,7 @@ where
                 status,
                 overridden_retry_config,
                 pending_invocations,
-                deleted_regions,
+                skipped_regions,
                 pending_updates,
                 failed_updates,
                 successful_updates,
@@ -139,7 +133,10 @@ where
                 component_size,
                 owned_resources,
                 total_linear_memory_size,
-                extensions: WorkerStatusRecordExtensions::Extension1 { active_plugins },
+                extensions: WorkerStatusRecordExtensions::Extension2 {
+                    active_plugins,
+                    deleted_regions,
+                },
             };
             Ok(result)
         }
@@ -150,15 +147,15 @@ fn calculate_latest_worker_status(
     initial: &WorkerStatus,
     default_retry_policy: &RetryConfig,
     initial_retry_policy: Option<RetryConfig>,
-    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> WorkerStatus {
     let mut result = initial.clone();
     let mut last_error_count = 0;
     let mut current_retry_policy = initial_retry_policy;
     for (idx, entry) in entries {
-        // Skipping entries in deleted regions, as they are skipped during replay too
-        if deleted_regions.is_in_deleted_region(*idx) {
+        // Skipping entries in skipped regions, as they are skipped during replay too
+        if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
@@ -259,33 +256,94 @@ fn calculate_latest_worker_status(
 }
 
 fn calculate_deleted_regions(
-    initial: DeletedRegions,
+    initial_deleted: DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
-    let mut builder = DeletedRegionsBuilder::from_regions(initial.into_regions());
-    for entry in entries.values() {
+    let mut deleted_builder = DeletedRegionsBuilder::from_regions(initial_deleted.into_regions());
+    for (idx, entry) in entries {
         match entry {
-            OplogEntry::Jump { jump, .. } => {
-                builder.add(jump.clone());
-            }
             OplogEntry::Revert { dropped_region, .. } => {
-                builder.add(dropped_region.clone());
+                deleted_builder.add(dropped_region.clone());
             }
             _ => {}
         }
     }
-    builder.build()
+    deleted_builder.build()
+}
+
+fn calculate_skipped_regions(
+    initial_skipped: DeletedRegions,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> DeletedRegions {
+    let mut skipped_without_override = initial_skipped.clone();
+    if skipped_without_override.is_overridden() {
+        skipped_without_override.drop_override();
+    }
+
+    let mut skipped_override = initial_skipped.get_override();
+
+    let mut skipped_builder =
+        DeletedRegionsBuilder::from_regions(skipped_without_override.into_regions());
+    for (idx, entry) in entries {
+        // Skipping deleted regions (by revert) from constructing the skipped regions
+        if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        match entry {
+            OplogEntry::Jump { jump, .. } => {
+                skipped_builder.add(jump.clone());
+            }
+            OplogEntry::Revert { dropped_region, .. } => {
+                skipped_builder.add(dropped_region.clone());
+            }
+            OplogEntry::PendingUpdate { description, .. } => {
+                if let UpdateDescription::SnapshotBased { .. } = description {
+                    skipped_override = Some(
+                        DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                            OplogIndex::INITIAL.next()..=*idx,
+                        )])
+                        .build(),
+                    );
+                }
+            }
+            OplogEntry::SuccessfulUpdate { .. } | OplogEntry::SuccessfulUpdateV1 { .. } => {
+                if let Some(ovrd) = skipped_override {
+                    for region in ovrd.into_regions() {
+                        skipped_builder.add(region);
+                    }
+                    skipped_override = None;
+                }
+            }
+            OplogEntry::FailedUpdate { .. } => {
+                skipped_override = None;
+            }
+            _ => {}
+        }
+    }
+
+    for deleted_region in deleted_regions.regions() {
+        skipped_builder.add(deleted_region.clone());
+    }
+
+    let mut new_skipped = skipped_builder.build();
+    if let Some(ovrd) = skipped_override {
+        new_skipped.set_override(ovrd);
+    }
+
+    new_skipped
 }
 
 fn calculate_overridden_retry_policy(
     initial: Option<RetryConfig>,
-    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Option<RetryConfig> {
     let mut result = initial;
     for (idx, entry) in entries {
-        // Skipping changes in deleted regions as they are not applied during replay
-        if deleted_regions.is_in_deleted_region(*idx) {
+        // Skipping changes in skipped regions as they are not applied during replay
+        if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
@@ -298,10 +356,16 @@ fn calculate_overridden_retry_policy(
 
 fn calculate_pending_invocations(
     initial: Vec<TimestampedWorkerInvocation>,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedWorkerInvocation> {
     let mut result = initial;
-    for entry in entries.values() {
+    for (idx, entry) in entries {
+        // Skipping entries in deleted regions (by revert) but not by skipped regions (by jumps and updates)
+        if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
         match entry {
             OplogEntry::PendingWorkerInvocation {
                 timestamp,
@@ -354,6 +418,7 @@ fn calculate_update_fields(
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
     initial_component_size: u64,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
@@ -366,13 +431,29 @@ fn calculate_update_fields(
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
-    let mut component_size = initial_component_size;
+    let mut size = initial_component_size;
     for (oplog_idx, entry) in entries {
+        // Skipping entries in deleted regions (by revert)
+        if deleted_regions.is_in_deleted_region(*oplog_idx) {
+            continue;
+        }
+
         match entry {
             OplogEntry::Create {
-                component_version, ..
+                component_version,
+                component_size,
+                ..
             } => {
                 version = *component_version;
+                size = *component_size;
+            }
+            OplogEntry::CreateV1 {
+                component_version,
+                component_size,
+                ..
+            } => {
+                version = *component_version;
+                size = *component_size;
             }
             OplogEntry::PendingUpdate {
                 timestamp,
@@ -407,7 +488,7 @@ fn calculate_update_fields(
                     target_version: *target_version,
                 });
                 version = *target_version;
-                component_size = *new_component_size;
+                size = *new_component_size;
                 pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
@@ -421,7 +502,7 @@ fn calculate_update_fields(
                     target_version: *target_version,
                 });
                 version = *target_version;
-                component_size = *new_component_size;
+                size = *new_component_size;
                 pending_updates.pop_front();
             }
             _ => {}
@@ -432,7 +513,7 @@ fn calculate_update_fields(
         failed_updates,
         successful_updates,
         version,
-        component_size,
+        size,
     )
 }
 
@@ -446,7 +527,7 @@ fn calculate_invocation_results(
     let mut current_idempotency_key = current_idempotency_key;
 
     for (oplog_idx, entry) in entries {
-        // Skipping entries in deleted regions as they are not applied during replay
+        // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
             continue;
         }
@@ -482,18 +563,33 @@ fn calculate_invocation_results(
 
 fn calculate_total_linear_memory_size(
     total: u64,
-    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> u64 {
     let mut result = total;
     for (idx, entry) in entries {
-        // Skipping entries in deleted regions as they are not applied during replay
-        if deleted_regions.is_in_deleted_region(*idx) {
+        // Skipping entries in skipped regions as they are not applied during replay
+        if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
-        if let OplogEntry::GrowMemory { delta, .. } = entry {
-            result += *delta;
+        match entry {
+            OplogEntry::Create {
+                initial_total_linear_memory_size,
+                ..
+            } => {
+                result = *initial_total_linear_memory_size;
+            }
+            OplogEntry::CreateV1 {
+                initial_total_linear_memory_size,
+                ..
+            } => {
+                result = *initial_total_linear_memory_size;
+            }
+            OplogEntry::GrowMemory { delta, .. } => {
+                result += *delta;
+            }
+            _ => {}
         }
     }
     result
@@ -501,13 +597,13 @@ fn calculate_total_linear_memory_size(
 
 fn calculate_owned_resources(
     initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
-    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
-        if deleted_regions.is_in_deleted_region(*idx) {
+        if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
@@ -567,4 +663,745 @@ fn calculate_active_plugins(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod test {
+    use test_r::test;
+
+    use crate::error::GolemError;
+    use crate::model::ExecutionStatus;
+    use crate::services::golem_config::GolemConfig;
+    use crate::services::oplog::tests::rounded;
+    use crate::services::oplog::{Oplog, OplogService};
+    use crate::services::{HasConfig, HasOplogService};
+    use crate::worker::status::calculate_last_known_status;
+    use async_trait::async_trait;
+    use bincode::Encode;
+    use bytes::Bytes;
+    use golem_common::base_model::OplogIndex;
+    use golem_common::model::oplog::{
+        DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
+        UpdateDescription,
+    };
+    use golem_common::model::regions::{DeletedRegions, OplogRegion};
+    use golem_common::model::{
+        AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
+        OwnedWorkerId, PluginInstallationId, RetryConfig, ScanCursor, SuccessfulUpdateRecord,
+        Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
+        WorkerStatus, WorkerStatusRecord,
+    };
+    use golem_common::serialization::serialize;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::{Arc, RwLock};
+    use golem_wasm_rpc::Value;
+
+    #[test]
+    async fn empty() {
+        let test_case = TestCase::builder(0).build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn invocation_results() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .grow_memory(100)
+            .exported_function_completed(&'x', k1)
+            .exported_function_invoked("b", &1, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn invocation_results_with_jump() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .grow_memory(100)
+            .jump(OplogIndex::from_u64(2))
+            .exported_function_completed(&'x', k1)
+            .exported_function_invoked("b", &1, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn invocation_results_with_revert() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .grow_memory(100)
+            .exported_function_completed(&'x', k1)
+            .exported_function_invoked("b", &1, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .revert(OplogIndex::from_u64(5))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn single_auto_update_for_running() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::Automatic { target_version: 2 };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_update(&update1)
+            .successful_update(update1, 2000, &HashSet::new())
+            .exported_function_completed(&'x', k1)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn auto_update_for_running_with_jump() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::Automatic { target_version: 2 };
+        let update2 = UpdateDescription::Automatic { target_version: 3 };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_update(&update1)
+            .pending_update(&update2)
+            .successful_update(update1, 2000, &HashSet::new())
+            .jump(OplogIndex::from_u64(4))
+            .successful_update(update2, 3000, &HashSet::new())
+            .exported_function_completed(&'x', k1)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn single_manual_update() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .exported_function_completed(&'x', k1)
+            .pending_update(&update1)
+            .successful_update(update1, 2000, &HashSet::new())
+            .exported_function_invoked("c", &0, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn single_manual_failed_update() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .exported_function_completed(&'x', k1)
+            .pending_update(&update1)
+            .failed_update(update1)
+            .exported_function_invoked("c", &0, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn auto_update_for_running_with_jump_and_revert() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::Automatic { target_version: 2 };
+        let update2 = UpdateDescription::Automatic { target_version: 3 };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_update(&update1)
+            .pending_update(&update2)
+            .successful_update(update1, 2000, &HashSet::new())
+            .jump(OplogIndex::from_u64(4))
+            .successful_update(update2, 3000, &HashSet::new())
+            .exported_function_completed(&'x', k1)
+            .revert(OplogIndex::from_u64(3))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn single_manual_update_with_revert() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .exported_function_completed(&'x', k1)
+            .pending_update(&update1)
+            .successful_update(update1, 2000, &HashSet::new())
+            .exported_function_invoked("c", &0, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .revert(OplogIndex::from_u64(4))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn multiple_manual_updates_with_jump_and_revert() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+        let update2 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .exported_function_completed(&'x', k1)
+            .pending_update(&update1)
+            .failed_update(update1)
+            .exported_function_invoked("c", &0, k2.clone())
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .exported_function_completed(&'y', k2)
+            .pending_update(&update2)
+            .successful_update(update2, 2000, &HashSet::new())
+            .revert(OplogIndex::from_u64(5))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn multiple_reverts() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .grow_memory(100)
+            .pending_invocation(WorkerInvocation::ExportedFunction {
+                idempotency_key: k2.clone(),
+                full_function_name: "b".to_string(),
+                function_input: vec![Value::Bool(true)]
+            })
+            .exported_function_completed(&'x', k1.clone())
+            .exported_function_invoked("b", &1, k2.clone())
+            .exported_function_completed(&'y', k2.clone())
+            .revert(OplogIndex::from_u64(5))
+            .exported_function_completed(&'x', k1)
+            .exported_function_invoked("b", &1, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .revert(OplogIndex::from_u64(2))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    struct TestCaseBuilder {
+        entries: Vec<TestEntry>,
+        previous_status_record: WorkerStatusRecord,
+        owned_worker_id: OwnedWorkerId,
+    }
+
+    impl TestCaseBuilder {
+        pub fn new(owned_worker_id: OwnedWorkerId, component_version: ComponentVersion) -> Self {
+            let status = WorkerStatusRecord {
+                component_version,
+                component_size: 100,
+                total_linear_memory_size: 200,
+                oplog_idx: OplogIndex::INITIAL,
+                ..Default::default()
+            };
+            TestCaseBuilder {
+                entries: vec![TestEntry {
+                    oplog_entry: OplogEntry::create(
+                        owned_worker_id.worker_id(),
+                        component_version,
+                        vec![],
+                        vec![],
+                        owned_worker_id.account_id(),
+                        None,
+                        100,
+                        200,
+                        HashSet::new(),
+                    ),
+                    expected_status: status.clone(),
+                }],
+                previous_status_record: status,
+                owned_worker_id,
+            }
+        }
+
+        pub fn add(
+            mut self,
+            entry: OplogEntry,
+            update: impl FnOnce(WorkerStatusRecord) -> WorkerStatusRecord,
+        ) -> Self {
+            self.previous_status_record.oplog_idx = self.previous_status_record.oplog_idx.next();
+            self.previous_status_record = update(self.previous_status_record);
+            self.entries.push(TestEntry {
+                oplog_entry: entry,
+                expected_status: self.previous_status_record.clone(),
+            });
+            self
+        }
+
+        pub fn exported_function_invoked<R: Encode>(
+            mut self,
+            function_name: &str,
+            request: &R,
+            idempotency_key: IdempotencyKey,
+        ) -> Self {
+            self.add(
+                OplogEntry::ExportedFunctionInvoked {
+                    timestamp: Timestamp::now_utc(),
+                    function_name: function_name.to_string(),
+                    request: OplogPayload::Inline(serialize(request).unwrap().to_vec()),
+                    idempotency_key: idempotency_key.clone(),
+                },
+                move |mut status| {
+                    status.current_idempotency_key = Some(idempotency_key);
+                    status.status = WorkerStatus::Running;
+                    if status.pending_invocations.len() > 0 {
+                        status.pending_invocations.pop();
+                    }
+                    status
+                },
+            )
+        }
+
+        pub fn exported_function_completed<R: Encode>(
+            mut self,
+            response: &R,
+            idempotency_key: IdempotencyKey,
+        ) -> Self {
+            self.add(
+                OplogEntry::ExportedFunctionCompleted {
+                    timestamp: Timestamp::now_utc(),
+                    response: OplogPayload::Inline(serialize(response).unwrap().to_vec()),
+                    consumed_fuel: 0,
+                },
+                move |mut status| {
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status.current_idempotency_key = None;
+                    status.status = WorkerStatus::Idle;
+                    status
+                },
+            )
+        }
+
+        pub fn imported_function_invoked<I: Encode, O: Encode>(
+            mut self,
+            name: &str,
+            i: &I,
+            o: &O,
+            func_type: DurableFunctionType,
+        ) -> Self {
+            self.add(
+                OplogEntry::ImportedFunctionInvoked {
+                    timestamp: Timestamp::now_utc(),
+                    function_name: name.to_string(),
+                    request: OplogPayload::Inline(serialize(i).unwrap().to_vec()),
+                    response: OplogPayload::Inline(serialize(o).unwrap().to_vec()),
+                    wrapped_function_type: func_type,
+                },
+                |mut status| status,
+            )
+        }
+
+        pub fn grow_memory(mut self, delta: u64) -> Self {
+            self.add(
+                OplogEntry::GrowMemory {
+                    timestamp: Timestamp::now_utc(),
+                    delta,
+                },
+                |mut status| {
+                    status.total_linear_memory_size += delta;
+                    status
+                },
+            )
+        }
+
+        pub fn jump(mut self, target: OplogIndex) -> Self {
+            let current = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            let region = OplogRegion {
+                start: target,
+                end: current,
+            };
+            let old_status = self.entries[u64::from(target) as usize - 1]
+                .expected_status
+                .clone();
+            self.add(OplogEntry::jump(region.clone()), move |mut status| {
+                status.status = old_status.status;
+                status.component_version = old_status.component_version;
+                status.current_idempotency_key = old_status.current_idempotency_key;
+                status.total_linear_memory_size = old_status.total_linear_memory_size;
+                status.component_size = old_status.component_size;
+                status.owned_resources = old_status.owned_resources;
+                status.skipped_regions.add(region);
+                status
+            })
+        }
+
+        pub fn revert(mut self, target: OplogIndex) -> Self {
+            let current = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            let region = OplogRegion {
+                start: target.next(),
+                end: current,
+            };
+
+            let old_status = self.entries[u64::from(target) as usize - 1]
+                .expected_status
+                .clone();
+            self.add(OplogEntry::revert(region.clone()), move |mut status| {
+                *status.active_plugins_mut() = old_status.active_plugins().clone();
+
+                status.skipped_regions = old_status.skipped_regions;
+                status.skipped_regions.add(region.clone());
+                status.deleted_regions_mut().add(region);
+
+                status.status = old_status.status;
+                status.component_version = old_status.component_version;
+                status.current_idempotency_key = old_status.current_idempotency_key;
+                status.total_linear_memory_size = old_status.total_linear_memory_size;
+                status.component_size = old_status.component_size;
+                status.owned_resources = old_status.owned_resources;
+                status.pending_invocations = old_status.pending_invocations;
+                status.pending_updates = old_status.pending_updates;
+                status.successful_updates = old_status.successful_updates;
+                status.failed_updates = old_status.failed_updates;
+                status.invocation_results = old_status.invocation_results;
+
+                status
+            })
+        }
+
+        pub fn pending_invocation(mut self, invocation: WorkerInvocation) -> Self {
+            let entry = rounded(OplogEntry::pending_worker_invocation(invocation.clone()));
+            self.add(entry.clone(), move |mut status| {
+                status
+                    .pending_invocations
+                    .push(TimestampedWorkerInvocation {
+                        timestamp: entry.timestamp(),
+                        invocation,
+                    });
+                status
+            })
+        }
+
+        pub fn pending_update(mut self, update_description: &UpdateDescription) -> Self {
+            let entry = rounded(OplogEntry::pending_update(update_description.clone()));
+            let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            self.add(entry.clone(), move |mut status| {
+                status
+                    .pending_updates
+                    .push_back(TimestampedUpdateDescription {
+                        timestamp: entry.timestamp(),
+                        oplog_index: oplog_idx,
+                        description: update_description.clone(),
+                    });
+
+                if status.pending_invocations.len() > 0 {
+                    status.pending_invocations.pop();
+                }
+
+                if let UpdateDescription::SnapshotBased { .. } = update_description {
+                    status
+                        .skipped_regions
+                        .set_override(DeletedRegions::from_regions(vec![
+                            OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=oplog_idx),
+                        ]));
+                }
+
+                status
+            })
+        }
+
+        pub fn successful_update(
+            mut self,
+            update_description: UpdateDescription,
+            new_component_size: u64,
+            new_active_plugins: &HashSet<PluginInstallationId>,
+        ) -> Self {
+            let old_status = self.entries.first().unwrap().expected_status.clone();
+            self.add(
+                OplogEntry::successful_update(
+                    *update_description.target_version(),
+                    new_component_size,
+                    new_active_plugins.clone(),
+                ),
+                move |mut status| {
+                    let pending = status.pending_updates.pop_front();
+                    status.successful_updates.push(SuccessfulUpdateRecord {
+                        timestamp: pending.unwrap().timestamp,
+                        target_version: *update_description.target_version(),
+                    });
+                    status.component_size = new_component_size;
+                    status.component_version = *update_description.target_version();
+                    *status.active_plugins_mut() = new_active_plugins.clone();
+
+                    if status.skipped_regions.is_overridden() {
+                        status.skipped_regions.merge_override();
+                        status.total_linear_memory_size = old_status.total_linear_memory_size;
+                        status.owned_resources = HashMap::new();
+                    }
+
+                    status
+                },
+            )
+        }
+
+        pub fn failed_update(mut self, update_description: UpdateDescription) -> Self {
+            let entry = rounded(OplogEntry::failed_update(
+                *update_description.target_version(),
+                Some("details".to_string()),
+            ));
+            self.add(entry.clone(), move |mut status| {
+                status.failed_updates.push(FailedUpdateRecord {
+                    timestamp: entry.timestamp(),
+                    target_version: *update_description.target_version(),
+                    details: Some("details".to_string()),
+                });
+                status.pending_updates.pop_front();
+
+                if status.skipped_regions.is_overridden() {
+                    status.skipped_regions.drop_override();
+                }
+
+                status
+            })
+        }
+
+        pub fn build(self) -> TestCase {
+            TestCase {
+                owned_worker_id: self.owned_worker_id,
+                entries: self
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.rounded())
+                    .collect(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestEntry {
+        oplog_entry: OplogEntry,
+        expected_status: WorkerStatusRecord,
+    }
+
+    impl TestEntry {
+        pub fn rounded(self) -> Self {
+            TestEntry {
+                oplog_entry: rounded(self.oplog_entry),
+                expected_status: self.expected_status,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestCase {
+        owned_worker_id: OwnedWorkerId,
+        entries: Vec<TestEntry>,
+    }
+
+    impl TestCase {
+        pub fn builder(initial_component_version: ComponentVersion) -> TestCaseBuilder {
+            let owned_worker_id = OwnedWorkerId::new(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &WorkerId {
+                    component_id: ComponentId::new_v4(),
+                    worker_name: "test-worker".to_string(),
+                },
+            );
+            TestCaseBuilder::new(owned_worker_id, initial_component_version)
+        }
+    }
+
+    impl HasOplogService for TestCase {
+        fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+            Arc::new(self.clone())
+        }
+    }
+
+    #[async_trait]
+    impl OplogService for TestCase {
+        async fn create(
+            &self,
+            owned_worker_id: &OwnedWorkerId,
+            initial_entry: OplogEntry,
+            initial_worker_metadata: WorkerMetadata,
+            execution_status: Arc<RwLock<ExecutionStatus>>,
+        ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+            unreachable!()
+        }
+
+        async fn open(
+            &self,
+            owned_worker_id: &OwnedWorkerId,
+            last_oplog_index: OplogIndex,
+            initial_worker_metadata: WorkerMetadata,
+            execution_status: Arc<RwLock<ExecutionStatus>>,
+        ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+            unreachable!()
+        }
+
+        async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+            OplogIndex::from_u64(self.entries.len() as u64)
+        }
+
+        async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+            unreachable!()
+        }
+
+        async fn read(
+            &self,
+            owned_worker_id: &OwnedWorkerId,
+            idx: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let mut result = BTreeMap::new();
+            let idx_u64: u64 = idx.into();
+            for i in idx_u64..(idx_u64 + n) {
+                if let Some(entry) = self.entries.get((i - 1) as usize) {
+                    result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
+                }
+            }
+            result
+        }
+
+        async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+            unreachable!()
+        }
+
+        async fn scan_for_component(
+            &self,
+            account_id: &AccountId,
+            component_id: &ComponentId,
+            cursor: ScanCursor,
+            count: u64,
+        ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+            unreachable!()
+        }
+
+        async fn upload_payload(
+            &self,
+            owned_worker_id: &OwnedWorkerId,
+            data: &[u8],
+        ) -> Result<OplogPayload, String> {
+            unreachable!()
+        }
+
+        async fn download_payload(
+            &self,
+            owned_worker_id: &OwnedWorkerId,
+            payload: &OplogPayload,
+        ) -> Result<Bytes, String> {
+            unreachable!()
+        }
+    }
+
+    impl HasConfig for TestCase {
+        fn config(&self) -> Arc<GolemConfig> {
+            Arc::new(GolemConfig {
+                retry: RetryConfig::default(),
+                ..Default::default()
+            })
+        }
+    }
+
+    async fn run_test_case(test_case: TestCase) {
+        let final_expected_status = test_case.entries.last().unwrap().expected_status.clone();
+
+        for idx in 0..=test_case.entries.len() {
+            let known_metadata = if idx == 0 {
+                None
+            } else {
+                Some(WorkerMetadata {
+                    last_known_status: test_case.entries[idx - 1].expected_status.clone(),
+                    ..WorkerMetadata::default(
+                        test_case.owned_worker_id.worker_id(),
+                        test_case.owned_worker_id.account_id(),
+                    )
+                })
+            };
+            let final_status = calculate_last_known_status(
+                &test_case,
+                &test_case.owned_worker_id,
+                &known_metadata,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                final_status, final_expected_status,
+                "Calculating the last known status from oplog index {idx}"
+            )
+        }
+    }
 }

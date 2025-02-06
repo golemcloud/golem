@@ -941,7 +941,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         if metadata
             .last_known_status
-            .deleted_regions
+            .skipped_regions
             .is_in_deleted_region(region_start)
         {
             Err(GolemError::invalid_request(
@@ -1186,12 +1186,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
-                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                        extensions: WorkerStatusRecordExtensions::Extension2 {
                             active_plugins: component_metadata
                                 .plugin_installations
                                 .iter()
                                 .map(|i| i.id.clone())
                                 .collect(),
+                            deleted_regions: initial_status.deleted_regions().clone()
                         },
                         ..initial_status
                     },
@@ -1458,7 +1459,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.component_version,
                 worker_metadata.args.clone(),
                 worker_metadata.env.clone(),
-                worker_metadata.last_known_status.deleted_regions.clone(),
+                worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
             ),
             parent.execution_status.clone(),

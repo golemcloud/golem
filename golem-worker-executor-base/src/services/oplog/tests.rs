@@ -58,7 +58,7 @@ fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
 }
 
-fn rounded(entry: OplogEntry) -> OplogEntry {
+pub fn rounded(entry: OplogEntry) -> OplogEntry {
     match entry {
         OplogEntry::CreateV1 {
             timestamp,
@@ -281,6 +281,12 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             plugin,
         },
+        OplogEntry::Revert { timestamp, dropped_region } => {
+            OplogEntry::Revert {
+                timestamp: rounded_ts(timestamp),
+                dropped_region,
+            }
+        }
     }
 }
 
