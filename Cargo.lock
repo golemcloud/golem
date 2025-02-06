@@ -3698,13 +3698,13 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tokio-tungstenite 0.24.0",
+ "tokio-tungstenite",
  "tonic",
  "tonic-health",
  "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
- "tungstenite 0.24.0",
+ "tungstenite",
  "url",
  "uuid",
  "version-compare",
@@ -3931,9 +3931,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.12"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
+checksum = "658a571e83d658c1e1e6deaba66f6a308627b20a8320f9655662da76b1997448"
 dependencies = [
  "clap",
  "convert_case",
@@ -4068,6 +4068,7 @@ dependencies = [
  "async-dropper-simple",
  "async-scoped",
  "async-trait",
+ "async_zip",
  "bytes 1.9.0",
  "chrono",
  "clap",
@@ -4076,6 +4077,7 @@ dependencies = [
  "console-subscriber",
  "futures-util",
  "golem-api-grpc",
+ "golem-client",
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
@@ -4089,15 +4091,18 @@ dependencies = [
  "once_cell",
  "postgres",
  "redis",
+ "reqwest 0.12.12",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-tungstenite",
  "tonic",
  "tracing",
  "tracing-subscriber",
@@ -4111,6 +4116,7 @@ version = "0.0.0"
 dependencies = [
  "bincode",
  "colored-diff",
+ "itertools 0.13.0",
  "leb128",
  "mappable-rc",
  "poem-openapi",
@@ -4125,6 +4131,7 @@ dependencies = [
  "wasm-wave",
  "wasmparser 0.221.2",
  "wasmprinter 0.221.2",
+ "wit-parser 0.221.2",
 ]
 
 [[package]]
@@ -5258,6 +5265,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "poem",
  "rand",
@@ -7101,7 +7109,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.25.0",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "wildmatch",
@@ -9927,28 +9935,16 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
-dependencies = [
- "futures-util",
- "log 0.4.22",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tungstenite 0.24.0",
-]
-
-[[package]]
-name = "tokio-tungstenite"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c28562dd8aea311048ed1ab9372a6b9a59977e1b308afb87c985c1f2b3206938"
 dependencies = [
  "futures-util",
  "log 0.4.22",
+ "native-tls",
  "tokio",
- "tungstenite 0.25.0",
+ "tokio-native-tls",
+ "tungstenite",
 ]
 
 [[package]]
@@ -10266,25 +10262,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
-dependencies = [
- "byteorder",
- "bytes 1.9.0",
- "data-encoding",
- "http 1.2.0",
- "httparse",
- "log 0.4.22",
- "native-tls",
- "rand",
- "sha1",
- "thiserror 1.0.69",
- "utf-8",
-]
-
-[[package]]
-name = "tungstenite"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "326eb16466ed89221beef69dbc94f517ee888bae959895472133924a25f7070e"
@@ -10295,6 +10272,7 @@ dependencies = [
  "http 1.2.0",
  "httparse",
  "log 0.4.22",
+ "native-tls",
  "rand",
  "sha1",
  "thiserror 2.0.11",

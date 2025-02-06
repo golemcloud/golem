@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::IntoValueAndType;
 use integration_tests::benchmarks::{
     benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
     warmup_workers, SimpleBenchmarkContext, SimpleIterationContext,
@@ -66,7 +66,7 @@ impl Benchmark for SuspendWorkerLatency {
             &benchmark_context.deps,
             &context.worker_ids,
             "sleep-for",
-            vec![Value::F64(1.0)],
+            vec![1.0f64.into_value_and_type()],
         )
         .await;
     }
@@ -84,7 +84,7 @@ impl Benchmark for SuspendWorkerLatency {
             self.config.length,
             &context.worker_ids,
             "sleep-for",
-            vec![Value::F64(10.0)],
+            vec![10.0f64.into_value_and_type()],
             "",
         )
         .await;

@@ -13,15 +13,6 @@
 // limitations under the License.
 
 use crate::components::component_compilation_service::ComponentCompilationService;
-use async_trait::async_trait;
-pub use cli::{CliParams, CliTestDependencies, CliTestService};
-pub use env::EnvBasedTestDependencies;
-pub use env::EnvBasedTestDependenciesConfig;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::BlobStorage;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
@@ -30,9 +21,25 @@ use crate::components::service::Service;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use async_trait::async_trait;
+use clap::ValueEnum;
+pub use cli::{CliParams, CliTestDependencies, CliTestService};
+pub use env::EnvBasedTestDependencies;
+pub use env::EnvBasedTestDependenciesConfig;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::BlobStorage;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub mod cli;
 mod env;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum GolemClientProtocol {
+    Grpc,
+    Http,
+}
 
 #[async_trait]
 pub trait TestDependencies {

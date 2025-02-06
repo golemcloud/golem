@@ -25,7 +25,7 @@ use golem_common::model::plugin::{
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 use tracing::{debug, info};
@@ -182,7 +182,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{initialize-cart}",
-            vec![Value::String("test-user-1".to_string())],
+            vec!["test-user-1".into_value_and_type()],
         )
         .await;
 
@@ -190,12 +190,13 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::F32(100.0),
-                Value::U32(5),
-            ])],
+            vec![vec![
+                ("product-id", "G1000".into_value_and_type()),
+                ("name", "Golem T-Shirt M".into_value_and_type()),
+                ("price", 100.0f32.into_value_and_type()),
+                ("quantity", 5u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
         )
         .await;
 
@@ -203,12 +204,13 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::F32(999999.0),
-                Value::U32(1),
-            ])],
+            vec![vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+                ("price", 999999.0f32.into_value_and_type()),
+                ("quantity", 1u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
         )
         .await;
 
@@ -216,12 +218,13 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::F32(11.0),
-                Value::U32(10),
-            ])],
+            vec![vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 10u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
         )
         .await;
 
@@ -229,7 +232,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{update-item-quantity}",
-            vec![Value::String("G1002".to_string()), Value::U32(20)],
+            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
         )
         .await;
 
@@ -237,7 +240,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{force-commit}",
-            vec![Value::U8(10)],
+            vec![10u8.into_value_and_type()],
         )
         .await;
 
