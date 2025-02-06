@@ -16,7 +16,7 @@ pub mod function_result_interpreter;
 pub mod invocation;
 pub mod status;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +29,6 @@ use crate::model::{
     ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
     WorkerConfig,
 };
-use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -48,7 +47,6 @@ use drop_stream::DropStream;
 use futures::channel::oneshot;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -56,9 +54,8 @@ use golem_common::model::{
     exports, ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
 };
 use golem_common::model::{
-    ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
-    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::model::RevertWorkerTarget;
@@ -170,26 +167,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker)
     }
 
-    pub async fn get_latest_metadata<T: HasActiveWorkers<Ctx> + HasWorkerService + HasOplogService + HasConfig + Sync>(
+    pub async fn get_latest_metadata<
+        T: HasActiveWorkers<Ctx> + HasWorkerService + HasOplogService + HasConfig + Sync,
+    >(
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Option<WorkerMetadata>, GolemError> {
         if let Some(worker) = deps.active_workers().try_get(owned_worker_id).await {
             Ok(Some(worker.get_metadata().await?))
+        } else if let Some(previous_metadata) = deps.worker_service().get(owned_worker_id).await {
+            Ok(Some(WorkerMetadata {
+                last_known_status: calculate_last_known_status(
+                    deps,
+                    owned_worker_id,
+                    &Some(previous_metadata.clone()),
+                )
+                .await?,
+                ..previous_metadata
+            }))
         } else {
-            if let Some(previous_metadata) = deps.worker_service().get(owned_worker_id).await {
-                Ok(Some(WorkerMetadata {
-                    last_known_status: calculate_last_known_status(
-                        deps,
-                        owned_worker_id,
-                        &Some(previous_metadata.clone()),
-                    )
-                        .await?,
-                    ..previous_metadata
-                }))
-            } else {
-                Ok(None)
-            }
+            Ok(None)
         }
     }
 

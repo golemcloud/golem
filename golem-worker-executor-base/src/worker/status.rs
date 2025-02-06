@@ -259,12 +259,9 @@ fn calculate_deleted_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DeletedRegions {
     let mut deleted_builder = DeletedRegionsBuilder::from_regions(initial_deleted.into_regions());
-    for (idx, entry) in entries {
-        match entry {
-            OplogEntry::Revert { dropped_region, .. } => {
-                deleted_builder.add(dropped_region.clone());
-            }
-            _ => {}
+    for entry in entries.values() {
+        if let OplogEntry::Revert { dropped_region, .. } = entry {
+            deleted_builder.add(dropped_region.clone());
         }
     }
     deleted_builder.build()
@@ -297,15 +294,16 @@ fn calculate_skipped_regions(
             OplogEntry::Revert { dropped_region, .. } => {
                 skipped_builder.add(dropped_region.clone());
             }
-            OplogEntry::PendingUpdate { description, .. } => {
-                if let UpdateDescription::SnapshotBased { .. } = description {
-                    skipped_override = Some(
-                        DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                            OplogIndex::INITIAL.next()..=*idx,
-                        )])
-                        .build(),
-                    );
-                }
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { .. },
+                ..
+            } => {
+                skipped_override = Some(
+                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=*idx,
+                    )])
+                    .build(),
+                )
             }
             OplogEntry::SuccessfulUpdate { .. } | OplogEntry::SuccessfulUpdateV1 { .. } => {
                 if let Some(ovrd) = skipped_override {
@@ -691,9 +689,9 @@ mod test {
         WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::serialization::serialize;
+    use golem_wasm_rpc::Value;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::{Arc, RwLock};
-    use golem_wasm_rpc::Value;
 
     #[test]
     async fn empty() {
@@ -758,7 +756,6 @@ mod test {
     #[test]
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
-        let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic { target_version: 2 };
 
         let test_case = TestCase::builder(1)
@@ -777,7 +774,6 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
-        let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic { target_version: 2 };
         let update2 = UpdateDescription::Automatic { target_version: 3 };
 
@@ -850,7 +846,6 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
-        let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic { target_version: 2 };
         let update2 = UpdateDescription::Automatic { target_version: 3 };
 
@@ -942,7 +937,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ExportedFunction {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
-                function_input: vec![Value::Bool(true)]
+                function_input: vec![Value::Bool(true)],
             })
             .exported_function_completed(&'x', k1.clone())
             .exported_function_invoked("b", &1, k2.clone())
@@ -1007,7 +1002,7 @@ mod test {
         }
 
         pub fn exported_function_invoked<R: Encode>(
-            mut self,
+            self,
             function_name: &str,
             request: &R,
             idempotency_key: IdempotencyKey,
@@ -1022,7 +1017,7 @@ mod test {
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
                     status.status = WorkerStatus::Running;
-                    if status.pending_invocations.len() > 0 {
+                    if !status.pending_invocations.is_empty() {
                         status.pending_invocations.pop();
                     }
                     status
@@ -1031,7 +1026,7 @@ mod test {
         }
 
         pub fn exported_function_completed<R: Encode>(
-            mut self,
+            self,
             response: &R,
             idempotency_key: IdempotencyKey,
         ) -> Self {
@@ -1053,7 +1048,7 @@ mod test {
         }
 
         pub fn imported_function_invoked<I: Encode, O: Encode>(
-            mut self,
+            self,
             name: &str,
             i: &I,
             o: &O,
@@ -1067,11 +1062,11 @@ mod test {
                     response: OplogPayload::Inline(serialize(o).unwrap().to_vec()),
                     wrapped_function_type: func_type,
                 },
-                |mut status| status,
+                |status| status,
             )
         }
 
-        pub fn grow_memory(mut self, delta: u64) -> Self {
+        pub fn grow_memory(self, delta: u64) -> Self {
             self.add(
                 OplogEntry::GrowMemory {
                     timestamp: Timestamp::now_utc(),
@@ -1084,7 +1079,7 @@ mod test {
             )
         }
 
-        pub fn jump(mut self, target: OplogIndex) -> Self {
+        pub fn jump(self, target: OplogIndex) -> Self {
             let current = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             let region = OplogRegion {
                 start: target,
@@ -1105,7 +1100,7 @@ mod test {
             })
         }
 
-        pub fn revert(mut self, target: OplogIndex) -> Self {
+        pub fn revert(self, target: OplogIndex) -> Self {
             let current = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             let region = OplogRegion {
                 start: target.next(),
@@ -1138,7 +1133,7 @@ mod test {
             })
         }
 
-        pub fn pending_invocation(mut self, invocation: WorkerInvocation) -> Self {
+        pub fn pending_invocation(self, invocation: WorkerInvocation) -> Self {
             let entry = rounded(OplogEntry::pending_worker_invocation(invocation.clone()));
             self.add(entry.clone(), move |mut status| {
                 status
@@ -1151,7 +1146,7 @@ mod test {
             })
         }
 
-        pub fn pending_update(mut self, update_description: &UpdateDescription) -> Self {
+        pub fn pending_update(self, update_description: &UpdateDescription) -> Self {
             let entry = rounded(OplogEntry::pending_update(update_description.clone()));
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(entry.clone(), move |mut status| {
@@ -1163,7 +1158,7 @@ mod test {
                         description: update_description.clone(),
                     });
 
-                if status.pending_invocations.len() > 0 {
+                if !status.pending_invocations.is_empty() {
                     status.pending_invocations.pop();
                 }
 
@@ -1180,7 +1175,7 @@ mod test {
         }
 
         pub fn successful_update(
-            mut self,
+            self,
             update_description: UpdateDescription,
             new_component_size: u64,
             new_active_plugins: &HashSet<PluginInstallationId>,
@@ -1213,7 +1208,7 @@ mod test {
             )
         }
 
-        pub fn failed_update(mut self, update_description: UpdateDescription) -> Self {
+        pub fn failed_update(self, update_description: UpdateDescription) -> Self {
             let entry = rounded(OplogEntry::failed_update(
                 *update_description.target_version(),
                 Some("details".to_string()),
@@ -1292,35 +1287,35 @@ mod test {
     impl OplogService for TestCase {
         async fn create(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            initial_entry: OplogEntry,
-            initial_worker_metadata: WorkerMetadata,
-            execution_status: Arc<RwLock<ExecutionStatus>>,
+            _owned_worker_id: &OwnedWorkerId,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: WorkerMetadata,
+            _execution_status: Arc<RwLock<ExecutionStatus>>,
         ) -> Arc<dyn Oplog + Send + Sync + 'static> {
             unreachable!()
         }
 
         async fn open(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            last_oplog_index: OplogIndex,
-            initial_worker_metadata: WorkerMetadata,
-            execution_status: Arc<RwLock<ExecutionStatus>>,
+            _owned_worker_id: &OwnedWorkerId,
+            _last_oplog_index: OplogIndex,
+            _initial_worker_metadata: WorkerMetadata,
+            _execution_status: Arc<RwLock<ExecutionStatus>>,
         ) -> Arc<dyn Oplog + Send + Sync + 'static> {
             unreachable!()
         }
 
-        async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        async fn get_last_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
             OplogIndex::from_u64(self.entries.len() as u64)
         }
 
-        async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+        async fn delete(&self, _owned_worker_id: &OwnedWorkerId) {
             unreachable!()
         }
 
         async fn read(
             &self,
-            owned_worker_id: &OwnedWorkerId,
+            _owned_worker_id: &OwnedWorkerId,
             idx: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -1334,32 +1329,32 @@ mod test {
             result
         }
 
-        async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+        async fn exists(&self, _owned_worker_id: &OwnedWorkerId) -> bool {
             unreachable!()
         }
 
         async fn scan_for_component(
             &self,
-            account_id: &AccountId,
-            component_id: &ComponentId,
-            cursor: ScanCursor,
-            count: u64,
+            _account_id: &AccountId,
+            _component_id: &ComponentId,
+            _cursor: ScanCursor,
+            _count: u64,
         ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
             unreachable!()
         }
 
         async fn upload_payload(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            data: &[u8],
+            _owned_worker_id: &OwnedWorkerId,
+            _data: &[u8],
         ) -> Result<OplogPayload, String> {
             unreachable!()
         }
 
         async fn download_payload(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            payload: &OplogPayload,
+            _owned_worker_id: &OwnedWorkerId,
+            _payload: &OplogPayload,
         ) -> Result<Bytes, String> {
             unreachable!()
         }

@@ -56,7 +56,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 
@@ -707,7 +707,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = self.worker_service().get(&owned_worker_id).await;
 
         if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_worker_id, &metadata).await?;
+            self.ensure_not_failed(&owned_worker_id, metadata).await?;
         }
 
         if let Some(limits) = request.account_limits() {
@@ -1053,8 +1053,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?
             .ok_or(GolemError::worker_not_found(owned_worker_id.worker_id()))?;
 
-        self.ensure_not_failed(&owned_worker_id, &metadata)
-            .await?;
+        self.ensure_not_failed(&owned_worker_id, &metadata).await?;
 
         if metadata.last_known_status.status != WorkerStatus::Interrupted {
             let event_service =

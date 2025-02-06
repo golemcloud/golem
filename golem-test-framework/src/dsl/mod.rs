@@ -1547,7 +1547,7 @@ pub fn to_worker_metadata(
                             .cloned()
                             .map(|id| id.try_into().expect("invalid plugin installation id")),
                     ),
-                    deleted_regions: DeletedRegions::new()
+                    deleted_regions: DeletedRegions::new(),
                 },
             },
             parent: None,

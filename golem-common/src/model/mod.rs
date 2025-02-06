@@ -698,7 +698,7 @@ impl Default for WorkerStatusRecord {
             oplog_idx: OplogIndex::default(),
             extensions: WorkerStatusRecordExtensions::Extension2 {
                 active_plugins: HashSet::new(),
-                deleted_regions: DeletedRegions::new()
+                deleted_regions: DeletedRegions::new(),
             },
         }
     }

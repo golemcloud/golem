@@ -25,7 +25,12 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
+    UpdateWorkerRequest,
+};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -1240,7 +1245,12 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn revert_worker(&self, worker_id: &WorkerId, target: RevertWorkerTarget, metadata: WorkerRequestMetadata) -> WorkerResult<()> {
+    async fn revert_worker(
+        &self,
+        worker_id: &WorkerId,
+        target: RevertWorkerTarget,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),

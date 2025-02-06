@@ -844,7 +844,6 @@ impl IntoValue for RevertParameters {
     }
 }
 
-
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -922,7 +921,7 @@ pub enum PublicOplogEntry {
     /// Deactivates a plugin
     DeactivatePlugin(DeactivatePluginParameters),
     /// Revert a worker to a previous state
-    Revert(RevertParameters)
+    Revert(RevertParameters),
 }
 
 impl PublicOplogEntry {
@@ -1144,7 +1143,9 @@ impl PublicOplogEntry {
                 Self::string_match("deactivateplugin", &[], query_path, query)
                     || Self::string_match("deactivate-plugin", &[], query_path, query)
             }
-            PublicOplogEntry::Revert(_params) => Self::string_match("revert", &[], query_path, query),
+            PublicOplogEntry::Revert(_params) => {
+                Self::string_match("revert", &[], query_path, query)
+            }
         }
     }
 
@@ -1438,7 +1439,7 @@ impl IntoValue for PublicOplogEntry {
             PublicOplogEntry::Revert(params) => Value::Variant {
                 case_idx: 27,
                 case_value: Some(Box::new(params.into_value())),
-            }
+            },
         }
     }
 
@@ -1531,7 +1532,18 @@ impl Display for OplogCursor {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
-    use crate::model::public_oplog::{ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters, OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicDurableFunctionType, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters};
+    use crate::model::public_oplog::{
+        ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
+        DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
+        ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+        ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+        ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+        OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
+        PluginInstallationDescription, PublicDurableFunctionType, PublicOplogEntry,
+        PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+        RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters,
+        TimestampParameter, WriteRemoteBatchedParameters,
+    };
     use crate::model::regions::OplogRegion;
     use crate::model::Empty;
     use golem_api_grpc::proto::golem::worker::{
@@ -1879,15 +1891,15 @@ mod protobuf {
                             .try_into()?,
                     }),
                 ),
-                oplog_entry::Entry::Revert(revert) => Ok(
-                    PublicOplogEntry::Revert(RevertParameters {
+                oplog_entry::Entry::Revert(revert) => {
+                    Ok(PublicOplogEntry::Revert(RevertParameters {
                         timestamp: revert.timestamp.ok_or("Missing timestamp field")?.into(),
                         dropped_region: OplogRegion {
                             start: OplogIndex::from_u64(revert.start),
                             end: OplogIndex::from_u64(revert.end),
                         },
-                    }),
-                )
+                    }))
+                }
             }
         }
     }

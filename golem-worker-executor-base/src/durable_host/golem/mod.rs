@@ -521,7 +521,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
 
         match metadata {
             Some(metadata) => {
-                let last_known_status = self.get_worker_status();
+                let last_known_status = self.get_worker_status_record();
                 let updated_metadata = golem_common::model::WorkerMetadata {
                     last_known_status,
                     ..metadata

@@ -15,7 +15,17 @@
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem::api1_1_1::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::model::public_oplog::{ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicDurableFunctionType, PublicRetryConfig, PublicWorkerInvocation, ResourceParameters, RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters};
+use golem_common::model::public_oplog::{
+    ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicDurableFunctionType, PublicRetryConfig, PublicWorkerInvocation, ResourceParameters,
+    RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters,
+    TimestampParameter, WriteRemoteBatchedParameters,
+};
 use golem_common::model::Timestamp;
 
 impl From<PublicOplogEntry> for oplog::OplogEntry {
@@ -229,12 +239,12 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 plugin: plugin.into(),
             }),
-            PublicOplogEntry::Revert(RevertParameters { timestamp, dropped_region }) => {
+            PublicOplogEntry::Revert(RevertParameters { .. }) => {
                 todo!() // need to update WIT
-                // Self::Revert(oplog::RevertParameters {
-                //     timestamp: timestamp.into(),
-                //     dropped_region: dropped_region.into(),
-                // })
+                        // Self::Revert(oplog::RevertParameters {
+                        //     timestamp: timestamp.into(),
+                        //     dropped_region: dropped_region.into(),
+                        // })
             }
         }
     }

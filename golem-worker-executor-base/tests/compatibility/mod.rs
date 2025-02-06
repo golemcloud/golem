@@ -17,8 +17,8 @@ use test_r::inherit_test_dep;
 
 pub mod v1;
 pub mod v1_1;
-pub mod worker_recovery;
 mod v1_2;
+pub mod worker_recovery;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

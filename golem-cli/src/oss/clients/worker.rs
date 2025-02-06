@@ -590,7 +590,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .revert_worker(
                 &worker_urn.id.component_id.0,
                 &worker_name_required(&worker_urn)?,
-                &target.into(),
+                &target,
             )
             .await?;
         Ok(())

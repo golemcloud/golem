@@ -1918,7 +1918,9 @@ pub enum RevertWorkerTarget {
 impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::common::RevertWorkerTarget) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+    ) -> Result<Self, Self::Error> {
         match value.target {
             Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
                 Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
@@ -1944,7 +1946,20 @@ impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWo
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Encode, Decode, Serialize, Deserialize, Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    Object,
+)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct RevertToOplogIndex {
@@ -1967,7 +1982,20 @@ impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertTo
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Encode, Decode, Serialize, Deserialize, Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    Object,
+)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct RevertLastInvocations {

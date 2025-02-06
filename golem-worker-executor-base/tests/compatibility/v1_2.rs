@@ -1,10 +1,3 @@
-use crate::compatibility::v1::backward_compatible;
-use goldenfile::Mint;
-use golem_common::base_model::OplogIndex;
-use golem_common::model::oplog::OplogEntry;
-use golem_common::model::regions::OplogRegion;
-use golem_common::model::Timestamp;
-
 #[test]
 pub fn oplog_entry() {
     let oe31 = OplogEntry::Revert {

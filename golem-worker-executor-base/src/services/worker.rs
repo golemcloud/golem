@@ -24,12 +24,12 @@ use crate::storage::keyvalue::{
 };
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord, WorkerStatusRecordExtensions,
 };
 use tracing::{debug, warn};
-use golem_common::model::regions::DeletedRegions;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -270,7 +270,7 @@ impl WorkerService for DefaultWorkerService {
                         total_linear_memory_size: initial_total_linear_memory_size,
                         extensions: WorkerStatusRecordExtensions::Extension2 {
                             active_plugins: initial_active_plugins,
-                            deleted_regions: DeletedRegions::new()
+                            deleted_regions: DeletedRegions::new(),
                         },
                         ..WorkerStatusRecord::default()
                     },

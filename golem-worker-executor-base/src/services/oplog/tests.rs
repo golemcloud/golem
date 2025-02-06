@@ -281,12 +281,13 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             plugin,
         },
-        OplogEntry::Revert { timestamp, dropped_region } => {
-            OplogEntry::Revert {
-                timestamp: rounded_ts(timestamp),
-                dropped_region,
-            }
-        }
+        OplogEntry::Revert {
+            timestamp,
+            dropped_region,
+        } => OplogEntry::Revert {
+            timestamp: rounded_ts(timestamp),
+            dropped_region,
+        },
     }
 }
 
