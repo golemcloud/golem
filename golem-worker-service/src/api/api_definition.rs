@@ -18,20 +18,54 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::api::RouteResponseData;
+use golem_worker_service_base::gateway_api_definition::HasGolemBindings;
+use golem_worker_service_base::service::component::ComponentService;
+use async_trait::async_trait;
+use futures::future::try_join_all;
 
 /// Local trait for converting HttpApiDefinition to HttpApiDefinitionResponseData
+#[async_trait]
 pub trait ToHttpApiDefinitionResponseData {
-    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String>;
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String>;
 }
 
+#[async_trait]
 impl ToHttpApiDefinitionResponseData for HttpApiDefinition {
-    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String> {
-        let metadata_dictionary = golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary {
-            metadata: std::collections::HashMap::new(),
-        };
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String> {
+        let components = self.get_bindings()
+            .iter()
+            .filter_map(|binding| binding.get_component_id())
+            .map(|versioned_id| async move {
+                let component = component_service
+                    .get_by_version(&versioned_id.component_id, versioned_id.version, &EmptyAuthCtx::default())
+                    .await
+                    .map_err(|e| format!("Failed to get component metadata: {:?}", e))?;
+
+                Ok(golem_service_base::model::Component {
+                    versioned_component_id: golem_service_base::model::VersionedComponentId {
+                        component_id: versioned_id.component_id.clone(),
+                        version: versioned_id.version,
+                    },
+                    component_name: component.component_name,
+                    component_size: component.component_size,
+                    metadata: component.metadata,
+                    created_at: component.created_at,
+                    component_type: component.component_type,
+                    files: component.files,
+                    installed_plugins: component.installed_plugins,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let components = try_join_all(components)
+            .await
+            .map_err(|e: Box<dyn std::error::Error + Send + Sync>| format!("Failed to get components: {}", e))?;
+
+        let metadata_dictionary = golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary::from_components(&components);
 
         let routes = self.routes
             .iter()
+            .filter(|route| !route.binding.is_security_binding())  // Filter out security bindings
             .map(|route| {
                 let compiled_route = golem_worker_service_base::gateway_api_definition::http::CompiledRoute::from_route(
                     route,
@@ -51,25 +85,26 @@ impl ToHttpApiDefinitionResponseData for HttpApiDefinition {
     }
 }
 
-impl<N: Clone> ToHttpApiDefinitionResponseData for CompiledHttpApiDefinition<N> {
-    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String> {
+#[async_trait]
+impl<N: Clone + Send + Sync> ToHttpApiDefinitionResponseData for CompiledHttpApiDefinition<N> {
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String> {
         let http_api_def: HttpApiDefinition = (*self).clone().into();
-        http_api_def.to_response_data()
+        http_api_def.to_response_data(component_service).await
     }
 }
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+    component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
     pub fn new(
-        definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
-        >,
+        definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+        component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>,
     ) -> Self {
-        Self { definition_service }
+        Self { definition_service, component_service }
     }
 
     /// Upload an OpenAPI definition
@@ -94,12 +129,12 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result = result.to_response_data().map_err(|e| {
+            let result = result.to_response_data(&self.component_service).await.map_err(|e| {
                 error!("Failed to convert to response data {}", e);
                 ApiEndpointError::internal(safe(e))
-            });
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -132,12 +167,12 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result = compiled_definition.to_response_data().map_err(|e| {
+            let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
                 error!("Failed to convert to response data {}", e);
                 ApiEndpointError::internal(safe(e))
-            });
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -189,12 +224,12 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                let result = compiled_definition.to_response_data().map_err(|e| {
+                let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
                     error!("Failed to convert to response data {}", e);
                     ApiEndpointError::internal(safe(e))
-                });
+                })?;
 
-                result.map(Json)
+                Ok(Json(result))
             }
         };
 
@@ -240,12 +275,12 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result = compiled_definition.to_response_data().map_err(|e| {
+            let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
                 error!("Failed to convert to response data {}", e);
                 ApiEndpointError::internal(safe(e))
-            });
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -316,14 +351,20 @@ impl RegisterApiDefinitionApi {
                     .await?
             };
 
-            let values = data
-                .into_iter()
-                .map(|http_api_def| http_api_def.to_response_data())
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                })?;
+            let values = futures::future::try_join_all(
+                data.into_iter()
+                    .map(|http_api_def| {
+                        let component_service = self.component_service.clone();
+                        async move {
+                            http_api_def.to_response_data(&component_service).await
+                        }
+                    })
+            )
+            .await
+            .map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            })?;
 
             Ok(Json(values))
         };
@@ -528,7 +569,7 @@ mod test {
             Arc::new(HttpApiDefinitionValidator {}),
         );
 
-        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));
+        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service), Arc::new(component_service));
 
         (
             poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0")),

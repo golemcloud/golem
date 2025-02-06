@@ -33,6 +33,7 @@ use rib::RibResult;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use futures_util::StreamExt;
 
 #[async_trait]
 pub trait FileServerBindingHandler<Namespace> {
@@ -220,9 +221,16 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                     file.key
                 )))
                 .map(|stream| {
-                    let mapped =
-                        stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-                    Box::pin(mapped)
+                    let mapped = stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+                    // Normalize line endings to Unix-style (\n)
+                    let normalized = mapped.map(|result| {
+                        result.map(|bytes| {
+                            let text = String::from_utf8_lossy(&bytes);
+                            let normalized = text.replace("\r\n", "\n");
+                            bytes::Bytes::from(normalized.into_bytes())
+                        })
+                    });
+                    Box::pin(normalized)
                 })?;
 
             Ok(FileServerBindingSuccess {
@@ -258,8 +266,15 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                 .await
                 .map_err(FileServerBindingError::WorkerServiceError)?;
 
-            let stream =
-                stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+            let stream = stream
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                .map(|result| {
+                    result.map(|bytes| {
+                        let text = String::from_utf8_lossy(&bytes);
+                        let normalized = text.replace("\r\n", "\n");
+                        bytes::Bytes::from(normalized.into_bytes())
+                    })
+                });
 
             Ok(FileServerBindingSuccess {
                 binding_details,

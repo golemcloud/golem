@@ -562,10 +562,12 @@ impl ComponentMetadataDictionary {
     pub fn from_components(components: &Vec<Component>) -> ComponentMetadataDictionary {
         let mut metadata = HashMap::new();
         for component in components {
-            metadata.insert(
-                component.versioned_component_id.clone(),
-                component.metadata.exports.clone(),
-            );
+            if !component.metadata.exports.is_empty() {
+                metadata.insert(
+                    component.versioned_component_id.clone(),
+                    component.metadata.exports.clone(),
+                );
+            }
         }
 
         ComponentMetadataDictionary { metadata }
