@@ -4,9 +4,9 @@ import React, { useState } from "react";
 import DangerZone from "@/components/settings";
 import { useSearchParams } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ErrorBoundary from "@/components/erro-boundary";
-import CustomModal from "@/components/CustomModal";
-import DeleteApiVersion from "@/components/api-version-deletion";
+import ErrorBoundary from "@/components/error-boundary";
+import CustomModal from "@/components/custom-modal";
+import DeleteApiVersion from "../../api-version-deletion";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const ApiSettings = () => {

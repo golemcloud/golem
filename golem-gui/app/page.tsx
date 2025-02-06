@@ -17,7 +17,7 @@ import useComponents from "@/lib/hooks/use-component";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import FooterLinks from "@/components/ui/footer-links";
 import Link from "next/link";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 
 const Dashboard = () => {
   const router = useRouter();

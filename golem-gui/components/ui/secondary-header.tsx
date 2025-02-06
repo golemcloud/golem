@@ -22,15 +22,15 @@ import { Dropdown } from "@/components/ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
 import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
 import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
-import CustomModal from "../CustomModal";
-import CreateNewApiVersion from "../create-api-new-version";
+import CustomModal from "../custom-modal";
+import CreateNewApiVersion from "@/app/apis/create-api-new-version";
 import DeploymentCreationPage from "../deployment-creation";
 import NewRouteForm from "../new-route";
-import DeleteApiVersion from "../api-version-deletion";
+import DeleteApiVersion from "@/app/apis/api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { ComponentVersionFilter } from "../component-version-filter";
-import CreateWorker from "../create-worker";
+import { ComponentVersionFilter } from "../../app/components/component-version-filter";
+import CreateWorker from "@/app/components/create-worker";
 const actionsMap = {
   new_version: "Create New Version",
   new_route: "Create New Route",

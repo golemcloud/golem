@@ -12,7 +12,7 @@ import useComponents from "@/lib/hooks/use-component";
 import { Component, Plugin } from "@/types/api";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { pluginSchema, PluginFormValues } from "@/lib/schema";
-import { Button2 } from "./ui/button";
+import { Button2 } from "@/components/ui/button";
 
 const CreatePluginForm = () => {
   const { components } = useComponents();

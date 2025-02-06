@@ -2,16 +2,16 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import DangerZone from "@/components/settings";
-import ComponentInfo from "@/components/component-info-card";
+import ComponentInfo from "@/app/components/component-info-card";
 import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
 import { useSearchParams } from "next/navigation";
-import CreateComponentForm from "@/components/new-component";
+import CreateComponentForm from "@/app/components/new-component";
 
 import { toast } from "react-toastify";
 import useComponents, { downloadComponent } from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 import { Button2 } from "@/components/ui/button";
 import { DownloadIcon } from "lucide-react";
 import { DropdownV2 } from "@/components/ui/dropdown-button";

@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Typography, Stack, Card } from "@mui/material";
 import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpen";
-import { Button2 } from "./ui/button";
+import { Button2 } from "@/components/ui/button";
 import { GitCommitHorizontal } from "lucide-react";
 
 interface ApiInfoProps {
@@ -47,9 +47,9 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
       >
         <Typography variant="subtitle1" fontWeight="bold"
         sx={{
-          overflow: "hidden", // Ensures overflow content is hidden
-          textOverflow: "ellipsis", // Adds an ellipsis when text overflows
-          whiteSpace: "nowrap", // Prevents text wrapping to a new line
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
           maxWidth: "80%",
         }}
         >

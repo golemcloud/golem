@@ -4,7 +4,7 @@ import ReactFlowBuilder from "./ReactFlowBuilder";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Box } from "@mui/material";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 function Builder() {

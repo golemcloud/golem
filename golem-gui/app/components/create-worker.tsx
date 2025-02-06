@@ -20,7 +20,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { addNewWorker } from "@/lib/hooks/use-worker";
 import {getFormErrorMessage} from "@/lib/utils"
 import { useRouter } from "next/navigation";
-import { Button2 } from "./ui/button";
+import { Button2 } from "@/components/ui/button";
 
 interface FormData {
   component: string;

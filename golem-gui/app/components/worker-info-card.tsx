@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { Box, Card, CardContent, Typography } from "@mui/material";
-import { Dropdown } from "./ui/dropdown-button";
+import { Dropdown } from "@/components/ui/dropdown-button";
 import { Worker } from "@/types/api";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";

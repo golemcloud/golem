@@ -16,7 +16,7 @@ import FolderIcon from "@mui/icons-material/Folder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { addNewcomponent } from "@/lib/hooks/use-component";
-import { getFormErrorMessage } from "../lib/utils";
+import { getFormErrorMessage } from "../../lib/utils";
 import { Button2 } from "@/components/ui/button";
 import { useDropzone } from "react-dropzone";
 

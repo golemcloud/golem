@@ -6,19 +6,18 @@ import {
   InputAdornment,
   Pagination,
   TextField,
-  Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import AddIcon from "@mui/icons-material/Add";
-import CreateAPI from "@/components/create-api";
+import CreateAPI from "./create-api";
 import ApiIcon from "@mui/icons-material/Api";
 import { useRouter } from "next/navigation";
 import { ApiDefinition } from "@/types/api";
-import CustomModal from "@/components/CustomModal";
+import CustomModal from "@/components/custom-modal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ApiInfoCard from "@/components/api-info-card";
+import ApiInfoCard from "./api-info-card";
 import { Button2 } from "@/components/ui/button";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 import NotFoundCard from "@/components/not-found-card";
 
 const ComponentsPage = () => {
