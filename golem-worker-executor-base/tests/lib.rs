@@ -40,9 +40,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
-use golem_wasm_ast::analysis::wit_parser::{
-    AnalysedTypeResolve, SharedAnalysedTypeResolve, TypeName, TypeOwner,
-};
+use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 
 mod common;
 
