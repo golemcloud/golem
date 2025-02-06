@@ -17,7 +17,6 @@ pub mod v1x;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::RetryConfig;
-use golem_wasm_rpc::golem_rpc_0_1_x;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;

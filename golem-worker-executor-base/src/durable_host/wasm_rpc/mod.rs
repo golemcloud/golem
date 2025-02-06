@@ -31,7 +31,8 @@ use async_trait::async_trait;
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId, WorkerId
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
+    WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
