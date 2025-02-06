@@ -13,9 +13,7 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
-            pub type WitValue = super::super::super::golem::rpc::types::WitValue;
             pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
-            pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             /// An index into the persistent log storing all performed operations of a worker
             pub type OplogIndex = u64;
             /// Represents a Golem component's version
@@ -549,7 +547,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.2")]
                         extern "C" {
                             #[link_name = "[resource-drop]get-workers"]
                             fn drop(_: u32);
@@ -688,7 +686,7 @@ pub mod golem {
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.2")]
                         extern "C" {
                             #[link_name = "[constructor]get-workers"]
                             fn wit_import(
@@ -742,7 +740,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.2")]
                         extern "C" {
                             #[link_name = "[method]get-workers.get-next"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -866,7 +864,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 32]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "create-promise"]
                         fn wit_import(_: *mut u8);
@@ -917,7 +915,7 @@ pub mod golem {
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "await-promise"]
                         fn wit_import(
@@ -973,7 +971,7 @@ pub mod golem {
                     let ptr5 = vec5.as_ptr().cast::<u8>();
                     let len5 = vec5.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "complete-promise"]
                         fn wit_import(
@@ -1025,7 +1023,7 @@ pub mod golem {
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "delete-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
@@ -1048,7 +1046,7 @@ pub mod golem {
             pub fn get_oplog_index() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-oplog-index"]
                         fn wit_import() -> i64;
@@ -1067,7 +1065,7 @@ pub mod golem {
             pub fn set_oplog_index(oplog_idx: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "set-oplog-index"]
                         fn wit_import(_: i64);
@@ -1085,7 +1083,7 @@ pub mod golem {
             pub fn oplog_commit(replicas: u8) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "oplog-commit"]
                         fn wit_import(_: i32);
@@ -1105,7 +1103,7 @@ pub mod golem {
             pub fn mark_begin_operation() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "mark-begin-operation"]
                         fn wit_import() -> i64;
@@ -1124,7 +1122,7 @@ pub mod golem {
             pub fn mark_end_operation(begin: OplogIndex) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "mark-end-operation"]
                         fn wit_import(_: i64);
@@ -1145,7 +1143,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-retry-policy"]
                         fn wit_import(_: *mut u8);
@@ -1196,7 +1194,7 @@ pub mod golem {
                         None => (0i32, 0.0f64),
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "set-retry-policy"]
                         fn wit_import(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64);
@@ -1220,7 +1218,7 @@ pub mod golem {
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-oplog-persistence-level"]
                         fn wit_import() -> i32;
@@ -1252,7 +1250,7 @@ pub mod golem {
                         PersistenceLevel::Smart => 2i32,
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "set-oplog-persistence-level"]
                         fn wit_import(_: i32);
@@ -1269,7 +1267,7 @@ pub mod golem {
             pub fn get_idempotence_mode() -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-idempotence-mode"]
                         fn wit_import() -> i32;
@@ -1290,7 +1288,7 @@ pub mod golem {
             pub fn set_idempotence_mode(idempotent: bool) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "set-idempotence-mode"]
                         fn wit_import(_: i32);
@@ -1318,7 +1316,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "generate-idempotency-key"]
                         fn wit_import(_: *mut u8);
@@ -1355,7 +1353,7 @@ pub mod golem {
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "update-worker"]
                         fn wit_import(
@@ -1390,7 +1388,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-self-metadata"]
                         fn wit_import(_: *mut u8);
@@ -1495,7 +1493,7 @@ pub mod golem {
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "get-worker-metadata"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
@@ -1629,7 +1627,7 @@ pub mod golem {
                     let ptr7 = vec7.as_ptr().cast::<u8>();
                     let len7 = vec7.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
+                    #[link(wasm_import_module = "golem:api/host@1.1.2")]
                     extern "C" {
                         #[link_name = "fork-worker"]
                         fn wit_import(
@@ -1671,320 +1669,6 @@ pub mod golem {
                     );
                 }
             }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Schedule invocation of any worker for later
-            pub fn schedule_invocation(
-                scheduled_time: Datetime,
-                worker_id: &WorkerId,
-                function_name: &str,
-                function_params: &[WitValue],
-            ) {
-                unsafe {
-                    let mut cleanup_list = _rt::Vec::new();
-                    let super::super::super::wasi::clocks::wall_clock::Datetime {
-                        seconds: seconds0,
-                        nanoseconds: nanoseconds0,
-                    } = scheduled_time;
-                    let WorkerId {
-                        component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id;
-                    let ComponentId { uuid: uuid2 } = component_id1;
-                    let Uuid { high_bits: high_bits3, low_bits: low_bits3 } = uuid2;
-                    let vec4 = worker_name1;
-                    let ptr4 = vec4.as_ptr().cast::<u8>();
-                    let len4 = vec4.len();
-                    let vec5 = function_name;
-                    let ptr5 = vec5.as_ptr().cast::<u8>();
-                    let len5 = vec5.len();
-                    let vec18 = function_params;
-                    let len18 = vec18.len();
-                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec18.len() * 8,
-                        4,
-                    );
-                    let result18 = if layout18.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
-                        if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout18);
-                        }
-                        ptr
-                    } else {
-                        ::core::ptr::null_mut()
-                    };
-                    for (i, e) in vec18.into_iter().enumerate() {
-                        let base = result18.add(i * 8);
-                        {
-                            let super::super::super::golem::rpc::types::WitValue {
-                                nodes: nodes6,
-                            } = e;
-                            let vec17 = nodes6;
-                            let len17 = vec17.len();
-                            let layout17 = _rt::alloc::Layout::from_size_align_unchecked(
-                                vec17.len() * 24,
-                                8,
-                            );
-                            let result17 = if layout17.size() != 0 {
-                                let ptr = _rt::alloc::alloc(layout17).cast::<u8>();
-                                if ptr.is_null() {
-                                    _rt::alloc::handle_alloc_error(layout17);
-                                }
-                                ptr
-                            } else {
-                                ::core::ptr::null_mut()
-                            };
-                            for (i, e) in vec17.into_iter().enumerate() {
-                                let base = result17.add(i * 24);
-                                {
-                                    use super::super::super::golem::rpc::types::WitNode as V16;
-                                    match e {
-                                        V16::RecordValue(e) => {
-                                            *base.add(0).cast::<u8>() = (0i32) as u8;
-                                            let vec7 = e;
-                                            let ptr7 = vec7.as_ptr().cast::<u8>();
-                                            let len7 = vec7.len();
-                                            *base.add(12).cast::<usize>() = len7;
-                                            *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
-                                        }
-                                        V16::VariantValue(e) => {
-                                            *base.add(0).cast::<u8>() = (1i32) as u8;
-                                            let (t8_0, t8_1) = e;
-                                            *base.add(8).cast::<i32>() = _rt::as_i32(t8_0);
-                                            match t8_1 {
-                                                Some(e) => {
-                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                        V16::EnumValue(e) => {
-                                            *base.add(0).cast::<u8>() = (2i32) as u8;
-                                            *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        V16::FlagsValue(e) => {
-                                            *base.add(0).cast::<u8>() = (3i32) as u8;
-                                            let vec9 = e;
-                                            let len9 = vec9.len();
-                                            let layout9 = _rt::alloc::Layout::from_size_align_unchecked(
-                                                vec9.len() * 1,
-                                                1,
-                                            );
-                                            let result9 = if layout9.size() != 0 {
-                                                let ptr = _rt::alloc::alloc(layout9).cast::<u8>();
-                                                if ptr.is_null() {
-                                                    _rt::alloc::handle_alloc_error(layout9);
-                                                }
-                                                ptr
-                                            } else {
-                                                ::core::ptr::null_mut()
-                                            };
-                                            for (i, e) in vec9.into_iter().enumerate() {
-                                                let base = result9.add(i * 1);
-                                                {
-                                                    *base.add(0).cast::<u8>() = (match e {
-                                                        true => 1,
-                                                        false => 0,
-                                                    }) as u8;
-                                                }
-                                            }
-                                            *base.add(12).cast::<usize>() = len9;
-                                            *base.add(8).cast::<*mut u8>() = result9;
-                                            cleanup_list.extend_from_slice(&[(result9, layout9)]);
-                                        }
-                                        V16::TupleValue(e) => {
-                                            *base.add(0).cast::<u8>() = (4i32) as u8;
-                                            let vec10 = e;
-                                            let ptr10 = vec10.as_ptr().cast::<u8>();
-                                            let len10 = vec10.len();
-                                            *base.add(12).cast::<usize>() = len10;
-                                            *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
-                                        }
-                                        V16::ListValue(e) => {
-                                            *base.add(0).cast::<u8>() = (5i32) as u8;
-                                            let vec11 = e;
-                                            let ptr11 = vec11.as_ptr().cast::<u8>();
-                                            let len11 = vec11.len();
-                                            *base.add(12).cast::<usize>() = len11;
-                                            *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
-                                        }
-                                        V16::OptionValue(e) => {
-                                            *base.add(0).cast::<u8>() = (6i32) as u8;
-                                            match e {
-                                                Some(e) => {
-                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(12).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                        V16::ResultValue(e) => {
-                                            *base.add(0).cast::<u8>() = (7i32) as u8;
-                                            match e {
-                                                Ok(e) => {
-                                                    *base.add(8).cast::<u8>() = (0i32) as u8;
-                                                    match e {
-                                                        Some(e) => {
-                                                            *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                        }
-                                                        None => {
-                                                            *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                        }
-                                                    };
-                                                }
-                                                Err(e) => {
-                                                    *base.add(8).cast::<u8>() = (1i32) as u8;
-                                                    match e {
-                                                        Some(e) => {
-                                                            *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                        }
-                                                        None => {
-                                                            *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                        }
-                                                    };
-                                                }
-                                            };
-                                        }
-                                        V16::PrimU8(e) => {
-                                            *base.add(0).cast::<u8>() = (8i32) as u8;
-                                            *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                        }
-                                        V16::PrimU16(e) => {
-                                            *base.add(0).cast::<u8>() = (9i32) as u8;
-                                            *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                        }
-                                        V16::PrimU32(e) => {
-                                            *base.add(0).cast::<u8>() = (10i32) as u8;
-                                            *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        V16::PrimU64(e) => {
-                                            *base.add(0).cast::<u8>() = (11i32) as u8;
-                                            *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                        }
-                                        V16::PrimS8(e) => {
-                                            *base.add(0).cast::<u8>() = (12i32) as u8;
-                                            *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                        }
-                                        V16::PrimS16(e) => {
-                                            *base.add(0).cast::<u8>() = (13i32) as u8;
-                                            *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                        }
-                                        V16::PrimS32(e) => {
-                                            *base.add(0).cast::<u8>() = (14i32) as u8;
-                                            *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        V16::PrimS64(e) => {
-                                            *base.add(0).cast::<u8>() = (15i32) as u8;
-                                            *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                        }
-                                        V16::PrimFloat32(e) => {
-                                            *base.add(0).cast::<u8>() = (16i32) as u8;
-                                            *base.add(8).cast::<f32>() = _rt::as_f32(e);
-                                        }
-                                        V16::PrimFloat64(e) => {
-                                            *base.add(0).cast::<u8>() = (17i32) as u8;
-                                            *base.add(8).cast::<f64>() = _rt::as_f64(e);
-                                        }
-                                        V16::PrimChar(e) => {
-                                            *base.add(0).cast::<u8>() = (18i32) as u8;
-                                            *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        V16::PrimBool(e) => {
-                                            *base.add(0).cast::<u8>() = (19i32) as u8;
-                                            *base.add(8).cast::<u8>() = (match e {
-                                                true => 1,
-                                                false => 0,
-                                            }) as u8;
-                                        }
-                                        V16::PrimString(e) => {
-                                            *base.add(0).cast::<u8>() = (20i32) as u8;
-                                            let vec12 = e;
-                                            let ptr12 = vec12.as_ptr().cast::<u8>();
-                                            let len12 = vec12.len();
-                                            *base.add(12).cast::<usize>() = len12;
-                                            *base.add(8).cast::<*mut u8>() = ptr12.cast_mut();
-                                        }
-                                        V16::Handle(e) => {
-                                            *base.add(0).cast::<u8>() = (21i32) as u8;
-                                            let (t13_0, t13_1) = e;
-                                            let super::super::super::golem::rpc::types::Uri {
-                                                value: value14,
-                                            } = t13_0;
-                                            let vec15 = value14;
-                                            let ptr15 = vec15.as_ptr().cast::<u8>();
-                                            let len15 = vec15.len();
-                                            *base.add(12).cast::<usize>() = len15;
-                                            *base.add(8).cast::<*mut u8>() = ptr15.cast_mut();
-                                            *base.add(16).cast::<i64>() = _rt::as_i64(t13_1);
-                                        }
-                                    }
-                                }
-                            }
-                            *base.add(4).cast::<usize>() = len17;
-                            *base.add(0).cast::<*mut u8>() = result17;
-                            cleanup_list.extend_from_slice(&[(result17, layout17)]);
-                        }
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.2.0")]
-                    extern "C" {
-                        #[link_name = "schedule-invocation"]
-                        fn wit_import(
-                            _: i64,
-                            _: i32,
-                            _: i64,
-                            _: i64,
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                            _: usize,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(
-                        _: i64,
-                        _: i32,
-                        _: i64,
-                        _: i64,
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                        _: usize,
-                    ) {
-                        unreachable!()
-                    }
-                    wit_import(
-                        _rt::as_i64(seconds0),
-                        _rt::as_i32(nanoseconds0),
-                        _rt::as_i64(high_bits3),
-                        _rt::as_i64(low_bits3),
-                        ptr4.cast_mut(),
-                        len4,
-                        ptr5.cast_mut(),
-                        len5,
-                        result18,
-                        len18,
-                    );
-                    if layout18.size() != 0 {
-                        _rt::alloc::dealloc(result18.cast(), layout18);
-                    }
-                    for (ptr, layout) in cleanup_list {
-                        if layout.size() != 0 {
-                            _rt::alloc::dealloc(ptr.cast(), layout);
-                        }
-                    }
-                }
-            }
         }
     }
     pub mod rpc {
@@ -1994,6 +1678,7 @@ pub mod golem {
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
+            pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             pub type NodeIndex = i32;
             pub type ResourceId = u64;
@@ -3698,6 +3383,299 @@ pub mod golem {
                             }
                         }
                         FutureInvokeResult::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Schedule invocation for later
+                pub fn schedule_invocation(
+                    &self,
+                    scheduled_time: Datetime,
+                    function_name: &str,
+                    function_params: &[WitValue],
+                ) {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        let super::super::super::wasi::clocks::wall_clock::Datetime {
+                            seconds: seconds0,
+                            nanoseconds: nanoseconds0,
+                        } = scheduled_time;
+                        let vec1 = function_name;
+                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                        let len1 = vec1.len();
+                        let vec13 = function_params;
+                        let len13 = vec13.len();
+                        let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec13.len() * 8,
+                            4,
+                        );
+                        let result13 = if layout13.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout13);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec13.into_iter().enumerate() {
+                            let base = result13.add(i * 8);
+                            {
+                                let WitValue { nodes: nodes2 } = e;
+                                let vec12 = nodes2;
+                                let len12 = vec12.len();
+                                let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec12.len() * 24,
+                                    8,
+                                );
+                                let result12 = if layout12.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                    if ptr.is_null() {
+                                        _rt::alloc::handle_alloc_error(layout12);
+                                    }
+                                    ptr
+                                } else {
+                                    ::core::ptr::null_mut()
+                                };
+                                for (i, e) in vec12.into_iter().enumerate() {
+                                    let base = result12.add(i * 24);
+                                    {
+                                        match e {
+                                            WitNode::RecordValue(e) => {
+                                                *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(12).cast::<usize>() = len3;
+                                                *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            WitNode::VariantValue(e) => {
+                                                *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                let (t4_0, t4_1) = e;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(t4_0);
+                                                match t4_1 {
+                                                    Some(e) => {
+                                                        *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::EnumValue(e) => {
+                                                *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::FlagsValue(e) => {
+                                                *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                let vec5 = e;
+                                                let len5 = vec5.len();
+                                                let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                                                    vec5.len() * 1,
+                                                    1,
+                                                );
+                                                let result5 = if layout5.size() != 0 {
+                                                    let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                                                    if ptr.is_null() {
+                                                        _rt::alloc::handle_alloc_error(layout5);
+                                                    }
+                                                    ptr
+                                                } else {
+                                                    ::core::ptr::null_mut()
+                                                };
+                                                for (i, e) in vec5.into_iter().enumerate() {
+                                                    let base = result5.add(i * 1);
+                                                    {
+                                                        *base.add(0).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        }) as u8;
+                                                    }
+                                                }
+                                                *base.add(12).cast::<usize>() = len5;
+                                                *base.add(8).cast::<*mut u8>() = result5;
+                                                cleanup_list.extend_from_slice(&[(result5, layout5)]);
+                                            }
+                                            WitNode::TupleValue(e) => {
+                                                *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                *base.add(12).cast::<usize>() = len6;
+                                                *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                            }
+                                            WitNode::ListValue(e) => {
+                                                *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                let vec7 = e;
+                                                let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                let len7 = vec7.len();
+                                                *base.add(12).cast::<usize>() = len7;
+                                                *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                            }
+                                            WitNode::OptionValue(e) => {
+                                                *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                match e {
+                                                    Some(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::ResultValue(e) => {
+                                                *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                match e {
+                                                    Ok(e) => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    Err(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                };
+                                            }
+                                            WitNode::PrimU8(e) => {
+                                                *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimU16(e) => {
+                                                *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimU32(e) => {
+                                                *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimU64(e) => {
+                                                *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimS8(e) => {
+                                                *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimS16(e) => {
+                                                *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimS32(e) => {
+                                                *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimS64(e) => {
+                                                *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimFloat32(e) => {
+                                                *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            WitNode::PrimFloat64(e) => {
+                                                *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            WitNode::PrimChar(e) => {
+                                                *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimBool(e) => {
+                                                *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                *base.add(8).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                }) as u8;
+                                            }
+                                            WitNode::PrimString(e) => {
+                                                *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                let vec8 = e;
+                                                let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                let len8 = vec8.len();
+                                                *base.add(12).cast::<usize>() = len8;
+                                                *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
+                                            }
+                                            WitNode::Handle(e) => {
+                                                *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                let (t9_0, t9_1) = e;
+                                                let Uri { value: value10 } = t9_0;
+                                                let vec11 = value10;
+                                                let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                let len11 = vec11.len();
+                                                *base.add(12).cast::<usize>() = len11;
+                                                *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t9_1);
+                                            }
+                                        }
+                                    }
+                                }
+                                *base.add(4).cast::<usize>() = len12;
+                                *base.add(0).cast::<*mut u8>() = result12;
+                                cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
+                        extern "C" {
+                            #[link_name = "[method]wasm-rpc.schedule-invocation"]
+                            fn wit_import(
+                                _: i32,
+                                _: i64,
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            _rt::as_i64(seconds0),
+                            _rt::as_i32(nanoseconds0),
+                            ptr1.cast_mut(),
+                            len1,
+                            result13,
+                            len13,
+                        );
+                        if layout13.size() != 0 {
+                            _rt::alloc::dealloc(result13.cast(), layout13);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
                     }
                 }
             }
@@ -5582,6 +5560,112 @@ pub mod golem {
 #[allow(dead_code, clippy::all)]
 pub mod wasi {
     pub mod clocks {
+        /// WASI Wall Clock is a clock API intended to let users query the current
+        /// time. The name "wall" makes an analogy to a "clock on the wall", which
+        /// is not necessarily monotonic as it may be reset.
+        ///
+        /// It is intended to be portable at least between Unix-family platforms and
+        /// Windows.
+        ///
+        /// A wall clock is a clock which measures the date and time according to
+        /// some external reference.
+        ///
+        /// External references may be reset, so this clock is not necessarily
+        /// monotonic, making it unsuitable for measuring elapsed time.
+        ///
+        /// It is intended for reporting the current date and time for humans.
+        #[allow(dead_code, clippy::all)]
+        pub mod wall_clock {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            /// A time and date in seconds plus nanoseconds.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Datetime {
+                pub seconds: u64,
+                pub nanoseconds: u32,
+            }
+            impl ::core::fmt::Debug for Datetime {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Datetime")
+                        .field("seconds", &self.seconds)
+                        .field("nanoseconds", &self.nanoseconds)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read the current value of the clock.
+            ///
+            /// This clock is not monotonic, therefore calling this function repeatedly
+            /// will not necessarily produce a sequence of non-decreasing values.
+            ///
+            /// The returned timestamps represent the number of seconds since
+            /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
+            /// also known as [Unix Time].
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            ///
+            /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
+            /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
+            pub fn now() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "now"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Query the resolution of the clock.
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            pub fn resolution() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "resolution"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
+                }
+            }
+        }
         /// WASI Monotonic Clock is a clock API intended to let users measure elapsed
         /// time.
         ///
@@ -5686,112 +5770,6 @@ pub mod wasi {
                     super::super::super::wasi::io::poll::Pollable::from_handle(
                         ret as u32,
                     )
-                }
-            }
-        }
-        /// WASI Wall Clock is a clock API intended to let users query the current
-        /// time. The name "wall" makes an analogy to a "clock on the wall", which
-        /// is not necessarily monotonic as it may be reset.
-        ///
-        /// It is intended to be portable at least between Unix-family platforms and
-        /// Windows.
-        ///
-        /// A wall clock is a clock which measures the date and time according to
-        /// some external reference.
-        ///
-        /// External references may be reset, so this clock is not necessarily
-        /// monotonic, making it unsuitable for measuring elapsed time.
-        ///
-        /// It is intended for reporting the current date and time for humans.
-        #[allow(dead_code, clippy::all)]
-        pub mod wall_clock {
-            #[used]
-            #[doc(hidden)]
-            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
-            /// A time and date in seconds plus nanoseconds.
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct Datetime {
-                pub seconds: u64,
-                pub nanoseconds: u32,
-            }
-            impl ::core::fmt::Debug for Datetime {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("Datetime")
-                        .field("seconds", &self.seconds)
-                        .field("nanoseconds", &self.nanoseconds)
-                        .finish()
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Read the current value of the clock.
-            ///
-            /// This clock is not monotonic, therefore calling this function repeatedly
-            /// will not necessarily produce a sequence of non-decreasing values.
-            ///
-            /// The returned timestamps represent the number of seconds since
-            /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
-            /// also known as [Unix Time].
-            ///
-            /// The nanoseconds field of the output is always less than 1000000000.
-            ///
-            /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
-            /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
-            pub fn now() -> Datetime {
-                unsafe {
-                    #[repr(align(8))]
-                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
-                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
-                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
-                    extern "C" {
-                        #[link_name = "now"]
-                        fn wit_import(_: *mut u8);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: *mut u8) {
-                        unreachable!()
-                    }
-                    wit_import(ptr0);
-                    let l1 = *ptr0.add(0).cast::<i64>();
-                    let l2 = *ptr0.add(8).cast::<i32>();
-                    Datetime {
-                        seconds: l1 as u64,
-                        nanoseconds: l2 as u32,
-                    }
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Query the resolution of the clock.
-            ///
-            /// The nanoseconds field of the output is always less than 1000000000.
-            pub fn resolution() -> Datetime {
-                unsafe {
-                    #[repr(align(8))]
-                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
-                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
-                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
-                    extern "C" {
-                        #[link_name = "resolution"]
-                        fn wit_import(_: *mut u8);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: *mut u8) {
-                        unreachable!()
-                    }
-                    wit_import(ptr0);
-                    let l1 = *ptr0.add(0).cast::<i64>();
-                    let l2 = *ptr0.add(8).cast::<i32>();
-                    Datetime {
-                        seconds: l1 as u64,
-                        nanoseconds: l2 as u32,
-                    }
                 }
             }
         }
@@ -6286,102 +6264,101 @@ pub(crate) use __export_scheduled_invocation_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:it:scheduled-invocation:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4586] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdf\"\x01A\x02\x01A\x11\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B@\x02\x03\x02\x01\x01\
-\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0breso\
-urce-id\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x06\
-\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\x0a\
-\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\0\
-\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09list-\
-type\x01\x03\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-type\
-\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-t\
-ype\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f\
-32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
-prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01\
-p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\
-\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\
-\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0b\
-flags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption\
--value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
-prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
-rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\
-\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\
-\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0e\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4593] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe6\"\x01A\x02\x01A\x11\
+\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\
+\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-\
+clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\
+\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16\
+[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04\
+poll\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\x03\
+\0\x01\x08pollable\x01BD\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\
+\x01\x03\x04\0\x08pollable\x03\0\x02\x01z\x04\0\x0anode-index\x03\0\x04\x01w\x04\
+\0\x0bresource-id\x03\0\x06\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\
+\x03\0\x08\x01o\x02s\x05\x01p\x0a\x01k\x05\x01o\x02s\x0c\x01p\x0d\x01ps\x01p\x05\
+\x01o\x02\x0c\x0c\x01o\x02\x07\x09\x01q\x16\x0brecord-type\x01\x0b\0\x0cvariant-\
+type\x01\x0e\0\x09enum-type\x01\x0f\0\x0aflags-type\x01\x0f\0\x0atuple-type\x01\x10\
+\0\x09list-type\x01\x05\0\x0boption-type\x01\x05\0\x0bresult-type\x01\x11\0\x0cp\
+rim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0c\
+prim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0d\
+prim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\
+\0\x10prim-string-type\0\0\x0bhandle-type\x01\x12\0\x04\0\x0dwit-type-node\x03\0\
+\x13\x01p\x14\x01r\x01\x05nodes\x15\x04\0\x08wit-type\x03\0\x16\x01r\x01\x05valu\
+es\x04\0\x03uri\x03\0\x18\x01o\x02y\x0c\x01p\x7f\x01j\x01\x0c\x01\x0c\x01o\x02\x19\
+w\x01q\x16\x0crecord-value\x01\x10\0\x0dvariant-value\x01\x1a\0\x0aenum-value\x01\
+y\0\x0bflags-value\x01\x1b\0\x0btuple-value\x01\x10\0\x0alist-value\x01\x10\0\x0c\
+option-value\x01\x0c\0\x0cresult-value\x01\x1c\0\x07prim-u8\x01}\0\x08prim-u16\x01\
+{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08\
+prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\
+\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1d\
+\0\x04\0\x08wit-node\x03\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x09wit-value\
+\x03\0!\x01r\x02\x05value\"\x03typ\x17\x04\0\x0evalue-and-type\x03\0#\x01q\x04\x0e\
 protocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-er\
-ror\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
-nvoke-result\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]was\
-m-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
-function-params*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01\
-@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rp\
-c.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\
-\0'[method]wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\
-\02\x04\0&[method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\
-\x04\0\x20[method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0d\
-extract-value\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15g\
-olem:rpc/types@0.1.2\x05\x02\x01B\x0f\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\
-\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\
-\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\
-\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\
-\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\
-\x03\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
-@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
-wall-clock@0.2.0\x05\x04\x02\x03\0\x01\x03uri\x02\x03\0\x01\x09wit-value\x02\x03\
-\0\x02\x08duration\x02\x03\0\x03\x08datetime\x01Bp\x02\x03\x02\x01\x05\x04\0\x03\
-uri\x03\0\0\x02\x03\x02\x01\x06\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x07\
-\x04\0\x08duration\x03\0\x04\x02\x03\x02\x01\x08\x04\0\x08datetime\x03\0\x06\x01\
-w\x04\0\x0boplog-index\x03\0\x08\x01w\x04\0\x11component-version\x03\0\x0a\x01r\x02\
-\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x0c\x01r\x01\x04uuid\x0d\x04\0\x0c\
-component-id\x03\0\x0e\x01r\x02\x0ccomponent-id\x0f\x0bworker-names\x04\0\x09wor\
-ker-id\x03\0\x10\x01r\x02\x09worker-id\x11\x09oplog-idx\x09\x04\0\x0apromise-id\x03\
-\0\x12\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x14\x01ku\x01r\x05\x0cmax-at\
-temptsy\x09min-delay\x05\x09max-delay\x05\x0amultiplieru\x11max-jitter-factor\x16\
-\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remo\
-te-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x19\x01m\x02\x09\
-automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x1b\x01m\x06\x05equal\x09\
-not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comp\
-arator\x03\0\x1d\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18str\
-ing-filter-comparator\x03\0\x1f\x01m\x07\x07running\x04idle\x09suspended\x0binte\
-rrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0!\x01r\x02\x0a\
-comparator\x20\x05values\x04\0\x12worker-name-filter\x03\0#\x01r\x02\x0acomparat\
-or\x1e\x05value\"\x04\0\x14worker-status-filter\x03\0%\x01r\x02\x0acomparator\x1e\
-\x05valuew\x04\0\x15worker-version-filter\x03\0'\x01r\x02\x0acomparator\x1e\x05v\
-aluew\x04\0\x18worker-created-at-filter\x03\0)\x01r\x03\x04names\x0acomparator\x20\
-\x05values\x04\0\x11worker-env-filter\x03\0+\x01q\x05\x04name\x01$\0\x06status\x01\
-&\0\x07version\x01(\0\x0acreated-at\x01*\0\x03env\x01,\0\x04\0\x16worker-propert\
-y-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x11worker-all-filter\x03\00\x01\
-p1\x01r\x01\x07filters2\x04\0\x11worker-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\
-\x01r\x06\x09worker-id\x11\x04args5\x03env7\x06status\"\x11component-versionw\x0b\
-retry-countw\x04\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01k4\x01\
-i:\x01@\x03\x0ccomponent-id\x0f\x06filter;\x07precise\x7f\0<\x04\0\x18[construct\
-or]get-workers\x01=\x01h:\x01p9\x01k?\x01@\x01\x04self>\0\xc0\0\x04\0\x1c[method\
-]get-workers.get-next\x01A\x01@\0\0\x13\x04\0\x0ecreate-promise\x01B\x01p}\x01@\x01\
-\x0apromise-id\x13\0\xc3\0\x04\0\x0dawait-promise\x01D\x01@\x02\x0apromise-id\x13\
-\x04data\xc3\0\0\x7f\x04\0\x10complete-promise\x01E\x01@\x01\x0apromise-id\x13\x01\
-\0\x04\0\x0edelete-promise\x01F\x01@\0\0\x09\x04\0\x0fget-oplog-index\x01G\x01@\x01\
-\x09oplog-idx\x09\x01\0\x04\0\x0fset-oplog-index\x01H\x01@\x01\x08replicas}\x01\0\
-\x04\0\x0coplog-commit\x01I\x04\0\x14mark-begin-operation\x01G\x01@\x01\x05begin\
-\x09\x01\0\x04\0\x12mark-end-operation\x01J\x01@\0\0\x18\x04\0\x10get-retry-poli\
-cy\x01K\x01@\x01\x10new-retry-policy\x18\x01\0\x04\0\x10set-retry-policy\x01L\x01\
-@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01M\x01@\x01\x15new-persistence-\
-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-level\x01N\x01@\0\0\x7f\x04\0\x14\
-get-idempotence-mode\x01O\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempote\
-nce-mode\x01P\x01@\0\0\x0d\x04\0\x18generate-idempotency-key\x01Q\x01@\x03\x09wo\
-rker-id\x11\x0etarget-version\x0b\x04mode\x1c\x01\0\x04\0\x0dupdate-worker\x01R\x01\
-@\0\09\x04\0\x11get-self-metadata\x01S\x01k9\x01@\x01\x09worker-id\x11\0\xd4\0\x04\
-\0\x13get-worker-metadata\x01U\x01@\x03\x10source-worker-id\x11\x10target-worker\
--id\x11\x11oplog-idx-cut-off\x09\x01\0\x04\0\x0bfork-worker\x01V\x01p\x03\x01@\x04\
-\x0escheduled-time\x07\x09worker-id\x11\x0dfunction-names\x0ffunction-params\xd7\
-\0\x01\0\x04\0\x13schedule-invocation\x01X\x03\0\x14golem:api/host@1.2.0\x05\x09\
-\x01B\x06\x01@\x01\x05valuew\x01\0\x04\0\x03add\x01\0\x01@\0\0w\x04\0\x03get\x01\
-\x01\x01@\0\x01\0\x04\0\x03run\x01\x02\x04\0!golem:it/scheduled-invocation-api\x05\
-\x0a\x04\0\x1dgolem:it/scheduled-invocation\x04\0\x0b\x1a\x01\0\x14scheduled-inv\
-ocation\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.22\
-0.0\x10wit-bindgen-rust\x060.36.0";
+ror\x01s\0\x04\0\x09rpc-error\x03\0%\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
+nvoke-result\x03\x01\x01i'\x01@\x01\x08location\x19\0)\x04\0\x15[constructor]was\
+m-rpc\x01*\x01h'\x01p\"\x01j\x01\"\x01&\x01@\x03\x04self+\x0dfunction-names\x0ff\
+unction-params,\0-\x04\0![method]wasm-rpc.invoke-and-await\x01.\x01j\0\x01&\x01@\
+\x03\x04self+\x0dfunction-names\x0ffunction-params,\0/\x04\0\x17[method]wasm-rpc\
+.invoke\x010\x01i(\x01@\x03\x04self+\x0dfunction-names\x0ffunction-params,\01\x04\
+\0'[method]wasm-rpc.async-invoke-and-await\x012\x01@\x04\x04self+\x0escheduled-t\
+ime\x01\x0dfunction-names\x0ffunction-params,\x01\0\x04\0$[method]wasm-rpc.sched\
+ule-invocation\x013\x01h(\x01i\x03\x01@\x01\x04self4\05\x04\0&[method]future-inv\
+oke-result.subscribe\x016\x01k-\x01@\x01\x04self4\07\x04\0\x20[method]future-inv\
+oke-result.get\x018\x01@\x01\x03vnt$\0\"\x04\0\x0dextract-value\x019\x01@\x01\x03\
+vnt$\0\x17\x04\0\x0cextract-type\x01:\x03\0\x15golem:rpc/types@0.1.2\x05\x04\x01\
+B\x0f\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\
+\x01w\x04\0\x08duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\
+\x04\0\x0aresolution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscr\
+ibe-instant\x01\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\
+\x03\0!wasi:clocks/monotonic-clock@0.2.0\x05\x05\x02\x03\0\x02\x03uri\x02\x03\0\x02\
+\x09wit-value\x02\x03\0\x03\x08duration\x01Bk\x02\x03\x02\x01\x06\x04\0\x03uri\x03\
+\0\0\x02\x03\x02\x01\x07\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x08\
+duration\x03\0\x04\x01w\x04\0\x0boplog-index\x03\0\x06\x01w\x04\0\x11component-v\
+ersion\x03\0\x08\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x0a\x01\
+r\x01\x04uuid\x0b\x04\0\x0ccomponent-id\x03\0\x0c\x01r\x02\x0ccomponent-id\x0d\x0b\
+worker-names\x04\0\x09worker-id\x03\0\x0e\x01r\x02\x09worker-id\x0f\x09oplog-idx\
+\x07\x04\0\x0apromise-id\x03\0\x10\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x12\
+\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x05\x09max-delay\x05\x0amultiplier\
+u\x11max-jitter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fpersist-n\
+othing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-\
+level\x03\0\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\
+\0\x19\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04\
+less\x04\0\x11filter-comparator\x03\0\x1b\x01m\x04\x05equal\x09not-equal\x04like\
+\x08not-like\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04\
+idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker\
+-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12worker-name-filt\
+er\x03\0!\x01r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\
+\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01\
+r\x02\x0acomparator\x1c\x05valuew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\
+\x04names\x0acomparator\x1e\x05values\x04\0\x11worker-env-filter\x03\0)\x01q\x05\
+\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03env\x01\
+*\0\x04\0\x16worker-property-filter\x03\0+\x01p,\x01r\x01\x07filters-\x04\0\x11w\
+orker-all-filter\x03\0.\x01p/\x01r\x01\x07filters0\x04\0\x11worker-any-filter\x03\
+\01\x01ps\x01o\x02ss\x01p4\x01r\x06\x09worker-id\x0f\x04args3\x03env5\x06status\x20\
+\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\06\x04\0\x0b\
+get-workers\x03\x01\x01k2\x01i8\x01@\x03\x0ccomponent-id\x0d\x06filter9\x07preci\
+se\x7f\0:\x04\0\x18[constructor]get-workers\x01;\x01h8\x01p7\x01k=\x01@\x01\x04s\
+elf<\0>\x04\0\x1c[method]get-workers.get-next\x01?\x01@\0\0\x11\x04\0\x0ecreate-\
+promise\x01@\x01p}\x01@\x01\x0apromise-id\x11\0\xc1\0\x04\0\x0dawait-promise\x01\
+B\x01@\x02\x0apromise-id\x11\x04data\xc1\0\0\x7f\x04\0\x10complete-promise\x01C\x01\
+@\x01\x0apromise-id\x11\x01\0\x04\0\x0edelete-promise\x01D\x01@\0\0\x07\x04\0\x0f\
+get-oplog-index\x01E\x01@\x01\x09oplog-idx\x07\x01\0\x04\0\x0fset-oplog-index\x01\
+F\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01G\x04\0\x14mark-begin-ope\
+ration\x01E\x01@\x01\x05begin\x07\x01\0\x04\0\x12mark-end-operation\x01H\x01@\0\0\
+\x16\x04\0\x10get-retry-policy\x01I\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
+\x10set-retry-policy\x01J\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01K\
+\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
+l\x01L\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01M\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01N\x01@\0\0\x0b\x04\0\x18generate-idempot\
+ency-key\x01O\x01@\x03\x09worker-id\x0f\x0etarget-version\x09\x04mode\x1a\x01\0\x04\
+\0\x0dupdate-worker\x01P\x01@\0\07\x04\0\x11get-self-metadata\x01Q\x01k7\x01@\x01\
+\x09worker-id\x0f\0\xd2\0\x04\0\x13get-worker-metadata\x01S\x01@\x03\x10source-w\
+orker-id\x0f\x10target-worker-id\x0f\x11oplog-idx-cut-off\x07\x01\0\x04\0\x0bfor\
+k-worker\x01T\x03\0\x14golem:api/host@1.1.2\x05\x09\x01B\x06\x01@\x01\x05valuew\x01\
+\0\x04\0\x03add\x01\0\x01@\0\0w\x04\0\x03get\x01\x01\x01@\0\x01\0\x04\0\x03run\x01\
+\x02\x04\0!golem:it/scheduled-invocation-api\x05\x0a\x04\0\x1dgolem:it/scheduled\
+-invocation\x04\0\x0b\x1a\x01\0\x14scheduled-invocation\x03\0\0\0G\x09producers\x01\
+\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

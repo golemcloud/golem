@@ -1,4 +1,4 @@
-package golem:api@0.2.0;
+package golem:api@0.2.1;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.

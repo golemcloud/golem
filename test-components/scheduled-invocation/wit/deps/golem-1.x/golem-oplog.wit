@@ -1,4 +1,4 @@
-package golem:api@1.2.0;
+package golem:api@1.1.2;
 
 /// Host interface for enumerating and searching for worker oplogs
 interface oplog {

@@ -7,7 +7,7 @@ interface scheduled-invocation-api {
 }
 
 world scheduled-invocation {
-  import golem:api/host@1.2.0;
+  import golem:api/host@1.1.2;
 
   export scheduled-invocation-api;
 }

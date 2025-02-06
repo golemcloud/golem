@@ -78,8 +78,8 @@ use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
-use golem_wasm_rpc::golem::rpc0_1_1::types::{FutureInvokeResult, WasmRpc};
-use golem_wasm_rpc::golem::rpc0_1_1::types::{HostFutureInvokeResult, Pollable};
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem::durability;
 use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::events::Events;
@@ -843,6 +843,18 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn schedule_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .schedule_invocation(self_, datetime, function_name, function_params)
+            .await
+    }
+
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
@@ -1027,7 +1039,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem::rpc0_1_1::types::add_to_linker_get_host(
+        golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,
         )?;

@@ -1,11 +1,10 @@
-package golem:api@1.2.0;
+package golem:api@1.1.2;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use golem:rpc/types@0.1.2.{uri, wit-value};
     use wasi:clocks/monotonic-clock@0.2.0.{duration};
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -240,14 +239,6 @@ interface host {
 
     /// Fork a worker to another worker at a given oplog index
     fork-worker: func(source-worker-id: worker-id, target-worker-id: worker-id, oplog-idx-cut-off: oplog-index) -> ();
-
-    /// Schedule invocation of any worker for later
-    schedule-invocation: func(
-        scheduled-time: datetime,
-        worker-id: worker-id,
-        function-name: string,
-        function-params: list<wit-value>
-    ) -> ();
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
