@@ -2191,14 +2191,10 @@ async fn scheduled_invocation_self(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor
-        .component("scheduled-invocation")
-        .store()
-        .await;
+    let component_id = executor.component("scheduled-invocation").store().await;
 
     let worker_id = executor
         .start_worker(&component_id, "scheduled-invocation-1")
@@ -2229,7 +2225,7 @@ async fn scheduled_invocation_self(
         } else {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-    };
+    }
 }
 
 /// Test scheduling an invocation for a different worker.
@@ -2241,14 +2237,10 @@ async fn scheduled_invocation_other(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor
-        .component("scheduled-invocation")
-        .store()
-        .await;
+    let component_id = executor.component("scheduled-invocation").store().await;
 
     let worker_id_1 = executor
         .start_worker(&component_id, "scheduled-invocation-2")
@@ -2259,7 +2251,12 @@ async fn scheduled_invocation_other(
     worker_2_env.insert("WORKER_NAME".to_string(), worker_id_1.worker_name.clone());
 
     let worker_id_2 = executor
-        .start_worker_with(&component_id, "scheduled-invocation-3", vec![], worker_2_env)
+        .start_worker_with(
+            &component_id,
+            "scheduled-invocation-3",
+            vec![],
+            worker_2_env,
+        )
         .await;
 
     executor
@@ -2287,5 +2284,5 @@ async fn scheduled_invocation_other(
         } else {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    };
+    }
 }

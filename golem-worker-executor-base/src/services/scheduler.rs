@@ -87,19 +87,13 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<(), GolemError> {
-        let worker = self.get_or_create_running(
-            &owned_worker_id,
-            None,
-            None,
-            None,
-            None
-        ).await?;
+        let worker = self
+            .get_or_create_running(&owned_worker_id, None, None, None, None)
+            .await?;
 
-        worker.invoke(
-            idempotency_key,
-            full_function_name,
-            function_input
-        ).await?;
+        worker
+            .invoke(idempotency_key, full_function_name, function_input)
+            .await?;
 
         Ok(())
     }
@@ -133,7 +127,7 @@ impl SchedulerServiceDefault {
             promise_service,
             oplog_service,
             worker_service,
-            worker_access
+            worker_access,
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -159,7 +153,6 @@ impl SchedulerServiceDefault {
 
         svc
     }
-
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
         let (hours_since_epoch, remainder) = Self::split_time(now);
@@ -213,10 +206,14 @@ impl SchedulerServiceDefault {
         // ! Errors will only be logged anyway, so just log them inline here and ignore.
         for (key, action) in matching {
             match action.clone() {
-                ScheduledAction::CompletePromise { promise_id, account_id } => {
+                ScheduledAction::CompletePromise {
+                    promise_id,
+                    account_id,
+                } => {
                     let owned_worker_id = OwnedWorkerId::new(&account_id, &promise_id.worker_id);
 
-                    let result = self.promise_service
+                    let result = self
+                        .promise_service
                         .complete(promise_id.clone(), vec![])
                         .await;
 
@@ -295,16 +292,24 @@ impl SchedulerServiceDefault {
 
                         // TODO: metrics
                     }
-                },
-                ScheduledAction::Invoke { owned_worker_id, idempotency_key, full_function_name, function_input } => {
+                }
+                ScheduledAction::Invoke {
+                    owned_worker_id,
+                    idempotency_key,
+                    full_function_name,
+                    function_input,
+                } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
-                    let result = self.worker_access.activate_and_invoke(
-                        owned_worker_id.clone(),
-                        idempotency_key,
-                        full_function_name.clone(),
-                        function_input
-                    ).await;
+                    let result = self
+                        .worker_access
+                        .activate_and_invoke(
+                            owned_worker_id.clone(),
+                            idempotency_key,
+                            full_function_name.clone(),
+                            function_input,
+                        )
+                        .await;
 
                     if let Err(e) = result {
                         error!(
@@ -421,11 +426,12 @@ mod tests {
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId
+        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
+        WorkerId,
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use uuid::Uuid;
     use golem_wasm_rpc::Value;
+    use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
 

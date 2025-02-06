@@ -80,7 +80,8 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
 
 impl From<self::wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
     fn from(value: self::wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
-        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds).expect("Received invalid datetime from wasi")
+        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
+            .expect("Received invalid datetime from wasi")
     }
 }
 

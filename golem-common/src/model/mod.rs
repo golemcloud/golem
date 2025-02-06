@@ -247,8 +247,8 @@ pub enum ScheduledAction {
         owned_worker_id: OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
-        function_input: Vec<Value>
-    }
+        function_input: Vec<Value>,
+    },
 }
 
 impl ScheduledAction {
@@ -261,7 +261,9 @@ impl ScheduledAction {
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
-            ScheduledAction::Invoke { owned_worker_id, .. } => owned_worker_id.clone()
+            ScheduledAction::Invoke {
+                owned_worker_id, ..
+            } => owned_worker_id.clone(),
         }
     }
 }
@@ -277,7 +279,9 @@ impl Display for ScheduledAction {
             } => {
                 write!(f, "archive[{}]", owned_worker_id)
             }
-            ScheduledAction::Invoke { owned_worker_id, .. } => write!(f, "invoke[{}]", owned_worker_id)
+            ScheduledAction::Invoke {
+                owned_worker_id, ..
+            } => write!(f, "invoke[{}]", owned_worker_id),
         }
     }
 }
