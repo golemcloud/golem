@@ -312,13 +312,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
-    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
-        let mut status = self
+    pub fn get_worker_status(&self) -> WorkerStatusRecord {
+        self
             .execution_status
             .read()
             .unwrap()
             .last_known_status()
-            .clone();
+            .clone()
+    }
+
+    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
+        let mut status = self.get_worker_status();
 
         let mut skipped_regions = self.state.replay_state.skipped_regions().await;
         let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();

@@ -14,7 +14,6 @@ use golem_common::model::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-// TODO: check all usages and replace with Worker::get_metadata where it is possible
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
 #[async_recursion]
 pub async fn calculate_last_known_status<T>(

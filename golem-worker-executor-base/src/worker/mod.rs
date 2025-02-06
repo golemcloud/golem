@@ -170,6 +170,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker)
     }
 
+    pub async fn get_latest_metadata<T: HasActiveWorkers<Ctx> + HasWorkerService + HasOplogService + HasConfig + Sync>(
+        deps: &T,
+        owned_worker_id: &OwnedWorkerId,
+    ) -> Result<Option<WorkerMetadata>, GolemError> {
+        if let Some(worker) = deps.active_workers().try_get(owned_worker_id).await {
+            Ok(Some(worker.get_metadata().await?))
+        } else {
+            if let Some(previous_metadata) = deps.worker_service().get(owned_worker_id).await {
+                Ok(Some(WorkerMetadata {
+                    last_known_status: calculate_last_known_status(
+                        deps,
+                        owned_worker_id,
+                        &Some(previous_metadata.clone()),
+                    )
+                        .await?,
+                    ..previous_metadata
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
         owned_worker_id: OwnedWorkerId,
@@ -944,9 +967,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .skipped_regions
             .is_in_deleted_region(region_start)
         {
-            Err(GolemError::invalid_request(
-                format!("Attempted to revert to a deleted region in oplog to index {last_oplog_index}"),
-            ))
+            Err(GolemError::invalid_request(format!(
+                "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+            )))
         } else {
             let region = OplogRegion {
                 start: region_start,
@@ -954,12 +977,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
             // Resetting the worker status so it is recalculated even if the server crashes
-            self.worker_service().update_status(&self.owned_worker_id, &WorkerStatusRecord::default(), self.component_type()).await;
+            self.worker_service()
+                .update_status(
+                    &self.owned_worker_id,
+                    &WorkerStatusRecord::default(),
+                    self.component_type(),
+                )
+                .await;
             self.oplog.add_and_commit(OplogEntry::revert(region)).await;
 
             // Recalculating the status from the whole oplog, because the newly deleted region may contain things like worker updates.
-            let recalculated_status = calculate_last_known_status(self, &self.owned_worker_id, &None).await?;
-            self.worker_service().update_status(&self.owned_worker_id, &recalculated_status, self.component_type()).await;
+            let recalculated_status =
+                calculate_last_known_status(self, &self.owned_worker_id, &None).await?;
+            self.worker_service()
+                .update_status(
+                    &self.owned_worker_id,
+                    &recalculated_status,
+                    self.component_type(),
+                )
+                .await;
 
             Ok(())
         }
@@ -1192,7 +1228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 .iter()
                                 .map(|i| i.id.clone())
                                 .collect(),
-                            deleted_regions: initial_status.deleted_regions().clone()
+                            deleted_regions: initial_status.deleted_regions().clone(),
                         },
                         ..initial_status
                     },

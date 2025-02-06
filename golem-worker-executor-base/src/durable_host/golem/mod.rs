@@ -521,12 +521,7 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
 
         match metadata {
             Some(metadata) => {
-                let last_known_status = Ctx::compute_latest_worker_status(
-                    &self.state,
-                    &owned_worker_id,
-                    &Some(metadata.clone()),
-                )
-                .await?;
+                let last_known_status = self.get_worker_status();
                 let updated_metadata = golem_common::model::WorkerMetadata {
                     last_known_status,
                     ..metadata
