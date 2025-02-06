@@ -689,7 +689,11 @@ fn assert_has_package_by_name(package_name: &PackageName, wit_source: impl WitSo
 }
 
 fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
-    let deps = vec![("poll", WASI_POLL_WIT), ("clocks", WASI_WALL_CLOCKS_WIT), ("wasm-rpc", WASM_RPC_WIT)];
+    let deps = vec![
+        ("poll", WASI_POLL_WIT),
+        ("clocks", WASI_WALL_CLOCKS_WIT),
+        ("wasm-rpc", WASM_RPC_WIT),
+    ];
 
     assert_has_same_wit_package(
         &PackageName::new("wasi", "io", Some(Version::new(0, 2, 0))),
