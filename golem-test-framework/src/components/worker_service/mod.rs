@@ -40,11 +40,11 @@ use golem_api_grpc::proto::golem::worker::v1::{
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
@@ -360,12 +360,15 @@ pub trait WorkerService {
         &self,
         request: InvokeAndAwaitRequest,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
-        Ok(self
-            .client()
-            .await?
-            .invoke_and_await_typed(request)
-            .await?
-            .into_inner())
+        match self.client() {
+            WorkerServiceClient::Grpc(mut client) => {
+                Ok(client.invoke_and_await_typed(request).await?.into_inner())
+            }
+            WorkerServiceClient::Http(_client) => {
+                // FIXME figure out Http version
+                todo!()
+            }
+        }
     }
 
     async fn invoke_and_await_json(
