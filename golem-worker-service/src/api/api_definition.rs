@@ -562,14 +562,14 @@ mod test {
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
-            component_service,
+            component_service.clone(),
             api_definition_repo,
             api_deployment_repo,
             security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
         );
 
-        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service), Arc::new(component_service));
+        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service), component_service);
 
         (
             poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0")),
