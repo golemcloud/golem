@@ -64,7 +64,7 @@ use crate::components::worker_service::k8s::K8sWorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use crate::config::{TestDependencies, TestService};
+use crate::config::{GolemClientProtocol, TestDependencies, TestService};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 
 /// Test dependencies created from command line arguments
@@ -112,6 +112,9 @@ pub struct CliParams {
 
     #[arg(long, default_value = "false")]
     pub keep_containers: bool,
+
+    #[arg(long, default_value = "GolemClientProtocol::Grpc")]
+    pub golem_client_protocol: GolemClientProtocol,
 }
 
 impl CliParams {
@@ -362,8 +365,8 @@ impl CliTestDependencies {
                     component_compilation_service,
                     rdb.clone(),
                     params_clone.service_verbosity(),
-                    true,
                     params.keep_containers,
+                    params.golem_client_protocol,
                 )
                 .await,
             );
@@ -408,8 +411,8 @@ impl CliTestDependencies {
                 shard_manager.clone(),
                 rdb.clone(),
                 params.service_verbosity(),
-                true,
                 params.keep_containers,
+                params.golem_client_protocol,
             )
             .await,
         );
@@ -508,7 +511,7 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         out_level,
                         Level::ERROR,
-                        true,
+                        params.golem_client_protocol,
                     )
                     .await,
                 );
@@ -574,7 +577,7 @@ impl CliTestDependencies {
                 params.service_verbosity(),
                 out_level,
                 Level::ERROR,
-                true,
+                params.golem_client_protocol,
             )
             .await,
         );
@@ -656,7 +659,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         None,
-                        true,
+                        params.golem_client_protocol,
                     )
                     .await,
                 );
@@ -718,7 +721,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 timeout,
                 None,
-                true,
+                params.golem_client_protocol,
             )
             .await,
         );
@@ -808,7 +811,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         service_annotations.clone(),
-                        true,
+                        params.golem_client_protocol,
                     )
                     .await,
                 );
@@ -870,7 +873,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 timeout,
                 service_annotations.clone(),
-                true,
+                params.golem_client_protocol,
             )
             .await,
         );
@@ -960,7 +963,7 @@ impl CliTestDependencies {
                         component_service_host.clone(),
                         *component_service_http_port,
                         *component_service_grpc_port,
-                        true,
+                        params.golem_client_protocol,
                     )
                     .await,
                 );
@@ -977,7 +980,7 @@ impl CliTestDependencies {
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
-                        true,
+                        params.golem_client_protocol,
                     )
                     .await,
                 );

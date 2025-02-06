@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::IntoValueAndType;
 use integration_tests::benchmarks::{
     benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
     warmup_workers, SimpleBenchmarkContext, SimpleIterationContext,
@@ -72,9 +72,7 @@ impl Benchmark for SimpleWorkerEcho {
             &benchmark_context.deps,
             &context.worker_ids,
             "golem:it/api.{echo}",
-            vec![Value::Option(Some(Box::new(Value::String(
-                "hello".to_string(),
-            ))))],
+            vec![Some("hello".to_string()).into_value_and_type()],
         )
         .await;
     }
@@ -92,9 +90,7 @@ impl Benchmark for SimpleWorkerEcho {
             self.config.length,
             &context.worker_ids,
             "golem:it/api.{echo}",
-            vec![Value::Option(Some(Box::new(Value::String(
-                "hello".to_string(),
-            ))))],
+            vec![Some("hello".to_string()).into_value_and_type()],
             "",
         )
         .await;
