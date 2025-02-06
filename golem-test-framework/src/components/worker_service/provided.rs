@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_service::{new_client, WorkerService};
+use crate::components::worker_service::{new_client, WorkerService, WorkerServiceClient};
+use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
-use tonic::transport::Channel;
 use tracing::info;
 
 pub struct ProvidedWorkerService {
@@ -23,7 +22,7 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    client: Option<WorkerServiceClient<Channel>>,
+    client: WorkerServiceClient,
 }
 
 impl ProvidedWorkerService {
@@ -32,7 +31,7 @@ impl ProvidedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -40,26 +39,15 @@ impl ProvidedWorkerService {
             http_port,
             grpc_port,
             custom_request_port,
-            client: if shared_client {
-                Some(
-                    new_client(&host, grpc_port)
-                        .await
-                        .expect("Failed to create client"),
-                )
-            } else {
-                None
-            },
+            client: new_client(client_protocol, &host, grpc_port, http_port).await,
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        match &self.client {
-            Some(client) => Ok(client.clone()),
-            None => Ok(new_client(&self.host, self.grpc_port).await?),
-        }
+    fn client(&self) -> WorkerServiceClient {
+        self.client.clone()
     }
 
     fn private_host(&self) -> String {

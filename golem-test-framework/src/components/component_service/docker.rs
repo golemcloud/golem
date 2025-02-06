@@ -12,34 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
-use tonic::transport::Channel;
-use tracing::{info, Level};
-
 use crate::components::component_service::{
-    new_client, new_plugins_client, ComponentService, ComponentServiceEnvVars,
+    new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
+    ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::{GolemEnvVars, NETWORK};
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
+use crate::config::GolemClientProtocol;
+use async_trait::async_trait;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
+use tokio::sync::Mutex;
+use tracing::{info, Level};
 
 pub struct DockerComponentService {
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,
     keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
-    client: Option<ComponentServiceClient<Channel>>,
-    plugins_client: Option<PluginServiceClient<Channel>>,
+    client_protocol: GolemClientProtocol,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl DockerComponentService {
@@ -51,16 +49,16 @@ impl DockerComponentService {
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        shared_client: bool,
         keep_container: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
             component_compilation_service,
             rdb,
             verbosity,
-            shared_client,
             keep_container,
+            client_protocol,
         )
         .await
     }
@@ -70,8 +68,8 @@ impl DockerComponentService {
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        shared_client: bool,
         keep_container: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -106,34 +104,37 @@ impl DockerComponentService {
             keep_container,
             public_http_port,
             public_grpc_port,
-            client: if shared_client {
-                Some(new_client("localhost", public_grpc_port).await)
-            } else {
-                None
-            },
-            plugins_client: if shared_client {
-                Some(new_plugins_client("localhost", public_grpc_port).await)
-            } else {
-                None
-            },
+            client_protocol,
+            component_client: new_component_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
+            plugin_client: new_plugin_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
         }
     }
 }
 
 #[async_trait]
 impl ComponentService for DockerComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
-        match &self.client {
-            Some(client) => client.clone(),
-            None => new_client("localhost", self.public_grpc_port).await,
-        }
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
     }
 
-    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
-        match &self.plugins_client {
-            Some(client) => client.clone(),
-            None => new_plugins_client("localhost", self.public_grpc_port).await,
-        }
+    fn component_client(&self) -> ComponentServiceClient {
+        self.component_client.clone()
+    }
+
+    fn plugin_client(&self) -> PluginServiceClient {
+        self.plugin_client.clone()
     }
 
     fn private_host(&self) -> String {

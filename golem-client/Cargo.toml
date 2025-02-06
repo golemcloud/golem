@@ -33,5 +33,5 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.12"
+golem-openapi-client-generator = "=0.0.13"
 relative-path = "1.9.3"

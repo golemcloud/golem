@@ -26,7 +26,7 @@ use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_message,
     TestDslUnsafe,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -205,7 +205,7 @@ async fn explicit_oplog_commit(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{explicit-commit}",
-            vec![Value::U8(0)],
+            vec![0u8.into_value_and_type()],
         )
         .await;
 
@@ -235,7 +235,7 @@ async fn set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(2)],
+            vec![2u64.into_value_and_type()],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -244,7 +244,7 @@ async fn set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(1)],
+            vec![1u64.into_value_and_type()],
         )
         .await;
 
@@ -320,7 +320,7 @@ async fn idempotence_on(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(true)],
+            vec![true.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -360,7 +360,7 @@ async fn idempotence_off(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(false)],
+            vec![false.into_value_and_type()],
         )
         .await;
 
@@ -437,7 +437,7 @@ async fn golem_rust_explicit_oplog_commit(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{explicit-commit}",
-            vec![Value::U8(0)],
+            vec![0u8.into_value_and_type()],
         )
         .await;
 
@@ -467,7 +467,7 @@ async fn golem_rust_set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(2)],
+            vec![2u64.into_value_and_type()],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -476,7 +476,7 @@ async fn golem_rust_set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(1)],
+            vec![1u64.into_value_and_type()],
         )
         .await;
 
@@ -557,7 +557,7 @@ async fn golem_rust_idempotence_on(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(true)],
+            vec![true.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -602,7 +602,7 @@ async fn golem_rust_idempotence_off(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(false)],
+            vec![false.into_value_and_type()],
         )
         .await;
 

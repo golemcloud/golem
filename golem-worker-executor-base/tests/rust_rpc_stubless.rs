@@ -19,7 +19,8 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
-use golem_wasm_rpc::Value;
+use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tracing::{debug, info};
@@ -76,10 +77,10 @@ async fn auction_example_1(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -160,10 +161,10 @@ async fn auction_example_2(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction-res}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -879,9 +880,12 @@ async fn wasm_rpc_bug_32_test(
         .invoke_and_await(
             &caller_worker_id,
             "rpc:caller-exports/caller-inline-functions.{bug-wasm-rpc-i32}",
-            vec![Value::Variant {
-                case_idx: 0,
-                case_value: None,
+            vec![ValueAndType {
+                value: Value::Variant {
+                    case_idx: 0,
+                    case_value: None,
+                },
+                typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
             }],
         )
         .await;
@@ -949,10 +953,10 @@ async fn error_message_invalid_uri(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -1019,10 +1023,10 @@ async fn error_message_non_existing_target_component(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -1183,7 +1187,7 @@ async fn golem_bug_1265_test(
         .invoke_and_await(
             &caller_worker_id,
             "rpc:caller-exports/caller-inline-functions.{bug-golem1265}",
-            vec![Value::String("test".to_string())],
+            vec!["test".into_value_and_type()],
         )
         .await;
 

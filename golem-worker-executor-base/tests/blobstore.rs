@@ -18,7 +18,7 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -42,9 +42,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-container}",
-            vec![Value::String(format!(
-                "{component_id}-{worker_name}-container"
-            ))],
+            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
         )
         .await
         .unwrap();
@@ -53,9 +51,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{container-exists}",
-            vec![Value::String(format!(
-                "{component_id}-{worker_name}-container"
-            ))],
+            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
         )
         .await
         .unwrap();
@@ -83,9 +79,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{container-exists}",
-            vec![Value::String(format!(
-                "{component_id}-{worker_name}-container"
-            ))],
+            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
         )
         .await
         .unwrap();

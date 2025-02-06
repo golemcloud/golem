@@ -73,11 +73,11 @@ testcontainers-modules = { workspace = true }
 textwrap = "0.16.1"
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["fs"] }
-tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tower = "0.5.1"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tungstenite = "0.24.0"
+tungstenite = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = "=0.0.11"

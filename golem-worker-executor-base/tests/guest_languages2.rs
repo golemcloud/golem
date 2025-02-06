@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::time::{Duration, Instant};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -28,6 +28,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[timeout(300_000)]
 async fn javascript_example_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -43,7 +44,7 @@ async fn javascript_example_3(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fetch-get}",
-            vec![Value::String("https://google.com".to_string())],
+            vec!["https://google.com".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -92,12 +93,20 @@ async fn python_example_1(
     let worker_id = executor.start_worker(&component_id, "python-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(3)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add}",
+            vec![3u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(8)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add}",
+            vec![8u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
