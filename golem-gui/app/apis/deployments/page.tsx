@@ -21,7 +21,7 @@ import { ApiDeployment as Deployment} from "@/types/api";
 import { Card } from "@/components/ui/card";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import { useState } from "react";
-import CustomModal from "@/components/CustomModal";
+import CustomModal from "@/components/custom-modal";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 function DeploymentApiVersionDropDown({

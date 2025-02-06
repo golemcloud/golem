@@ -49,9 +49,9 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         }}>
             <Typography variant="subtitle1"
             sx={{
-              overflow: "hidden", // Ensures overflow content is hidden
-              textOverflow: "ellipsis", // Adds an ellipsis when text overflows
-              whiteSpace: "nowrap", // Prevents text wrapping to a new line
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
               fontWeight: 500,
             }}
             >

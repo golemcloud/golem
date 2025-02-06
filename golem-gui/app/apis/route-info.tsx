@@ -13,14 +13,14 @@ import { Button2 as Button } from "@/components/ui/button";
 import { Trash } from "lucide-react";
 import { ApiRoute } from "@/types/api";
 import TryItOut from "./try-it-out";
-import NewRouteForm from "./new-route";
+import NewRouteForm from "../../components/new-route";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { AlertDialogDemo } from "./confirmation-dialog";
+import { AlertDialogDemo } from "../../components/confirmation-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { TabsContent, TabsTrigger, TabsList, Tabs } from "./ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { TabsContent, TabsTrigger, TabsList, Tabs } from "../../components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import useComponents from "@/lib/hooks/use-component";
 
 

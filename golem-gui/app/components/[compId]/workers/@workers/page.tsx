@@ -11,13 +11,13 @@ import { useWorkerFind } from "@/lib/hooks/use-worker";
 import { useRouter } from "next/navigation";
 import { Crosshair, Loader } from "lucide-react";
 import { Worker } from "@/types/api";
-import CreateWorker from "@/components/create-worker";
-import CustomModal from "@/components/CustomModal";
+import CreateWorker from "@/app/components/create-worker";
+import CustomModal from "@/components/custom-modal";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import { Button2 } from "@/components/ui/button";
-import WorkerInfoCard from "@/components/worker-info-card";
+import WorkerInfoCard from "@/app/components/worker-info-card";
 import {StatusFilter, VersionFilter, Search, CustomDatePickFilter} from "./workers-filter";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 

@@ -2,9 +2,9 @@
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
 import NewRouteForm from "@/components/new-route";
-import CustomModal from "@/components/CustomModal";
-import CreateNewApiVersion from "@/components/create-api-new-version";
-import DeleteApiVersion from "@/components/api-version-deletion";
+import CustomModal from "@/components/custom-modal";
+import CreateNewApiVersion from "../../create-api-new-version";
+import DeleteApiVersion from "../../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { Typography } from "@mui/material";
 import JsonEditor from "@/components/json-editor";

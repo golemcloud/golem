@@ -3,7 +3,7 @@ import { Box, TextField, Typography } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
 import { addNewApiDefinition } from "@/lib/hooks/use-api-definitons";
 import { ApiDefinition } from "@/types/api";
-import { getFormErrorMessage } from "../lib/utils";
+import { getFormErrorMessage } from "../../lib/utils";
 import { Button2 } from "@/components/ui/button";
 
 const CreateAPI = ({

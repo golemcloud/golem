@@ -3,7 +3,7 @@ import { Box, TextField, Typography, Stack } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { getFormErrorMessage } from "@/lib/utils";
-import {Button2 as Button} from "./ui/button";
+import { Button2 as Button } from "@/components/ui/button";
 
 type FormData = {
   version: string;

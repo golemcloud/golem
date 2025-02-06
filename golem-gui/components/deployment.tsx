@@ -12,9 +12,9 @@ import AddIcon from "@mui/icons-material/Add";
 import { useState } from "react";
 import DeploymentCreationPage from "@/components/deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
-import CustomModal from "./CustomModal";
+import CustomModal from "./custom-modal";
 import { Button2 as Button, Button2 } from "./ui/button";
-import ErrorBoundary from "./erro-boundary";
+import ErrorBoundary from "./error-boundary";
 import useApiDefinitions from '@/lib/hooks/use-api-definitons';
 
 export default function DeploymentPage({

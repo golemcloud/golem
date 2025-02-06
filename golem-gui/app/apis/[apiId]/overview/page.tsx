@@ -1,5 +1,5 @@
 "use client";
-import RoutePage from "@/components/api-route-page";
+import RoutePage from "../../api-route-page";
 import DeploymentPage from "@/components/deployment";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Typography, Paper } from "@mui/material";
@@ -11,7 +11,6 @@ export default function Overview() {
   const version = params.get("version");
 
 
-  //TODO: we can make this api overview simialr to components tab structure so that we will have more control over the data
   return (
     <>
       {/* Routes Section */}

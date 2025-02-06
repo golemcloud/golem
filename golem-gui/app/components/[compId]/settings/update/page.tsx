@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { Container } from "@mui/material";
 
-import CreateComponentForm from "@/components/new-component";
+import CreateComponentForm from "@/app/components/new-component";
 
 const ComponentsPage = () => {
   const [, setOpen] = useState(false);

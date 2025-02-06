@@ -6,7 +6,7 @@ import useComponents from "@/lib/hooks/use-component";
 import { ComponentExport } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
 import { Box } from "@mui/material";
-import ErrorBoundary from "@/components/erro-boundary";
+import ErrorBoundary from "@/components/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 type DataItem = {
