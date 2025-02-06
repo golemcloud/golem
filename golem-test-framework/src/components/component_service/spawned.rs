@@ -13,19 +13,17 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    new_client, new_plugins_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
+    new_component_client, new_plugin_client, wait_for_startup, ComponentService,
+    ComponentServiceClient, ComponentServiceEnvVars, PluginServiceClient,
 };
 use crate::components::rdb::Rdb;
 use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -34,8 +32,9 @@ pub struct SpawnedComponentService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    client: Option<ComponentServiceClient<Channel>>,
-    plugins_client: Option<PluginServiceClient<Channel>>,
+    client_protocol: GolemClientProtocol,
+    component_client: ComponentServiceClient,
+    plugin_client: PluginServiceClient,
 }
 
 impl SpawnedComponentService {
@@ -49,7 +48,7 @@ impl SpawnedComponentService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -62,7 +61,7 @@ impl SpawnedComponentService {
             verbosity,
             out_level,
             err_level,
-            shared_client,
+            client_protocol,
         )
         .await
     }
@@ -78,7 +77,7 @@ impl SpawnedComponentService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-component-service process");
 
@@ -112,41 +111,46 @@ impl SpawnedComponentService {
             &mut child,
         );
 
-        wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
+        wait_for_startup(
+            client_protocol,
+            "localhost",
+            grpc_port,
+            http_port,
+            Duration::from_secs(90),
+        )
+        .await;
 
         Self {
             http_port,
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            client: if shared_client {
-                Some(new_client("localhost", grpc_port).await)
-            } else {
-                None
-            },
-            plugins_client: if shared_client {
-                Some(new_plugins_client("localhost", grpc_port).await)
-            } else {
-                None
-            },
+            client_protocol,
+            component_client: new_component_client(
+                client_protocol,
+                "localhost",
+                grpc_port,
+                http_port,
+            )
+            .await,
+            plugin_client: new_plugin_client(client_protocol, "localhost", grpc_port, http_port)
+                .await,
         }
     }
 }
 
 #[async_trait]
 impl ComponentService for SpawnedComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
-        match &self.client {
-            Some(client) => client.clone(),
-            None => new_client("localhost", self.grpc_port).await,
-        }
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
     }
 
-    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
-        match &self.plugins_client {
-            Some(client) => client.clone(),
-            None => new_plugins_client("localhost", self.grpc_port).await,
-        }
+    fn component_client(&self) -> ComponentServiceClient {
+        self.component_client.clone()
+    }
+
+    fn plugin_client(&self) -> PluginServiceClient {
+        self.plugin_client.clone()
     }
 
     fn private_host(&self) -> String {

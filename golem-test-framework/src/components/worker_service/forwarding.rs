@@ -12,33 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
-use bytes::Bytes;
-use std::sync::Arc;
-
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::WorkerService;
+use crate::components::worker_service::{WorkerLogEventStream, WorkerService, WorkerServiceClient};
+use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
     ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, LogEvent, WorkerId};
+use golem_api_grpc::proto::golem::worker::{
+    IdempotencyKey, InvokeResultTyped, InvocationContext, InvokeResult, LogEvent, TargetWorkerId, WorkerId,
+};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
-use tonic::transport::Channel;
+use golem_wasm_rpc::ValueAndType;
+use std::sync::Arc;
 use tonic::Streaming;
 
 pub struct ForwardingWorkerService {
@@ -72,10 +71,8 @@ impl ForwardingWorkerService {
 
 #[async_trait]
 impl WorkerService for ForwardingWorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        Err(anyhow!(
-            "There is no worker-service, cannot create gRPC client"
-        ))
+    fn client(&self) -> WorkerServiceClient {
+        panic!("There is no worker-service, cannot create gRPC client")
     }
 
     async fn create_worker(
@@ -267,7 +264,14 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn invoke(&self, request: InvokeRequest) -> crate::Result<InvokeResponse> {
+    async fn invoke(
+        &self,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        invoke_parameters: Option<Vec<ValueAndType>>,
+        context: Option<InvocationContext>,
+    ) -> crate::Result<InvokeResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self
@@ -275,13 +279,17 @@ impl WorkerService for ForwardingWorkerService {
                 .client()
                 .await?
                 .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
-                    worker_id: request.worker_id.clone(),
-                    idempotency_key: request.idempotency_key.clone(),
-                    name: request.function.clone(),
-                    input: request
-                        .invoke_parameters
+                    worker_id: Some(worker_id.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    name: function.clone(),
+                    input: invoke_parameters
                         .clone()
-                        .map(|p| p.params.clone())
+                        .map(|invoke_parameters| {
+                            invoke_parameters
+                                .into_iter()
+                                .map(|param| param.value.into())
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     account_id: Some(
                         AccountId {
@@ -293,7 +301,7 @@ impl WorkerService for ForwardingWorkerService {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
                     }),
-                    context: request.context.clone(),
+                    context: context.clone(),
                 })
                 .await;
 
@@ -331,7 +339,11 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await(
         &self,
-        request: InvokeAndAwaitRequest,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        invoke_parameters: Option<Vec<ValueAndType>>,
+        context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
@@ -340,13 +352,12 @@ impl WorkerService for ForwardingWorkerService {
                 .client()
                 .await?
                 .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                    worker_id: request.worker_id.clone(),
-                    idempotency_key: request.idempotency_key.clone(),
-                    name: request.function.clone(),
-                    input: request
-                        .invoke_parameters
+                    worker_id: Some(worker_id.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    name: function.clone(),
+                    input: invoke_parameters
                         .clone()
-                        .map(|p| p.params.clone())
+                        .map(|params| params.into_iter().map(|param| param.value.into()).collect())
                         .unwrap_or_default(),
                     account_id: Some(
                         AccountId {
@@ -358,7 +369,7 @@ impl WorkerService for ForwardingWorkerService {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
                     }),
-                    context: request.context.clone(),
+                    context: context.clone(),
                 })
                 .await;
 
@@ -475,7 +486,7 @@ impl WorkerService for ForwardingWorkerService {
     async fn connect_worker(
         &self,
         request: ConnectWorkerRequest,
-    ) -> crate::Result<Streaming<LogEvent>> {
+    ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self
@@ -506,7 +517,9 @@ impl WorkerService for ForwardingWorkerService {
         };
         let result = result?.into_inner();
 
-        Ok(result)
+        Ok(Box::new(
+            GrpcForwardingWorkerLogEventStream::new(result).await?,
+        ))
     }
 
     async fn resume_worker(
@@ -950,4 +963,21 @@ impl WorkerService for ForwardingWorkerService {
     }
 
     async fn kill(&self) {}
+}
+
+pub struct GrpcForwardingWorkerLogEventStream {
+    streaming: Streaming<LogEvent>,
+}
+
+impl GrpcForwardingWorkerLogEventStream {
+    async fn new(streaming: Streaming<LogEvent>) -> crate::Result<Self> {
+        Ok(Self { streaming })
+    }
+}
+
+#[async_trait]
+impl WorkerLogEventStream for GrpcForwardingWorkerLogEventStream {
+    async fn message(&mut self) -> crate::Result<Option<LogEvent>> {
+        Ok(self.streaming.message().await?)
+    }
 }

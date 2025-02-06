@@ -14,7 +14,7 @@ use std::collections::HashMap;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use tokio::task::JoinSet;
 
 use golem_api_grpc::proto::golem::shardmanager;
@@ -158,7 +158,7 @@ impl Benchmark for RpcCpuIntensive {
                 .map(|w| w.parent.clone())
                 .collect::<Vec<WorkerId>>(),
             "golem:itrpc/rpc-api.{echo}",
-            vec![Value::String("hello".to_string())],
+            vec!["hello".into_value_and_type()],
         )
         .await;
     }
@@ -194,7 +194,7 @@ impl Benchmark for RpcCpuIntensive {
             &recorder,
             &shard_manager_routing_table,
             "golem:itrpc/rpc-api.{calculate}",
-            vec![Value::U64(calculate_iter)],
+            vec![calculate_iter.into_value_and_type()],
             "worker-calculate-invocation",
         )
         .await;
@@ -228,7 +228,7 @@ impl RpcCpuIntensive {
         recorder: &BenchmarkRecorder,
         shard_manager_routing_table: &RoutingTable,
         function: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
         name: &str,
     ) {
         let mut fibers = JoinSet::new();

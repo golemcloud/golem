@@ -40,6 +40,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
+use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 
 mod common;
 
@@ -310,4 +311,11 @@ pub fn last_unique_id() -> LastUniqueId {
     LastUniqueId {
         id: AtomicU16::new(0),
     }
+}
+
+#[test_dep(tagged_as = "golem_host")]
+pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
+    SharedAnalysedTypeResolve::new(
+        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
+    )
 }

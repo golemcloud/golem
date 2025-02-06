@@ -268,6 +268,7 @@ pub mod directive {
             warn("fred"),
             warn("wac_graph"),
             warn("wasmtime_environ"),
+            warn("wit_parser"),
         ]
     }
 }
