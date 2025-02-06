@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
-import DangerZone from "@/components/settings";
+import DangerZone from "@/components/ui/settings";
 import ComponentInfo from "@/app/components/component-info-card";
 import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
 import { useSearchParams } from "next/navigation";
@@ -11,7 +11,7 @@ import { toast } from "react-toastify";
 import useComponents, { downloadComponent } from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { Button2 } from "@/components/ui/button";
 import { DownloadIcon } from "lucide-react";
 import { DropdownV2 } from "@/components/ui/dropdown-button";

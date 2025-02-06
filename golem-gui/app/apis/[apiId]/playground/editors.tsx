@@ -1,14 +1,14 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import useStore from "@/lib/hooks/use-react-flow-store";
-import NewRouteForm from "@/components/new-route";
-import CustomModal from "@/components/custom-modal";
+import NewRouteForm from "../../new-route";
+import CustomModal from "@/components/custom/custom-modal";
 import CreateNewApiVersion from "../../create-api-new-version";
 import DeleteApiVersion from "../../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { Typography } from "@mui/material";
-import JsonEditor from "@/components/json-editor";
-import DeploymentCreationPage from "@/components/deployment-creation";
+import JsonEditor from "@/components/json-editor/json-editor";
+import DeploymentCreationPage from "@/app/apis/deployment-creation";
 const operationMap = {
   "new_route": "New Route",
   "new_api": "New Version",

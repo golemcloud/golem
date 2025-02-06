@@ -19,13 +19,13 @@ import {
 } from "@mui/icons-material";
 import { PieChart, Pie,Cell, ResponsiveContainer } from "recharts";
 import CreateWorker from "@/app/components/create-worker";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import useComponents from "@/lib/hooks/use-component";
 import {  useRouter, useSearchParams } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import useWorkers, { getStateFromWorkersData } from "@/lib/hooks/use-worker";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const Overview = () => {

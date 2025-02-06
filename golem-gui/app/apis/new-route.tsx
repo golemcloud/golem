@@ -21,7 +21,7 @@ import { PopoverDemo } from "./interpolate-tooltip";
 import {
   InterpolationExpressions,
   AvailableFunctions,
-} from "./interpolate-tooltip";
+} from "@/app/apis/interpolate-tooltip";
 import { useRouter } from "next/navigation";
 
 type FormData = {

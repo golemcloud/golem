@@ -3,7 +3,7 @@ import { Box, Typography, Stack, List } from "@mui/material";
 import { Loader } from "lucide-react";
 import { ApiDefinition, ApiRoute } from "../../types/api";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Button2 } from "../../components/ui/button";

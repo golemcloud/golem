@@ -27,9 +27,9 @@ import {
   AlignVerticalSpaceAround,
 } from "lucide-react";
 import { transform } from "@/lib/hooks/use-worker";
-import JsonEditor from "@/components/json-editor";
+import JsonEditor from "@/components/json-editor/json-editor";
 import { RemoveCircle } from "@mui/icons-material";
-import { RecordDataType } from "@/components/interpolate-tooltip";
+import { RecordDataType } from "@/app/apis/interpolate-tooltip";
 
 type FormData = {
   [key: string]: unknown;

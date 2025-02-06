@@ -3,7 +3,7 @@ import React from "react";
 import { Box, Typography, Grid2 as Grid, Paper } from "@mui/material";
 import { Folder } from "lucide-react";
 import { useWorkerFileContent } from "@/lib/hooks/use-worker";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 const FileComponent = () => {

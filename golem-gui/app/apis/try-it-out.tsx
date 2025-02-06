@@ -9,9 +9,9 @@ import {
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 import React, { useMemo, useState } from "react";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
-import JsonEditor from "@/components/json-editor";
+import JsonEditor from "@/components/json-editor/json-editor";
 import { Loader } from "lucide-react";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { toast } from "react-toastify";
 type FormData = {
   [key: string]: unknown;

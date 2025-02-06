@@ -24,10 +24,10 @@ import {
 import usePlugins, { useDeletePlugin } from "@/lib/hooks/use-plugin";
 
 import CreatePluginForm from "./create-plugin";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import { Plugin } from "@/types/api";
-import ErrorBoundary from "@/components/error-boundary";
-import NotFoundCard from "@/components/not-found-card";
+import ErrorBoundary from "@/components/error/error-boundary";
+import NotFoundCard from "@/components/ui/not-found-card";
 import SearchIcon from "@mui/icons-material/Search";
 
 const PluginsPage = () => {
