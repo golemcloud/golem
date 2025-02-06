@@ -4116,6 +4116,7 @@ version = "0.0.0"
 dependencies = [
  "bincode",
  "colored-diff",
+ "itertools 0.13.0",
  "leb128",
  "mappable-rc",
  "poem-openapi",
@@ -4130,6 +4131,7 @@ dependencies = [
  "wasm-wave",
  "wasmparser 0.221.2",
  "wasmprinter 0.221.2",
+ "wit-parser 0.221.2",
 ]
 
 [[package]]

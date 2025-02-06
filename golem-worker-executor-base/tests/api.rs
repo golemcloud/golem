@@ -34,6 +34,7 @@ use golem_test_framework::dsl::{
     worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
 use std::collections::HashMap;
@@ -51,6 +52,10 @@ use wasmtime_wasi::runtime::spawn;
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+inherit_test_dep!(
+    #[tagged_as("golem_host")]
+    SharedAnalysedTypeResolve
+);
 
 #[test]
 #[tracing::instrument]
@@ -526,11 +531,12 @@ async fn get_self_uri(
     );
 }
 
-#[test]
+#[test()]
 #[tracing::instrument]
 async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
 ) {
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await.unwrap();
@@ -546,13 +552,12 @@ async fn get_workers_from_worker(
         .await;
 
     async fn get_check(
-        _worker_id: &WorkerId,
-        _name_filter: Option<String>,
-        _expected_count: usize,
-        _executor: &mut TestWorkerExecutor,
+        worker_id: &WorkerId,
+        name_filter: Option<String>,
+        expected_count: usize,
+        executor: &mut TestWorkerExecutor,
+        mut type_resolve: SharedAnalysedTypeResolve,
     ) {
-        // TODO:
-        /*
         let component_id_val_and_type = {
             let (high, low) = worker_id.component_id.0.as_u64_pair();
             vec![(
@@ -566,27 +571,16 @@ async fn get_workers_from_worker(
             .into_value_and_type()
         };
 
-        let filter_val_and_type = name_filter.map(|name| {
-            vec![(
-                "filters",
-                vec![(
-                    "filters",
-                    ValueAndType {
-                        value: Value::List(vec![Value::Variant {
-                            case_idx: 0,
-                            case_value: Some(Box::new(Value::Record(vec![
-                                Value::Enum(0),
-                                Value::String(name.clone()),
-                            ]))),
-                        }]),
-                        typ: analysed_type::list(analysed_type::variant(vec![
-                            // TODO: should enumerate all filter cases
-                        ])),
-                    },
-                )]
-                .into_value_and_type(),
-            )]
-            .into_value_and_type();
+        let filter_val = name_filter.map(|name| {
+            Value::Record(vec![Value::List(vec![Value::Record(vec![Value::List(
+                vec![Value::Variant {
+                    case_idx: 0,
+                    case_value: Some(Box::new(Value::Record(vec![
+                        Value::Enum(0),
+                        Value::String(name.clone()),
+                    ]))),
+                }],
+            )])])])
         });
 
         let result = executor
@@ -596,8 +590,16 @@ async fn get_workers_from_worker(
                 vec![
                     component_id_val_and_type,
                     ValueAndType {
-                        value: Value::Option(filter_val_and_type.value),
-                        typ: analysed_type::option(filter_val_and_type.typ),
+                        value: Value::Option(filter_val.map(Box::new)),
+                        typ: analysed_type::option(
+                            type_resolve
+                                .analysed_type(&TypeName {
+                                    package: Some("golem:api@0.2.0".to_string()),
+                                    owner: TypeOwner::Interface("host".to_string()),
+                                    name: Some("worker-any-filter".to_string()),
+                                })
+                                .unwrap(),
+                        ),
                     },
                     true.into_value_and_type(),
                 ],
@@ -614,15 +616,15 @@ async fn get_workers_from_worker(
             _ => {
                 check!(false);
             }
-        }*/
+        }
     }
-
-    get_check(&worker_id1, None, 2, &mut executor).await;
+    get_check(&worker_id1, None, 2, &mut executor, type_resolve.clone()).await;
     get_check(
         &worker_id2,
         Some("runtime-service-1".to_string()),
         1,
         &mut executor,
+        type_resolve.clone(),
     )
     .await;
 
