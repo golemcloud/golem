@@ -31,11 +31,11 @@ use async_trait::async_trait;
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId, WorkerId
 };
 use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
-use golem_wasm_rpc::golem::rpc0_1_1::types::{
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -420,6 +420,47 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         result
     }
 
+    async fn schedule_invocation(
+        &mut self,
+        this: Resource<WasmRpcEntry>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        full_function_name: String,
+        mut function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+    ) -> anyhow::Result<()> {
+        let entry = self.table().get(&this)?;
+        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        let remote_worker_id = payload.remote_worker_id().clone();
+
+        Self::add_self_parameter_if_needed(&mut function_input, payload);
+
+        let current_idempotency_key = self
+            .state
+            .get_current_idempotency_key()
+            .expect("Expected to get an idempotency key as we are inside an invocation");
+
+        let current_oplog_index = self.state.current_oplog_index().await;
+
+        let idempotency_key =
+            IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
+
+        let action = ScheduledAction::Invoke {
+            owned_worker_id: remote_worker_id,
+            idempotency_key,
+            full_function_name,
+            function_input: function_input.into_iter().map(|e| e.into()).collect(),
+        };
+
+        // The scheduler uses the (deterministic) datetime to deduplicate scheduled actions.
+        // The worker executor uses the idempotency key to deduplicate invocation.
+        // With both together we don't need any extra idempotency handling here.
+        self.state
+            .scheduler_service
+            .schedule(datetime.into(), action)
+            .await;
+
+        Ok(())
+    }
+
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::wasm-rpc", "drop");
 
@@ -780,14 +821,14 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     // generator does not include types that are not used in any exported _functions_
     async fn extract_value(
         &mut self,
-        vnt: golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
     ) -> anyhow::Result<WitValue> {
         Ok(vnt.value)
     }
 
     async fn extract_type(
         &mut self,
-        vnt: golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+        vnt: golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
     ) -> anyhow::Result<WitType> {
         Ok(vnt.typ)
     }

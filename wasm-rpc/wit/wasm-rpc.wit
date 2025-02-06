@@ -1,5 +1,5 @@
 package golem:rpc;
 
 world wasm-rpc {
-  import golem:rpc/types@0.1.1;
+  import golem:rpc/types@0.1.2;
 }

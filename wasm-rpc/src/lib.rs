@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use chrono::{DateTime, Utc};
 
 #[allow(unused)]
 #[rustfmt::skip]
@@ -69,8 +70,10 @@ pub mod wasmtime;
 
 #[cfg(any(feature = "host-bindings", feature = "stub"))]
 use crate::builder::WitValueBuilder;
+
 #[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
+
 #[cfg(any(feature = "host-bindings", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
@@ -106,13 +109,23 @@ mod generated {
 }
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem;
+pub use generated::golem::rpc0_1_2 as golem_rpc_0_1_x;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_1_1::types::{
+pub use golem_rpc_0_1_x::types::{
     Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, WitNode, WitType, WitTypeNode,
     WitValue,
 };
+
+#[cfg(feature = "host-bindings")]
+pub use generated::wasi::clocks::wall_clock::Datetime as WasiDatetime;
+
+impl From<WasiDatetime> for DateTime<Utc> {
+    fn from(value: WasiDatetime) -> DateTime<Utc> {
+        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
+            .expect("Received invalid datetime from wasi")
+    }
+}
 
 #[cfg(feature = "host-bindings")]
 pub struct WasmRpcEntry {

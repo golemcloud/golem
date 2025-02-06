@@ -4144,6 +4144,7 @@ dependencies = [
  "bigdecimal",
  "bincode",
  "cargo_metadata",
+ "chrono",
  "git-version",
  "golem-wasm-ast",
  "poem-openapi",
@@ -4210,7 +4211,7 @@ dependencies = [
 [[package]]
 name = "golem-wit"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit.git?branch=scheduled-invocation#33db0c8eccd228c07fa47f2aee8b5d1728afe77f"
+source = "git+https://github.com/golemcloud/golem-wit.git?rev=94f1e29ef61c94a904335677bb4fea220630f37d#94f1e29ef61c94a904335677bb4fea220630f37d"
 
 [[package]]
 name = "golem-wit"
@@ -11986,9 +11987,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rt"
-version = "0.36.0"
+version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7947d0131c7c9da3f01dfde0ab8bd4c4cf3c5bd49b6dba0ae640f1fa752572ea"
+checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.7.0",
 ]

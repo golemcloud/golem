@@ -37,7 +37,7 @@ fs_extra = { workspace = true }
 glob = "0.3.1"
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
-golem-wit = { workspace = true }
+golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", rev = "94f1e29ef61c94a904335677bb4fea220630f37d" }
 heck = "0.5.0"
 id-arena = "2.2.1"
 indexmap = "2.7.0"

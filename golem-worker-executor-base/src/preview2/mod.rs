@@ -78,13 +78,6 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
     }
 }
 
-impl From<self::wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
-    fn from(value: self::wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
-        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
-            .expect("Received invalid datetime from wasi")
-    }
-}
-
 // reexports so that we don't have to change version numbers everywhere
-pub use self::golem::api0_2_0 as golem_api_0_2_x;
-pub use self::golem::api1_2_0 as golem_api_1_x;
+pub use self::golem::api0_2_1 as golem_api_0_2_x;
+pub use self::golem::api1_1_2 as golem_api_1_x;
