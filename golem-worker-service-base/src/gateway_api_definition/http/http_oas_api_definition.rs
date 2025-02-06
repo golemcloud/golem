@@ -48,6 +48,71 @@ impl OpenApiHttpApiDefinitionRequest {
             security,
         })
     }
+
+    pub fn from_http_api_definition_request(def: &crate::gateway_api_definition::http::HttpApiDefinitionRequest) -> Result<Self, String> {
+        let mut open_api = openapiv3::OpenAPI::default();
+        open_api.info = openapiv3::Info {
+            title: "OpenAPI Definition".to_string(),
+            version: def.version.0.clone(),
+            ..Default::default()
+        };
+        
+        open_api.extensions.insert(
+            "x-golem-api-definition-id".to_string(), 
+            serde_json::Value::String(def.id.0.clone())
+        );
+        open_api.extensions.insert(
+            "x-golem-api-definition-version".to_string(), 
+            serde_json::Value::String(def.version.0.clone())
+        );
+        
+        let mut paths: std::collections::BTreeMap<String, openapiv3::PathItem> = std::collections::BTreeMap::new();
+
+        for route in &def.routes {
+            let path_str = route.path.to_string();
+            let operation = internal::get_operation_from_route(route)?;
+            let path_item = paths.entry(path_str.clone()).or_insert_with(|| openapiv3::PathItem::default());
+            match route.method {
+                crate::gateway_api_definition::http::MethodPattern::Get => { path_item.get = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Post => { path_item.post = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Put => { path_item.put = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Delete => { path_item.delete = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Options => { path_item.options = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Head => { path_item.head = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Patch => { path_item.patch = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Trace => { path_item.trace = Some(operation); },
+                crate::gateway_api_definition::http::MethodPattern::Connect => {
+                    return Err("CONNECT method is not supported in OpenAPI v3 specification".to_string());
+                },
+            }
+        }
+        
+        open_api.paths = openapiv3::Paths {
+            paths: paths.into_iter()
+                .map(|(k, v)| (k, openapiv3::ReferenceOr::Item(v)))
+                .collect(),
+            extensions: Default::default()
+        };
+
+        // Set the security field from def.security. If def.security is None, default to an empty vector.
+        open_api.security = Some(
+            def.security.as_ref().map_or(Vec::new(), |sec_refs| {
+                sec_refs.iter().map(|sec_ref| {
+                    let mut req: openapiv3::SecurityRequirement = openapiv3::SecurityRequirement::new();
+                    req.insert(sec_ref.security_scheme_identifier.to_string(), Vec::<String>::new());
+                    req
+                }).collect()
+            })
+        );
+
+        let has_cors_preflight = def.routes.iter().any(|route| {
+            route.method == crate::gateway_api_definition::http::MethodPattern::Options &&
+            matches!(route.binding, crate::gateway_binding::GatewayBinding::Static(_))
+        });
+        open_api.extensions.insert("corsPreflight".to_string(), serde_json::Value::Bool(has_cors_preflight));
+
+        Ok(OpenApiHttpApiDefinitionRequest(open_api))
+    }
 }
 
 impl ParseFromJSON for OpenApiHttpApiDefinitionRequest {
@@ -151,9 +216,9 @@ mod internal {
                 .collect();
 
             if global_security.is_empty() {
-                Some(global_security)
-            } else {
                 None
+            } else {
+                Some(global_security)
             }
         })
     }
@@ -216,6 +281,7 @@ mod internal {
             "head" => Ok(MethodPattern::Head),
             "patch" => Ok(MethodPattern::Patch),
             "trace" => Ok(MethodPattern::Trace),
+            "connect" => Ok(MethodPattern::Connect),
             _ => Err("Other methods not supported".to_string()),
         };
 
@@ -369,25 +435,12 @@ mod internal {
     pub(crate) fn get_component_id(
         gateway_binding_value: &Value,
     ) -> Result<VersionedComponentId, String> {
-        let component_id_str = gateway_binding_value
-            .get("component-id")
-            .ok_or("No component-id found")?
-            .as_str()
-            .ok_or("component-id is not a string")?;
-
-        let version = gateway_binding_value
-            .get("component-version")
-            .ok_or("No component-version found")?
-            .as_u64()
-            .ok_or("component-version is not a u64")?;
-
-        let component_id =
-            ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
-
-        Ok(VersionedComponentId {
-            component_id,
-            version,
-        })
+        let comp_val = gateway_binding_value.get("component-id").ok_or("No component-id found")?;
+        let component_id_str: String = serde_json::from_value(comp_val.clone()).map_err(|e| e.to_string())?;
+        let version_val = gateway_binding_value.get("component-version").ok_or("No component-version found")?;
+        let version: u64 = serde_json::from_value(version_val.clone()).map_err(|e| e.to_string())?;
+        let component_id = ComponentId(Uuid::parse_str(&component_id_str).map_err(|err| err.to_string())?);
+        Ok(VersionedComponentId { component_id, version })
     }
 
     pub(crate) fn get_binding_type(
@@ -405,47 +458,28 @@ mod internal {
     pub(crate) fn get_response_mapping(
         gateway_binding_value: &Value,
     ) -> Result<ResponseMapping, String> {
-        let response = {
-            let response_mapping_optional = gateway_binding_value.get("response").ok_or(
-                "No response mapping found. It should be a string representing expression"
-                    .to_string(),
-            )?;
-
-            match response_mapping_optional {
-                Value::String(expr) => rib::from_string(expr).map_err(|err| err.to_string()),
-                _ => Err(
-                    "Invalid response mapping type. It should be a string representing expression"
-                        .to_string(),
-                ),
-            }
-        }?;
-
-        Ok(ResponseMapping(response.clone()))
+        let response_val = gateway_binding_value.get("response").ok_or("No response mapping found. It should be a JSON representation of the expression")?;
+        let response = serde_json::from_value(response_val.clone()).map_err(|e| e.to_string())?;
+        Ok(ResponseMapping(response))
     }
 
     pub(crate) fn get_worker_id_expr(
         gateway_binding_value: &Value,
     ) -> Result<Option<Expr>, String> {
-        let worker_id_str_opt = gateway_binding_value
-            .get("worker-name")
-            .map(|json_value| json_value.as_str().ok_or("worker-name is not a string"))
-            .transpose()?;
-
-        let worker_id_expr_opt = worker_id_str_opt
-            .map(|worker_id| rib::from_string(worker_id).map_err(|err| err.to_string()))
-            .transpose()?;
-
-        Ok(worker_id_expr_opt)
+        if let Some(val) = gateway_binding_value.get("worker-name") {
+            let expr: Expr = serde_json::from_value(val.clone()).map_err(|e| e.to_string())?;
+            Ok(Some(expr))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn get_idempotency_key(
         gateway_binding_value: &Value,
     ) -> Result<Option<Expr>, String> {
-        if let Some(key) = gateway_binding_value.get("idempotency-key") {
-            let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
-            Ok(Some(
-                rib::from_string(key_expr).map_err(|err| err.to_string())?,
-            ))
+        if let Some(val) = gateway_binding_value.get("idempotency-key") {
+            let expr: Expr = serde_json::from_value(val.clone()).map_err(|e| e.to_string())?;
+            Ok(Some(expr))
         } else {
             Ok(None)
         }
@@ -453,6 +487,47 @@ mod internal {
 
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path)
+    }
+
+    pub(crate) fn get_operation_from_route(route: &crate::gateway_api_definition::http::RouteRequest) -> Result<openapiv3::Operation, String> {
+        let mut operation = openapiv3::Operation::default();
+        let mut binding_info = serde_json::Map::new();
+
+        match &route.binding {
+            GatewayBinding::Default(worker_binding) => {
+                binding_info.insert("binding-type".to_string(), serde_json::Value::String("default".to_string()));
+                binding_info.insert("worker-name".to_string(), serde_json::to_value(&worker_binding.worker_name).map_err(|e| e.to_string())?);
+                binding_info.insert("component-id".to_string(), serde_json::to_value(&worker_binding.component_id).map_err(|e| e.to_string())?);
+                if let Some(key) = &worker_binding.idempotency_key {
+                    binding_info.insert("idempotency-key".to_string(), serde_json::to_value(key).map_err(|e| e.to_string())?);
+                }
+                binding_info.insert("response".to_string(), serde_json::to_value(&worker_binding.response_mapping).map_err(|e| e.to_string())?);
+            },
+            GatewayBinding::HttpHandler(http_handler_binding) => {
+                binding_info.insert("binding-type".to_string(), serde_json::Value::String("http-handler".to_string()));
+                binding_info.insert("worker-name".to_string(), serde_json::to_value(&http_handler_binding.worker_name).map_err(|e| e.to_string())?);
+                binding_info.insert("component-id".to_string(), serde_json::to_value(&http_handler_binding.component_id).map_err(|e| e.to_string())?);
+                if let Some(key) = &http_handler_binding.idempotency_key {
+                    binding_info.insert("idempotency-key".to_string(), serde_json::to_value(key).map_err(|e| e.to_string())?);
+                }
+            },
+            GatewayBinding::Static(static_binding) => {
+                binding_info.insert("binding-type".to_string(), serde_json::Value::String("cors-preflight".to_string()));
+                binding_info.insert("response".to_string(), serde_json::to_value(&static_binding).map_err(|e| e.to_string())?);
+            },
+            GatewayBinding::FileServer(worker_binding) => {
+                binding_info.insert("binding-type".to_string(), serde_json::Value::String("file-server".to_string()));
+                binding_info.insert("worker-name".to_string(), serde_json::to_value(&worker_binding.worker_name).map_err(|e| e.to_string())?);
+                binding_info.insert("component-id".to_string(), serde_json::to_value(&worker_binding.component_id).map_err(|e| e.to_string())?);
+                if let Some(key) = &worker_binding.idempotency_key {
+                    binding_info.insert("idempotency-key".to_string(), serde_json::to_value(key).map_err(|e| e.to_string())?);
+                }
+                binding_info.insert("response".to_string(), serde_json::to_value(&worker_binding.response_mapping).map_err(|e| e.to_string())?);
+            },
+        }
+
+        operation.extensions.insert("x-golem-api-gateway-binding".to_string(), serde_json::Value::Object(binding_info));
+        Ok(operation)
     }
 }
 
@@ -468,6 +543,7 @@ mod tests {
     use openapiv3::Operation;
 
     use serde_json::json;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_get_route_with_cors_preflight_binding() {
@@ -550,5 +626,102 @@ mod tests {
             security: None,
             cors: None,
         }
+    }
+
+    #[test]
+    fn test_conversion_preserves_security_and_cors() {
+        use openapiv3::{OpenAPI, Info, Operation, PathItem, ReferenceOr};
+        use std::collections::BTreeMap;
+        use serde_json::json;
+        use crate::gateway_api_definition::http::MethodPattern;
+
+        // Build an OpenAPI spec with global security and both GET and OPTIONS operations
+        let mut open_api = OpenAPI::default();
+        open_api.info = Info {
+            title: "Test API".into(),
+            version: "1.0".into(),
+            ..Default::default()
+        };
+        open_api.extensions.insert("x-golem-api-definition-id".to_string(), json!("test_export"));
+        open_api.extensions.insert("x-golem-api-definition-version".to_string(), json!("1.0"));
+
+        // Set global security: [{"api_key": []}]
+        let mut global_sec = IndexMap::new();
+        global_sec.insert("api_key".to_string(), Vec::<String>::new());
+        open_api.security = Some(vec![global_sec]);
+
+        // Create a GET operation with default binding and operation-level security
+        let mut get_op = Operation::default();
+        get_op.extensions.insert("x-golem-api-gateway-binding".to_string(), json!({
+            "binding-type": "default",
+            "worker-name": "workerA",
+            "component-id": "550e8400-e29b-41d4-a716-446655440000",
+            "component-version": 1,
+            "response": "{dummy: \"data\"}"
+        }));
+        let mut op_sec = IndexMap::new();
+        op_sec.insert("api_key".to_string(), Vec::<String>::new());
+        get_op.security = Some(vec![op_sec]);
+
+        // Create an OPTIONS operation with cors-preflight binding and a custom allow origin
+        let mut options_op = Operation::default();
+        options_op.extensions.insert("x-golem-api-gateway-binding".to_string(), json!({
+            "binding-type": "cors-preflight",
+            "response": "{Access-Control-Allow-Origin: \"example.com\"}"
+        }));
+
+        // Assemble the path item with both operations
+        let mut path_item = PathItem::default();
+        path_item.get = Some(get_op);
+        path_item.options = Some(options_op);
+
+        let mut paths = BTreeMap::new();
+        paths.insert("/test".to_string(), ReferenceOr::Item(path_item));
+        open_api.paths = openapiv3::Paths {
+            paths: paths.into_iter()
+                .map(|(k, v)| (k, v))  // No need for extra ReferenceOr wrapping
+                .collect(),
+            extensions: Default::default()
+        };
+
+        // Convert the OpenAPI spec into our internal representation
+        let openapi_req = OpenApiHttpApiDefinitionRequest(open_api);
+        let api_def_req = openapi_req.to_http_api_definition_request().unwrap();
+
+        // Verify that the global security is preserved
+        assert!(api_def_req.security.is_some(), "Global security should be preserved.");
+        let global_sec_preserved = api_def_req.security.unwrap();
+        let has_api_key = global_sec_preserved.into_iter().any(|sec| sec.security_scheme_identifier.to_string() == "api_key");
+        assert!(has_api_key, "Global security should include 'api_key'.");
+
+        // Verify that both GET and OPTIONS routes are correctly converted
+        let mut found_get = false;
+        let mut found_options = false;
+        for route in api_def_req.routes {
+            if route.method == MethodPattern::Get {
+                found_get = true;
+                if let crate::gateway_binding::GatewayBinding::Default(_) = route.binding {
+                    // Expected default binding
+                } else {
+                    panic!("GET route should use default binding.");
+                }
+                assert!(route.security.is_some(), "GET route should have security set.");
+                let sec_ref = route.security.unwrap();
+                assert_eq!(sec_ref.security_scheme_identifier.to_string(), "api_key", "GET route security scheme should be 'api_key'.");
+            } else if route.method == MethodPattern::Options {
+                found_options = true;
+                if let crate::gateway_binding::GatewayBinding::Static(sb) = route.binding {
+                    if let Some(cors) = sb.get_cors_preflight() {
+                        assert_eq!(cors.get_allow_origin(), "example.com", "OPTIONS route should have custom allow origin 'example.com'.");
+                    } else {
+                        panic!("OPTIONS route should have CORS preflight configuration.");
+                    }
+                } else {
+                    panic!("OPTIONS route should use cors-preflight binding.");
+                }
+            }
+        }
+        assert!(found_get, "GET route not found.");
+        assert!(found_options, "OPTIONS route not found.");
     }
 }

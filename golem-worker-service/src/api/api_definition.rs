@@ -16,6 +16,47 @@ use poem_openapi::*;
 use std::result::Result;
 use std::sync::Arc;
 use tracing::{error, Instrument};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api::RouteResponseData;
+
+/// Local trait for converting HttpApiDefinition to HttpApiDefinitionResponseData
+pub trait ToHttpApiDefinitionResponseData {
+    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String>;
+}
+
+impl ToHttpApiDefinitionResponseData for HttpApiDefinition {
+    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String> {
+        let metadata_dictionary = golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary {
+            metadata: std::collections::HashMap::new(),
+        };
+
+        let routes = self.routes
+            .iter()
+            .map(|route| {
+                let compiled_route = golem_worker_service_base::gateway_api_definition::http::CompiledRoute::from_route(
+                    route,
+                    &metadata_dictionary,
+                ).map_err(|e| format!("Failed to compile route: {:?}", e))?;
+                RouteResponseData::try_from(compiled_route)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(HttpApiDefinitionResponseData {
+            id: self.id.clone(),
+            version: self.version.clone(),
+            routes,
+            draft: self.draft,
+            created_at: Some(self.created_at),
+        })
+    }
+}
+
+impl<N: Clone> ToHttpApiDefinitionResponseData for CompiledHttpApiDefinition<N> {
+    fn to_response_data(&self) -> Result<HttpApiDefinitionResponseData, String> {
+        let http_api_def: HttpApiDefinition = (*self).clone().into();
+        http_api_def.to_response_data()
+    }
+}
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
@@ -53,7 +94,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result = HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
+            let result = result.to_response_data().map_err(|e| {
                 error!("Failed to convert to response data {}", e);
                 ApiEndpointError::internal(safe(e))
             });
@@ -91,11 +132,10 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
+            let result = compiled_definition.to_response_data().map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            });
 
             result.map(Json)
         };
@@ -149,11 +189,10 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                let result =
-                    HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                        error!("Failed to convert to response data {}", e);
-                        ApiEndpointError::internal(safe(e))
-                    });
+                let result = compiled_definition.to_response_data().map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                });
 
                 result.map(Json)
             }
@@ -201,11 +240,10 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
+            let result = compiled_definition.to_response_data().map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            });
 
             result.map(Json)
         };
@@ -280,7 +318,7 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(HttpApiDefinitionResponseData::try_from)
+                .map(|http_api_def| http_api_def.to_response_data())
                 .collect::<Result<Vec<_>, String>>()
                 .map_err(|e| {
                     error!("Failed to convert to response data {}", e);
@@ -290,6 +328,49 @@ impl RegisterApiDefinitionApi {
             Ok(Json(values))
         };
         record.result(response)
+    }
+
+    /// Export the OpenAPI specification for the API definition.
+    ///
+    /// Returns the OpenAPI spec (in YAML) for the API definition with the given id and version.
+    #[oai(path = "/:id/:version/export", method = "get", operation_id = "export_definition")]
+    async fn export(
+        &self,
+        id: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiDefinitionId>,
+        version: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiVersion>,
+    ) -> Result<poem_openapi::payload::PlainText<String>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "export_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
+        );
+
+        let data = self.definition_service
+            .get(&id.0, &version.0, &DefaultNamespace::default(), &EmptyAuthCtx::default())
+            .instrument(record.span.clone())
+            .await?;
+        
+        let compiled_definition = data.ok_or(
+            ApiEndpointError::not_found(safe(format!(
+                "Can't find API definition with id {} and version {}",
+                id.0, version.0
+            )))
+        )?;
+        
+        // First convert CompiledHttpApiDefinition to HttpApiDefinition
+        let http_api_def: HttpApiDefinition = compiled_definition.into();
+        
+        // Then convert HttpApiDefinition to base HttpApiDefinitionRequest
+        let api_def_request: golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest = http_api_def.into();
+        
+        // Finally create OpenApiHttpApiDefinitionRequest
+        let openapi_def = golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest::from_http_api_definition_request(&api_def_request)
+            .map_err(|e| ApiEndpointError::internal(safe(e)))?;
+        
+        let yaml = serde_yaml::to_string(&openapi_def.0)
+            .map_err(|e| ApiEndpointError::internal(safe(e.to_string())))?;
+        
+        Ok(poem_openapi::payload::PlainText(yaml))
     }
 }
 
@@ -693,5 +774,40 @@ mod test {
             .await;
 
         response.assert_status_is_ok();
+    }
+
+    #[test]
+    async fn export_endpoint_preserves_custom_extensions() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test_export".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![],
+            draft: false,
+            security: None,
+        };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status(StatusCode::OK);
+
+        let url = format!("/v1/api/definitions/{}/{}/export", definition.id.0, definition.version.0);
+        let response = client.get(&url).send().await;
+        response.assert_status(StatusCode::OK);
+
+        let body_bytes = response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let body = String::from_utf8(body_bytes).unwrap();
+
+        assert!(body.contains("x-golem-api-definition-id"));
+        assert!(body.contains("test_export"));
+        assert!(body.contains("x-golem-api-definition-version"));
+        assert!(body.contains("1.0"));
+        assert!(body.contains("security:"), "Exported YAML should contain 'security' field.");
+        assert!(body.contains("corsPreflight:"), "Exported YAML should contain 'corsPreflight' field.");
     }
 }
