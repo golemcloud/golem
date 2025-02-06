@@ -17,12 +17,12 @@ import { ApiDefinition, Component as GolemComponent } from "@/types/api";
 import { useRouter } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import useComponents from "@/lib/hooks/use-component";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import ComponentCard from "../components/component-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { NotepadText, Component, Globe, Bot } from "lucide-react";
 import { Button2 } from "@/components/ui/button";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 
 // working on overview page
 

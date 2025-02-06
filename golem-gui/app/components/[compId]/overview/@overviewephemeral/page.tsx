@@ -15,7 +15,7 @@ import useComponents from "@/lib/hooks/use-component";
 import { useSearchParams } from "next/navigation";
 import { ComponentExport, WorkerFunction } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import InvokePage from "../../workers/@workers/[id]/invoke";
 

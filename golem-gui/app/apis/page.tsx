@@ -13,12 +13,12 @@ import CreateAPI from "./create-api";
 import ApiIcon from "@mui/icons-material/Api";
 import { useRouter } from "next/navigation";
 import { ApiDefinition } from "@/types/api";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import ApiInfoCard from "./api-info-card";
 import { Button2 } from "@/components/ui/button";
-import ErrorBoundary from "@/components/error-boundary";
-import NotFoundCard from "@/components/not-found-card";
+import ErrorBoundary from "@/components/error/error-boundary";
+import NotFoundCard from "@/components/ui/not-found-card";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);

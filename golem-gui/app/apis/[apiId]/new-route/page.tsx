@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { useSearchParams } from "next/navigation";
-import NewRouteForm from "@/components/new-route";
+import NewRouteForm from "../../new-route";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export default function Page() {

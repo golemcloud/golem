@@ -1,6 +1,6 @@
 "use client";
 import RoutePage from "../../api-route-page";
-import DeploymentPage from "@/components/deployment";
+import DeploymentPage from "../../deployment";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Typography, Paper } from "@mui/material";
 import { useSearchParams } from "next/navigation";

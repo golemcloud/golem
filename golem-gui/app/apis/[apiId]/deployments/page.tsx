@@ -1,5 +1,5 @@
 "use client";
-import DeploymentPage from "@/components/deployment";
+import DeploymentPage from "../../deployment";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export default function Page() {

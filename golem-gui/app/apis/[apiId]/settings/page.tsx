@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import DangerZone from "@/components/settings";
+import DangerZone from "@/components/ui/settings";
 import { useSearchParams } from "next/navigation";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ErrorBoundary from "@/components/error-boundary";
-import CustomModal from "@/components/custom-modal";
+import ErrorBoundary from "@/components/error/error-boundary";
+import CustomModal from "@/components/custom/custom-modal";
 import DeleteApiVersion from "../../api-version-deletion";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 

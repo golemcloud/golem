@@ -13,7 +13,7 @@ import {
 import { Add } from "@mui/icons-material";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import RouteSideBar from "../route-side-bar";
+import RouteSideBar from "../../app/apis/route-side-bar";
 
 type SidebarProps = {
   id: string;

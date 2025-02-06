@@ -16,14 +16,14 @@ import WidgetsIcon from "@mui/icons-material/Widgets";
 import { Component } from "@/types/api";
 import { useRouter } from "next/navigation";
 import useComponents from "@/lib/hooks/use-component";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import ComponentCard from "./components-card";
 import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
 import { Button2 } from "@/components/ui/button";
 import clsx from "clsx";
 import ComponentTable from "@/components/ui/generic-table";
-import ErrorBoundary from "@/components/error-boundary";
-import NotFoundCard from "@/components/not-found-card";
+import ErrorBoundary from "@/components/error/error-boundary";
+import NotFoundCard from "@/components/ui/not-found-card";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);

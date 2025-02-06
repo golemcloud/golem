@@ -11,7 +11,7 @@ import Manage from "./manage";
 
 import { useWebSocketWithPath } from "@/lib/hooks/use-websocket";
 import SecondaryHeader from "@/components/ui/secondary-header";
-import ErrorBoundary from "@/components/error-boundary";
+import ErrorBoundary from "@/components/error/error-boundary";
 import EnvironmentTab from "./environment-tab";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { Loader } from "lucide-react";

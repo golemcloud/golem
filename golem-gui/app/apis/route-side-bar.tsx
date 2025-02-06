@@ -5,7 +5,7 @@ import { ListItem, ListItemText, ListItemIcon, List } from "@mui/material";
 import { Loader } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import React from "react";
-import { Button2 } from "./ui/button";
+import { Button2 } from "../../components/ui/button";
 import Link from "next/link";
 
 export default function RouteSideBar() {

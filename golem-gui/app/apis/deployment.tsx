@@ -10,11 +10,11 @@ import { Loader } from "lucide-react";
 import { ApiDeployment } from "@/types/api";
 import AddIcon from "@mui/icons-material/Add";
 import { useState } from "react";
-import DeploymentCreationPage from "@/components/deployment-creation";
+import DeploymentCreationPage from "./deployment-creation";
 import useApiDeployments from "@/lib/hooks/use-api-deployments";
-import CustomModal from "./custom-modal";
-import { Button2 as Button, Button2 } from "./ui/button";
-import ErrorBoundary from "./error-boundary";
+import CustomModal from "@/components/custom/custom-modal";
+import { Button2 as Button, Button2 } from "@/components/ui/button";
+import ErrorBoundary from "@/components/error/error-boundary";
 import useApiDefinitions from '@/lib/hooks/use-api-definitons';
 
 export default function DeploymentPage({

@@ -12,7 +12,7 @@ import {
   Box,
 } from "@mui/material";
 import { Menu as MenuIcon } from "@mui/icons-material";
-import { ModeToggle } from "../toggle-button";
+import { ModeToggle } from "./toggle-button";
 import Logo from "../../assets/golem-logo";
 import Link from "next/link";
 import { usePathname } from "next/navigation";

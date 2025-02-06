@@ -19,9 +19,9 @@ import {
 import { Button2 as CustomButton } from "@/components/ui/button";
 import { ApiDeployment as Deployment} from "@/types/api";
 import { Card } from "@/components/ui/card";
-import DeploymentCreationPage from "@/components/deployment-creation";
+import DeploymentCreationPage from "@/app/apis/deployment-creation";
 import { useState } from "react";
-import CustomModal from "@/components/custom-modal";
+import CustomModal from "@/components/custom/custom-modal";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 function DeploymentApiVersionDropDown({

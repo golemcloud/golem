@@ -14,7 +14,7 @@ import useStore from "@/lib/hooks/use-react-flow-store";
 import { ApiRoute } from "@/types/api";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { AlertDialogDemo } from "@/components/confirmation-dialog";
+import { AlertDialogDemo } from "@/components/ui/confirmation-dialog";
 
 export default function NodeMenu({
   data,

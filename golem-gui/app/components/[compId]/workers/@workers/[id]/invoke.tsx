@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
-import JsonEditor from "@/components/json-editor";
+import JsonEditor from "@/components/json-editor/json-editor";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
 export function InvokeForm({
