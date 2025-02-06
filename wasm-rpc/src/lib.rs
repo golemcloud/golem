@@ -79,13 +79,22 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_1_1::types::{
+pub use bindings::golem::rpc0_1_2 as golem_rpc_0_1_x;
+
+#[cfg(not(feature = "host-bindings"))]
+#[cfg(feature = "stub")]
+pub use golem_rpc_0_1_x::types::{
     FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, WasmRpc, WitNode, WitType,
     WitTypeNode, WitValue,
 };
+
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi::io::poll::Pollable;
+
+#[cfg(not(feature = "host-bindings"))]
+#[cfg(feature = "stub")]
+pub use bindings::wasi::clocks::wall_clock::Datetime as WasiDatetime;
 
 #[cfg(feature = "host-bindings")]
 pub use wasmtime_wasi::Pollable;
