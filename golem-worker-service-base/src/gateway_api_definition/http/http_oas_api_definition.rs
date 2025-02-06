@@ -358,6 +358,15 @@ mod internal {
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
+                    },
+                    (GatewayBindingType::SwaggerUi, _) => {
+                        Ok(RouteRequest {
+                            path: path_pattern.clone(),
+                            method,
+                            binding: GatewayBinding::SwaggerUi,
+                            security,
+                            cors: None
+                        })
                     }
                 }
             }
@@ -524,6 +533,9 @@ mod internal {
                 }
                 binding_info.insert("response".to_string(), serde_json::to_value(&worker_binding.response_mapping).map_err(|e| e.to_string())?);
             },
+            GatewayBinding::SwaggerUi => {
+                binding_info.insert("binding-type".to_string(), serde_json::Value::String("swagger-ui".to_string()));
+            }
         }
 
         operation.extensions.insert("x-golem-api-gateway-binding".to_string(), serde_json::Value::Object(binding_info));

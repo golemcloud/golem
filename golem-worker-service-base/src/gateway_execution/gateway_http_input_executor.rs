@@ -48,6 +48,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
+use poem_openapi::OpenApiService;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -522,6 +523,64 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     .await;
 
                 maybe_apply_middlewares_out(response, &middlewares).await
+            },
+            GatewayBindingCompiled::SwaggerUi => {
+                let api_definitions = match self
+                    .api_definition_lookup_service
+                    .get(&ApiSiteString(authority.clone()))
+                    .await
+                {
+                    Ok(defs) => defs,
+                    Err(e) => {
+                        return poem::Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string(format!("Failed to get API definition: {}", e)));
+                    }
+                };
+
+                let api_def = match api_definitions.first() {
+                    Some(def) => def,
+                    None => {
+                        return poem::Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Body::from_string("No API definition found".to_string()));
+                    }
+                };
+
+                let api_def_http = crate::gateway_api_definition::http::HttpApiDefinition::from(api_def.clone());
+                let api_def_request = crate::gateway_api_definition::http::HttpApiDefinitionRequest::from(api_def_http);
+
+                let openapi_req = match crate::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest::from_http_api_definition_request(&api_def_request) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        return poem::Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string(format!("Failed to convert to OpenAPI: {}", e)));
+                    }
+                };
+
+                let api_service = OpenApiService::new((), "API", "1.0")
+                    .server(format!("https://{}", authority.clone()));
+                
+                let spec_url = format!("https://{}/openapi.json", authority);
+                let html = api_service.swagger_ui_html().replace("\"./openapi.json\"", &format!("\"{}\"", spec_url));
+                
+                if rich_request.url().map(|url| url.path().ends_with("/openapi.json")).unwrap_or(false) {
+                    let spec_json = serde_json::to_string_pretty(&openapi_req.0)
+                        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize OpenAPI spec: {}\"}}", e));
+                    
+                    let response = poem::Response::builder()
+                        .content_type("application/json")
+                        .body(Body::from_string(spec_json));
+                    
+                    maybe_apply_middlewares_out(response, &middlewares).await
+                } else {
+                    let response = poem::Response::builder()
+                        .content_type("text/html")
+                        .body(Body::from_string(html));
+
+                    maybe_apply_middlewares_out(response, &middlewares).await
+                }
             }
         }
     }

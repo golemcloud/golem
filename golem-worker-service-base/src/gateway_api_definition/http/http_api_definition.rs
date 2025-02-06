@@ -652,6 +652,13 @@ impl CompiledRoute {
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
                 middlewares: route.middlewares.clone(),
             }),
+
+            GatewayBinding::SwaggerUi => Ok(CompiledRoute {
+                method: route.method.clone(),
+                path: route.path.clone(),
+                binding: GatewayBindingCompiled::SwaggerUi,
+                middlewares: route.middlewares.clone(),
+            }),
         }
     }
 }

@@ -120,6 +120,7 @@ enum GatewayBindingType {
   CORS_PREFLIGHT = 2;
   AUTH_CALL_BACK = 3;
   HTTP_HANDLER = 4;
+  SWAGGER_UI = 5;
 }
 
 // Used in api definition repo and needs to be backward compatible

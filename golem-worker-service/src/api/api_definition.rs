@@ -424,6 +424,9 @@ mod test {
     use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
+    use golem_worker_service_base::gateway_api_definition::http::MethodPattern;
+    use golem_worker_service_base::api::{RouteRequestData, GatewayBindingData};
+    use golem_common::model::GatewayBindingType;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -809,5 +812,66 @@ mod test {
         assert!(body.contains("1.0"));
         assert!(body.contains("security:"), "Exported YAML should contain 'security' field.");
         assert!(body.contains("corsPreflight:"), "Exported YAML should contain 'corsPreflight' field.");
+    }
+
+    #[test]
+    async fn swagger_ui_binding_test() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("swagger_test".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![
+                RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/docs".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(GatewayBindingType::SwaggerUi),
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        response: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                }
+            ],
+            draft: false,
+            security: None,
+        };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let url = format!("/v1/api/definitions/{}/{}", definition.id.0, definition.version.0);
+        let response = client.get(&url).send().await;
+        response.assert_status_is_ok();
+        
+        let body = response.json().await;
+        let value = serde_json::to_value(body).unwrap();
+        let body_value: HttpApiDefinitionResponseData = serde_json::from_value(value).unwrap();
+        assert_eq!(body_value.routes.len(), 1);
+        assert_eq!(body_value.routes[0].binding.binding_type, Some(golem_common::model::GatewayBindingType::SwaggerUi));
+
+        let export_url = format!("/v1/api/definitions/{}/{}/export", definition.id.0, definition.version.0);
+        let response = client.get(&export_url).send().await;
+        response.assert_status_is_ok();
+
+        let body_bytes = response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let body = String::from_utf8(body_bytes).unwrap();
+        
+        assert!(body.contains("swagger-ui"), "Exported YAML should contain 'swagger-ui' binding type");
+        assert!(body.contains("x-golem-api-gateway-binding"), "Exported YAML should contain gateway binding extension");
     }
 }

@@ -599,7 +599,19 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
                     cors_preflight: static_binding.get_cors_preflight(),
                     response_mapping_output: None,
                 })
-            }
+            },
+            GatewayBindingCompiled::SwaggerUi => Ok(GatewayBindingResponseData {
+                component_id: None,
+                worker_name: None,
+                idempotency_key: None,
+                response: None,
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: None,
+                response_mapping_output: None,
+            })
         }
     }
 }
@@ -720,6 +732,20 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     Err("Auth call back static binding not to be exposed to users".to_string())
                 }
             },
+
+            GatewayBinding::SwaggerUi => Ok(GatewayBindingData {
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                component_id: None,
+                worker_name: None,
+                idempotency_key: None,
+                response: None,
+                allow_origin: None,
+                allow_methods: None,
+                allow_headers: None,
+                expose_headers: None,
+                max_age: None,
+                allow_credentials: None,
+            }),
         }
     }
 }
@@ -814,6 +840,8 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     }
                 }
             }
+
+            Some(GatewayBindingType::SwaggerUi) => Ok(GatewayBinding::SwaggerUi)
         }
     }
 }
