@@ -5110,6 +5110,7 @@ components:
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5139,6 +5140,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5354,6 +5356,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ResourceParameters'
+    PublicOplogEntry_RevertParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revert
+            type: string
+            enum:
+            - Revert
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
       allOf:
       - type: object
@@ -5501,6 +5515,17 @@ components:
           format: uint64
       required:
       - numberOfInvocations
+    RevertParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        dropped_region:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - dropped_region
     RevertToOplogIndex:
       type: object
       properties:

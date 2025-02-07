@@ -239,12 +239,17 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 plugin: plugin.into(),
             }),
-            PublicOplogEntry::Revert(RevertParameters { .. }) => {
-                todo!() // need to update WIT
-                        // Self::Revert(oplog::RevertParameters {
-                        //     timestamp: timestamp.into(),
-                        //     dropped_region: dropped_region.into(),
-                        // })
+            PublicOplogEntry::Revert(RevertParameters {
+                timestamp,
+                dropped_region,
+            }) => {
+                // TODO: Adding new entries to the WIT oplog-entry variant breaks the interface so for now we don't support the new entries and mark them as fake Log entries instead
+                Self::Log(oplog::LogParameters {
+                    timestamp: timestamp.into(),
+                    level: oplog::LogLevel::Info,
+                    context: "Revert".to_string(),
+                    message: format!("Reverted worker by deleting oplog region {drop_region}"),
+                })
             }
         }
     }
