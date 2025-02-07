@@ -54,6 +54,7 @@ exclude = [
     "test-components/runtime-service",
     "test-components/rust-echo",
     "test-components/rust-service",
+    "test-components/scheduled-invocation",
     "test-components/shopping-cart",
     "test-components/shopping-cart-resource",
     "test-components/stdio-cc",
@@ -114,7 +115,6 @@ futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 git-version = "0.3.9"
-golem-wit = { version = "=1.1.7" }
 hex = "0.4.3"
 http = "1.2.0" # keep in sync with wasmtime
 http-body = "1.0.1"                                 # keep in sync with wasmtime

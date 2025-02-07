@@ -61,7 +61,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
 
         // Common used types
         stub_interface.use_type(
-            "golem:rpc/types@0.1.1",
+            "golem:rpc/types@0.1.2",
             "uri",
             Some(Ident::new("golem-rpc-uri")),
         );
@@ -274,6 +274,12 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         &target_deps.join("io"),
         "poll.wit",
         golem_wit::WASI_POLL_WIT,
+    )?;
+
+    write_embedded_source(
+        &target_deps.join("clocks"),
+        "wall-clock.wit",
+        golem_wit::WASI_WALL_CLOCKS_WIT,
     )?;
 
     Ok(())

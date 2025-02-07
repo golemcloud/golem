@@ -34,8 +34,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
-        "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
-        "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+        "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
+        "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "wasi:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "wasi:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "wasi:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
@@ -58,8 +58,21 @@ impl From<golem_wasm_rpc::WitValue> for golem::rpc::types::WitValue {
     }
 }
 
+impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::WitValue {
+    fn from(value: golem::rpc::types::WitValue) -> Self {
+        unsafe { mem::transmute(value) }
+    }
+}
+
 impl From<golem_wasm_rpc::Value> for golem::rpc::types::WitValue {
     fn from(value: golem_wasm_rpc::Value) -> Self {
+        let wit_value: golem_wasm_rpc::WitValue = value.into();
+        wit_value.into()
+    }
+}
+
+impl From<golem::rpc::types::WitValue> for golem_wasm_rpc::Value {
+    fn from(value: golem::rpc::types::WitValue) -> Self {
         let wit_value: golem_wasm_rpc::WitValue = value.into();
         wit_value.into()
     }
@@ -71,3 +84,7 @@ impl From<ValueAndType> for golem::rpc::types::WitValue {
         wit_value.into()
     }
 }
+
+// reexports so that we don't have to change version numbers everywhere
+pub use self::golem::api0_2_1 as golem_api_0_2_x;
+pub use self::golem::api1_1_2 as golem_api_1_x;

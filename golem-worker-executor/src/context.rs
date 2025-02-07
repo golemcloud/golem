@@ -23,7 +23,7 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{ComponentFilePath, PluginInstallationId};
-use golem_wasm_rpc::golem::rpc0_1_1::types::{
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -508,6 +508,18 @@ impl HostWasmRpc for Context {
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .schedule_invocation(self_, datetime, function_name, function_params)
             .await
     }
 
