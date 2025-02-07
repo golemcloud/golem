@@ -20,14 +20,24 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 use tracing::{error, warn};
+use golem_wasm_rpc::Value;
 
 /// Service for activating workers in the background
 #[async_trait]
 pub trait WorkerActivator<Ctx: WorkerCtx> {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
+
+    /// Enqueue an invocation to a worker.
+    async fn enqueue_invocation(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError>;
 
     /// Gets or creates a worker in suspended state
     async fn get_or_create_suspended(
@@ -79,6 +89,22 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         match maybe_worker_activator {
             Some(worker_activator) => worker_activator.activate_worker(owned_worker_id).await,
             None => warn!("WorkerActivator is disabled, not activating instance"),
+        }
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError> {
+        let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
+        match maybe_worker_activator {
+            Some(worker_activator) => worker_activator.enqueue_invocation(owned_worker_id, idempotency_key, full_function_name, function_input).await,
+            None => Err(GolemError::runtime(
+                "WorkerActivator is disabled, not creating instance",
+            ))
         }
     }
 
@@ -150,6 +176,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
             ctx: PhantomData,
         }
     }
+
+    async fn enqueue_invocation_internal(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError>
+    where
+        Svcs: Send + Sync + 'static
+    {
+        let worker = Worker::get_or_create_suspended(&self.all, owned_worker_id, None, None, None, None).await?;
+
+        worker
+            .invoke(idempotency_key, full_function_name, function_input)
+            .await?;
+
+        Worker::start_if_needed(worker).await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -176,6 +223,30 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             None => {
                 error!("WorkerActivator::activate_worker: worker not found")
             }
+        }
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError> {
+        let metadata = self.all.worker_service().get(owned_worker_id).await;
+        match metadata {
+            Some(_) => {
+                self.enqueue_invocation_internal(
+                    owned_worker_id,
+                    idempotency_key,
+                    full_function_name,
+                    function_input
+                )
+                .await
+            }
+            None => Err(GolemError::runtime(
+                "WorkerActivator#enqueue_invocation: worker not found",
+            ))?
         }
     }
 

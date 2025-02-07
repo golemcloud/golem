@@ -34,7 +34,6 @@ use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_wasm_rpc::Value;
@@ -59,7 +58,7 @@ pub trait SchedulerWorkerAccess {
     // enqueue and invocation to the worker
     async fn enqueue_invocation(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
@@ -77,29 +76,24 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
         let worker = self
+            .deref()
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
+
         Ok(worker.oplog())
     }
 
     async fn enqueue_invocation(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<(), GolemError> {
-        let worker = self
-            .get_or_create_suspended(&owned_worker_id, None, None, None, None)
-            .await?;
-
-        worker
-            .invoke(idempotency_key, full_function_name, function_input)
-            .await?;
-
-        Worker::start_if_needed(worker).await?;
-
-        Ok(())
+        self
+            .deref()
+            .enqueue_invocation(owned_worker_id, idempotency_key, full_function_name, function_input)
+            .await
     }
 }
 
@@ -308,7 +302,7 @@ impl SchedulerServiceDefault {
                     let result = self
                         .worker_access
                         .enqueue_invocation(
-                            owned_worker_id.clone(),
+                            &owned_worker_id,
                             idempotency_key,
                             full_function_name.clone(),
                             function_input,
@@ -450,7 +444,7 @@ mod tests {
         }
         async fn enqueue_invocation(
             &self,
-            _owned_worker_id: OwnedWorkerId,
+            _owned_worker_id: &OwnedWorkerId,
             _idempotency_key: IdempotencyKey,
             _full_function_name: String,
             _function_input: Vec<Value>,
