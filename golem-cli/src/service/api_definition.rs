@@ -21,6 +21,7 @@ use crate::model::{
     PathBufOrStdin,
 };
 use async_trait::async_trait;
+use webbrowser;
 
 #[async_trait]
 pub trait ApiDefinitionService {
@@ -64,6 +65,13 @@ pub trait ApiDefinitionService {
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError>;
+    async fn swagger(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        host: String,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
 }
@@ -149,5 +157,40 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
     ) -> Result<GolemResult, GolemError> {
         let exported = self.client.export(id, version, project).await?;
         Ok(GolemResult::Str(exported))
+    }
+
+    async fn swagger(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        host: String,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError> {
+        let definition = self.client.get(id.clone(), version.clone(), project).await?;
+        
+        let swagger_route = definition.routes.iter()
+            .find(|route| route.binding.binding_type == Some(golem_client::model::GatewayBindingType::SwaggerUi));
+
+        match swagger_route {
+            Some(route) => {
+                let url = format!("https://{}{}/swaggerui", host, route.path);
+
+                if webbrowser::open(&url).is_err() {
+                    return Ok(GolemResult::Str(format!(
+                        "Failed to open browser automatically. Please visit {} manually.",
+                        url
+                    )));
+                }
+
+                Ok(GolemResult::Str(format!(
+                    "Opening Swagger UI for API definition {}/{} at {}",
+                    id.0, version.0, url
+                )))
+            },
+            None => Ok(GolemResult::Str(format!(
+                "API definition {}/{} does not have Swagger UI configured",
+                id.0, version.0
+            )))
+        }
     }
 }

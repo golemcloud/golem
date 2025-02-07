@@ -243,6 +243,17 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
             api_definition_delete((deps, name.to_string(), cli.with_args(short)))
         }
     );
+    add_test!(
+        r,
+        format!("api_definition_swagger{suffix}"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_swagger((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 pub fn make_shopping_cart_component(
@@ -1127,6 +1138,101 @@ fn api_definition_export(
         binding["component-id"]["componentId"],
         component_id
     );
+
+    Ok(())
+}
+
+fn api_definition_swagger(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_swagger{}", name);
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+
+    let mut def = HttpApiDefinitionRequest {
+        id: component_name.clone(),
+        version: "0.1.0".to_string(),
+        draft: true,
+        security: None,
+        routes: vec![
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/api".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"foo\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("let x: u64 = 1u64;\n{headers: {ContentType: \"json\"}, body: \"test\", status: x}".to_string()),
+                    allow_origin: Some("*".to_string()),
+                    allow_methods: Some("GET, OPTIONS".to_string()),
+                    allow_headers: Some("Content-Type".to_string()),
+                    expose_headers: Some("Content-Type".to_string()),
+                    binding_type: Some(GatewayBindingType::SwaggerUi),
+                    max_age: Some(86400),
+                    allow_credentials: Some(true),
+                },
+            },
+        ],
+    };
+
+    let file_path = make_json_file(&def.id, &def)?;
+    let response: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    assert_eq!(response.id, component_name);
+    assert_eq!(response.version, "0.1.0");
+    assert_eq!(response.routes.len(), 1);
+
+    let swagger_route = response.routes.first().expect("Route should exist");
+    assert_eq!(swagger_route.path, "/api");
+    assert_eq!(swagger_route.method, MethodPattern::Get);
+    assert_eq!(swagger_route.binding.binding_type, Some(GatewayBindingType::SwaggerUi));
+
+    let cfg = &cli.config;
+
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("Opening Swagger UI for API definition"));
+    assert!(result.contains(&component_name));
+    assert!(result.contains("0.1.0"));
+    assert!(result.contains("localhost:8080/api/swaggerui"));
+
+    def.id = format!("{}_no_swagger", component_name);
+    def.routes[0].binding.binding_type = Some(GatewayBindingType::Default);
+    
+    let file_path = make_json_file(&def.id, &def)?;
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &def.id,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("does not have Swagger UI configured"));
+    assert!(result.contains(&def.id));
 
     Ok(())
 }

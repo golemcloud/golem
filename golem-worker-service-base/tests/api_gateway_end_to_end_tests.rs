@@ -18,6 +18,7 @@ use test_r::test;
 test_r::enable!();
 
 use golem_service_base::auth::DefaultNamespace;
+use golem_common::model::GatewayBindingType;
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
@@ -2726,4 +2727,104 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         cookies
     }
+}
+
+#[test]
+async fn test_api_def_with_swagger_ui() {
+    let mut empty_headers = HeaderMap::new();
+    empty_headers.insert("host", "localhost:8080".parse().unwrap());
+    
+    let api_specification: HttpApiDefinition = get_api_def_with_swagger_ui("/api", GatewayBindingType::SwaggerUi).await;
+    let session_store = internal::get_session_store();
+    let test_identity_provider = TestIdentityProvider::default();
+
+    let html_request = get_gateway_request("/api", None, &empty_headers, serde_json::Value::Null);
+    let html_response = execute(
+        html_request,
+        &api_specification,
+        &session_store,
+        &test_identity_provider,
+    ).await;
+
+    assert_eq!(html_response.status(), StatusCode::OK);
+    assert_eq!(html_response.headers().get("content-type").unwrap(), "text/html");
+    let html_body = html_response.into_body().into_string().await.unwrap();
+    assert!(html_body.contains("<title>Swagger UI</title>"), "HTML should contain Swagger UI title");
+    assert!(html_body.contains("swagger-ui.css"), "HTML should reference swagger-ui.css");
+
+}
+
+async fn get_api_def_with_swagger_ui(path_pattern: &str, binding_type: GatewayBindingType) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Get
+            path: {}
+            binding:
+              bindingType: {}
+          - method: Get
+            path: {}/openapi.json
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '"test-worker"'
+              response: |
+                let x: u64 = 1u64;
+                {{headers: {{ContentType: "json"}}, body: "test", status: x}}
+        "#,
+        path_pattern,
+        match binding_type {
+            GatewayBindingType::SwaggerUi => "swagger-ui",
+            _ => "default"
+        }
+    );
+
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request.try_into().unwrap();
+
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
+    )
+    .await
+    .unwrap()
+}
+
+#[test]
+async fn test_api_def_with_openapi_json() {
+    let mut empty_headers = HeaderMap::new();
+    empty_headers.insert("host", "localhost:8080".parse().unwrap());
+    
+    let api_specification: HttpApiDefinition = get_api_def_with_swagger_ui("/api", GatewayBindingType::SwaggerUi).await;
+    let session_store = internal::get_session_store();
+    let test_identity_provider = TestIdentityProvider::default();
+
+    let json_request = get_gateway_request("/api/openapi.json", None, &empty_headers, serde_json::Value::Null);
+    let json_response = execute(
+        json_request,
+        &api_specification,
+        &session_store,
+        &test_identity_provider,
+    ).await;
+
+    assert_eq!(json_response.status(), StatusCode::OK);
+    assert_eq!(json_response.headers().get("content-type").unwrap(), "application/json");
+    let json_body = json_response.into_body().into_string().await.unwrap();
+    let json_value: serde_json::Value = serde_json::from_str(&json_body).unwrap();
+    
+    assert!(json_value.is_object(), "Response should be a JSON object");
+    assert!(json_value.get("openapi").is_some(), "Should have openapi version");
+    assert!(json_value.get("info").is_some(), "Should have info section");
+    assert!(json_value.get("paths").is_some(), "Should have paths section");
 }

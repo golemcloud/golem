@@ -136,6 +136,26 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(short = 'V', long)]
         version: ApiDefinitionVersion,
     },
+
+    /// Opens the Swagger UI for an API definition in the default browser
+    #[command()]
+    Swagger {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+
+        /// Host to use for the Swagger UI (e.g. 'localhost:8080')
+        #[arg(short = 'H', long)]
+        host: String,
+    },
 }
 
 impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<ProjectRef> {
@@ -201,6 +221,10 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service.delete(id, version, &project_id).await
+            }
+            ApiDefinitionSubcommand::Swagger { project_ref, id, version, host } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.swagger(id, version, host, &project_id).await
             }
         }
     }
