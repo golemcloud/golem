@@ -34,6 +34,7 @@ use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_wasm_rpc::Value;
@@ -76,10 +77,8 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
         let worker = self
-            .deref()
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
-
         Ok(worker.oplog())
     }
 
@@ -90,14 +89,17 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<(), GolemError> {
-        self.deref()
-            .enqueue_invocation(
-                owned_worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-            )
-            .await
+        let worker = self
+            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .await?;
+
+        worker
+            .invoke(idempotency_key, full_function_name, function_input)
+            .await?;
+
+        Worker::start_if_needed(worker).await?;
+
+        Ok(())
     }
 }
 
