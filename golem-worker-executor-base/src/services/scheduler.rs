@@ -56,7 +56,7 @@ pub trait SchedulerWorkerAccess {
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
 
-    // enqueu and invocation to the worker, but do not block until the invocation is completed.
+    // enqueue and invocation to the worker
     async fn enqueue_invocation(
         &self,
         owned_worker_id: OwnedWorkerId,
