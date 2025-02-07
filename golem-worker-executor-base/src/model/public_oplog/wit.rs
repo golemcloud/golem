@@ -248,7 +248,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     timestamp: timestamp.into(),
                     level: oplog::LogLevel::Info,
                     context: "Revert".to_string(),
-                    message: format!("Reverted worker by deleting oplog region {drop_region}"),
+                    message: format!("Reverted worker by deleting oplog region {dropped_region}"),
                 })
             }
         }
