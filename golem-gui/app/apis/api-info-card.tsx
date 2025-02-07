@@ -86,7 +86,7 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
               padding: "1px 5px",
               borderRadius: "4px",
             }}
-            className="texr-muted-foreground"
+            className="text-muted-foreground"
           >
             {version}
           </Typography>

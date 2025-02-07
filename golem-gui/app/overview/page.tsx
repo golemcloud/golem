@@ -1,66 +1,39 @@
 "use client";
-import React, { useMemo, useState } from "react";
-import {
+import * as Imports from "@/components/imports";
+import { ApiDefinition, Component as GolemComponent } from "@/types/api";
+import Empty from "./empty";
+import { resources } from "./utils";
+
+const {
+  React,
   Box,
+  useMemo,
+  useState,
   Typography,
-  Button,
   Paper,
-  Grid2 as Grid,
+  Grid,
   Stack,
   Divider,
-} from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import FooterLinks from "@/components/ui/footer-links";
-import CreateAPI from "../apis/create-api";
-import CreateComponentForm from "@/app/components/new-component";
-import { ApiDefinition, Component as GolemComponent } from "@/types/api";
-import { useRouter } from "next/navigation";
-import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import useComponents from "@/lib/hooks/use-component";
-import CustomModal from "@/components/custom/custom-modal";
-import ComponentCard from "../components/component-card";
-import { calculateHoursDifference, calculateSizeInMB } from "@/lib/utils";
-import { NotepadText, Component, Globe, Bot } from "lucide-react";
-import { Button2 } from "@/components/ui/button";
-import ErrorBoundary from "@/components/error/error-boundary";
-
-// working on overview page
+  FooterLinks,
+  CreateAPI,
+  CreateComponentForm,
+  useRouter,
+  useApiDefinitions,
+  useComponents,
+  CustomModal,
+  ComponentCard,
+  calculateHoursDifference,
+  calculateSizeInMB,
+  Button2,
+  ErrorBoundary,
+} = Imports;
 
 const ProjectDashboard = () => {
   const router = useRouter();
-  const resources = [
-    {
-      label: "Language Guides",
-      icon: <NotepadText />,
-      description: "Check our language and start building",
-      link: "https://learn.golem.cloud/docs/develop-overview",
-    },
-    {
-      label: "Components",
-      icon: <Component />,
-      description: "Create Wasm components that run on Golem",
-      link: "https://learn.golem.cloud/docs/concepts/components",
-    },
-    {
-      label: "APIs",
-      icon: <Globe />,
-      description: "Craft custom APIs to expose your components to the world",
-      link: "https://learn.golem.cloud/docs/rest-api/oss-rest-api",
-    },
-    {
-      label: "Workers",
-      icon: <Bot />,
-      description: "Launch and manage efficient workers from your components",
-      link: "https://learn.golem.cloud/docs/concepts/workers",
-    },
-  ];
   const [open, setOpen] = useState<string | null>(null);
   const { apiDefinitions, isLoading, error } = useApiDefinitions();
-  const {
-    components,
-    isLoading: componentsLoading,
-    error: componentError,
-  } = useComponents();
+  const {components, isLoading: componentsLoading, error: componentError} = useComponents();
+  
   //TODO we need limit the api we are showing in the Ui. for now we are showing all.
   const apiMap = apiDefinitions?.reduce<Record<string, ApiDefinition>>(
     (obj, api: ApiDefinition) => {
@@ -70,14 +43,14 @@ const ProjectDashboard = () => {
     {}
   );
 
-   const finalComponents = useMemo(() => {
-      return Object.values(
-        components?.reduce<Record<string, GolemComponent>>((obj, component) => {
-          obj[component.versionedComponentId.componentId] = component;
-          return obj;
-        }, {}) || {}
-      )?.reverse()
-    }, [components])
+  const finalComponents = useMemo(() => {
+    return Object.values(
+      components?.reduce<Record<string, GolemComponent>>((obj, component) => {
+        obj[component.versionedComponentId.componentId] = component;
+        return obj;
+      }, {}) || {}
+    )?.reverse();
+  }, [components]);
 
   const uniquesApis = Object.values(apiMap)?.reverse();
 
@@ -90,63 +63,36 @@ const ProjectDashboard = () => {
   const handleClose = () => setOpen(null);
 
   return (
-    <main className="mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col">
-      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col">
+    <main className='mx-auto max-w-7xl px-6 lg:px-8 min-h-[calc(100svh-84px)] py-4 flex h-full w-full flex-1 flex-col'>
+      <Box className='mx-auto max-w-2xl lg:max-w-none gap-6 flex h-full w-full flex-1 flex-col'>
         {error === componentError && <ErrorBoundary message={error} />}
 
-        <Grid container spacing={3} sx={{ flexWrap: "wrap" }}>
-          {/* APIs Section */}
+        <Grid container spacing={3} flexWrap='wrap'>
           <Grid size={{ xs: 12, md: 12, lg: 4 }}>
             <Paper
               elevation={3}
-              sx={{
-                p: 2,
-                minHeight: { md: "auto", lg: "calc(100vh - 200px)" },
-                borderRadius: 2,
-                display: "flex",
-                flexDirection: "column",
-              }}
-              className="border"
+              className='p-2 min-h-auto lg:min-h-[calc(100vh-200px)] rounded-md flex flex-col border'
             >
-              <Box className="flex justify-between">
-                <Typography variant="h5">APIs</Typography>
+              <Box className='flex justify-between'>
+                <Typography variant='h5'>APIs</Typography>
                 {uniquesApis?.length > 0 && (
-                  <Button
-                    variant="text"
-                    sx={{
-                      fontSize: "0.8rem",
-                      border: "0.1px solid #555",
-                      textTransform: "none",
-                    }}
-                    className="text-[#888] dark:text-gray-400"
+                  <Button2
+                    variant='primary'
+                    size='sm'
+                    className='text-muted-foreground'
                     onClick={() => router.push("/apis")}
                   >
                     View All
-                  </Button>
+                  </Button2>
                 )}
               </Box>
               {error !== componentError && <ErrorBoundary message={error} />}
               {uniquesApis?.length === 0 && (
-                <Box
-                  textAlign="center"
-                  className="border-dashed border rounded-md m-auto p-7"
-                >
-                  <Typography variant="h6" className="text-foreground">
-                    No APIs Available
-                  </Typography>
-                  <Typography variant="body2" className="text-muted-foreground">
-                    Create your first api to get started
-                  </Typography>
-                  <br />
-                  <Button2
-                    variant="primary"
-                    size="md"
-                    startIcon={<AddIcon />}
-                    onClick={() => setOpen("api")}
-                  >
-                    Create New
-                  </Button2>
-                </Box>
+                <Empty
+                  heading='No APIs Available'
+                  subheading='Create your first api to get started'
+                  onClick={() => setOpen("api")}
+                />
               )}
               {!error && !isLoading && uniquesApis?.length > 0 && (
                 <Stack marginTop={2} sx={{ flex: 1, overflow: "hidden" }}>
@@ -157,32 +103,23 @@ const ProjectDashboard = () => {
                         <Box
                           key={api.id}
                           padding={3}
-                          className="hover:bg-[#444] cursor-pointer"
+                          className='hover:bg-[#444] cursor-pointer'
                           onClick={() =>
                             router.push(
                               `/apis/${api.id}/overview?version=${api.version}`
                             )
                           }
                         >
-                          <Box display="flex" justifyContent="space-between">
+                          <Box display='flex' justifyContent='space-between'>
                             <Typography
-                              variant="body1"
-                              sx={{
-                                overflow: "hidden", // Ensures overflow content is hidden
-                                textOverflow: "ellipsis", // Adds an ellipsis when text overflows
-                                whiteSpace: "nowrap", // Prevents text wrapping to a new line
-                                fontWeight: 500,
-                              }}
+                              variant='body1'
+                              className='overflow-hidden text-ellipsis whitespace-nowrap font-medium'
                             >
                               {api.id}
                             </Typography>
                             <Typography
-                              variant="body2"
-                              sx={{
-                                px: 1,
-                                border: "1px solid #555",
-                                borderRadius: 1,
-                              }}
+                              variant='body2'
+                              className='px-1 border border-gray-500 rounded'
                             >
                               {api.version}
                             </Typography>
@@ -199,37 +136,26 @@ const ProjectDashboard = () => {
           <Grid size={{ xs: 12, md: 12, lg: 8 }}>
             <Paper
               elevation={3}
-              sx={{
-                p: 2,
-                minHeight: { md: "auto", lg: "calc(100vh - 200px)" },
-                borderRadius: 2,
-                display: "flex",
-                flexDirection: "column",
-              }}
-              className="border"
+              className='p-2 min-h-auto lg:min-h-[calc(100vh-200px)] rounded-md flex flex-col border'
             >
-              <Box className="flex justify-between">
-                <Typography variant="h5">Components</Typography>
+              <Box className='flex justify-between'>
+                <Typography variant='h5'>Components</Typography>
                 {components.length > 0 && (
-                  <Button
-                    variant="text"
-                    sx={{
-                      fontSize: "0.8rem",
-                      border: "0.1px solid #555",
-                      textTransform: "none",
-                    }}
-                    className="text-[#888] dark:text-gray-400"
+                  <Button2
+                    variant='primary'
+                    size='sm'
+                    className='text-muted-foreground'
                     onClick={() => router.push("/components")}
                   >
                     View All
-                  </Button>
+                  </Button2>
                 )}
               </Box>
               {error !== componentError && (
                 <ErrorBoundary message={componentError} />
               )}
               {!componentError && !componentsLoading && (
-                <Box className="grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2">
+                <Box className='grid w-full grid-cols-1 gap-3 lg:grid-cols-2 mt-2'>
                   {!componentError &&
                     finalComponents
                       .slice(0, 6)
@@ -252,26 +178,11 @@ const ProjectDashboard = () => {
                 </Box>
               )}
               {finalComponents.length === 0 && (
-                <Box
-                  textAlign="center"
-                  className="border-dashed border rounded-md m-auto p-16"
-                >
-                  <Typography variant="h6" className="text-foreground">
-                    No Project Components
-                  </Typography>
-                  <Typography variant="body2" className="text-muted-foreground">
-                    Create your first component to get started
-                  </Typography>
-                  <br />
-                  <Button2
-                    variant="primary"
-                    size="md"
-                    startIcon={<AddIcon />}
-                    onClick={() => setOpen("component")}
-                  >
-                    Create New
-                  </Button2>
-                </Box>
+                <Empty
+                  heading='No Project Components'
+                  subheading='Create your first component to get started'
+                  onClick={() => setOpen("component")}
+                />
               )}
             </Paper>
           </Grid>
@@ -280,14 +191,15 @@ const ProjectDashboard = () => {
         <CustomModal
           open={!!open}
           onClose={handleClose}
-          heading="Create a new Component"
+          heading='Create a new Component'
         >
           {open === "api" && <CreateAPI onCreation={handleClose} />}
           {open === "component" && (
-            <CreateComponentForm mode="create" onSubmitSuccess={handleClose} />
+            <CreateComponentForm mode='create' onSubmitSuccess={handleClose} />
           )}
         </CustomModal>
-        <FooterLinks variant="others" resources={resources} />
+
+        <FooterLinks variant='others' resources={resources} />
       </Box>
     </main>
   );
