@@ -199,10 +199,11 @@ mod tests {
 
         let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            routes,
             version: ApiVersion::new("v1"),
+            routes,
             draft: false,
             created_at: chrono::Utc::now(),
+            metadata: None,
         };
 
         cors_transform(&mut api_definition).unwrap();
@@ -233,10 +234,11 @@ mod tests {
 
         let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            routes,
             version: ApiVersion::new("v1"),
+            routes,
             draft: false,
             created_at: chrono::Utc::now(),
+            metadata: None,
         };
 
         let result = cors_transform(&mut api_definition).map_err(|x| match x {
@@ -263,10 +265,11 @@ mod tests {
 
         let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            routes,
             version: ApiVersion::new("v1"),
+            routes,
             draft: false,
             created_at: chrono::Utc::now(),
+            metadata: None,
         };
 
         let expected = api_definition.clone();

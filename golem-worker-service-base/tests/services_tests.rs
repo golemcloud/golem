@@ -393,6 +393,7 @@ impl TestComponentService {
                 producers: vec![],
                 memories: vec![],
                 dynamic_linking: HashMap::new(),
+                openapi_metadata: None,
             },
             created_at: Some(Utc::now()),
             component_type: None,

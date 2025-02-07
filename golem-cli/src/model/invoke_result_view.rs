@@ -170,6 +170,7 @@ mod tests {
                 })],
                 memories: vec![],
                 dynamic_linking: HashMap::new(),
+                openapi_metadata: None,
             },
             project_id: None,
             created_at: Some(Utc::now()),

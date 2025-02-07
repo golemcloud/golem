@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::HttpApiDefinitionRequest;
+use crate::gateway_api_definition::http::http_api_definition_request::HttpApiDefinitionRequest;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
@@ -20,8 +20,37 @@ use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
 use serde_json::Value;
 use std::borrow::Cow;
+use serde::{Serialize, Deserialize};
 
 pub struct OpenApiHttpApiDefinitionRequest(pub OpenAPI);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiMetadata {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub terms_of_service: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_url: Option<String>,
+    pub contact_email: Option<String>,
+    pub license_name: Option<String>,
+    pub license_url: Option<String>,
+}
+
+impl Default for OpenApiMetadata {
+    fn default() -> Self {
+        Self {
+            title: Some("OpenAPI Definition".to_string()),
+            description: Some("API definition exported from Golem".to_string()),
+            terms_of_service: None,
+            contact_name: Some("Golem Cloud".to_string()),
+            contact_url: None,
+            contact_email: None,
+            license_name: Some("Apache 2.0".to_string()),
+            license_url: Some("https://www.apache.org/licenses/LICENSE-2.0".to_string()),
+        }
+    }
+}
 
 impl OpenApiHttpApiDefinitionRequest {
     pub fn to_http_api_definition_request(&self) -> Result<HttpApiDefinitionRequest, String> {
@@ -46,17 +75,42 @@ impl OpenApiHttpApiDefinitionRequest {
             routes,
             draft: true,
             security,
+            metadata: None,
         })
     }
 
     pub fn from_http_api_definition_request(def: &crate::gateway_api_definition::http::HttpApiDefinitionRequest) -> Result<Self, String> {
         let mut open_api = openapiv3::OpenAPI::default();
+        open_api.openapi = "3.0.0".to_string();
+        
+        // Get OpenAPI metadata from component metadata or use defaults
+        let api_metadata = def.metadata
+            .as_ref()
+            .and_then(|m| m.openapi_metadata.as_ref())
+            .cloned()
+            .unwrap_or_default();
+        
+        // Enhanced Info object using metadata
         open_api.info = openapiv3::Info {
-            title: "OpenAPI Definition".to_string(),
+            title: api_metadata.title.unwrap_or_else(|| "OpenAPI Definition".to_string()),
+            description: api_metadata.description,
+            terms_of_service: api_metadata.terms_of_service,
+            contact: Some(openapiv3::Contact {
+                name: api_metadata.contact_name,
+                url: api_metadata.contact_url,
+                email: api_metadata.contact_email,
+                extensions: Default::default(),
+            }),
+            license: Some(openapiv3::License {
+                name: api_metadata.license_name.unwrap_or_else(|| "Apache 2.0".to_string()),
+                url: api_metadata.license_url,
+                extensions: Default::default(),
+            }),
             version: def.version.0.clone(),
-            ..Default::default()
+            extensions: Default::default(),
         };
         
+        // Add Golem extensions
         open_api.extensions.insert(
             "x-golem-api-definition-id".to_string(), 
             serde_json::Value::String(def.id.0.clone())
@@ -68,9 +122,61 @@ impl OpenApiHttpApiDefinitionRequest {
         
         let mut paths: std::collections::BTreeMap<String, openapiv3::PathItem> = std::collections::BTreeMap::new();
 
+        // Components section for reusable schemas
+        let mut components = openapiv3::Components::default();
+        components.schemas = Default::default();
+        open_api.components = Some(components);
+
         for route in &def.routes {
             let path_str = route.path.to_string();
-            let operation = internal::get_operation_from_route(route)?;
+            let mut operation = internal::get_operation_from_route(route)?;
+            
+            // Add default 200 response if none exists
+            if operation.responses.responses.is_empty() {
+                let mut response = openapiv3::Response::default();
+                response.description = "Successful response".to_string();
+                
+                // Add default content type and schema
+                let mut content = indexmap::IndexMap::new();
+                let mut media = openapiv3::MediaType::default();
+                media.schema = Some(openapiv3::ReferenceOr::Item(openapiv3::Schema {
+                    schema_data: Default::default(),
+                    schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default())),
+                }));
+                content.insert("application/json".to_string(), media);
+                response.content = content;
+                
+                operation.responses.responses.insert(
+                    openapiv3::StatusCode::Code(200),
+                    openapiv3::ReferenceOr::Item(response),
+                );
+            }
+            
+            // Extract path parameters from the path and add them to operation parameters
+            let params = extract_path_parameters(&path_str);
+            for param_name in params {
+                let parameter = openapiv3::Parameter::Path {
+                    parameter_data: openapiv3::ParameterData {
+                        name: param_name.clone(),
+                        description: Some(format!("Path parameter: {}", param_name)),
+                        required: true,
+                        deprecated: None,
+                        explode: Some(false),
+                        format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
+                            openapiv3::Schema {
+                                schema_data: Default::default(),
+                                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(Default::default())),
+                            }
+                        )),
+                        example: None,
+                        examples: Default::default(),
+                        extensions: Default::default(),
+                    },
+                    style: openapiv3::PathStyle::Simple,
+                };
+                operation.parameters.push(openapiv3::ReferenceOr::Item(parameter));
+            }
+
             let path_item = paths.entry(path_str.clone()).or_insert_with(|| openapiv3::PathItem::default());
             match route.method {
                 crate::gateway_api_definition::http::MethodPattern::Get => { path_item.get = Some(operation); },
@@ -94,7 +200,7 @@ impl OpenApiHttpApiDefinitionRequest {
             extensions: Default::default()
         };
 
-        // Set the security field from def.security. If def.security is None, default to an empty vector.
+        // Set the security field from def.security
         open_api.security = Some(
             def.security.as_ref().map_or(Vec::new(), |sec_refs| {
                 sec_refs.iter().map(|sec_ref| {
@@ -109,10 +215,20 @@ impl OpenApiHttpApiDefinitionRequest {
             route.method == crate::gateway_api_definition::http::MethodPattern::Options &&
             matches!(route.binding, crate::gateway_binding::GatewayBinding::Static(_))
         });
-        open_api.extensions.insert("corsPreflight".to_string(), serde_json::Value::Bool(has_cors_preflight));
+        open_api.extensions.insert("x-golem-cors-preflight".to_string(), serde_json::Value::Bool(has_cors_preflight));
 
         Ok(OpenApiHttpApiDefinitionRequest(open_api))
     }
+}
+
+fn extract_path_parameters(path: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    for segment in path.split('/') {
+        if segment.starts_with('{') && segment.ends_with('}') {
+            params.push(segment[1..segment.len()-1].to_string());
+        }
+    }
+    params
 }
 
 impl ParseFromJSON for OpenApiHttpApiDefinitionRequest {

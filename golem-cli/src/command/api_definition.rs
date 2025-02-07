@@ -105,6 +105,22 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         version: ApiDefinitionVersion,
     },
 
+    /// Exports an existing api definition
+    #[command()]
+    Export {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        /// Api definition id
+        #[arg(short, long)]
+        id: ApiDefinitionId,
+
+        /// Version of the api definition
+        #[arg(short = 'V', long)]
+        version: ApiDefinitionVersion,
+    },
+
     /// Deletes an existing api definition
     #[command()]
     Delete {
@@ -173,6 +189,10 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
             ApiDefinitionSubcommand::List { project_ref, id } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service.list(id, &project_id).await
+            }
+            ApiDefinitionSubcommand::Export { project_ref, id, version } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.export(id, version, &project_id).await
             }
             ApiDefinitionSubcommand::Delete {
                 project_ref,

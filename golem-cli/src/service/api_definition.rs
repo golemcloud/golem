@@ -60,6 +60,12 @@ pub trait ApiDefinitionService {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ApiDefinitionServiceLive<ProjectContext> {
@@ -133,5 +139,15 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
     ) -> Result<GolemResult, GolemError> {
         let result = self.client.delete(id, version, project).await?;
         Ok(GolemResult::Str(result))
+    }
+
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<GolemResult, GolemError> {
+        let exported = self.client.export(id, version, project).await?;
+        Ok(GolemResult::Str(exported))
     }
 }

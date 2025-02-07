@@ -39,6 +39,9 @@ pub struct ComponentMetadata {
 
     #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+
+    #[serde(default)]
+    pub openapi_metadata: Option<OpenApiMetadata>,
 }
 
 impl ComponentMetadata {
@@ -152,6 +155,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             producers,
             memories,
             dynamic_linking: HashMap::new(),
+            openapi_metadata: None,
         }
     }
 }
@@ -339,6 +343,68 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
     };
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiMetadata {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub terms_of_service: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_url: Option<String>,
+    pub contact_email: Option<String>,
+    pub license_name: Option<String>,
+    pub license_url: Option<String>,
+}
+
+impl Default for OpenApiMetadata {
+    fn default() -> Self {
+        Self {
+            title: Some("OpenAPI Definition".to_string()),
+            description: Some("API definition exported from Golem".to_string()),
+            terms_of_service: None,
+            contact_name: Some("Golem Cloud".to_string()),
+            contact_url: None,
+            contact_email: None,
+            license_name: Some("Apache 2.0".to_string()),
+            license_url: Some("https://www.apache.org/licenses/LICENSE-2.0".to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+impl From<OpenApiMetadata> for golem_api_grpc::proto::golem::component::OpenApiMetadata {
+    fn from(value: OpenApiMetadata) -> Self {
+        Self {
+            title: value.title,
+            description: value.description,
+            terms_of_service: value.terms_of_service,
+            contact_name: value.contact_name,
+            contact_url: value.contact_url,
+            contact_email: value.contact_email,
+            license_name: value.license_name,
+            license_url: value.license_url,
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+impl From<golem_api_grpc::proto::golem::component::OpenApiMetadata> for OpenApiMetadata {
+    fn from(value: golem_api_grpc::proto::golem::component::OpenApiMetadata) -> Self {
+        Self {
+            title: value.title,
+            description: value.description,
+            terms_of_service: value.terms_of_service,
+            contact_name: value.contact_name,
+            contact_url: value.contact_url,
+            contact_email: value.contact_email,
+            license_name: value.license_name,
+            license_url: value.license_url,
+        }
+    }
+}
+
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::component_metadata::{
@@ -444,6 +510,9 @@ mod protobuf {
                     .into_iter()
                     .map(|(k, v)| v.try_into().map(|v| (k, v)))
                     .collect::<Result<_, _>>()?,
+                openapi_metadata: value
+                    .openapi_metadata
+                    .map(|metadata| metadata.into()),
             })
         }
     }
@@ -451,27 +520,11 @@ mod protobuf {
     impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
         fn from(value: ComponentMetadata) -> Self {
             Self {
-                exports: value
-                    .exports
-                    .into_iter()
-                    .map(|export| export.into())
-                    .collect(),
-                producers: value
-                    .producers
-                    .into_iter()
-                    .map(|producer| producer.into())
-                    .collect(),
-                memories: value
-                    .memories
-                    .into_iter()
-                    .map(|memory| memory.into())
-                    .collect(),
-                dynamic_linking: HashMap::from_iter(
-                    value
-                        .dynamic_linking
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into())),
-                ),
+                exports: value.exports.into_iter().map(|export| export.into()).collect(),
+                producers: value.producers.into_iter().map(|producer| producer.into()).collect(),
+                memories: value.memories.into_iter().map(|memory| memory.into()).collect(),
+                dynamic_linking: HashMap::from_iter(value.dynamic_linking.into_iter().map(|(k, v)| (k, v.into()))),
+                openapi_metadata: value.openapi_metadata.map(|metadata| metadata.into()),
             }
         }
     }

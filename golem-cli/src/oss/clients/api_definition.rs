@@ -169,4 +169,14 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
             .delete_definition(id.0.as_str(), version.0.as_str())
             .await?)
     }
+
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        _project: &Self::ProjectContext,
+    ) -> Result<String, GolemError> {
+        info!("Exporting api definition for {}/{}", id.0, version.0);
+        Ok(self.client.export_definition(id.0.as_str(), version.0.as_str()).await?)
+    }
 }

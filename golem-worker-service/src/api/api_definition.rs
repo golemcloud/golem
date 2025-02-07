@@ -379,7 +379,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiDefinitionId>,
         version: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiVersion>,
-    ) -> Result<poem_openapi::payload::PlainText<String>, ApiEndpointError> {
+    ) -> Result<poem_openapi::payload::Json<String>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "export_definition",
             api_definition_id = id.0.to_string(),
@@ -398,20 +398,15 @@ impl RegisterApiDefinitionApi {
             )))
         )?;
         
-        // First convert CompiledHttpApiDefinition to HttpApiDefinition
         let http_api_def: HttpApiDefinition = compiled_definition.into();
-        
-        // Then convert HttpApiDefinition to base HttpApiDefinitionRequest
         let api_def_request: golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest = http_api_def.into();
-        
-        // Finally create OpenApiHttpApiDefinitionRequest
         let openapi_def = golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest::from_http_api_definition_request(&api_def_request)
             .map_err(|e| ApiEndpointError::internal(safe(e)))?;
         
         let yaml = serde_yaml::to_string(&openapi_def.0)
             .map_err(|e| ApiEndpointError::internal(safe(e.to_string())))?;
         
-        Ok(poem_openapi::payload::PlainText(yaml))
+        Ok(poem_openapi::payload::Json(yaml))
     }
 }
 
@@ -588,6 +583,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -618,6 +614,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -640,6 +637,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -662,6 +660,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -687,6 +686,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -701,6 +701,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -831,6 +832,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -852,7 +854,7 @@ mod test {
         assert!(body.contains("x-golem-api-definition-version"));
         assert!(body.contains("1.0"));
         assert!(body.contains("security:"), "Exported YAML should contain 'security' field.");
-        assert!(body.contains("corsPreflight:"), "Exported YAML should contain 'corsPreflight' field.");
+        assert!(body.contains("x-golem-cors-preflight:"), "Exported YAML should contain 'corsPreflight' field.");
     }
 
     #[test]
@@ -886,6 +888,7 @@ mod test {
             ],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client

@@ -50,6 +50,29 @@ fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
 fn generated(r: &mut DynamicTestRegistration) {
     make(r, "_short", "CLI_short", true);
     make(r, "_long", "CLI_long", false);
+    
+    add_test!(
+        r,
+        format!("api_definition_export_short"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_export((deps, "CLI_short".to_string(), cli.with_args(true)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_export_long"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_export((deps, "CLI_long".to_string(), cli.with_args(false)))
+        }
+    );
 }
 
 fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
@@ -1050,6 +1073,60 @@ fn api_definition_delete(
     ])?;
 
     assert!(res_list.is_empty());
+
+    Ok(())
+}
+
+fn api_definition_export(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_export{}", name);
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let path = "/{user-id}/get-cart-contents";
+
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
+
+    let file_path = make_json_file(&def.id, &def)?;
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    let cfg = &cli.config;
+    let exported: String = cli.run_string(&[
+        "api-definition",
+        "export",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+    ])?;
+
+    let yaml_start = exported.find("openapi: 3.0.0").unwrap_or(0);
+    let yaml_content = &exported[yaml_start..];
+
+    println!("Raw response:\n{}", exported); // Keep for debugging
+
+    let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}\nContent: {}", e, yaml_content))?;
+
+    assert_eq!(yaml["openapi"], "3.0.0");
+    assert_eq!(yaml["x-golem-api-definition-id"], component_name);
+    assert_eq!(yaml["x-golem-api-definition-version"], "0.1.0");
+    
+    let path_key = "/{user-id}/get-cart-contents";
+    assert!(
+        yaml["paths"][path_key]["get"]["x-golem-api-gateway-binding"].is_mapping(),
+        "Missing gateway binding in paths"
+    );
+
+    let binding = &yaml["paths"][path_key]["get"]["x-golem-api-gateway-binding"];
+    assert_eq!(
+        binding["component-id"]["componentId"],
+        component_id
+    );
 
     Ok(())
 }

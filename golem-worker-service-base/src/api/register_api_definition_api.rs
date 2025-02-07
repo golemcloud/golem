@@ -74,6 +74,7 @@ pub struct HttpApiDefinitionRequest {
     pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
+    pub metadata: Option<String>,
 }
 
 // Mostly this data structures that represents the actual incoming request
@@ -678,6 +679,12 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             routes.push(v);
         }
 
+        let metadata = if let Some(metadata_str) = self.metadata {
+            Some(serde_json::from_str(&metadata_str).map_err(|e| format!("Failed to parse metadata: {}", e))?)
+        } else {
+            None
+        };
+
         Ok(
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
@@ -687,6 +694,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
                     .map(|x| x.into_iter().map(SecuritySchemeReference::new).collect()),
                 routes,
                 draft: self.draft,
+                metadata,
             },
         )
     }
@@ -916,6 +924,7 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
             version: ApiVersion(value.version),
             routes: route_requests,
             draft: value.draft,
+            metadata: None,
             security,
         };
 

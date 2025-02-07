@@ -39,6 +39,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
+use golem_common::model::component_metadata::ComponentMetadata;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -47,6 +48,7 @@ pub struct HttpApiDefinition {
     pub routes: Vec<Route>,
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub metadata: Option<ComponentMetadata>,
 }
 
 impl HttpApiDefinition {
@@ -132,6 +134,7 @@ impl HttpApiDefinition {
             routes,
             draft: request.draft,
             created_at,
+            metadata: None,
         };
 
         transform_http_api_definition(&mut http_api_definition).map_err(|error| {
@@ -159,6 +162,7 @@ impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
             security,
             routes: value.routes.into_iter().map(RouteRequest::from).collect(),
             draft: value.draft,
+            metadata: value.metadata,
         }
     }
 }
@@ -184,6 +188,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
                 .collect(),
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
+            metadata: compiled_http_api_definition.metadata,
         }
     }
 }
@@ -211,6 +216,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
             routes,
             draft: value.draft,
             created_at: created_at.into(),
+            metadata: None, // TODO: Add metadata support in gRPC types when needed
         };
         Ok(result)
     }
@@ -229,6 +235,7 @@ pub struct CompiledHttpApiDefinition<Namespace> {
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub namespace: Namespace,
+    pub metadata: Option<ComponentMetadata>,
 }
 
 impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
@@ -251,6 +258,7 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
             namespace: namespace.clone(),
+            metadata: None,
         })
     }
 }

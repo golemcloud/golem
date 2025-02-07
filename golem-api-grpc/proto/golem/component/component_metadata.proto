@@ -7,9 +7,21 @@ import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
 import "golem/component/dynamic_linked_instance.proto";
 
+message OpenApiMetadata {
+  optional string title = 1;
+  optional string description = 2;
+  optional string terms_of_service = 3;
+  optional string contact_name = 4;
+  optional string contact_url = 5;
+  optional string contact_email = 6;
+  optional string license_name = 7;
+  optional string license_url = 8;
+}
+
 message ComponentMetadata {
   repeated Export exports = 1;
   repeated Producers producers = 2;
   repeated LinearMemory memories = 3;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 4;
+  optional OpenApiMetadata openapi_metadata = 5;
 }
