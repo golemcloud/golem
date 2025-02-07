@@ -34,6 +34,7 @@ use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_wasm_rpc::Value;
@@ -55,7 +56,8 @@ pub trait SchedulerWorkerAccess {
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
 
-    async fn activate_and_invoke(
+    // enqueu and invocation to the worker, but do not block until the invocation is completed.
+    async fn enqueue_invocation(
         &self,
         owned_worker_id: OwnedWorkerId,
         idempotency_key: IdempotencyKey,
@@ -80,7 +82,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         Ok(worker.oplog())
     }
 
-    async fn activate_and_invoke(
+    async fn enqueue_invocation(
         &self,
         owned_worker_id: OwnedWorkerId,
         idempotency_key: IdempotencyKey,
@@ -88,12 +90,14 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         function_input: Vec<Value>,
     ) -> Result<(), GolemError> {
         let worker = self
-            .get_or_create_running(&owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(&owned_worker_id, None, None, None, None)
             .await?;
 
         worker
             .invoke(idempotency_key, full_function_name, function_input)
             .await?;
+
+        Worker::start_if_needed(worker).await?;
 
         Ok(())
     }
@@ -303,7 +307,7 @@ impl SchedulerServiceDefault {
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .activate_and_invoke(
+                        .enqueue_invocation(
                             owned_worker_id.clone(),
                             idempotency_key,
                             full_function_name.clone(),
@@ -444,7 +448,7 @@ mod tests {
         ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
             unimplemented!()
         }
-        async fn activate_and_invoke(
+        async fn enqueue_invocation(
             &self,
             _owned_worker_id: OwnedWorkerId,
             _idempotency_key: IdempotencyKey,
