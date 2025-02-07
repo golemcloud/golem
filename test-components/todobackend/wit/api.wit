@@ -1,0 +1,109 @@
+package todo:personal@0.1.0;
+
+interface types {
+    // Basic timestamp type (Unix timestamp in milliseconds)
+    type timestamp = u64;
+
+    // User profile information
+    record profile {
+        name: string,
+        email: string,
+        created-at: timestamp,
+        updated-at: timestamp,
+    }
+
+    // Input for updating profile
+    record update-profile-input {
+        name: option<string>,
+        email: option<string>,
+    }
+
+    // Represents a task
+    record task {
+        id: u64,
+        title: string,
+        description: string,
+        completed: bool,
+        due-date: option<timestamp>,
+        created-at: timestamp,
+        updated-at: timestamp,
+    }
+
+    // Input for creating a task
+    record create-task-input {
+        title: string,
+        description: string,
+        due-date: option<timestamp>,
+    }
+
+    // Input for updating a task
+    record update-task-input {
+        title: option<string>,
+        description: option<string>,
+        completed: option<bool>,
+        due-date: option<timestamp>,
+    }
+
+    // Task list type
+    type task-list = list<task>;
+
+    // Error types
+    enum error {
+        not-found,
+        invalid-input,
+        internal-error,
+    }
+
+    // Response wrapper type
+    record json-response {
+        status: u16,
+        body: string,
+    }
+}
+
+// Profile management interface
+interface profile {
+    use types.{error, profile, update-profile-input, json-response};
+
+    // Get the current user's profile
+    get: func() -> json-response;
+
+    // Update the current user's profile
+    update: func(input: update-profile-input) -> json-response;
+}
+
+// Task management interface
+interface tasks {
+    use types.{error, task, task-list, create-task-input, update-task-input, timestamp, json-response};
+
+    // Create a new task
+    create: func(input: create-task-input) -> json-response;
+
+    // Get a specific task by ID
+    get: func(id: u64) -> json-response;
+
+    // Update an existing task
+    update: func(id: u64, input: update-task-input) -> json-response;
+
+    // Delete a task
+    delete: func(id: u64) -> json-response;
+
+    // Get all tasks
+    get-all: func() -> json-response;
+
+    // List tasks due before a specific timestamp
+    list-due-before: func(before: timestamp) -> json-response;
+
+    // List all completed tasks
+    list-completed: func() -> json-response;
+
+    // List all incomplete tasks
+    list-incomplete: func() -> json-response;
+}
+
+// Main world definition
+world todo-worker {
+    import types;
+    export profile;
+    export tasks;
+}
