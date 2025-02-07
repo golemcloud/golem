@@ -24,12 +24,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ListDirectoryRequest,
-    ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse,
-    SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
+    InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, TargetWorkerId,
@@ -411,7 +411,11 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await_typed(
         &self,
-        request: InvokeAndAwaitRequest,
+        worker_id: TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function: String,
+        invoke_parameters: Option<Vec<ValueAndType>>,
+        context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
@@ -420,13 +424,12 @@ impl WorkerService for ForwardingWorkerService {
                 .client()
                 .await?
                 .invoke_and_await_worker_typed(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                    worker_id: request.worker_id.clone(),
-                    idempotency_key: request.idempotency_key.clone(),
-                    name: request.function.clone(),
-                    input: request
-                        .invoke_parameters
+                    worker_id: Some(worker_id.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    name: function.clone(),
+                    input: invoke_parameters
                         .clone()
-                        .map(|p| p.params.clone())
+                        .map(|params| params.into_iter().map(|param| param.value.into()).collect())
                         .unwrap_or_default(),
                     account_id: Some(
                         AccountId {
@@ -438,7 +441,7 @@ impl WorkerService for ForwardingWorkerService {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
                     }),
-                    context: request.context.clone(),
+                    context: context.clone(),
                 })
                 .await;
 

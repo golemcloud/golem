@@ -25,9 +25,10 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbsConnections;
 use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor_base::services::rdbms::mysql::MysqlType;
 use golem_worker_executor_base::services::rdbms::postgres::PostgresType;
 use golem_worker_executor_base::services::rdbms::RdbmsType;
@@ -665,6 +666,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
         let _ = fibers.spawn(async move {
             let fn_name = test_clone.fn_name();
             let component_fn_name = format!("golem:it/api.{{{db_type_clone}-{fn_name}}}");
+
             let mut statements: Vec<Value> = Vec::with_capacity(test_clone.statements.len());
 
             for s in test_clone.statements {
@@ -676,10 +678,25 @@ async fn rdbms_workers_test<T: RdbmsType>(
                 ]));
             }
 
-            let mut fn_params: Vec<Value> = vec![Value::List(statements)];
+            let statements = ValueAndType::new(
+                Value::List(statements),
+                analysed_type::list(analysed_type::record(vec![
+                    analysed_type::field("statement", analysed_type::str()),
+                    analysed_type::field("params", analysed_type::list(analysed_type::str())),
+                    analysed_type::field(
+                        "action",
+                        analysed_type::r#enum(&["execute", "query", "query-stream"]),
+                    ),
+                ])),
+            );
+
+            let mut fn_params: Vec<ValueAndType> = vec![statements];
 
             if let Some(te) = test_clone.transaction_end {
-                fn_params.push(Value::Enum(te as u32));
+                fn_params.push(ValueAndType::new(
+                    Value::Enum(te as u32),
+                    analysed_type::r#enum(&["commit", "rollback", "none"]),
+                ));
             }
 
             let result = executor_clone
