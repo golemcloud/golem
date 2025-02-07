@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -35,8 +34,10 @@ use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_wasm_rpc::Value;
 
 #[async_trait]
 pub trait SchedulerService {
@@ -54,6 +55,15 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
+
+    // enqueue and invocation to the worker
+    async fn enqueue_invocation(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError>;
 }
 
 #[async_trait]
@@ -70,6 +80,26 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
         Ok(worker.oplog())
+    }
+
+    async fn enqueue_invocation(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    ) -> Result<(), GolemError> {
+        let worker = self
+            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .await?;
+
+        worker
+            .invoke(idempotency_key, full_function_name, function_input)
+            .await?;
+
+        Worker::start_if_needed(worker).await?;
+
+        Ok(())
     }
 }
 
@@ -135,6 +165,10 @@ impl SchedulerServiceDefault {
         let previous_hour_key = Self::schedule_key_from_timestamp(previous_hours_since_epoch);
         let current_hour_key = Self::schedule_key_from_timestamp(hours_since_epoch);
 
+        // TODO: couple of issues with this implementation
+        // 1: We only query scheduled actions for the current hour - 1. If we are unavailable for longer than that actions will not be run.
+        // 2: We use the timestamp of the scheduled action as a unique key. If we have 2 actions scheduled for the same point in time one will be silently discarded.
+
         let all_from_prev_hour: Vec<(f64, ScheduledAction)> = self
             .key_value_storage
             .with_entity("scheduler", "process", "scheduled_action")
@@ -172,22 +206,47 @@ impl SchedulerServiceDefault {
             })
             .collect::<Vec<_>>();
 
-        let mut owned_worker_ids = HashSet::new();
+        // ! Do not exist early from this loop because of failed actions, as it will cause all other actions to be skipped.
+        // ! Errors will only be logged anyway, so just log them inline here and ignore.
         for (key, action) in matching {
-            owned_worker_ids.insert(action.owned_worker_id().clone());
-            self.key_value_storage
-                .with_entity("scheduler", "process", "scheduled_action")
-                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
-                .await?;
+            match action.clone() {
+                ScheduledAction::CompletePromise {
+                    promise_id,
+                    account_id,
+                } => {
+                    let owned_worker_id = OwnedWorkerId::new(&account_id, &promise_id.worker_id);
 
-            match action {
-                ScheduledAction::CompletePromise { promise_id, .. } => {
-                    self.promise_service
-                        .complete(promise_id, vec![])
-                        .await
-                        .map_err(|golem_err| format!("{golem_err}"))?;
+                    let result = self
+                        .promise_service
+                        .complete(promise_id.clone(), vec![])
+                        .await;
 
-                    record_scheduled_promise_completed();
+                    // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
+                    match result {
+                        Ok(_) => {
+                            // activate worker so it starts processing the newly completed promises
+                            {
+                                let span = span!(
+                                    Level::INFO,
+                                    "scheduler",
+                                    worker_id = owned_worker_id.worker_id.to_string()
+                                );
+                                self.worker_access
+                                    .activate_worker(&owned_worker_id)
+                                    .instrument(span)
+                                    .await;
+                            }
+
+                            record_scheduled_promise_completed();
+                        }
+                        Err(e) => {
+                            error!(
+                                worker_id = owned_worker_id.to_string(),
+                                promise_id = promise_id.to_string(),
+                                "Failed to complete promise: {e}"
+                            );
+                        }
+                    }
                 }
                 ScheduledAction::ArchiveOplog {
                     owned_worker_id,
@@ -238,19 +297,39 @@ impl SchedulerServiceDefault {
                         // TODO: metrics
                     }
                 }
-            }
-        }
+                ScheduledAction::Invoke {
+                    owned_worker_id,
+                    idempotency_key,
+                    full_function_name,
+                    function_input,
+                } => {
+                    // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
+                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
+                    let result = self
+                        .worker_access
+                        .enqueue_invocation(
+                            &owned_worker_id,
+                            idempotency_key,
+                            full_function_name.clone(),
+                            function_input,
+                        )
+                        .await;
 
-        for owned_worker_id in owned_worker_ids {
-            let span = span!(
-                Level::INFO,
-                "scheduler",
-                worker_id = owned_worker_id.worker_id.to_string()
-            );
-            self.worker_access
-                .activate_worker(&owned_worker_id)
-                .instrument(span)
-                .await;
+                    if let Err(e) = result {
+                        error!(
+                            worker_id = owned_worker_id.to_string(),
+                            full_function_name = full_function_name,
+                            "Failed to invoke worker with scheduled invocation: {e}"
+                        );
+                    };
+                }
+            }
+
+            // We are completely done with the action, purge it from the queue
+            self.key_value_storage
+                .with_entity("scheduler", "process", "scheduled_action")
+                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
+                .await?;
         }
 
         Ok(())
@@ -351,9 +430,11 @@ mod tests {
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
+        WorkerId,
     };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use golem_wasm_rpc::Value;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
@@ -365,6 +446,15 @@ mod tests {
             &self,
             _owned_worker_id: &OwnedWorkerId,
         ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+            unimplemented!()
+        }
+        async fn enqueue_invocation(
+            &self,
+            _owned_worker_id: &OwnedWorkerId,
+            _idempotency_key: IdempotencyKey,
+            _full_function_name: String,
+            _function_input: Vec<Value>,
+        ) -> Result<(), GolemError> {
             unimplemented!()
         }
     }

@@ -25,7 +25,7 @@ use golem_wasm_rpc_stubgen::wit_generate::{
 };
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
-use golem_wit::{WASI_POLL_WIT, WASM_RPC_WIT};
+use golem_wit::{WASI_POLL_WIT, WASI_WALL_CLOCKS_WIT, WASM_RPC_WIT};
 use semver::Version;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -689,10 +689,19 @@ fn assert_has_package_by_name(package_name: &PackageName, wit_source: impl WitSo
 }
 
 fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
-    let deps = vec![("poll", WASI_POLL_WIT), ("wasm-rpc", WASM_RPC_WIT)];
+    let deps = vec![
+        ("poll", WASI_POLL_WIT),
+        ("clocks", WASI_WALL_CLOCKS_WIT),
+        ("wasm-rpc", WASM_RPC_WIT),
+    ];
 
     assert_has_same_wit_package(
         &PackageName::new("wasi", "io", Some(Version::new(0, 2, 0))),
+        wit_dir,
+        deps.as_slice(),
+    );
+    assert_has_same_wit_package(
+        &PackageName::new("wasi", "clocks", Some(Version::new(0, 2, 0))),
         wit_dir,
         deps.as_slice(),
     );

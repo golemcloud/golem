@@ -594,7 +594,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@0.2.0".to_string()),
+                                    package: Some("golem:api@0.2.1".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("worker-any-filter".to_string()),
                                 })

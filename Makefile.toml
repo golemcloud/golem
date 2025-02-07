@@ -66,6 +66,7 @@ script = """
 rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
 cp wit/deps/io wasm-rpc/wit/deps
+cp wit/deps/clocks wasm-rpc/wit/deps
 cp wit/deps/wasm-rpc wasm-rpc/wit/deps
 """
 
