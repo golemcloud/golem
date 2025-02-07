@@ -462,7 +462,6 @@ mod test {
     use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
     use golem_worker_service_base::gateway_api_definition::http::MethodPattern;
     use golem_worker_service_base::api::{RouteRequestData, GatewayBindingData};
-    use golem_common::model::GatewayBindingType;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -868,13 +867,13 @@ mod test {
             routes: vec![
                 RouteRequestData {
                     method: MethodPattern::Get,
-                    path: "/docs".to_string(),
+                    path: "/swagger-ui".to_string(),
                     binding: GatewayBindingData {
-                        binding_type: Some(GatewayBindingType::SwaggerUi),
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
                         component_id: None,
                         worker_name: None,
                         idempotency_key: None,
-                        response: None,
                         allow_origin: None,
                         allow_methods: None,
                         allow_headers: None,
@@ -884,7 +883,7 @@ mod test {
                     },
                     security: None,
                     cors: None,
-                }
+                },
             ],
             draft: false,
             security: None,
@@ -906,8 +905,11 @@ mod test {
         let value = serde_json::to_value(body).unwrap();
         let body_value: HttpApiDefinitionResponseData = serde_json::from_value(value).unwrap();
         assert_eq!(body_value.routes.len(), 1);
-        assert_eq!(body_value.routes[0].binding.binding_type, Some(golem_common::model::GatewayBindingType::SwaggerUi));
-
+        
+        let swagger_route = &body_value.routes[0];
+        assert_eq!(swagger_route.path, "/swagger-ui");
+        assert_eq!(swagger_route.binding.binding_type, Some(golem_common::model::GatewayBindingType::SwaggerUi));
+        
         let export_url = format!("/v1/api/definitions/{}/{}/export", definition.id.0, definition.version.0);
         let response = client.get(&export_url).send().await;
         response.assert_status_is_ok();
@@ -917,5 +919,16 @@ mod test {
         
         assert!(body.contains("swagger-ui"), "Exported YAML should contain 'swagger-ui' binding type");
         assert!(body.contains("x-golem-api-gateway-binding"), "Exported YAML should contain gateway binding extension");
+        assert!(body.contains("swagger_test"), "Exported YAML should contain our API definition id 'swagger_test'.");
+
+        let authority = "mytesthost";
+        let api_service = poem_openapi::OpenApiService::new((), "API", "1.0")
+            .server(format!("https://{}", authority));
+        let spec_url = format!("https://{}/openapi.json", authority);
+        let swagger_ui_html = api_service.swagger_ui_html().replace("\"./openapi.json\"", &format!("\"{}\"", spec_url));
+
+        assert!(swagger_ui_html.contains("swagger-ui.css"), "Swagger UI HTML should reference its CSS file.");
+        assert!(swagger_ui_html.contains("swagger-ui-bundle.js"), "Swagger UI HTML should reference its JS bundle.");
+        assert!(swagger_ui_html.contains("<html"), "Swagger UI HTML should contain an <html> tag.");
     }
 }
