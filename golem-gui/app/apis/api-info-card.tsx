@@ -22,36 +22,15 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
 }) => {
   return (
     <Card
-      sx={{
-        p: 2,
-        borderRadius: 2,
-        maxHeight: "fit-content",
-        display: "flex",
-        flexDirection: "column",
-        cursor: "pointer",
-        gap: 1,
-        minWidth: "300px",
-        "&:hover": { cursor: "pointer", boxShadow: "0px 3px 10px 1px #666"
-        },
-      }}
       onClick={onClick}
-      className="flex-1 border"
+      className="flex-1 border  rounded-md  p-4 max-h-fit flex flex-col cursor-pointer gap-1 min-w-[300px] hover:hover:shadow-custom  hover:cursor-pointer"
     >
       {" "}
-      <Box
-        sx={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <Typography variant="subtitle1" fontWeight="bold"
-        sx={{
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          maxWidth: "80%",
-        }}
+      <Box className="flex justify-between items-center">
+        <Typography
+          variant="subtitle1"
+          fontWeight="bold"
+          className="overflow-hidden text-ellipsis whitespace-nowrap max-w-[80%]"
         >
           {name}
         </Typography>
@@ -68,49 +47,34 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
         direction="row"
         justifyContent="space-between"
         alignItems="center"
-        sx={{ mt: 1 }}
+        className="mt-1"
       >
         <Stack direction="column">
-          <Typography variant="body2" sx={{ fontSize: "12px" }}
-          className="text-muted-foreground"
-          >
-
+          <Typography variant="body2" className="text-muted-foreground text-xs">
             Latest Version
           </Typography>
           <Typography
             variant="body2"
-            sx={{
-              border: "1px solid #555",
-              width: "fit-content",
-              marginTop:"1px",
-              padding: "1px 5px",
-              borderRadius: "4px",
-            }}
-            className="text-muted-foreground"
+            className="text-muted-foreground border w-fit mt-[1px] px-[5px] py-[1px] rounded-md"
           >
             {version}
           </Typography>
         </Stack>
         <Stack direction="column">
-          <Typography variant="body2" sx={{ fontSize: "12px" }}
-          className="text-muted-foreground"
-          >
+          <Typography variant="body2" className="text-muted-foreground text-xs">
             Routes
           </Typography>
           <Stack direction="row">
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Box className="flex items-center gap-1">
               {locked ? (
-                <LockIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
+                <LockIcon className="text-[1.2rem] text-muted-foreground " />
               ) : (
-                <LockOpenIcon sx={{ fontSize: "1.2rem", color: "#888" }} />
+                <LockOpenIcon className="text-[1.2rem] text-muted-foreground  " />
               )}
             </Box>
             <Typography
               variant="body2"
-              sx={{
-                padding: "4px 2px",
-              }}
-              className="text-muted-foreground"
+              className="text-muted-foreground p-[4px_2px]"
             >
               {routesCount}
             </Typography>

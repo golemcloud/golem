@@ -50,20 +50,12 @@ const {error} = (!apiLoading && getApiDefintion() || {});
   return (
     <>
       <Box>
-        {/* Active Deployments Section */}
-        <Paper
-          className="border"
+          <Paper
+          className="border p-6 mb-6 rounded-md"
           elevation={3}
-          sx={{
-            p: 3,
-            mb: 3,
-            borderRadius: 2,
-          }}
         >
           <Stack
-            sx={{
-              mb: 2,
-            }}
+            className="mb-4"
           >
             <Stack
               direction={"row"}

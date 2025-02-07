@@ -29,12 +29,7 @@ interface FormValues {
   definitions: KeyValue[];
 }
 
-export default function DeploymentCreationPage({
-  addDeployment,
-  apiId,
-  onSuccess,
-  version,
-}: {
+type DeploymentProps = {
   onSuccess?: () => void;
   apiId?: string;
   addDeployment?: (newDeploy: ApiDeployment) => Promise<{
@@ -43,7 +38,14 @@ export default function DeploymentCreationPage({
     error?: string | null;
   }>;
   version?: string;
-}) {
+};
+
+export default function DeploymentCreationPage({
+  addDeployment,
+  apiId,
+  onSuccess,
+  version,
+}:DeploymentProps) {
   const [error, setError] = useState<string | null>(null);
   const { apiDefinitions: data, isLoading } = useApiDefinitions(apiId, version);
   const apiDefinitions = data;
