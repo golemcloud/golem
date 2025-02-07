@@ -3917,7 +3917,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit 1.1.7",
+ "golem-wit",
  "include_dir",
  "itertools 0.14.0",
  "nanoid",
@@ -4179,7 +4179,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit 0.0.0",
+ "golem-wit",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4210,14 +4210,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit.git?rev=044dba05b1f883a821cc767e151456dddb3f455f#044dba05b1f883a821cc767e151456dddb3f455f"
-
-[[package]]
-name = "golem-wit"
-version = "1.1.7"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cb9d855d8604587ccf16a402f759ee6e85b555201b6d6b1c9f0764a0fbc6d2"
+checksum = "f7474ab148bafb0768427ffd714089ce906fb606fe4468ab3954aa4a5c3f9e8f"
 
 [[package]]
 name = "golem-worker-executor"
