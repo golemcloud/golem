@@ -21,8 +21,8 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
-use tracing::{error, warn};
 use golem_wasm_rpc::Value;
+use tracing::{error, warn};
 
 /// Service for activating workers in the background
 #[async_trait]
@@ -101,10 +101,19 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     ) -> Result<(), GolemError> {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
-            Some(worker_activator) => worker_activator.enqueue_invocation(owned_worker_id, idempotency_key, full_function_name, function_input).await,
+            Some(worker_activator) => {
+                worker_activator
+                    .enqueue_invocation(
+                        owned_worker_id,
+                        idempotency_key,
+                        full_function_name,
+                        function_input,
+                    )
+                    .await
+            }
             None => Err(GolemError::runtime(
                 "WorkerActivator is disabled, not creating instance",
-            ))
+            )),
         }
     }
 
@@ -185,9 +194,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
         function_input: Vec<Value>,
     ) -> Result<(), GolemError>
     where
-        Svcs: Send + Sync + 'static
+        Svcs: Send + Sync + 'static,
     {
-        let worker = Worker::get_or_create_suspended(&self.all, owned_worker_id, None, None, None, None).await?;
+        let worker =
+            Worker::get_or_create_suspended(&self.all, owned_worker_id, None, None, None, None)
+                .await?;
 
         worker
             .invoke(idempotency_key, full_function_name, function_input)
@@ -240,13 +251,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     owned_worker_id,
                     idempotency_key,
                     full_function_name,
-                    function_input
+                    function_input,
                 )
                 .await
             }
             None => Err(GolemError::runtime(
                 "WorkerActivator#enqueue_invocation: worker not found",
-            ))?
+            ))?,
         }
     }
 

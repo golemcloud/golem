@@ -90,9 +90,13 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<(), GolemError> {
-        self
-            .deref()
-            .enqueue_invocation(owned_worker_id, idempotency_key, full_function_name, function_input)
+        self.deref()
+            .enqueue_invocation(
+                owned_worker_id,
+                idempotency_key,
+                full_function_name,
+                function_input,
+            )
             .await
     }
 }
