@@ -202,8 +202,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), GolemError> {
         match &metadata.last_known_status.status {
             WorkerStatus::Failed => {
-                let error_and_retry_count =
-                    Ctx::get_last_error_and_retry_count(self, owned_worker_id).await;
+                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
+                    self,
+                    owned_worker_id,
+                    &metadata.last_known_status,
+                )
+                .await;
                 if let Some(last_error) = error_and_retry_count {
                     Err(GolemError::PreviousInvocationFailed {
                         details: last_error.error.to_string(&last_error.stderr),
@@ -216,8 +220,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Exited => Err(GolemError::PreviousInvocationExited),
             _ => {
-                let error_and_retry_count =
-                    Ctx::get_last_error_and_retry_count(self, owned_worker_id).await;
+                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
+                    self,
+                    owned_worker_id,
+                    &metadata.last_known_status,
+                )
+                .await;
                 debug!("Last error and retry count: {:?}", error_and_retry_count);
                 if let Some(last_error) = error_and_retry_count {
                     Err(GolemError::PreviousInvocationFailed {
@@ -801,8 +809,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?
             .ok_or(GolemError::worker_not_found(owned_worker_id.worker_id()))?;
 
-        let last_error_and_retry_count =
-            Ctx::get_last_error_and_retry_count(self, &owned_worker_id).await;
+        let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+            self,
+            &owned_worker_id,
+            &metadata.last_known_status,
+        )
+        .await;
 
         Ok(Self::create_proto_metadata(
             metadata,
@@ -878,8 +890,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut result = Vec::new();
 
         for worker_metadata in workers {
-            let last_error_and_retry_count =
-                Ctx::get_last_error_and_retry_count(self, &worker_metadata.owned_worker_id()).await;
+            let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+                self,
+                &worker_metadata.owned_worker_id(),
+                &worker_metadata.last_known_status,
+            )
+            .await;
             let metadata = Self::create_proto_metadata(worker_metadata, last_error_and_retry_count);
             result.push(metadata);
         }
