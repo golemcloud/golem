@@ -4144,6 +4144,7 @@ dependencies = [
  "bigdecimal",
  "bincode",
  "cargo_metadata",
+ "chrono",
  "git-version",
  "golem-wasm-ast",
  "poem-openapi",
@@ -4209,9 +4210,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.1.7"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cb9d855d8604587ccf16a402f759ee6e85b555201b6d6b1c9f0764a0fbc6d2"
+checksum = "f7474ab148bafb0768427ffd714089ce906fb606fe4468ab3954aa4a5c3f9e8f"
 
 [[package]]
 name = "golem-worker-executor"

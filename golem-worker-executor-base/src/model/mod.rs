@@ -303,33 +303,33 @@ pub enum PersistenceLevel {
     Smart,
 }
 
-impl From<crate::preview2::golem::api0_2_0::host::PersistenceLevel> for PersistenceLevel {
-    fn from(value: crate::preview2::golem::api0_2_0::host::PersistenceLevel) -> Self {
+impl From<crate::preview2::golem_api_0_2_x::host::PersistenceLevel> for PersistenceLevel {
+    fn from(value: crate::preview2::golem_api_0_2_x::host::PersistenceLevel) -> Self {
         match value {
-            crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistNothing => {
+            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistNothing => {
                 PersistenceLevel::PersistNothing
             }
-            crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects => {
+            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects => {
                 PersistenceLevel::PersistRemoteSideEffects
             }
-            crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart => {
+            crate::preview2::golem_api_0_2_x::host::PersistenceLevel::Smart => {
                 PersistenceLevel::Smart
             }
         }
     }
 }
 
-impl From<PersistenceLevel> for crate::preview2::golem::api0_2_0::host::PersistenceLevel {
+impl From<PersistenceLevel> for crate::preview2::golem_api_0_2_x::host::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
         match value {
             PersistenceLevel::PersistNothing => {
-                crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistNothing
+                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistNothing
             }
             PersistenceLevel::PersistRemoteSideEffects => {
-                crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects
+                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects
             }
             PersistenceLevel::Smart => {
-                crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart
+                crate::preview2::golem_api_0_2_x::host::PersistenceLevel::Smart
             }
         }
     }

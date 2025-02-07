@@ -47,7 +47,6 @@ use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use tokio::time::sleep;
 use tracing::{debug, info};
-use wasmtime_wasi::runtime::spawn;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -594,7 +593,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@0.2.0".to_string()),
+                                    package: Some("golem:api@0.2.1".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("worker-any-filter".to_string()),
                                 })
@@ -1820,7 +1819,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
-    let fiber = spawn(async move {
+    let fiber = tokio::spawn(async move {
         // Invoke blocks until the invocation starts
         executor_clone
             .invoke(
@@ -1841,7 +1840,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         *response = "first".to_string();
     }
 
-    fiber.await;
+    fiber.await.unwrap();
 
     sleep(Duration::from_secs(1)).await;
 
@@ -2107,6 +2106,10 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
             }
         }
     }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .await;
 
     let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 

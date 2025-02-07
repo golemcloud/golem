@@ -91,6 +91,13 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
 
+    wit_dependencies.insert(
+        "wasi:clocks".to_string(),
+        WitDependency {
+            path: "wit/deps/clocks".to_string(),
+        },
+    );
+
     let stub_dep_package_ids = def.stub_dep_package_ids();
     for (dep_package_id, dep_package, dep_package_sources) in def.packages_with_wit_sources() {
         if !stub_dep_package_ids.contains(&dep_package_id) {
