@@ -16,7 +16,6 @@ pub use byte_code::*;
 pub use compiler_output::*;
 use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
-use std::collections::HashSet;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
