@@ -13,17 +13,12 @@
 // limitations under the License.
 
 pub(crate) use flatten::*;
-pub(crate) use unification_result::*;
-pub(crate) use validation::*;
 mod flatten;
 mod unification;
-mod unification_result;
-mod validation;
-
-use std::collections::HashSet;
-
+use crate::TypeName;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
+use std::collections::HashSet;
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
 pub enum InferredType {
@@ -176,7 +171,7 @@ impl InferredType {
     }
 
     pub fn unify(&self) -> Result<InferredType, String> {
-        unification::unify(self)
+        unification::unify(self).map(|unified| unified.inferred_type())
     }
 
     pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {

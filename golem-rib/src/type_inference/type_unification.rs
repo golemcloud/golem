@@ -29,7 +29,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -42,8 +42,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of record {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!(
+                            "unable to infer the type of record {}, {}",
+                            expr_str, e
+                        ));
                     }
                 }
             }
@@ -55,8 +57,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of tuple {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!(
+                            "unable to infer the type of tuple {}, {}",
+                            expr_str, e
+                        ));
                     }
                 }
             }
@@ -68,10 +72,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of sequence {}",
-                            expr_str
+                            "unable to infer the type of sequence {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -82,8 +85,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of option {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!(
+                            "unable to infer the type of option {}, {}",
+                            expr_str, e
+                        ));
                     }
                 }
             }
@@ -94,8 +99,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of option {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!(
+                            "unable to infer the type of option {}, {}",
+                            expr_str, e
+                        ));
                     }
                 }
             }
@@ -108,10 +115,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of `result::ok` {}",
-                            expr_str
+                            "unable to infer the type of `result::ok` {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -124,10 +130,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of `result::err` {}",
-                            expr_str
+                            "unable to infer the type of `result::err` {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -142,10 +147,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of condition expression {}",
-                            expr_str
+                            "unable to infer the type of condition expression {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -165,11 +169,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of list comprehension {}",
-                            expr_str
+                            "unable to infer the type of list comprehension {}, {}",
+                            expr_str, e
                         ));
-
-                        errors.push(e)
                     }
                 }
             }
@@ -191,11 +193,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of list aggregation {}",
-                            expr_str
+                            "unable to infer the type of list aggregation {}, {}",
+                            expr_str, e
                         ));
-
-                        errors.push(e)
                     }
                 }
             }
@@ -214,10 +214,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of pattern match expression {}",
-                            expr_str
+                            "unable to infer the type of pattern match expression {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -230,10 +229,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of function return {}",
-                            function_call
+                            "unable to infer the type of function return {}, {}",
+                            function_call, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -245,10 +243,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of field selection {}",
-                            expr_str
+                            "unable to infer the type of field selection {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -260,10 +257,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of index selection {}",
-                            expr_str
+                            "unable to infer the type of index selection {}, {}",
+                            expr_str, e
                         ));
-                        errors.push(e);
                     }
                 }
             }
@@ -277,7 +273,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -287,8 +283,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of flags {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!(
+                            "unable to infer the type of flags {}, {}",
+                            expr_str, e
+                        ));
                     }
                 }
             }
@@ -298,11 +296,9 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!(
-                            "Unable to resolve the type of identifier {}",
-                            text::to_string(expr).unwrap()
-                        ));
-                        errors.push(e);
+                        let expr_str = expr.to_string();
+                        let error = format!("unable to infer the type of {}, {}", expr_str, e);
+                        errors.push(error);
                     }
                 }
             }
@@ -317,9 +313,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(e);
-                    }
+                    Err(_) => {}
                 }
             }
 
@@ -330,8 +324,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -342,8 +335,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -354,8 +346,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -366,8 +357,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.push(e);
+                        errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
                     }
                 }
             }
@@ -466,8 +456,7 @@ mod internal {
         match unified_inferred_type {
             Ok(unified_type) => *inferred_type = unified_type,
             Err(e) => {
-                errors.push(format!("Unable to resolve the type of {}", expr_str));
-                errors.push(e);
+                errors.push(format!("unable to infer the type of {}, {}", expr_str, e));
             }
         }
     }

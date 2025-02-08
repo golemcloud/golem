@@ -70,7 +70,6 @@ mod type_inference_tests {
             let rib_expr = r#"
              let res = request.path.user-id;
              let hello: u64 = request.path.number;
-             let y: u64 = res;
              hello
             "#;
 

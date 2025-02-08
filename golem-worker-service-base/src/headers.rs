@@ -39,7 +39,7 @@ impl ResolvedResponseHeaders {
                     let value_str = value
                         .get_literal()
                         .map(|primitive| primitive.to_string())
-                        .unwrap_or_else(|| "Unable to resolve header".to_string());
+                        .unwrap_or_else(|| "unable to infer header".to_string());
 
                     resolved_headers.insert(field_def.name, value_str);
                 }
@@ -47,7 +47,7 @@ impl ResolvedResponseHeaders {
                 let headers = (&resolved_headers)
                     .try_into()
                     .map_err(|e: http::Error| e.to_string())
-                    .map_err(|e| format!("Unable to resolve valid headers. Error: {e}"))?;
+                    .map_err(|e| format!("unable to infer valid headers. Error: {e}"))?;
 
                 Ok(ResolvedResponseHeaders { headers })
             }
