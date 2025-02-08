@@ -49,6 +49,15 @@ pub fn compile_with_restricted_global_variables(
     allowed_global_variables: Option<Vec<String>>,
     global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
 ) -> Result<CompilerOutput, String> {
+    for info in global_variable_type_spec {
+        if !info.variable_id.is_global() {
+            return Err(format!(
+                "Only global variables can have default types, but found {}",
+                info.variable_id
+            ));
+        }
+    }
+
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
     let function_calls_identified =
@@ -56,16 +65,6 @@ pub fn compile_with_restricted_global_variables(
 
     let global_input_type_info =
         RibInputTypeInfo::from_expr(&inferred_expr).map_err(|e| format!("Error: {}", e))?;
-
-    let global_keys: HashSet<_> = global_input_type_info.types.keys().cloned().collect();
-
-    // We make the global variable spec given by the user is infact corresponds to the real
-    // global variables identified by the compiler
-    for info in global_variable_type_spec {
-        if !info.variable_id.is_global() || !global_keys.contains(&info.variable_id.to_string()) {
-            return Err("Only global variables can have default types".to_string());
-        }
-    }
 
     let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
 
