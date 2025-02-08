@@ -155,7 +155,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             producers,
             memories,
             dynamic_linking: HashMap::new(),
-            openapi_metadata: None,
+            openapi_metadata: value.openapi_metadata,
         }
     }
 }
@@ -165,12 +165,11 @@ pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
     pub memories: Vec<Mem>,
+    pub openapi_metadata: Option<OpenApiMetadata>,
 }
 
 impl RawComponentMetadata {
-    pub fn analyse_component(
-        data: &[u8],
-    ) -> Result<RawComponentMetadata, ComponentProcessingError> {
+    pub fn analyse_component(data: &[u8]) -> Result<RawComponentMetadata, ComponentProcessingError> {
         let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
             .map_err(ComponentProcessingError::Parsing)?;
 
@@ -179,7 +178,7 @@ impl RawComponentMetadata {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let state = AnalysisContext::new(component);
+        let state = AnalysisContext::new(component.clone());
 
         let mut exports = state
             .get_top_level_exports()
@@ -196,10 +195,34 @@ impl RawComponentMetadata {
             .into_iter()
             .collect();
 
+        // Extract OpenAPI metadata from component's custom sections
+        let openapi_metadata = if let Some(metadata) = component.get_metadata() {
+            if let Some(registry_metadata) = metadata.registry_metadata {
+                // Convert registry metadata fields to OpenAPI metadata
+                Some(OpenApiMetadata {
+                    title: None, // We don't have a direct mapping for title
+                    description: registry_metadata.description,
+                    terms_of_service: None, // No direct mapping
+                    contact_name: registry_metadata.authors.and_then(|authors| authors.first().cloned()), // Use first author as contact
+                    contact_url: None, // No direct mapping
+                    contact_email: None, // No direct mapping
+                    license_name: registry_metadata.license.or_else(|| 
+                        registry_metadata.custom_licenses.and_then(|licenses| licenses.first().map(|l| l.name.clone()))
+                    ),
+                    license_url: None, // No direct mapping
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(RawComponentMetadata {
             exports,
             producers,
             memories,
+            openapi_metadata,
         })
     }
 }

@@ -20,37 +20,9 @@ use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
 use serde_json::Value;
 use std::borrow::Cow;
-use serde::{Serialize, Deserialize};
+use golem_common::model::component_metadata::{ComponentMetadata, OpenApiMetadata};
 
 pub struct OpenApiHttpApiDefinitionRequest(pub OpenAPI);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenApiMetadata {
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub terms_of_service: Option<String>,
-    pub contact_name: Option<String>,
-    pub contact_url: Option<String>,
-    pub contact_email: Option<String>,
-    pub license_name: Option<String>,
-    pub license_url: Option<String>,
-}
-
-impl Default for OpenApiMetadata {
-    fn default() -> Self {
-        Self {
-            title: Some("OpenAPI Definition".to_string()),
-            description: Some("API definition exported from Golem".to_string()),
-            terms_of_service: None,
-            contact_name: Some("Golem Cloud".to_string()),
-            contact_url: None,
-            contact_email: None,
-            license_name: Some("Apache 2.0".to_string()),
-            license_url: Some("https://www.apache.org/licenses/LICENSE-2.0".to_string()),
-        }
-    }
-}
 
 impl OpenApiHttpApiDefinitionRequest {
     pub fn to_http_api_definition_request(&self) -> Result<HttpApiDefinitionRequest, String> {
@@ -75,7 +47,22 @@ impl OpenApiHttpApiDefinitionRequest {
             routes,
             draft: true,
             security,
-            metadata: None,
+            metadata: Some(ComponentMetadata {
+                exports: vec![],
+                producers: vec![],
+                memories: vec![],
+                dynamic_linking: Default::default(),
+                openapi_metadata: Some(OpenApiMetadata {
+                    title: Some(open_api.info.title.clone()),
+                    description: open_api.info.description.clone(),
+                    terms_of_service: open_api.info.terms_of_service.clone(),
+                    contact_name: open_api.info.contact.as_ref().and_then(|c| c.name.clone()),
+                    contact_url: open_api.info.contact.as_ref().and_then(|c| c.url.clone()),
+                    contact_email: open_api.info.contact.as_ref().and_then(|c| c.email.clone()),
+                    license_name: open_api.info.license.as_ref().map(|l| l.name.clone()),
+                    license_url: open_api.info.license.as_ref().and_then(|l| l.url.clone()),
+                }),
+            }),
         })
     }
 
@@ -125,7 +112,7 @@ impl OpenApiHttpApiDefinitionRequest {
         // Components section for reusable schemas
         let mut components = openapiv3::Components::default();
         components.schemas = Default::default();
-        open_api.components = Some(components);
+        open_api.components = Some(components.clone());
 
         for route in &def.routes {
             let path_str = route.path.to_string();
@@ -136,7 +123,6 @@ impl OpenApiHttpApiDefinitionRequest {
                 let mut response = openapiv3::Response::default();
                 response.description = "Successful response".to_string();
                 
-                // Add default content type and schema
                 let mut content = indexmap::IndexMap::new();
                 let mut media = openapiv3::MediaType::default();
                 media.schema = Some(openapiv3::ReferenceOr::Item(openapiv3::Schema {
@@ -199,6 +185,9 @@ impl OpenApiHttpApiDefinitionRequest {
                 .collect(),
             extensions: Default::default()
         };
+
+        // Add components section with schemas
+        open_api.components = Some(components);
 
         // Set the security field from def.security
         open_api.security = Some(

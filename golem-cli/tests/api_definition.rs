@@ -73,6 +73,19 @@ fn generated(r: &mut DynamicTestRegistration) {
             api_definition_export((deps, "CLI_long".to_string(), cli.with_args(false)))
         }
     );
+
+    // Add todo worker test
+    add_test!(
+        r,
+        "api_definition_todo_worker",
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_todo_worker_test((deps, "".to_string(), cli.with_args(true)))
+        }
+    );
 }
 
 fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
@@ -1233,6 +1246,314 @@ fn api_definition_swagger(
 
     assert!(result.contains("does not have Swagger UI configured"));
     assert!(result.contains(&def.id));
+
+    Ok(())
+}
+
+pub fn make_todo_worker_component(
+    deps: &(impl TestDependencies + Send + Sync + 'static),
+    component_name: &str,
+    cli: &CliLive,
+) -> anyhow::Result<ComponentView> {
+    add_component_from_file(deps, component_name, cli, "todo_worker.wasm")
+}
+
+fn api_definition_todo_worker_test(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_todo_worker{}", name);
+    let component = make_todo_worker_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+
+    // Create API definition for todo worker
+    let def = HttpApiDefinitionRequest {
+        id: component_name.clone(),
+        version: "0.1.0".to_string(),
+        draft: true,
+        security: None,
+        routes: vec![
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/profile".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-profile-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/profile@0.1.0.{get}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Put,
+                path: "/profile".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"update-profile-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/profile@0.1.0.{update}(request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-all-tasks-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{get-all}()".to_string()),
+                    allow_origin: Some("*".to_string()),
+                    allow_methods: Some("GET, POST, OPTIONS".to_string()),
+                    allow_headers: Some("Content-Type".to_string()),
+                    expose_headers: Some("Content-Type".to_string()),
+                    binding_type: Some(GatewayBindingType::SwaggerUi),
+                    max_age: Some(86400),
+                    allow_credentials: Some(true),
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Post,
+                path: "/tasks".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"create-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{create}(request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{get}(request.path.id)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Put,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"update-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{update}(request.path.id, request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Delete,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"delete-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{delete}(request.path.id)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/incomplete".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-tasks-incomplete-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-incomplete}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/completed".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-completed-tasks-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-completed}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/due-before/{timestamp}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"tasks-due-before-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-due-before}(request.path.timestamp)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+        ],
+    };
+
+    // Add API definition
+    let file_path = make_json_file(&def.id, &def)?;
+    let response: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    // Test API definition response
+    assert_eq!(response.id, component_name);
+    assert_eq!(response.version, "0.1.0");
+    assert_eq!(response.routes.len(), 10); // Updated to match all routes including profile endpoints
+
+    // Test export
+    let cfg = &cli.config;
+    let exported: String = cli.run_string(&[
+        "api-definition",
+        "export",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+    ])?;
+
+    let yaml_start = exported.find("openapi: 3.0.0").unwrap_or(0);
+    let yaml_content = &exported[yaml_start..];
+    
+    let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}\nContent: {}", e, yaml_content))?;
+
+    // Validate exported OpenAPI spec
+    assert_eq!(yaml["openapi"], "3.0.0");
+    assert_eq!(yaml["x-golem-api-definition-id"], component_name);
+    assert_eq!(yaml["x-golem-api-definition-version"], "0.1.0");
+    
+    // Validate paths
+    assert!(yaml["paths"]["/profile"].is_mapping());
+    assert!(yaml["paths"]["/tasks"].is_mapping());
+    assert!(yaml["paths"]["/tasks/{id}"].is_mapping());
+    assert!(yaml["paths"]["/tasks/incomplete"].is_mapping());
+    assert!(yaml["paths"]["/tasks/completed"].is_mapping());
+    assert!(yaml["paths"]["/tasks/due-before/{timestamp}"].is_mapping());
+
+    // Test Swagger UI
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("Opening Swagger UI for API definition"));
+    assert!(result.contains(&component_name));
+    assert!(result.contains("0.1.0"));
+    assert!(result.contains("localhost:8080/tasks/swaggerui"));
 
     Ok(())
 }

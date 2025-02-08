@@ -216,7 +216,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
             routes,
             draft: value.draft,
             created_at: created_at.into(),
-            metadata: None, // TODO: Add metadata support in gRPC types when needed
+            metadata: None,
         };
         Ok(result)
     }
@@ -258,7 +258,7 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
             namespace: namespace.clone(),
-            metadata: None,
+            metadata: http_api_definition.metadata.clone(),
         })
     }
 }
@@ -561,22 +561,21 @@ pub enum RouteCompilationErrors {
     RibCompilationError(String),
 }
 
-#[derive(Clone, Debug)]
 pub struct ComponentMetadataDictionary {
     pub metadata: HashMap<VersionedComponentId, Vec<AnalysedExport>>,
 }
 
 impl ComponentMetadataDictionary {
     pub fn from_components(components: &Vec<Component>) -> ComponentMetadataDictionary {
-        let mut metadata = HashMap::new();
-        for component in components {
-            if !component.metadata.exports.is_empty() {
-                metadata.insert(
+        let metadata = components
+            .iter()
+            .map(|component| {
+                (
                     component.versioned_component_id.clone(),
                     component.metadata.exports.clone(),
-                );
-            }
-        }
+                )
+            })
+            .collect();
 
         ComponentMetadataDictionary { metadata }
     }

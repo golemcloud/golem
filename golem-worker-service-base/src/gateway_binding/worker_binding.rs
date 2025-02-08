@@ -89,7 +89,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
     }
 }
 
-// ResponseMapping will consist of actual logic such as invoking worker functions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseMapping(pub Expr);
 
@@ -99,7 +98,6 @@ pub struct ResponseMappingCompiled {
     pub response_mapping_compiled: RibByteCode,
     pub rib_input: RibInputTypeInfo,
     pub worker_calls: Option<WorkerFunctionsInRib>,
-    // Optional to keep backward compatibility
     pub rib_output: Option<RibOutputTypeInfo>,
 }
 
