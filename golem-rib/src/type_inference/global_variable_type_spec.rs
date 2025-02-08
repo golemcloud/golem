@@ -4,11 +4,9 @@ use std::collections::VecDeque;
 
 // The goal is to be able to specify the types associated with an identifier.
 // i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
-// This can be represented using `TypeSpecification { a, vec![], Str }`, `TypeSpecification {a, b, Str}`  and
-// `TypeSpecification {a, vec[b, c], Str}` respectively
+// This can be represented using `GlobalVariableTypeSpec { a, vec![], Str }`, `GlobalVariableTypeSpec {a, b, Str}`  and
+// `GlobalVariableTypeSpec {a, vec[b, c], Str}` respectively
 // If you specify completely opposite types to be default, you will get a compilation error.
-// If you tried to specify a variable is always string, but compiler identifies it's usage as `U64`,
-// then it chooses `U64` and discards the default. If the compiler finds its usages as `Str`
 #[derive(Clone, Debug)]
 pub struct GlobalVariableTypeSpec {
     pub variable_id: VariableId,
@@ -18,12 +16,6 @@ pub struct GlobalVariableTypeSpec {
 
 //
 // Algorithm:
-//
-// The goal is to be able to specify the types associated with an identifier
-// i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
-// This can be represented using `TypeSpecification { a, vec![], Str }`, `TypeSpecification {a, b, Str}`  and
-// `TypeSpecification {a, vec[b, c], Str}` respectively
-//
 // We initially create queue of immutable Expr (to be able to push mutable version has to do into reference count logic in Rust)
 // and then push it to an intermediate stack and recreate the Expr. This is similar to `type_pull_up` phase.
 // This is verbose but will make the algorithm quite easy to handle.
@@ -40,7 +32,7 @@ pub struct GlobalVariableTypeSpec {
 //  Example queue:
 //  [select_field(select_field(a, b), c), select_field(a, b), identifier(a)]
 //
-// Example Walkthrough: Given `TypeSpecification { a, vec[b, c], Str]`
+// Example Walkthrough: Given `GlobalVariableTypeSpec { a, vec[b, c], Str]`
 //
 // 1. Pop the back element in the queue to get `identifier(a)`.
 //    - Check the `temp_stack` by popping from the front.
