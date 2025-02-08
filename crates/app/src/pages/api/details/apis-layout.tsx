@@ -15,8 +15,10 @@ import {
     BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
 import {Api} from "@/types/api.ts";
-import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select.tsx";
+import {Select, SelectContent, SelectItem, SelectTrigger,} from "@/components/ui/select.tsx";
 import {NavRoutes} from "@/components/nav-route.tsx";
+import {Badge} from "@/components/ui/badge.tsx";
+import {SelectValue} from "@radix-ui/react-select";
 
 const MenuItems = (apiName: string, version: string) => [
     {
@@ -135,13 +137,35 @@ export const ApiLayout = () => {
                                         }
                                     }}
                                 >
-                                    <SelectTrigger>
+                                    <SelectTrigger
+                                        // className={"rounded border-transparent bg-blue-950 text-warning-foreground px-2 py-0.5 m-0"}
+                                    >
                                         <SelectValue>{version}</SelectValue>
                                     </SelectTrigger>
                                     <SelectContent>
                                         {sortedVersions.map((api) => (
                                             <SelectItem value={api.version} key={api.version}>
-                                                {api.version} {api.draft ? "(Draft)" : "(Published)"}
+                                                <div className="flex items-center gap-2">
+                                                    <span
+                                                        className="text-sm"
+                                                    >
+                                                        {api.version}
+                                                    </span>
+                                                    {api.draft ? (
+                                                        <Badge
+                                                            variant="warning"
+                                                            className="p-0.5 m-0 rounded"
+                                                        >
+                                                            Draft
+                                                        </Badge>
+                                                    ) : <Badge
+                                                        variant="success"
+                                                        className="p-0.5 m-0 rounded"
+                                                    >
+                                                        Published
+                                                    </Badge>}
+                                                </div>
+                                                {/*{api.version} {api.draft ? "(Draft)" : "(Published)"}*/}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

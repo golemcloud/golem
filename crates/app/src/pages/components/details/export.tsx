@@ -8,8 +8,7 @@ import {useParams} from "react-router-dom";
 import {Case, ComponentList, Export, Parameter, Typ} from "@/types/component";
 
 // ---------- Shadcn UI Tooltip Imports ----------
-import {TooltipProvider} from "@/components/ui/tooltip";
-import {Popover, PopoverContent, PopoverTrigger,} from "@/components/ui/popover";
+import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from "@/components/ui/tooltip";
 
 /**
  * The interface for each export/function row
@@ -128,6 +127,9 @@ function parseTypeForTooltip(typ: Typ | undefined): {
 function TypeWithPopover({typ}: { typ: Typ | undefined }) {
     const {short, full} = parseTypeForTooltip(typ);
     const [copied, setCopied] = useState(false);
+    const [open, setOpen] = useState(false);
+    // const debouncedOpen = useDebounce(open, 200);
+
 
     const handleCopy = () => {
         navigator.clipboard.writeText(full).then(() => {
@@ -137,13 +139,13 @@ function TypeWithPopover({typ}: { typ: Typ | undefined }) {
     };
 
     return (
-        <Popover>
-            <PopoverTrigger asChild>
+        <Tooltip open={open} onOpenChange={setOpen}>
+            <TooltipTrigger asChild onClick={() => setOpen(true)}>
         <span className="cursor-help text-blue-600 dark:text-blue-400">
           {short}
         </span>
-            </PopoverTrigger>
-            <PopoverContent className="p-4 bg-gray-100 dark:bg-gray-800 rounded-md shadow-lg">
+            </TooltipTrigger>
+            <TooltipContent className="p-4 bg-gray-100 dark:bg-gray-800 rounded-md shadow-lg">
                 <div className="flex justify-between items-center mb-2">
           <span className="text-sm font-bold text-gray-900 dark:text-gray-100">
             Type Details
@@ -160,8 +162,8 @@ function TypeWithPopover({typ}: { typ: Typ | undefined }) {
                     className="whitespace-pre-wrap text-sm bg-white dark:bg-gray-900 p-2 rounded-md border dark:border-gray-700 text-gray-900 dark:text-gray-100">
           {full}
         </pre>
-            </PopoverContent>
-        </Popover>
+            </TooltipContent>
+        </Tooltip>
     );
 }
 
