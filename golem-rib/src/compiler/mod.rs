@@ -21,7 +21,7 @@ pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo, TypeDefault};
+use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
@@ -34,7 +34,7 @@ pub fn compile(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, String> {
-    compile_with_restricted_global_variables(expr, export_metadata, None, None)
+    compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
 }
 
 // Rib allows global input variables, however, we can choose to fail compilation
@@ -42,15 +42,15 @@ pub fn compile(
 // There is no restriction imposed to the type of this variable.
 // Also we can specify types for certain global variables and if needed be specific
 // on the path. Example: All variables under the  variable `path` which is under the global variable `request` can be `Str`
+// Not all global variable require a type specification, and you can leave it to the compiler.
 pub fn compile_with_restricted_global_variables(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
     allowed_global_variables: Option<Vec<String>>,
-    global_variable_type_default: Option<TypeDefault>,
+    global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
 ) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
-    let inferred_expr =
-        InferredExpr::from_expr(expr, &type_registry, global_variable_type_default.as_ref())?;
+    let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
     let function_calls_identified =
         WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
@@ -59,7 +59,9 @@ pub fn compile_with_restricted_global_variables(
 
     let global_keys: HashSet<_> = global_input_type_info.types.keys().cloned().collect();
 
-    if let Some(info) = &global_variable_type_default {
+    // We make the global variable spec given by the user is infact corresponds to the real
+    // global variables identified by the compiler
+    for info in global_variable_type_spec {
         if !info.variable_id.is_global() || !global_keys.contains(&info.variable_id.to_string()) {
             return Err("Only global variables can have default types".to_string());
         }

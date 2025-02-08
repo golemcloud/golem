@@ -4,13 +4,13 @@ use std::collections::VecDeque;
 
 // The goal is to be able to specify the types associated with an identifier.
 // i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
-// This can be represented using `TypeDefault { a, vec![], Str }`, `TypeDefault {a, b, Str}`  and
-// `TypeDefault {a, vec[b, c], Str}` respectively
+// This can be represented using `TypeSpecification { a, vec![], Str }`, `TypeSpecification {a, b, Str}`  and
+// `TypeSpecification {a, vec[b, c], Str}` respectively
 // If you specify completely opposite types to be default, you will get a compilation error.
 // If you tried to specify a variable is always string, but compiler identifies it's usage as `U64`,
 // then it chooses `U64` and discards the default. If the compiler finds its usages as `Str`
 #[derive(Clone, Debug)]
-pub struct TypeDefault {
+pub struct GlobalVariableTypeSpec {
     pub variable_id: VariableId,
     pub path: Path,
     pub inferred_type: InferredType,
@@ -21,8 +21,8 @@ pub struct TypeDefault {
 //
 // The goal is to be able to specify the types associated with an identifier
 // i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
-// This can be represented using `TypeDefault { a, vec![], Str }`, `TypeDefault {a, b, Str}`  and
-// `TypeDefault {a, vec[b, c], Str}` respectively
+// This can be represented using `TypeSpecification { a, vec![], Str }`, `TypeSpecification {a, b, Str}`  and
+// `TypeSpecification {a, vec[b, c], Str}` respectively
 //
 // We initially create queue of immutable Expr (to be able to push mutable version has to do into reference count logic in Rust)
 // and then push it to an intermediate stack and recreate the Expr. This is similar to `type_pull_up` phase.
@@ -40,7 +40,7 @@ pub struct TypeDefault {
 //  Example queue:
 //  [select_field(select_field(a, b), c), select_field(a, b), identifier(a)]
 //
-// Example Walkthrough: Given `TypeDefault { a, vec[b, c], Str]`
+// Example Walkthrough: Given `TypeSpecification { a, vec[b, c], Str]`
 //
 // 1. Pop the back element in the queue to get `identifier(a)`.
 //    - Check the `temp_stack` by popping from the front.
@@ -60,11 +60,22 @@ pub struct TypeDefault {
 //
 //  The same algorithm above is tweaked even if users specified partial paths. Example:
 //  Everything under `a.b` (regardless of the existence of c and d) at their leafs follow the default type
-pub fn tag_default_global_variable_type(
+
+pub fn bind_global_variables_type(
     expr: &Expr,
-    type_default: &TypeDefault,
+    type_pecs: &Vec<GlobalVariableTypeSpec>,
 ) -> Result<Expr, String> {
-    let mut path = type_default.path.clone();
+    let mut result_expr = expr.clone();
+
+    for spec in type_pecs {
+        result_expr = bind_with_type_spec(&result_expr, spec)?;
+    }
+
+    Ok(result_expr)
+}
+
+fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Result<Expr, String> {
+    let mut path = type_spec.path.clone();
 
     let mut expr_queue = VecDeque::new();
 
@@ -75,7 +86,7 @@ pub fn tag_default_global_variable_type(
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
             expr @ Expr::Identifier(variable_id, _) => {
-                if variable_id == &type_default.variable_id {
+                if variable_id == &type_spec.variable_id {
                     if path.is_empty() {
                         let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _)) if inner.as_ref() == expr);
 
@@ -85,7 +96,7 @@ pub fn tag_default_global_variable_type(
                             temp_stack.push_front((
                                 Expr::Identifier(
                                     variable_id.clone(),
-                                    type_default.inferred_type.clone(),
+                                    type_spec.inferred_type.clone(),
                                 ),
                                 false,
                             ));
@@ -108,7 +119,7 @@ pub fn tag_default_global_variable_type(
                     current_inferred_type,
                     &mut temp_stack,
                     &mut path,
-                    &type_default.inferred_type,
+                    &type_spec.inferred_type,
                 )?;
             }
 
@@ -472,7 +483,8 @@ mod internal {
         if part_of_path {
             match path.current() {
                 Some(PathElem::Field(name)) if name == field => path.progress(),
-                Some(_) => return Err("We disallow type overrides at indices".to_string()),
+                Some(PathElem::Field(_)) => {}
+                Some(PathElem::Index(_)) => {}
                 None => {}
             }
 
@@ -917,13 +929,13 @@ mod tests {
         )
         .unwrap();
 
-        let type_default = TypeDefault {
+        let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::default(),
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.override_types(&type_default).unwrap();
+        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::Identifier(VariableId::global("foo".to_string()), InferredType::Str);
 
@@ -940,13 +952,13 @@ mod tests {
         )
         .unwrap();
 
-        let type_default = TypeDefault {
+        let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar"]),
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.override_types(&type_default).unwrap();
+        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
@@ -966,13 +978,13 @@ mod tests {
         )
         .unwrap();
 
-        let type_default = TypeDefault {
+        let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar", "baz"]),
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.override_types(&type_default).unwrap();
+        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
@@ -992,13 +1004,13 @@ mod tests {
         )
         .unwrap();
 
-        let type_default = TypeDefault {
+        let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::default(),
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.override_types(&type_default).unwrap();
+        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
@@ -1020,13 +1032,13 @@ mod tests {
         )
         .unwrap();
 
-        let type_default = TypeDefault {
+        let type_spec = GlobalVariableTypeSpec {
             variable_id: VariableId::global("foo".to_string()),
             path: Path::from_elems(vec!["bar"]),
             inferred_type: InferredType::Str,
         };
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), Some(&type_default))
+        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
             .unwrap();
 
         let expected = Expr::ExprBlock(

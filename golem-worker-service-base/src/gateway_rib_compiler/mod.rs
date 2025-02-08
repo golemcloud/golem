@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, Expr, InferredType, Path, TypeDefault, VariableId};
+use rib::{CompilerOutput, Expr, InferredType, Path, GlobalVariableTypeSpec, VariableId};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
@@ -29,11 +29,11 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             rib,
             &export_metadata.to_vec(),
             Some(vec!["request".to_string()]),
-            Some(TypeDefault {
+            &vec![GlobalVariableTypeSpec {
                 variable_id: VariableId::global("request".to_string()),
                 path: Path::from_elems(vec!["path"]),
                 inferred_type: InferredType::Str,
-            }),
+            }],
         )
     }
 }

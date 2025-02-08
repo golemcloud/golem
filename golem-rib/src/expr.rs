@@ -17,8 +17,8 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
-    ParsedFunctionName, TypeDefault, VariableId,
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
+    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -392,8 +392,11 @@ impl Expr {
         )
     }
 
-    pub fn override_types(&self, type_default: &TypeDefault) -> Result<Self, String> {
-        let result_expr = type_inference::tag_default_global_variable_type(self, type_default)?;
+    pub fn bind_global_variables_type(
+        &self,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
+    ) -> Result<Self, String> {
+        let result_expr = type_inference::bind_global_variables_type(self, type_spec)?;
         Ok(result_expr)
     }
 
@@ -546,9 +549,9 @@ impl Expr {
     pub fn infer_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-        type_default: Option<&TypeDefault>,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        self.infer_types_initial_phase(function_type_registry, type_default)?;
+        self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
@@ -562,11 +565,11 @@ impl Expr {
     pub fn infer_types_initial_phase(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-        type_default: Option<&TypeDefault>,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        if let Some(type_default) = type_default {
-            *self = self.override_types(type_default).map_err(|x| vec![x])?;
-        }
+        *self = self
+            .bind_global_variables_type(type_spec)
+            .map_err(|x| vec![x])?;
         self.bind_types();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();

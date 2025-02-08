@@ -574,7 +574,7 @@ mod desugar_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, None).unwrap();
+        expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
         let desugared_expr = match internal::last_expr(&expr) {
             Expr::PatternMatch(predicate, match_arms, _) => {
