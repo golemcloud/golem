@@ -22,7 +22,6 @@ use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
-use poem_openapi::types::Type;
 
 use crate::parser::errors::RibParseError;
 use crate::InferredType;
@@ -338,7 +337,7 @@ impl TryFrom<InferredType> for TypeName {
             InferredType::Variant(variant) => {
                 let mut cases = vec![];
                 for (case, typ) in variant {
-                    let verified = typ.map(|x| TypeName::try_from(x)).transpose()?;
+                    let verified = typ.map(TypeName::try_from).transpose()?;
                     cases.push((case, verified.map(Box::new)));
                 }
                 Ok(TypeName::Variant { cases })

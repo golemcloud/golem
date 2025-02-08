@@ -734,7 +734,7 @@ mod internal {
         }
     }
 
-    fn display_multiple_types(types: &Vec<InferredType>) -> String {
+    fn display_multiple_types(types: &[InferredType]) -> String {
         let types = types
             .iter()
             .map(|x| {

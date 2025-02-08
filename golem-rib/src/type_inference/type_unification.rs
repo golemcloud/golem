@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{text, ArmPattern, Expr};
+use crate::{ArmPattern, Expr};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
     let mut queue = vec![];
@@ -311,9 +311,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
 
                 let unified_inferred_type = inferred_type.unify();
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(_) => {}
+                if let Ok(unified_type) = unified_inferred_type {
+                    *inferred_type = unified_type
                 }
             }
 

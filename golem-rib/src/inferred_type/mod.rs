@@ -15,7 +15,6 @@
 pub(crate) use flatten::*;
 mod flatten;
 mod unification;
-use crate::TypeName;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
