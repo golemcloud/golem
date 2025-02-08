@@ -32,8 +32,8 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             Some(TypeDefault {
                 variable_id: VariableId::global("request".to_string()),
                 path: Path::from_elems(vec!["path"]),
-                inferred_type: InferredType::Str
-            })
+                inferred_type: InferredType::Str,
+            }),
         )
     }
 }
