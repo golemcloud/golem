@@ -20,7 +20,7 @@ pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
+use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
@@ -33,19 +33,32 @@ pub fn compile(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, String> {
-    compile_with_limited_globals(expr, export_metadata, None)
+    compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
 }
 
 // Rib allows global input variables, however, we can choose to fail compilation
 // if they don't fall under a pre-defined set of global variables.
 // There is no restriction imposed to the type of this variable.
-pub fn compile_with_limited_globals(
+// Also we can specify types for certain global variables and if needed be specific
+// on the path. Example: All variables under the  variable `path` which is under the global variable `request` can be `Str`
+// Not all global variable require a type specification, and you can leave it to the compiler.
+pub fn compile_with_restricted_global_variables(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
     allowed_global_variables: Option<Vec<String>>,
+    global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
 ) -> Result<CompilerOutput, String> {
+    for info in global_variable_type_spec {
+        if !info.variable_id.is_global() {
+            return Err(format!(
+                "Only global variables can have default types, but found {}",
+                info.variable_id
+            ));
+        }
+    }
+
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
-    let inferred_expr = InferredExpr::from_expr(expr, &type_registry)?;
+    let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
     let function_calls_identified =
         WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 

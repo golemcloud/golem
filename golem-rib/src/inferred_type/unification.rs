@@ -1,11 +1,19 @@
-use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list, validate_unified_type};
+use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list};
 use crate::InferredType;
 use std::collections::{HashMap, HashSet};
 
-pub fn unify(inferred_type: &InferredType) -> Result<InferredType, String> {
+pub struct Unified(InferredType);
+
+impl Unified {
+    pub fn inferred_type(&self) -> InferredType {
+        self.0.clone()
+    }
+}
+
+pub fn unify(inferred_type: &InferredType) -> Result<Unified, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
-    validate_unified_type(&possibly_unified_type).map(|unified| unified.inferred_type())
+    internal::validate_unified_type(&possibly_unified_type)
 }
 
 pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, String> {
@@ -573,18 +581,22 @@ pub fn unify_with_required(
                 result.unify_with_required(inferred_type)
             }
 
-            (inferred_type1, inferred_type2) => {
-                if inferred_type1 == inferred_type2 {
-                    Ok(inferred_type1.clone())
-                } else if inferred_type1.is_number() && inferred_type2.is_number() {
+            (inferred_type_left, inferred_type_right) => {
+                if inferred_type_left == inferred_type_right {
+                    Ok(inferred_type_left.clone())
+                } else if inferred_type_left.is_number() && inferred_type_right.is_number() {
                     Ok(InferredType::AllOf(vec![
-                        inferred_type1.clone(),
-                        inferred_type2.clone(),
+                        inferred_type_left.clone(),
+                        inferred_type_right.clone(),
                     ]))
+                } else if inferred_type_left.is_string() && inferred_type_right.is_number() {
+                    Ok(inferred_type_right.clone())
+                } else if inferred_type_left.is_number() && inferred_type_right.is_string() {
+                    Ok(inferred_type_left.clone())
                 } else {
                     Err(format!(
                         "Types do not match. Inferred to be both {:?} and {:?}",
-                        inferred_type1, inferred_type2
+                        inferred_type_left, inferred_type_right
                     ))
                 }
             }
@@ -593,7 +605,8 @@ pub fn unify_with_required(
 }
 
 mod internal {
-    use crate::InferredType;
+    use crate::inferred_type::unification::Unified;
+    use crate::{InferredType, TypeName};
     use std::collections::HashMap;
 
     pub(crate) fn sort_and_convert(
@@ -602,5 +615,135 @@ mod internal {
         let mut vec: Vec<(String, InferredType)> = hashmap.into_iter().collect();
         vec.sort_by(|a, b| a.0.cmp(&b.0));
         vec
+    }
+
+    pub(crate) fn validate_unified_type(inferred_type: &InferredType) -> Result<Unified, String> {
+        match inferred_type {
+            InferredType::Bool => Ok(Unified(InferredType::Bool)),
+            InferredType::S8 => Ok(Unified(InferredType::S8)),
+            InferredType::U8 => Ok(Unified(InferredType::U8)),
+            InferredType::S16 => Ok(Unified(InferredType::S16)),
+            InferredType::U16 => Ok(Unified(InferredType::U16)),
+            InferredType::S32 => Ok(Unified(InferredType::S32)),
+            InferredType::U32 => Ok(Unified(InferredType::U32)),
+            InferredType::S64 => Ok(Unified(InferredType::S64)),
+            InferredType::U64 => Ok(Unified(InferredType::U64)),
+            InferredType::F32 => Ok(Unified(InferredType::F32)),
+            InferredType::F64 => Ok(Unified(InferredType::F64)),
+            InferredType::Chr => Ok(Unified(InferredType::Chr)),
+            InferredType::Str => Ok(Unified(InferredType::Str)),
+            InferredType::List(inferred_type) => {
+                let verified = validate_unified_type(inferred_type)?;
+                Ok(Unified(InferredType::List(Box::new(
+                    verified.inferred_type(),
+                ))))
+            }
+            InferredType::Tuple(types) => {
+                let mut verified_types = vec![];
+
+                for typ in types {
+                    let verified = validate_unified_type(typ)?;
+                    verified_types.push(verified.inferred_type());
+                }
+
+                Ok(Unified(InferredType::Tuple(verified_types)))
+            }
+            InferredType::Record(field) => {
+                for (field, typ) in field {
+                    if let Err(unresolved) = validate_unified_type(typ) {
+                        return Err(format!(
+                            "Un-inferred type for field {} in record: {}",
+                            field, unresolved
+                        ));
+                    }
+                }
+
+                Ok(Unified(InferredType::Record(field.clone())))
+            }
+            InferredType::Flags(flags) => Ok(Unified(InferredType::Flags(flags.clone()))),
+            InferredType::Enum(enums) => Ok(Unified(InferredType::Enum(enums.clone()))),
+            InferredType::Option(inferred_type) => {
+                let result = validate_unified_type(inferred_type)?;
+                Ok(Unified(InferredType::Option(Box::new(
+                    result.inferred_type(),
+                ))))
+            }
+            result @ InferredType::Result { ok, error } => {
+                // For Result, we try to be flexible with types
+                // Example: Allow Rib script to simply return ok(x) as the final output, even if it doesn't know anything about error
+                match (ok, error) {
+                    (Some(ok), Some(err)) => {
+                        let ok_unified = validate_unified_type(ok);
+                        let err_unified = validate_unified_type(err);
+
+                        match (ok_unified, err_unified) {
+                            // We fail only if both are unknown
+                            (Err(ok_err), Err(err_err)) => {
+                                let err = format!("Ok: {}, Error: {}", ok_err, err_err);
+                                Err(err)
+                            }
+                            (_, _) => Ok(Unified(result.clone())),
+                        }
+                    }
+
+                    (Some(ok), None) => {
+                        let ok_unified = validate_unified_type(ok);
+                        match ok_unified {
+                            Err(ok_err) => Err(ok_err),
+                            _ => Ok(Unified(result.clone())),
+                        }
+                    }
+
+                    (None, Some(err)) => {
+                        let err_unified = validate_unified_type(err);
+                        match err_unified {
+                            Err(err_err) => Err(err_err),
+                            _ => Ok(Unified(result.clone())),
+                        }
+                    }
+
+                    (None, None) => Ok(Unified(result.clone())),
+                }
+            }
+            inferred_type @ InferredType::Variant(variant) => {
+                for (_, typ) in variant {
+                    if let Some(typ) = typ {
+                        validate_unified_type(typ)?;
+                    }
+                }
+                Ok(Unified(inferred_type.clone()))
+            }
+            resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
+            InferredType::OneOf(possibilities) => Err(format!(
+                "Conflicting types: {}",
+                display_multiple_types(possibilities)
+            )),
+            InferredType::AllOf(possibilities) => Err(format!(
+                "Conflicting types: {}",
+                display_multiple_types(possibilities)
+            )),
+
+            InferredType::Unknown => Err("Unresolved types".to_string()),
+            inferred_type @ InferredType::Sequence(inferred_types) => {
+                for typ in inferred_types {
+                    validate_unified_type(typ)?;
+                }
+
+                Ok(Unified(inferred_type.clone()))
+            }
+        }
+    }
+
+    fn display_multiple_types(types: &[InferredType]) -> String {
+        let types = types
+            .iter()
+            .map(|x| {
+                TypeName::try_from(x.clone())
+                    .map(|x| x.to_string())
+                    .unwrap_or(format!("{:?}", x))
+            })
+            .collect::<Vec<_>>();
+
+        types.join(", ")
     }
 }
