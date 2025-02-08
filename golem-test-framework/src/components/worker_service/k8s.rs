@@ -20,12 +20,12 @@ use crate::components::k8s::{
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, wait_for_startup, WorkerService, WorkerServiceEnvVars,
+    new_client, wait_for_startup, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::GolemEnvVars;
+use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -33,17 +33,18 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct K8sWorkerService {
     namespace: K8sNamespace,
     local_host: String,
-    local_port: u16,
+    local_grpc_port: u16,
+    local_http_port: u16,
     pod: Arc<Mutex<Option<K8sPod>>>,
     service: Arc<Mutex<Option<K8sService>>>,
-    routing: Arc<Mutex<Option<K8sRouting>>>,
-    client: Option<WorkerServiceClient<Channel>>,
+    grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
+    http_routing: Arc<Mutex<Option<K8sRouting>>>,
+    client: WorkerServiceClient,
 }
 
 impl K8sWorkerService {
@@ -61,7 +62,7 @@ impl K8sWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -73,7 +74,7 @@ impl K8sWorkerService {
             rdb,
             timeout,
             service_annotations,
-            shared_client,
+            client_protocol,
         )
         .await
     }
@@ -88,7 +89,7 @@ impl K8sWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -202,43 +203,46 @@ impl K8sWorkerService {
 
         let managed_service = AsyncDropper::new(ManagedService::new(Self::NAME, namespace));
 
-        let Routing {
-            hostname: local_host,
-            port: local_port,
-            routing: managed_routing,
-        } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
+        let grpc_routing =
+            Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
+        let http_routing =
+            Routing::create(Self::NAME, Self::HTTP_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port, timeout).await;
+        wait_for_startup(
+            client_protocol,
+            &grpc_routing.hostname,
+            grpc_routing.port,
+            http_routing.port,
+            timeout,
+        )
+        .await;
 
         info!("Golem Worker Service pod started");
 
         Self {
             namespace: namespace.clone(),
-            local_host: local_host.clone(),
-            local_port,
+            local_host: grpc_routing.hostname.clone(),
+            local_grpc_port: grpc_routing.port,
+            local_http_port: http_routing.port,
             pod: Arc::new(Mutex::new(Some(managed_pod))),
             service: Arc::new(Mutex::new(Some(managed_service))),
-            routing: Arc::new(Mutex::new(Some(managed_routing))),
-            client: if shared_client {
-                Some(
-                    new_client(&local_host, local_port)
-                        .await
-                        .expect("Failed to create client"),
-                )
-            } else {
-                None
-            },
+            grpc_routing: Arc::new(Mutex::new(Some(grpc_routing.routing))),
+            http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
+            client: new_client(
+                client_protocol,
+                &grpc_routing.hostname,
+                grpc_routing.port,
+                http_routing.port,
+            )
+            .await,
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for K8sWorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        match &self.client {
-            Some(client) => Ok(client.clone()),
-            None => Ok(new_client(&self.local_host, self.local_port).await?),
-        }
+    fn client(&self) -> WorkerServiceClient {
+        self.client.clone()
     }
 
     fn private_host(&self) -> String {
@@ -262,11 +266,11 @@ impl WorkerService for K8sWorkerService {
     }
 
     fn public_http_port(&self) -> u16 {
-        todo!()
+        self.local_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.local_port
+        self.local_grpc_port
     }
 
     fn public_custom_request_port(&self) -> u16 {
@@ -276,6 +280,7 @@ impl WorkerService for K8sWorkerService {
     async fn kill(&self) {
         let _ = self.pod.lock().await.take();
         let _ = self.service.lock().await.take();
-        let _ = self.routing.lock().await.take();
+        let _ = self.grpc_routing.lock().await.take();
+        let _ = self.http_routing.lock().await.take();
     }
 }

@@ -16,17 +16,15 @@ use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, wait_for_startup, WorkerService, WorkerServiceEnvVars,
+    new_client, wait_for_startup, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -36,7 +34,7 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    client: Option<WorkerServiceClient<Channel>>,
+    client: WorkerServiceClient,
 }
 
 impl SpawnedWorkerService {
@@ -52,7 +50,7 @@ impl SpawnedWorkerService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -67,7 +65,7 @@ impl SpawnedWorkerService {
             verbosity,
             out_level,
             err_level,
-            shared_client,
+            client_protocol,
         )
         .await
     }
@@ -85,7 +83,7 @@ impl SpawnedWorkerService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -117,7 +115,14 @@ impl SpawnedWorkerService {
         let logger =
             ChildProcessLogger::log_child_process("[workersvc]", out_level, err_level, &mut child);
 
-        wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
+        wait_for_startup(
+            client_protocol,
+            "localhost",
+            grpc_port,
+            http_port,
+            Duration::from_secs(90),
+        )
+        .await;
 
         Self {
             http_port,
@@ -125,15 +130,7 @@ impl SpawnedWorkerService {
             custom_request_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            client: if shared_client {
-                Some(
-                    new_client("localhost", grpc_port)
-                        .await
-                        .expect("Failed to create client"),
-                )
-            } else {
-                None
-            },
+            client: new_client(client_protocol, "localhost", grpc_port, http_port).await,
         }
     }
 
@@ -147,11 +144,8 @@ impl SpawnedWorkerService {
 
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        match &self.client {
-            Some(client) => Ok(client.clone()),
-            None => Ok(new_client("localhost", self.grpc_port).await?),
-        }
+    fn client(&self) -> WorkerServiceClient {
+        self.client.clone()
     }
 
     fn private_host(&self) -> String {

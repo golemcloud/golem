@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
+use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
+use golem_client::api::HealthCheckClient;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
+use std::str::FromStr;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
-
-use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
-use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
+use url::Url;
 
 pub mod component_compilation_service;
 pub mod component_service;
@@ -99,7 +100,7 @@ impl ChildProcessLogger {
 
 pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
     info!(
-        "Waiting for {name} start on host {host}:{grpc_port}, timeout: {}s",
+        "Waiting for {name} (GRPC) start on host {host}:{grpc_port}, timeout: {}s",
         timeout.as_secs()
     );
     let start = Instant::now();
@@ -124,6 +125,39 @@ pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeo
                 },
                 Err(_) => false,
             };
+        if success {
+            break;
+        } else {
+            if start.elapsed() > timeout {
+                panic!("Failed to verify that {name} is running");
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+}
+
+pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeout: Duration) {
+    info!(
+        "Waiting for {name} (HTTP) start on host {host}:{http_port}, timeout: {}s",
+        timeout.as_secs()
+    );
+    let start = Instant::now();
+    loop {
+        let client = golem_client::api::HealthCheckClientLive {
+            context: golem_client::Context {
+                client: new_reqwest_client(),
+                base_url: Url::from_str(&format!("http://{host}:{http_port}"))
+                    .expect("Can't parse HTTP URL for health check"),
+            },
+        };
+
+        let success = match client.healthcheck().await {
+            Ok(_) => true,
+            Err(err) => {
+                debug!("Health request for {name} returned with an error: {err:?}");
+                false
+            }
+        };
         if success {
             break;
         } else {
@@ -204,3 +238,10 @@ impl EnvVarBuilder {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GolemEnvVars();
+
+fn new_reqwest_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("Failed to build reqwest client")
+}

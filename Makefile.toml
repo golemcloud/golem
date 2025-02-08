@@ -66,6 +66,7 @@ script = """
 rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
 cp wit/deps/io wasm-rpc/wit/deps
+cp wit/deps/clocks wasm-rpc/wit/deps
 cp wit/deps/wasm-rpc wasm-rpc/wit/deps
 """
 
@@ -383,7 +384,7 @@ mkdir -pv ../data
 '''
 
 [tasks.merge-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.10" }
+install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.13" }
 dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",

@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{AddComponentError, ComponentService};
+use crate::components::component_service::{
+    AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
+};
+use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
@@ -26,7 +27,6 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -137,11 +137,19 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
+    fn client_protocol(&self) -> GolemClientProtocol {
         panic!("No real component service running")
     }
 
-    async fn plugins_client(&self) -> PluginServiceClient<Channel> {
+    fn handles_ifs_upload(&self) -> bool {
+        false
+    }
+
+    fn component_client(&self) -> ComponentServiceClient {
+        panic!("No real component service running")
+    }
+
+    fn plugin_client(&self) -> PluginServiceClient {
         panic!("No real component service running")
     }
 
@@ -211,6 +219,8 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        files: Option<&[InitialComponentFile]>,
+        dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let target_dir = &self.root;
 
@@ -227,14 +237,15 @@ impl ComponentService for FileSystemComponentService {
         let last_version = self.get_latest_version(component_id).await;
         let new_version = last_version + 1;
 
+        let empty_linking = HashMap::<String, DynamicLinkedInstance>::new();
         self.write_component_to_filesystem(
             local_path,
             component_id,
             new_version,
             component_type,
-            &[],
+            files.unwrap_or_default(),
             false,
-            &HashMap::new(),
+            dynamic_linking.unwrap_or(&empty_linking),
         )
         .await
         .expect("Failed to write component to filesystem");

@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
-use tokio::sync::Mutex;
-use tonic::transport::Channel;
-use tracing::{info, Level};
-
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
-
 use crate::components::component_service::ComponentService;
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{new_client, WorkerService, WorkerServiceEnvVars};
+use crate::components::worker_service::{
+    new_client, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+};
 use crate::components::{GolemEnvVars, NETWORK};
+use crate::config::GolemClientProtocol;
+use async_trait::async_trait;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
+use tokio::sync::Mutex;
+use tracing::{info, Level};
 
 pub struct DockerWorkerService {
     container: Arc<Mutex<Option<ContainerAsync<GolemWorkerServiceImage>>>>,
@@ -39,7 +37,7 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
-    client: Option<WorkerServiceClient<Channel>>,
+    client: WorkerServiceClient,
 }
 
 impl DockerWorkerService {
@@ -53,8 +51,8 @@ impl DockerWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        shared_client: bool,
         keep_container: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -62,8 +60,8 @@ impl DockerWorkerService {
             shard_manager,
             rdb,
             verbosity,
-            shared_client,
             keep_container,
+            client_protocol,
         )
         .await
     }
@@ -74,8 +72,8 @@ impl DockerWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        shared_client: bool,
         keep_container: bool,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-worker-service container");
 
@@ -121,15 +119,13 @@ impl DockerWorkerService {
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
-            client: if shared_client {
-                Some(
-                    new_client("localhost", public_grpc_port)
-                        .await
-                        .expect("Failed to create client"),
-                )
-            } else {
-                None
-            },
+            client: new_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
             keep_container,
         }
     }
@@ -137,11 +133,8 @@ impl DockerWorkerService {
 
 #[async_trait]
 impl WorkerService for DockerWorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        match &self.client {
-            Some(client) => Ok(client.clone()),
-            None => Ok(new_client("localhost", self.public_grpc_port).await?),
-        }
+    fn client(&self) -> WorkerServiceClient {
+        self.client.clone()
     }
 
     fn private_host(&self) -> String {

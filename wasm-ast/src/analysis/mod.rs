@@ -24,6 +24,8 @@ pub mod protobuf;
 /// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
 #[cfg(feature = "wave")]
 pub mod wave;
+#[cfg(feature = "wit-parser")]
+pub mod wit_parser;
 
 use crate::component::*;
 use crate::core::Mem;

@@ -235,13 +235,13 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         let request = unsafe {
             transmute::<
                 durability::ValueAndType,
-                golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+                golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
             >(request)
         };
         let response = unsafe {
             transmute::<
                 durability::ValueAndType,
-                golem_wasm_rpc::golem::rpc0_1_1::types::ValueAndType,
+                golem_wasm_rpc::golem_rpc_0_1_x::types::ValueAndType,
             >(response)
         };
         DurabilityHost::persist_typed_durable_function_invocation(

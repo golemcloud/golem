@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::IntoValueAndType;
 
 use golem_common::model::WorkerId;
 use golem_test_framework::config::{CliParams, TestDependencies};
@@ -103,21 +103,33 @@ impl Benchmark for DurabilityOverhead {
             &benchmark_context.deps,
             &context.durable_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(1), Value::Bool(false), Value::Bool(false)],
+            vec![
+                1u64.into_value_and_type(),
+                false.into_value_and_type(),
+                false.into_value_and_type(),
+            ],
         )
         .await;
         warmup_workers(
             &benchmark_context.deps,
             &context.durable_committed_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(1), Value::Bool(false), Value::Bool(true)],
+            vec![
+                1u64.into_value_and_type(),
+                false.into_value_and_type(),
+                true.into_value_and_type(),
+            ],
         )
         .await;
         warmup_workers(
             &benchmark_context.deps,
             &context.not_durable_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(1), Value::Bool(true), Value::Bool(false)],
+            vec![
+                1u64.into_value_and_type(),
+                true.into_value_and_type(),
+                false.into_value_and_type(),
+            ],
         )
         .await;
     }
@@ -134,7 +146,11 @@ impl Benchmark for DurabilityOverhead {
             self.config.length,
             &context.durable_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(COUNT), Value::Bool(false), Value::Bool(false)],
+            vec![
+                COUNT.into_value_and_type(),
+                false.into_value_and_type(),
+                false.into_value_and_type(),
+            ],
             "durable-",
         )
         .await;
@@ -145,7 +161,11 @@ impl Benchmark for DurabilityOverhead {
             self.config.length,
             &context.durable_committed_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(COUNT), Value::Bool(false), Value::Bool(true)],
+            vec![
+                COUNT.into_value_and_type(),
+                false.into_value_and_type(),
+                true.into_value_and_type(),
+            ],
             "durable-committed-",
         )
         .await;
@@ -156,7 +176,11 @@ impl Benchmark for DurabilityOverhead {
             self.config.length,
             &context.durable_committed_worker_ids,
             "golem:it/api.{run}",
-            vec![Value::U64(COUNT), Value::Bool(true), Value::Bool(false)],
+            vec![
+                COUNT.into_value_and_type(),
+                true.into_value_and_type(),
+                false.into_value_and_type(),
+            ],
             "not-durable-",
         )
         .await;
