@@ -1269,7 +1269,6 @@ fn api_definition_todo_worker_test(
     let component = make_todo_worker_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
 
-    // Create API definition for todo worker
     let def = HttpApiDefinitionRequest {
         id: component_name.clone(),
         version: "0.1.0".to_string(),
@@ -1499,16 +1498,13 @@ fn api_definition_todo_worker_test(
         ],
     };
 
-    // Add API definition
     let file_path = make_json_file(&def.id, &def)?;
     let response: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
 
-    // Test API definition response
     assert_eq!(response.id, component_name);
     assert_eq!(response.version, "0.1.0");
-    assert_eq!(response.routes.len(), 10); // Updated to match all routes including profile endpoints
+    assert_eq!(response.routes.len(), 10);
 
-    // Test export
     let cfg = &cli.config;
     let exported: String = cli.run_string(&[
         "api-definition",
@@ -1525,12 +1521,10 @@ fn api_definition_todo_worker_test(
     let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}\nContent: {}", e, yaml_content))?;
 
-    // Validate exported OpenAPI spec
     assert_eq!(yaml["openapi"], "3.0.0");
     assert_eq!(yaml["x-golem-api-definition-id"], component_name);
     assert_eq!(yaml["x-golem-api-definition-version"], "0.1.0");
     
-    // Validate paths
     assert!(yaml["paths"]["/profile"].is_mapping());
     assert!(yaml["paths"]["/tasks"].is_mapping());
     assert!(yaml["paths"]["/tasks/{id}"].is_mapping());
@@ -1538,7 +1532,6 @@ fn api_definition_todo_worker_test(
     assert!(yaml["paths"]["/tasks/completed"].is_mapping());
     assert!(yaml["paths"]["/tasks/due-before/{timestamp}"].is_mapping());
 
-    // Test Swagger UI
     let result: String = cli.run_string(&[
         "api-definition",
         "swagger",

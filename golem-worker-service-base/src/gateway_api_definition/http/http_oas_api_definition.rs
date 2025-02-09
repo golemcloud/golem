@@ -88,14 +88,12 @@ impl OpenApiHttpApiDefinitionRequest {
         let mut open_api = openapiv3::OpenAPI::default();
         open_api.openapi = "3.0.0".to_string();
         
-        // Get OpenAPI metadata from component metadata or use defaults
         let api_metadata = def.metadata
             .as_ref()
             .and_then(|m| m.openapi_metadata.as_ref())
             .cloned()
             .unwrap_or_default();
         
-        // Enhanced Info object using metadata
         open_api.info = openapiv3::Info {
             title: api_metadata.title.unwrap_or_else(|| "OpenAPI Definition".to_string()),
             description: api_metadata.description,
@@ -115,7 +113,6 @@ impl OpenApiHttpApiDefinitionRequest {
             extensions: Default::default(),
         };
         
-        // Add Golem extensions
         open_api.extensions.insert(
             "x-golem-api-definition-id".to_string(), 
             serde_json::Value::String(def.id.0.clone())
@@ -146,7 +143,6 @@ impl OpenApiHttpApiDefinitionRequest {
         
         let mut paths: std::collections::BTreeMap<String, openapiv3::PathItem> = std::collections::BTreeMap::new();
 
-        // Components section for reusable schemas
         let mut components = openapiv3::Components::default();
         components.schemas = Default::default();
         open_api.components = Some(components.clone());
@@ -203,7 +199,6 @@ impl OpenApiHttpApiDefinitionRequest {
                 );
             }
             
-            // Extract path parameters from the path and add them to operation parameters
             let params = extract_path_parameters(&path_str);
             for param_name in params {
                 let parameter = openapiv3::Parameter::Path {
@@ -251,10 +246,8 @@ impl OpenApiHttpApiDefinitionRequest {
             extensions: Default::default()
         };
 
-        // Add components section with schemas
         open_api.components = Some(components);
 
-        // Set the security field from def.security
         open_api.security = Some(
             def.security.as_ref().map_or(Vec::new(), |sec_refs| {
                 sec_refs.iter().map(|sec_ref| {
@@ -356,7 +349,7 @@ mod internal {
     use golem_common::model::{ComponentId, GatewayBindingType};
     use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
     use rib::Expr;
-    use serde_json::Value;
+    use serde_json::{Value};
 
     use crate::gateway_binding::{
         GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, WorkerBinding,
@@ -369,7 +362,6 @@ mod internal {
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
 
-    // Legacy extension for worker bridge
     pub(crate) const GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY: &str = "x-golem-worker-bridge";
 
     pub(crate) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
@@ -457,22 +449,21 @@ mod internal {
 
         let method = method_res?;
 
-        let security = method_operation
-            .security
-            .clone()
-            .and_then(|x| x.clone().first().cloned());
-
-        // Custom scopes to be supported later
-        // Multiple security schemes to be supported later
-        let security_name = security.and_then(|x| x.first().map(|x| x.0.clone()));
-
-        let security = security_name.map(|x| SecuritySchemeReference {
-            security_scheme_identifier: SecuritySchemeIdentifier::new(x),
-        });
+        let security: Option<SecuritySchemeReference> = if let Some(requirements) = method_operation.security.clone() {
+            let flat: Vec<SecuritySchemeReference> = requirements.into_iter().flat_map(|req| {
+                req.into_iter().map(|(scheme, _scopes)| {
+                    SecuritySchemeReference {
+                        security_scheme_identifier: SecuritySchemeIdentifier::new(scheme),
+                    }
+                })
+            }).collect();
+            flat.into_iter().next()
+        } else {
+            None
+        };
 
         let worker_gateway_info_optional = method_operation
             .extensions
-            // TO keep backward compatibility with the old extension
             .get(GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY)
             .or(method_operation.extensions.get(GOLEM_API_GATEWAY_BINDING));
 
@@ -709,6 +700,19 @@ mod internal {
         }
 
         operation.extensions.insert("x-golem-api-gateway-binding".to_string(), serde_json::Value::Object(binding_info));
+
+        if let Some(cors) = &route.cors {
+            let cors_json = serde_json::to_value(cors).map_err(|e| e.to_string())?;
+            operation.extensions.insert("x-golem-cors".to_string(), cors_json);
+        }
+
+        if let Some(security_ref) = &route.security {
+            let sec_array = vec![serde_json::json!({
+                "security_scheme_identifier": security_ref.security_scheme_identifier.to_string()
+            })];
+            operation.extensions.insert("x-golem-security-schemes".to_string(), serde_json::Value::Array(sec_array));
+        }
+
         Ok(operation)
     }
 }
@@ -817,7 +821,6 @@ mod tests {
         use serde_json::json;
         use crate::gateway_api_definition::http::MethodPattern;
 
-        // Build an OpenAPI spec with global security and both GET and OPTIONS operations
         let mut open_api = OpenAPI::default();
         open_api.info = Info {
             title: "Test API".into(),
@@ -827,12 +830,10 @@ mod tests {
         open_api.extensions.insert("x-golem-api-definition-id".to_string(), json!("test_export"));
         open_api.extensions.insert("x-golem-api-definition-version".to_string(), json!("1.0"));
 
-        // Set global security: [{"api_key": []}]
         let mut global_sec = IndexMap::new();
         global_sec.insert("api_key".to_string(), Vec::<String>::new());
         open_api.security = Some(vec![global_sec]);
 
-        // Create a GET operation with default binding and operation-level security
         let mut get_op = Operation::default();
         get_op.extensions.insert("x-golem-api-gateway-binding".to_string(), json!({
             "binding-type": "default",
@@ -845,14 +846,12 @@ mod tests {
         op_sec.insert("api_key".to_string(), Vec::<String>::new());
         get_op.security = Some(vec![op_sec]);
 
-        // Create an OPTIONS operation with cors-preflight binding and a custom allow origin
         let mut options_op = Operation::default();
         options_op.extensions.insert("x-golem-api-gateway-binding".to_string(), json!({
             "binding-type": "cors-preflight",
             "response": "{Access-Control-Allow-Origin: \"example.com\"}"
         }));
 
-        // Assemble the path item with both operations
         let mut path_item = PathItem::default();
         path_item.get = Some(get_op);
         path_item.options = Some(options_op);
@@ -866,29 +865,27 @@ mod tests {
             extensions: Default::default()
         };
 
-        // Convert the OpenAPI spec into our internal representation
         let openapi_req = OpenApiHttpApiDefinitionRequest(open_api);
         let api_def_req = openapi_req.to_http_api_definition_request().unwrap();
 
-        // Verify that the global security is preserved
         assert!(api_def_req.security.is_some(), "Global security should be preserved.");
         let global_sec_preserved = api_def_req.security.unwrap();
         let has_api_key = global_sec_preserved.into_iter().any(|sec| sec.security_scheme_identifier.to_string() == "api_key");
         assert!(has_api_key, "Global security should include 'api_key'.");
 
-        // Verify that both GET and OPTIONS routes are correctly converted
         let mut found_get = false;
         let mut found_options = false;
         for route in api_def_req.routes {
             if route.method == MethodPattern::Get {
                 found_get = true;
                 if let crate::gateway_binding::GatewayBinding::Default(_) = route.binding {
-                    // Expected default binding
                 } else {
                     panic!("GET route should use default binding.");
                 }
                 assert!(route.security.is_some(), "GET route should have security set.");
-                let sec_ref = route.security.unwrap();
+                let sec_refs = route.security.unwrap();
+                assert_eq!(sec_refs.len(), 1, "Expected one security scheme");
+                let sec_ref = &sec_refs[0];
                 assert_eq!(sec_ref.security_scheme_identifier.to_string(), "api_key", "GET route security scheme should be 'api_key'.");
             } else if route.method == MethodPattern::Options {
                 found_options = true;
