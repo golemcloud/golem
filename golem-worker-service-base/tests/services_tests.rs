@@ -650,6 +650,13 @@ async fn test_deployment(
         .unwrap();
     assert!(!deployments.is_empty());
 
+    let deployments = deployment_service
+        .get_by_id(&DefaultNamespace::default(), None)
+        .await
+        .unwrap();
+    assert_eq!(deployments.len(), 2);
+    assert!(!deployments.is_empty());
+
     let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
         .await
