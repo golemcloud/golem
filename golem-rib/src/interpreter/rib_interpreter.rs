@@ -1385,57 +1385,22 @@ mod interpreter_tests {
         use crate::{
             compiler, Expr, GlobalVariableTypeSpec, InferredType, Path, RibInput, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::{record, s8, str, u32};
-        use golem_wasm_ast::analysis::NameTypePair;
+        use golem_wasm_ast::analysis::analysed_type::{field, record, s8, str, u32};
         use golem_wasm_rpc::{Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
 
         #[test]
         async fn test_global_variable_with_type_spec() {
-            let mut rib_input = HashMap::new();
-
-            let value_and_type = get_value_and_type(
-                &record(vec![
-                    NameTypePair {
-                        name: "path".to_string(),
-                        typ: record(vec![NameTypePair {
-                            name: "user-id".to_string(),
-                            typ: str(),
-                        }]),
-                    },
-                    NameTypePair {
-                        name: "headers".to_string(),
-                        typ: record(vec![
-                            NameTypePair {
-                                name: "name".to_string(),
-                                typ: str(),
-                            },
-                            NameTypePair {
-                                name: "age".to_string(),
-                                typ: str(),
-                            },
-                        ]),
-                    },
-                ]),
-                r#"{path : { user-id: "1" }, headers: { name: "foo", age: "20" }}"#,
-            );
-
-            rib_input.insert("request".to_string(), value_and_type);
-
-            let mut interpreter = internal::static_test_interpreter(
-                &ValueAndType::new(Value::S8(1), s8()),
-                Some(RibInput::new(rib_input)),
-            );
-
+            // Not specifying any type for request.path.*, or request.headers.*
+            // will result in inferring them as string, since we pass type-spec
+            // to compiler.
             let rib_expr = r#"
-             let res1 = request.path.user-id;
-             let res2 = request.headers.name;
-             let res3 = request.headers.age;
-             "${res1}-${res2}-${res3}"
+               let res1 = request.path.user-id;
+               let res2 = request.headers.name;
+               let res3 = request.headers.age;
+               "${res1}-${res2}-${res3}"
             "#;
-
-            let expr = Expr::from_text(rib_expr).unwrap();
 
             let type_spec = vec![
                 GlobalVariableTypeSpec {
@@ -1449,6 +1414,32 @@ mod interpreter_tests {
                     inferred_type: InferredType::Str,
                 },
             ];
+
+            let mut rib_input = HashMap::new();
+
+            // Rib compiler identifies the input requirements to be a string (due to type-spec passed)
+            // and there we pass input value (value_and_type) with headers and path values as string.
+            let analysed_type_of_input = &record(vec![
+                field("path", record(vec![field("user-id", str())])),
+                field(
+                    "headers",
+                    record(vec![field("name", str()), field("age", str())]),
+                ),
+            ]);
+
+            let value_and_type = get_value_and_type(
+                analysed_type_of_input,
+                r#"{path : { user-id: "1" }, headers: { name: "foo", age: "20" }}"#,
+            );
+
+            rib_input.insert("request".to_string(), value_and_type);
+
+            let mut interpreter = internal::static_test_interpreter(
+                &ValueAndType::new(Value::S8(1), s8()),
+                Some(RibInput::new(rib_input)),
+            );
+
+            let expr = Expr::from_text(rib_expr).unwrap();
 
             let compiled = compiler::compile_with_restricted_global_variables(
                 &expr,
@@ -1471,55 +1462,19 @@ mod interpreter_tests {
 
         #[test]
         async fn test_global_variable_override_type_spec() {
-            let mut rib_input = HashMap::new();
-
-            let value_and_type = get_value_and_type(
-                &record(vec![
-                    NameTypePair {
-                        name: "path".to_string(),
-                        typ: record(vec![NameTypePair {
-                            name: "user-id".to_string(),
-                            typ: u32(),
-                        }]),
-                    },
-                    NameTypePair {
-                        name: "headers".to_string(),
-                        typ: record(vec![
-                            NameTypePair {
-                                name: "name".to_string(),
-                                typ: str(),
-                            },
-                            NameTypePair {
-                                name: "age".to_string(),
-                                typ: u32(),
-                            },
-                        ]),
-                    },
-                ]),
-                r#"{path : { user-id: 1 }, headers: { name: "foo", age: 20 }}"#,
-            );
-
-            rib_input.insert("request".to_string(), value_and_type);
-
-            let mut interpreter = internal::static_test_interpreter(
-                &ValueAndType::new(Value::S8(1), s8()),
-                Some(RibInput::new(rib_input)),
-            );
-
             let rib_expr = r#"
              let res1: u32 = request.path.user-id;
-             let res2: string = request.headers.name;
+             let res2 = request.headers.name;
              let res3: u32 = request.headers.age;
              let res4 = res1 + res3;
              "${res4}-${res2}"
             "#;
 
-            let expr = Expr::from_text(rib_expr).unwrap();
-
-            // We always specify the global type in request.path.* to be a string
-            // however the rib script explicitly specify the type of request.path.user-id
-            // to be u32, and similarly for request.header.age.
-            // In this case, the expected input shouldn't be a string, but a u32.
+            // We always specify the type of request.path.* to be a string using type-spec
+            // however the rib script (above) explicitly specify the type of request.path.user-id
+            // and request.header.age to be u32, and that of request.header.age to be u32 too.
+            // In this case, the inferred rib-input should be u32 for those global variables.
+            // In other words, they are not considered strings anywhere.
             let type_spec = vec![
                 GlobalVariableTypeSpec {
                     variable_id: VariableId::global("request".to_string()),
@@ -1532,6 +1487,30 @@ mod interpreter_tests {
                     inferred_type: InferredType::Str,
                 },
             ];
+
+            let mut rib_input = HashMap::new();
+
+            let analysed_type_of_input = &record(vec![
+                field("path", record(vec![field("user-id", u32())])),
+                field(
+                    "headers",
+                    record(vec![field("name", str()), field("age", u32())]),
+                ),
+            ]);
+
+            let value_and_type = get_value_and_type(
+                analysed_type_of_input,
+                r#"{path : { user-id: 1 }, headers: { name: "foo", age: 20 }}"#,
+            );
+
+            rib_input.insert("request".to_string(), value_and_type);
+
+            let mut interpreter = internal::static_test_interpreter(
+                &ValueAndType::new(Value::S8(1), s8()),
+                Some(RibInput::new(rib_input)),
+            );
+
+            let expr = Expr::from_text(rib_expr).unwrap();
 
             let compiled = compiler::compile_with_restricted_global_variables(
                 &expr,

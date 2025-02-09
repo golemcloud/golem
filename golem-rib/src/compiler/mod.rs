@@ -38,10 +38,11 @@ pub fn compile(
 
 // Rib allows global input variables, however, we can choose to fail compilation
 // if they don't fall under a pre-defined set of global variables.
-// There is no restriction imposed to the type of this variable.
-// Also we can specify types for certain global variables and if needed be specific
-// on the path. Example: All variables under the  variable `path` which is under the global variable `request` can be `Str`
-// Not all global variable require a type specification, and you can leave it to the compiler.
+// There is no restriction imposed to the type of this variable. If nothing is specified,
+// then it implies, any variable name in the Rib script can be a global variable.
+// Along with this, we can explicitly specify types for certain global variables using `GlobalVariableTypeSpec`
+// Example: All variables (under the variable `request` (regardless of whether it could be a record) can be `string`
+// Note that, not all global variables require a type specification.
 pub fn compile_with_restricted_global_variables(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
