@@ -20,7 +20,9 @@ use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
 use serde_json::Value;
 use std::borrow::Cow;
-use golem_common::model::component_metadata::{ComponentMetadata, OpenApiMetadata};
+use golem_common::model::component_metadata::{ComponentMetadata, OpenApiMetadata, Producers, LinearMemory, DynamicLinkedInstance};
+use golem_wasm_ast::analysis::AnalysedExport;
+use crate::gateway_binding::GatewayBinding;
 
 pub struct OpenApiHttpApiDefinitionRequest(pub OpenAPI);
 
@@ -41,6 +43,22 @@ impl OpenApiHttpApiDefinitionRequest {
 
         let routes = get_routes(&open_api.paths)?;
 
+        let exports: Vec<AnalysedExport> = open_api.extensions.get("x-golem-exports")
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+
+        let producers: Vec<Producers> = open_api.extensions.get("x-golem-producers")
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+
+        let memories: Vec<LinearMemory> = open_api.extensions.get("x-golem-memories")
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+
+        let dynamic_linking: std::collections::HashMap<String, DynamicLinkedInstance> = open_api.extensions.get("x-golem-dynamic-linking")
+            .and_then(|val| serde_json::from_value(val.clone()).ok())
+            .unwrap_or_default();
+
         Ok(HttpApiDefinitionRequest {
             id: api_definition_id,
             version: api_definition_version,
@@ -48,10 +66,10 @@ impl OpenApiHttpApiDefinitionRequest {
             draft: true,
             security,
             metadata: Some(ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-                dynamic_linking: Default::default(),
+                exports: exports,
+                producers: producers,
+                memories: memories,
+                dynamic_linking: dynamic_linking,
                 openapi_metadata: Some(OpenApiMetadata {
                     title: Some(open_api.info.title.clone()),
                     description: open_api.info.description.clone(),
@@ -107,6 +125,25 @@ impl OpenApiHttpApiDefinitionRequest {
             serde_json::Value::String(def.version.0.clone())
         );
         
+        if let Some(metadata) = &def.metadata {
+            open_api.extensions.insert(
+                "x-golem-exports".to_string(), 
+                serde_json::to_value(&metadata.exports).unwrap_or(serde_json::Value::Null)
+            );
+            open_api.extensions.insert(
+                "x-golem-producers".to_string(), 
+                serde_json::to_value(&metadata.producers).unwrap_or(serde_json::Value::Null)
+            );
+            open_api.extensions.insert(
+                "x-golem-memories".to_string(), 
+                serde_json::to_value(&metadata.memories).unwrap_or(serde_json::Value::Null)
+            );
+            open_api.extensions.insert(
+                "x-golem-dynamic-linking".to_string(), 
+                serde_json::to_value(&metadata.dynamic_linking).unwrap_or(serde_json::Value::Null)
+            );
+        }
+        
         let mut paths: std::collections::BTreeMap<String, openapiv3::PathItem> = std::collections::BTreeMap::new();
 
         // Components section for reusable schemas
@@ -118,22 +155,50 @@ impl OpenApiHttpApiDefinitionRequest {
             let path_str = route.path.to_string();
             let mut operation = internal::get_operation_from_route(route)?;
             
-            // Add default 200 response if none exists
             if operation.responses.responses.is_empty() {
+                let default_status = match route.method {
+                    crate::gateway_api_definition::http::MethodPattern::Get => 200,
+                    crate::gateway_api_definition::http::MethodPattern::Post => 201,
+                    crate::gateway_api_definition::http::MethodPattern::Put => {
+                        match &route.binding {
+                            GatewayBinding::Default(binding) | GatewayBinding::FileServer(binding) => {
+                                if binding.response_mapping.0 == rib::Expr::from_text("").unwrap() { 204 } else { 200 }
+                            },
+                            _ => 204
+                        }
+                    },
+                    crate::gateway_api_definition::http::MethodPattern::Delete => 204,
+                    crate::gateway_api_definition::http::MethodPattern::Options => 200,
+                    crate::gateway_api_definition::http::MethodPattern::Head => 200,
+                    crate::gateway_api_definition::http::MethodPattern::Patch => {
+                        match &route.binding {
+                            GatewayBinding::Default(binding) | GatewayBinding::FileServer(binding) => {
+                                if binding.response_mapping.0 == rib::Expr::from_text("").unwrap() { 204 } else { 200 }
+                            },
+                            _ => 200
+                        }
+                    },
+                    crate::gateway_api_definition::http::MethodPattern::Trace => 200,
+                    _ => 200,
+                };
                 let mut response = openapiv3::Response::default();
-                response.description = "Successful response".to_string();
-                
-                let mut content = indexmap::IndexMap::new();
-                let mut media = openapiv3::MediaType::default();
-                media.schema = Some(openapiv3::ReferenceOr::Item(openapiv3::Schema {
-                    schema_data: Default::default(),
-                    schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default())),
-                }));
-                content.insert("application/json".to_string(), media);
-                response.content = content;
-                
+                response.description = match default_status {
+                    204 => "No Content".to_string(),
+                    201 => "Created".to_string(),
+                    _ => "Successful response".to_string()
+                };
+                if default_status != 204 {
+                    let mut content = indexmap::IndexMap::new();
+                    let mut media = openapiv3::MediaType::default();
+                    media.schema = Some(openapiv3::ReferenceOr::Item(openapiv3::Schema {
+                        schema_data: Default::default(),
+                        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default()))
+                    }));
+                    content.insert("application/json".to_string(), media);
+                    response.content = content;
+                }
                 operation.responses.responses.insert(
-                    openapiv3::StatusCode::Code(200),
+                    openapiv3::StatusCode::Code(default_status),
                     openapiv3::ReferenceOr::Item(response),
                 );
             }
@@ -463,7 +528,7 @@ mod internal {
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
-                    },
+                    }
                     (GatewayBindingType::SwaggerUi, _) => {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
