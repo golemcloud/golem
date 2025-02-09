@@ -2762,20 +2762,13 @@ async fn get_api_def_with_swagger_ui(path_pattern: &str, binding_type: GatewayBi
           createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
-            path: {}
+            path: {0}
             binding:
-              bindingType: {}
+              bindingType: {1}
           - method: Get
-            path: {}/openapi.json
+            path: {0}/openapi.json
             binding:
-              type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
-                version: 0
-              workerName: '"test-worker"'
-              response: |
-                let x: u64 = 1u64;
-                {{headers: {{ContentType: "json"}}, body: "test", status: x}}
+              bindingType: swagger-ui
         "#,
         path_pattern,
         match binding_type {
@@ -2827,4 +2820,74 @@ async fn test_api_def_with_openapi_json() {
     assert!(json_value.get("openapi").is_some(), "Should have openapi version");
     assert!(json_value.get("info").is_some(), "Should have info section");
     assert!(json_value.get("paths").is_some(), "Should have paths section");
+}
+
+#[test]
+async fn test_api_def_with_swagger_ui_cors() {
+    let mut headers = HeaderMap::new();
+    headers.insert("host", "localhost:8080".parse().unwrap());
+    headers.insert("Origin", "https://developer-portal.example.com".parse().unwrap());
+    
+    let api_specification: HttpApiDefinition = get_api_def_with_swagger_ui("/api", GatewayBindingType::SwaggerUi).await;
+    let session_store = internal::get_session_store();
+    let test_identity_provider = TestIdentityProvider::default();
+
+    let html_request = get_gateway_request("/api", None, &headers, serde_json::Value::Null);
+    let html_response = execute(
+        html_request,
+        &api_specification,
+        &session_store,
+        &test_identity_provider,
+    ).await;
+
+    assert_eq!(html_response.status(), StatusCode::OK);
+    assert_eq!(html_response.headers().get("content-type").unwrap(), "text/html");
+    assert_eq!(
+        html_response.headers().get("access-control-allow-origin").unwrap(),
+        "https://developer-portal.example.com"
+    );
+    assert_eq!(
+        html_response.headers().get("access-control-allow-credentials").unwrap(),
+        "true"
+    );
+
+    let json_request = get_gateway_request("/api/openapi.json", None, &headers, serde_json::Value::Null);
+    let json_response = execute(
+        json_request,
+        &api_specification,
+        &session_store,
+        &test_identity_provider,
+    ).await;
+
+    assert_eq!(json_response.status(), StatusCode::OK);
+    assert_eq!(json_response.headers().get("content-type").unwrap(), "application/json");
+    assert_eq!(
+        json_response.headers().get("access-control-allow-origin").unwrap(),
+        "https://developer-portal.example.com"
+    );
+    assert_eq!(
+        json_response.headers().get("access-control-allow-credentials").unwrap(),
+        "true"
+    );
+
+    let mut no_origin_headers = HeaderMap::new();
+    no_origin_headers.insert("host", "localhost:8080".parse().unwrap());
+    
+    let no_origin_request = get_gateway_request("/api", None, &no_origin_headers, serde_json::Value::Null);
+    let no_origin_response = execute(
+        no_origin_request,
+        &api_specification,
+        &session_store,
+        &test_identity_provider,
+    ).await;
+
+    assert_eq!(no_origin_response.status(), StatusCode::OK);
+    assert_eq!(
+        no_origin_response.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+    assert!(
+        no_origin_response.headers().get("access-control-allow-credentials").is_none(),
+        "Should not include credentials when using * origin"
+    );
 }

@@ -32,7 +32,7 @@ use crate::gateway_execution::file_server_binding_handler::FileServerBindingHand
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
+use crate::gateway_middleware::{HttpCors, HttpMiddleware, HttpMiddlewares, MiddlewareSuccess, MiddlewareError};
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
@@ -565,6 +565,33 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                 let spec_url = format!("https://{}/openapi.json", authority);
                 let html = api_service.swagger_ui_html().replace("\"./openapi.json\"", &format!("\"{}\"", spec_url));
                 
+                let middlewares = middlewares.unwrap_or_else(|| {
+                    let cors = if let Some(origin) = rich_request.underlying.headers().get("Origin") {
+                        if let Ok(origin_str) = origin.to_str() {
+                            HttpCors::new(
+                                origin_str,
+                                "GET, OPTIONS, HEAD",
+                                "Content-Type, Authorization, Accept",
+                                Some("Content-Type"),
+                                Some(true),
+                                Some(86400),
+                            )
+                        } else {
+                            HttpCors::default()
+                        }
+                    } else {
+                        HttpCors::new(
+                            "*",
+                            "GET, OPTIONS, HEAD",
+                            "Content-Type, Authorization, Accept",
+                            Some("Content-Type"),
+                            None,
+                            Some(86400),
+                        )
+                    };
+                    HttpMiddlewares(vec![HttpMiddleware::cors(cors)])
+                });
+
                 if rich_request.url().map(|url| url.path().ends_with("/openapi.json")).unwrap_or(false) {
                     let spec_json = serde_json::to_string_pretty(&openapi_req.0)
                         .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize OpenAPI spec: {}\"}}", e));
@@ -573,13 +600,13 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         .content_type("application/json")
                         .body(Body::from_string(spec_json));
                     
-                    maybe_apply_middlewares_out(response, &middlewares).await
+                    maybe_apply_middlewares_out(response, &Some(middlewares)).await
                 } else {
                     let response = poem::Response::builder()
                         .content_type("text/html")
                         .body(Body::from_string(html));
 
-                    maybe_apply_middlewares_out(response, &middlewares).await
+                    maybe_apply_middlewares_out(response, &Some(middlewares)).await
                 }
             }
         }

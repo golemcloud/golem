@@ -883,10 +883,12 @@ mod tests {
                     panic!("GET route should use default binding.");
                 }
                 assert!(route.security.is_some(), "GET route should have security set.");
-                let sec_refs = route.security.unwrap();
-                assert_eq!(sec_refs.len(), 1, "Expected one security scheme");
-                let sec_ref = &sec_refs[0];
-                assert_eq!(sec_ref.security_scheme_identifier.to_string(), "api_key", "GET route security scheme should be 'api_key'.");
+                let sec_ref = route.security.unwrap();
+                assert_eq!(
+                    sec_ref.security_scheme_identifier.to_string(),
+                    "api_key",
+                    "GET route security scheme should be 'api_key'."
+                );
             } else if route.method == MethodPattern::Options {
                 found_options = true;
                 if let crate::gateway_binding::GatewayBinding::Static(sb) = route.binding {
