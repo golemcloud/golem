@@ -79,7 +79,7 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_1_2 as golem_rpc_0_1_x;
+pub use bindings::golem::rpc0_1_3 as golem_rpc_0_1_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
