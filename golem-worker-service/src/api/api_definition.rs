@@ -439,8 +439,9 @@ impl RegisterApiDefinitionApi {
 mod test {
     use golem_service_base::migration::{Migrations, MigrationsDir};
     use test_r::test;
-
     use super::*;
+    use golem_worker_service_base::api::{RouteRequestData, GatewayBindingData};
+    use golem_worker_service_base::gateway_api_definition::http::MethodPattern;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
@@ -460,8 +461,6 @@ mod test {
     use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
-    use golem_worker_service_base::gateway_api_definition::http::MethodPattern;
-    use golem_worker_service_base::api::{RouteRequestData, GatewayBindingData};
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -930,5 +929,133 @@ mod test {
         assert!(swagger_ui_html.contains("swagger-ui.css"), "Swagger UI HTML should reference its CSS file.");
         assert!(swagger_ui_html.contains("swagger-ui-bundle.js"), "Swagger UI HTML should reference its JS bundle.");
         assert!(swagger_ui_html.contains("<html"), "Swagger UI HTML should contain an <html> tag.");
+    }
+
+    #[test]
+    async fn export_and_generate_client_integration() {
+        use std::process::Command;
+        use tempfile::tempdir;
+        use std::fs;
+
+        // First ensure cargo-progenitor is installed
+        let cargo_progenitor_check = Command::new("cargo")
+            .args(&["progenitor", "--version"])
+            .output();
+
+        if cargo_progenitor_check.is_err() || !cargo_progenitor_check.unwrap().status.success() {
+            // Install cargo-progenitor if not found
+            let install_output = Command::new("cargo")
+                .args(&["install", "cargo-progenitor"])
+                .output()
+                .expect("Failed to install cargo-progenitor");
+            assert!(install_output.status.success(), "Failed to install cargo-progenitor: {}", String::from_utf8_lossy(&install_output.stderr));
+        }
+
+        // Setup the API with a complex API definition
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        // Define a complex API definition with multiple endpoints, similar to other tests
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("complex_api".to_string()),
+            version: ApiVersion("2.0.0".to_string()),
+            routes: vec![
+                RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/foo".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                },
+                RouteRequestData {
+                    method: MethodPattern::Post,
+                    path: "/bar/{id}".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                },
+            ],
+            draft: false,
+            security: None,
+            metadata: None,
+        };
+
+        let response = client.post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        // Export the spec as YAML using the export endpoint
+        let export_url = "/v1/api/definitions/complex_api/2.0.0/export";
+        let export_response = client.get(export_url).send().await;
+        export_response.assert_status_is_ok();
+        let body_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let yaml_str = String::from_utf8(body_bytes).expect("Invalid UTF8 in exported YAML");
+
+        // Convert YAML to JSON for Progenitor
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_str).expect("Failed to parse YAML");
+        let json_value = serde_json::to_value(&yaml_value).expect("Failed to convert YAML to JSON value");
+        let json_str = serde_json::to_string_pretty(&json_value).expect("Failed to serialize JSON to string");
+
+        // Write the JSON to a temporary file
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let json_path = temp_dir.path().join("openapi.json");
+        fs::write(&json_path, json_str.as_bytes()).expect("Failed to write JSON file");
+
+        // Generate the client library using cargo-progenitor as a standalone tool
+        let generated_client_dir = temp_dir.path().join("generated_client");
+        let progenitor_output = Command::new("cargo")
+            .args(&[
+                "progenitor",
+                "-i",
+                json_path.to_str().unwrap(),
+                "-o",
+                generated_client_dir.to_str().unwrap(),
+                "-n",
+                "complex_client",
+                "-v",
+                "0.1.0"
+            ])
+            .output()
+            .expect("Failed to execute cargo progenitor command");
+        assert!(progenitor_output.status.success(), "Progenitor command failed: {}", String::from_utf8_lossy(&progenitor_output.stderr));
+
+        // Run cargo check in the generated client to ensure it compiles
+        let cargo_check_output = Command::new("cargo")
+            .arg("check")
+            .current_dir(&generated_client_dir)
+            .output()
+            .expect("Failed to run cargo check");
+        assert!(cargo_check_output.status.success(), "Cargo check failed: {}", String::from_utf8_lossy(&cargo_check_output.stderr));
+
+        // Verify that the generated client library contains the Client struct
+        let lib_rs = generated_client_dir.join("src").join("lib.rs");
+        let lib_rs_contents = fs::read_to_string(&lib_rs).expect("Failed to read generated lib.rs");
+        assert!(lib_rs_contents.contains("pub struct Client"), "Generated client does not contain Client struct");
     }
 }
