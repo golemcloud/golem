@@ -26,7 +26,7 @@ export function PopoverDemo({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-fit dark:bg-[#0a0a0a] z-[1500]"
+        className="w-fit dark:bg-primary z-[1500]"
         align="start"
         side="bottom"
       >
@@ -148,8 +148,7 @@ export function RecordDataType({ record }: { record: Record<string, any> }) {
           <Typography
             key={key}
             variant="body2"
-            className="text-muted-foreground"
-            style={{ marginLeft: "16px" }}
+            className="text-muted-foreground ml-4"
           >
             {key}: {value},
           </Typography>

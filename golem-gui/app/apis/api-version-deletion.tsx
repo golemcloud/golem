@@ -4,9 +4,13 @@ import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { getFormErrorMessage } from "@/lib/utils";
 import { Button2 as Button } from "@/components/ui/button";
+import { ApiVersionProps } from "./types";
 
 type FormData = {
   version: string;
+};
+type DeleteApiProps = ApiVersionProps & {
+  onSuccess?: () => void;
 };
 
 const DeleteApiVersion = ({
@@ -15,30 +19,23 @@ const DeleteApiVersion = ({
   isExperimental,
   noRedirect,
   onSuccess,
-}: {
-  apiId: string;
-  version?: string|null;
-  isExperimental?: boolean;
-  noRedirect?:boolean;
-  onSuccess?: () => void;
-}) => {
+}: DeleteApiProps ) => {
   const { deleteVersion } = useApiDefinitions(apiId);
 
-  // Initialize react-hook-form
   const {
     control,
     handleSubmit,
     formState: { errors },
   } = useForm<FormData>({
     defaultValues: {
-      version: "", // Default to an empty string
+      version: "",
     },
   });
 
   const onSubmit = async (data: FormData) => {
-    if (isExperimental) return; // Block submission if experimental
+    if (isExperimental) return;
     await deleteVersion(apiId, data.version, noRedirect);
-    onSuccess?.(); // Call success callback if provided
+    onSuccess?.();
   };
 
   return (
@@ -55,7 +52,6 @@ const DeleteApiVersion = ({
       )}
 
       <form onSubmit={handleSubmit(onSubmit)}>
-        {/* API Version Input */}
         <Controller
           name="version"
           control={control}
@@ -88,8 +84,6 @@ const DeleteApiVersion = ({
           {getFormErrorMessage("version", errors)}
         </Typography>
         </Stack>
-
-        {/* Submit Button */}
         <Stack>
           <Button
             type="submit"

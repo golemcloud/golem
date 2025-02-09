@@ -4,34 +4,30 @@ import { useForm, Controller } from "react-hook-form";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
 import { getFormErrorMessage } from "@/lib/utils";
 import {Button2 as Button} from "@/components/ui/button";
+import { ApiVersionProps } from "./types";
 
 type FormData = {
   version: string;
 };
-
+type CreateApiProps = ApiVersionProps & {
+  onSuccess?: (data: { version: string }) => void;
+};
 const CreateNewApiVersion = ({
   apiId,
   version,
   isExperimental,
   noRedirect,
   onSuccess,
-}: {
-  apiId: string;
-  version?: string|null;
-  isExperimental?: boolean;
-  noRedirect?: boolean;
-  onSuccess?: (data:{version: string}) => void;
-}) => {
-  const { addNewApiVersionDefinition } = useApiDefinitions(apiId, version);
+}:CreateApiProps) => {
 
-  // Initialize react-hook-form
+  const { addNewApiVersionDefinition } = useApiDefinitions(apiId, version);
   const {
     control,
     handleSubmit,
     formState: { errors },
   } = useForm<FormData>({
     defaultValues: {
-      version: "", // Default to an empty string
+      version: "",
     },
   });
 
@@ -43,7 +39,7 @@ const CreateNewApiVersion = ({
       version,
       noRedirect,
     );
-    onSuccess?.({ version: data.version }); // Call success callback if provided
+    onSuccess?.({ version: data.version });
   };
 
   return (

@@ -81,7 +81,6 @@ const CreateAPI = ({
             {getFormErrorMessage("apiName", errors)}
           </Typography>
         </Box>
-        {/* Version Input */}
         <Box>
           <Controller
             name="version"
