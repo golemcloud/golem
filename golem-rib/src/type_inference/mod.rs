@@ -16,6 +16,7 @@ pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
+pub use global_variable_type_spec::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
@@ -33,29 +34,84 @@ pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 
 mod call_arguments_inference;
+mod enum_resolution;
 mod expr_visitor;
+mod global_input_inference;
+mod global_variable_type_spec;
 mod identifier_inference;
+mod inference_fix_point;
+mod inferred_expr;
+pub(crate) mod kind;
 mod rib_input_type;
+mod rib_output_type;
+mod type_binding;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;
 mod type_unification;
 mod variable_binding_let_assignment;
+mod variable_binding_list_comprehension;
+mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 
-mod enum_resolution;
-mod global_input_inference;
-mod inference_fix_point;
-mod inferred_expr;
-pub(crate) mod kind;
-mod rib_output_type;
-mod type_binding;
-mod variable_binding_list_comprehension;
-mod variable_binding_list_reduce;
-
 #[cfg(test)]
 mod type_inference_tests {
+
+    mod global_variable {
+        use crate::type_checker::Path;
+        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
+        use test_r::test;
+
+        #[test]
+        fn test_global_variable_inference_1() {
+            let rib_expr = r#"
+             let res = request.path.user-id;
+             let hello: u64 = request.path.number;
+             hello
+            "#;
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("request".to_string()),
+                path: Path::from_elems(vec!["path"]),
+                inferred_type: InferredType::Str,
+            };
+
+            assert!(expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
+                .is_ok());
+        }
+
+        #[test]
+        fn test_global_variable_inference_2() {
+            let rib_expr = r#"
+             let res1 = request.path.user-id;
+             let res2 = request.headers.name;
+             let res3 = request.headers.age;
+             "${res1}-${res2}-${res3}"
+            "#;
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            let type_spec = vec![
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["path"]),
+                    inferred_type: InferredType::Str,
+                },
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["headers"]),
+                    inferred_type: InferredType::Str,
+                },
+            ];
+
+            assert!(expr
+                .infer_types(&FunctionTypeRegistry::empty(), &type_spec)
+                .is_ok());
+        }
+    }
 
     mod let_binding_tests {
         use bigdecimal::BigDecimal;
@@ -77,7 +133,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(rib_expr).unwrap();
 
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let let_binding = Expr::Let(
                 VariableId::local("x", 0),
@@ -125,7 +181,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(rib_expr).unwrap();
 
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
@@ -207,7 +263,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -241,7 +297,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -281,7 +337,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -434,7 +490,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr).unwrap();
 
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = internal::expected_expr_for_enum_test();
 
@@ -511,7 +567,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr).unwrap();
 
-            let result = expr.infer_types(&function_type_registry);
+            let result = expr.infer_types(&function_type_registry, &vec![]);
             assert!(result.is_ok());
         }
     }
@@ -532,7 +588,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -578,7 +634,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -616,7 +672,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -704,7 +760,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -743,7 +799,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -803,7 +859,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -867,7 +923,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -936,7 +992,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1000,7 +1056,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1056,7 +1112,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr_str).unwrap();
 
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1146,7 +1203,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
@@ -1251,7 +1308,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(rib_expr).unwrap();
 
-            let result = expr.infer_types(&function_type_registry);
+            let result = expr.infer_types(&function_type_registry, &vec![]);
             assert!(result.is_ok());
         }
 
@@ -1268,7 +1325,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr_str).unwrap();
 
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1365,7 +1423,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr_str).unwrap();
 
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1441,7 +1500,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr_str).unwrap();
 
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1522,7 +1582,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr_str).unwrap();
 
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1674,7 +1735,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1715,7 +1776,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1781,7 +1842,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1836,7 +1897,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -1947,7 +2008,7 @@ mod type_inference_tests {
             let function_type_registry =
                 FunctionTypeRegistry::from_export_metadata(&component_metadata);
 
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = internal::expected_expr_for_select_index();
 
@@ -1973,7 +2034,7 @@ mod type_inference_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let inferred_expr =
-                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty()).unwrap();
+                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -2052,7 +2113,7 @@ mod type_inference_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let inferred_expr =
-                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty()).unwrap();
+                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![
@@ -2104,7 +2165,7 @@ mod type_inference_tests {
 
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
             let expected = Expr::ExprBlock(
                 vec![

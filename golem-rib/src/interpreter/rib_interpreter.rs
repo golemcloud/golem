@@ -1379,6 +1379,97 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), 2i32.into_value_and_type());
     }
 
+    mod global_variable_tests {
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal::get_value_and_type;
+        use crate::{
+            compiler, Expr, GlobalVariableTypeSpec, InferredType, Path, RibInput, VariableId,
+        };
+        use golem_wasm_ast::analysis::analysed_type::{record, s8, str};
+        use golem_wasm_ast::analysis::NameTypePair;
+        use golem_wasm_rpc::{Value, ValueAndType};
+        use std::collections::HashMap;
+        use test_r::test;
+
+        #[test]
+        async fn test_global_variable_custom() {
+            let mut rib_input = HashMap::new();
+
+            let value_and_type = get_value_and_type(
+                &record(vec![
+                    NameTypePair {
+                        name: "path".to_string(),
+                        typ: record(vec![NameTypePair {
+                            name: "user-id".to_string(),
+                            typ: str(),
+                        }]),
+                    },
+                    NameTypePair {
+                        name: "headers".to_string(),
+                        typ: record(vec![
+                            NameTypePair {
+                                name: "name".to_string(),
+                                typ: str(),
+                            },
+                            NameTypePair {
+                                name: "age".to_string(),
+                                typ: str(),
+                            },
+                        ]),
+                    },
+                ]),
+                r#"{path : { user-id: "1" }, headers: { name: "foo", age: "20" }}"#,
+            );
+
+            rib_input.insert("request".to_string(), value_and_type);
+
+            let mut interpreter = internal::static_test_interpreter(
+                &ValueAndType::new(Value::S8(1), s8()),
+                Some(RibInput::new(rib_input)),
+            );
+
+            let rib_expr = r#"
+             let res1 = request.path.user-id;
+             let res2 = request.headers.name;
+             let res3 = request.headers.age;
+             "${res1}-${res2}-${res3}"
+            "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let type_spec = vec![
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["path"]),
+                    inferred_type: InferredType::Str,
+                },
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["headers"]),
+                    inferred_type: InferredType::Str,
+                },
+            ];
+
+            let compiled = compiler::compile_with_restricted_global_variables(
+                &expr,
+                &vec![],
+                None,
+                &type_spec,
+            )
+            .unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap()
+                .value;
+
+            assert_eq!(result, Value::String("1-foo-20".to_string()))
+        }
+    }
+
     mod list_reduce_interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr};
@@ -1596,7 +1687,8 @@ mod interpreter_tests {
         "#;
 
             let mut expr = Expr::from_text(expr).unwrap();
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1616,7 +1708,8 @@ mod interpreter_tests {
         "#;
 
             let mut expr = Expr::from_text(expr).unwrap();
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1637,7 +1730,8 @@ mod interpreter_tests {
         "#;
 
             let mut expr = Expr::from_text(expr).unwrap();
-            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+                .unwrap();
 
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -1733,7 +1827,7 @@ mod interpreter_tests {
 
             let result_value = internal::get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter = internal::static_test_interpreter(&result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value, None);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1771,7 +1865,7 @@ mod interpreter_tests {
             let result_value =
                 internal::get_value_and_type(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter = internal::static_test_interpreter(&result_value);
+            let mut interpreter = internal::static_test_interpreter(&result_value, None);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1856,7 +1950,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -1890,7 +1984,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -2001,7 +2095,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -2055,7 +2149,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::static_test_interpreter(&result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_value, None);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -2315,9 +2409,12 @@ mod interpreter_tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn static_test_interpreter(result_value: &ValueAndType) -> Interpreter {
+        pub(crate) fn static_test_interpreter(
+            result_value: &ValueAndType,
+            input: Option<RibInput>,
+        ) -> Interpreter {
             Interpreter {
-                input: RibInput::default(),
+                input: input.unwrap_or_default(),
                 invoke: static_worker_invoke(result_value),
             }
         }
