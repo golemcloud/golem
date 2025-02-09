@@ -280,6 +280,9 @@ where
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
         self.api_definition_validator
+            .validate_name(&definition.id)?;
+
+        self.api_definition_validator
             .validate(&definition, components.as_slice())?;
 
         let component_metadata_dictionary =
