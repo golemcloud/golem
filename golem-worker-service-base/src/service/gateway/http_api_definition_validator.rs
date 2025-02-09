@@ -78,7 +78,7 @@ impl ApiDefinitionValidatorService<HttpApiDefinition> for HttpApiDefinitionValid
     }
     fn validate_name(&self, name: &ApiDefinitionId) -> Result<(), ValidationErrors> {
         let valid_name_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]*$").unwrap();
-        valid_name_regex.is_match(name.to_string().as_str()).then(|| ()).ok_or_else(|| {
+        valid_name_regex.is_match(name.to_string().as_str()).then_some(()).ok_or_else(|| {
             ValidationErrors {
                 errors: vec![format!("Invalid name '{}'. Names must start with a letter and contain only letters, numbers, underscores, and hyphens", name)],
             }
