@@ -30,7 +30,7 @@ pub trait ApiDeploymentService {
     async fn get(&self, site: String) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
-        id: Option<ApiDefinitionId>,
+        id: Option<&ApiDefinitionId>,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError>;
     async fn delete(&self, site: String) -> Result<GolemResult, GolemError>;
@@ -69,7 +69,7 @@ impl<ProjectContext: Send + Sync> ApiDeploymentService
 
     async fn list(
         &self,
-        id: Option<ApiDefinitionId>,
+        id: Option<&ApiDefinitionId>,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let deployments = self.client.list(id, project).await?;
