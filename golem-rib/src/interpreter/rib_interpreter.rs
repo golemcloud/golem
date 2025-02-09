@@ -1392,9 +1392,8 @@ mod interpreter_tests {
 
         #[test]
         async fn test_global_variable_with_type_spec() {
-            // Not specifying any type for request.path.*, or request.headers.*
-            // will result in inferring them as string, since we pass type-spec
-            // to compiler.
+            // request.path.user-id and request.headers.* should be inferred as string,
+            // since we configure the compiler with a type-spec (given below)
             let rib_expr = r#"
                let res1 = request.path.user-id;
                let res2 = request.headers.name;
@@ -1418,7 +1417,7 @@ mod interpreter_tests {
             let mut rib_input = HashMap::new();
 
             // Rib compiler identifies the input requirements to be a string (due to type-spec passed)
-            // and there we pass input value (value_and_type) with headers and path values as string.
+            // and therefore, we pass input value (value_and_type) to the interpreter with headers and path values as string
             let analysed_type_of_input = &record(vec![
                 field("path", record(vec![field("user-id", str())])),
                 field(
@@ -1470,11 +1469,9 @@ mod interpreter_tests {
              "${res4}-${res2}"
             "#;
 
-            // We always specify the type of request.path.* to be a string using type-spec
+            // We always specify the type of request.path.* and request.headers.* to be a string using type-spec
             // however the rib script (above) explicitly specify the type of request.path.user-id
-            // and request.header.age to be u32, and that of request.header.age to be u32 too.
-            // In this case, the inferred rib-input should be u32 for those global variables.
-            // In other words, they are not considered strings anywhere.
+            // and request.header.age to be u32. In this case, the Rib compiler infer them as u32 and interpreter works with u32.
             let type_spec = vec![
                 GlobalVariableTypeSpec {
                     variable_id: VariableId::global("request".to_string()),
@@ -1490,6 +1487,8 @@ mod interpreter_tests {
 
             let mut rib_input = HashMap::new();
 
+            // We pass the input value to rib-interpreter with request.path.user-id
+            // and request.headers.age as u32, since the compiler inferred these input type requirements to be u32.
             let analysed_type_of_input = &record(vec![
                 field("path", record(vec![field("user-id", u32())])),
                 field(
