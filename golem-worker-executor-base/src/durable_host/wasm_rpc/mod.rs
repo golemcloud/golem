@@ -888,7 +888,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let _ = if durability.is_live() {
+        if durability.is_live() {
             self.scheduler_service().cancel(schedule_id).await;
 
             durability
