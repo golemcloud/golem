@@ -1385,14 +1385,14 @@ mod interpreter_tests {
         use crate::{
             compiler, Expr, GlobalVariableTypeSpec, InferredType, Path, RibInput, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::{record, s8, str};
+        use golem_wasm_ast::analysis::analysed_type::{record, s8, str, u32};
         use golem_wasm_ast::analysis::NameTypePair;
         use golem_wasm_rpc::{Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
 
         #[test]
-        async fn test_global_variable_custom() {
+        async fn test_global_variable_with_type_spec() {
             let mut rib_input = HashMap::new();
 
             let value_and_type = get_value_and_type(
@@ -1467,6 +1467,89 @@ mod interpreter_tests {
                 .value;
 
             assert_eq!(result, Value::String("1-foo-20".to_string()))
+        }
+
+        #[test]
+        async fn test_global_variable_override_type_spec() {
+            let mut rib_input = HashMap::new();
+
+            let value_and_type = get_value_and_type(
+                &record(vec![
+                    NameTypePair {
+                        name: "path".to_string(),
+                        typ: record(vec![NameTypePair {
+                            name: "user-id".to_string(),
+                            typ: u32(),
+                        }]),
+                    },
+                    NameTypePair {
+                        name: "headers".to_string(),
+                        typ: record(vec![
+                            NameTypePair {
+                                name: "name".to_string(),
+                                typ: str(),
+                            },
+                            NameTypePair {
+                                name: "age".to_string(),
+                                typ: u32(),
+                            },
+                        ]),
+                    },
+                ]),
+                r#"{path : { user-id: 1 }, headers: { name: "foo", age: 20 }}"#,
+            );
+
+            rib_input.insert("request".to_string(), value_and_type);
+
+            let mut interpreter = internal::static_test_interpreter(
+                &ValueAndType::new(Value::S8(1), s8()),
+                Some(RibInput::new(rib_input)),
+            );
+
+            let rib_expr = r#"
+             let res1: u32 = request.path.user-id;
+             let res2: string = request.headers.name;
+             let res3: u32 = request.headers.age;
+             let res4 = res1 + res3;
+             "${res4}-${res2}"
+            "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            // We always specify the global type in request.path.* to be a string
+            // however the rib script explicitly specify the type of request.path.user-id
+            // to be u32, and similarly for request.header.age.
+            // In this case, the expected input shouldn't be a string, but a u32.
+            let type_spec = vec![
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["path"]),
+                    inferred_type: InferredType::Str,
+                },
+                GlobalVariableTypeSpec {
+                    variable_id: VariableId::global("request".to_string()),
+                    path: Path::from_elems(vec!["headers"]),
+                    inferred_type: InferredType::Str,
+                },
+            ];
+
+            let compiled = compiler::compile_with_restricted_global_variables(
+                &expr,
+                &vec![],
+                None,
+                &type_spec,
+            )
+            .unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap()
+                .value;
+
+            assert_eq!(result, Value::String("21-foo".to_string()))
         }
     }
 
