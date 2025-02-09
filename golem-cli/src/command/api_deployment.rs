@@ -55,7 +55,7 @@ pub enum ApiDeploymentSubcommand<ProjectRef: clap::Args> {
 
         /// Api definition id
         #[arg(short, long)]
-        id: ApiDefinitionId,
+        id: Option<ApiDefinitionId>,
     },
 
     /// Delete api deployment

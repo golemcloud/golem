@@ -68,12 +68,17 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
 
     async fn list(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_id: Option<ApiDefinitionId>,
         _project: &Self::ProjectContext,
     ) -> Result<Vec<ApiDeployment>, GolemError> {
-        info!("List api deployments with definition {api_definition_id}");
+        info!("List api deployments with definition");
 
-        let deployments = self.client.list_deployments(&api_definition_id.0).await?;
+        let api_definition_id = api_definition_id.map(|n| n.0);
+
+        let deployments = self
+            .client
+            .list_deployments(api_definition_id.as_deref())
+            .await?;
 
         Ok(deployments.into_iter().map_into().collect())
     }
