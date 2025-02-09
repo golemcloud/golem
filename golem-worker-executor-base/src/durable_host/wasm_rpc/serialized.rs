@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
 use golem_common::model::{IdempotencyKey, WorkerId};
@@ -39,4 +39,13 @@ pub struct SerializableInvokeRequest {
     pub idempotency_key: IdempotencyKey,
     pub function_name: String,
     pub function_params: Vec<ValueAndType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct SerializableScheduleInvocationRequest {
+    pub remote_worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    pub function_params: Vec<ValueAndType>,
+    pub datetime: SerializableDateTime,
 }
