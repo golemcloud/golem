@@ -44,7 +44,6 @@ pub(crate) fn bind_type(expr: &mut Expr) {
                 if let Some(type_name) = optional_type_name {
                     *inferred_type = type_name.clone().into();
                 }
-
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
