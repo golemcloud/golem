@@ -47,7 +47,7 @@ use golem_common::model::public_oplog::{
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
@@ -720,6 +720,13 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                     },
                 ))
             }
+            OplogEntry::Revert {
+                timestamp,
+                dropped_region,
+            } => Ok(PublicOplogEntry::Revert(RevertParameters {
+                timestamp,
+                dropped_region,
+            })),
         }
     }
 }

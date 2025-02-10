@@ -24,6 +24,7 @@ use crate::storage::keyvalue::{
 };
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord, WorkerStatusRecordExtensions,
@@ -267,8 +268,9 @@ impl WorkerService for DefaultWorkerService {
                         component_version,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
-                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                        extensions: WorkerStatusRecordExtensions::Extension2 {
                             active_plugins: initial_active_plugins,
+                            deleted_regions: DeletedRegions::new(),
                         },
                         ..WorkerStatusRecord::default()
                     },

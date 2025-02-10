@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+pub mod function_result_interpreter;
+pub mod invocation;
+pub mod status;
+
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,13 +25,10 @@ use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
 use crate::error::{GolemError, WorkerOutOfMemory};
-use crate::function_result_interpreter::interpret_function_results;
-use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
 use crate::model::{
     ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
     WorkerConfig,
 };
-use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -37,13 +38,15 @@ use crate::services::{
     HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
     HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::function_result_interpreter::interpret_function_results;
+use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -51,11 +54,11 @@ use golem_common::model::{
     exports, ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
 };
 use golem_common::model::{
-    ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
-    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
+use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -162,6 +165,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await?;
         Self::start_if_needed(worker.clone()).await?;
         Ok(worker)
+    }
+
+    pub async fn get_latest_metadata<
+        T: HasActiveWorkers<Ctx> + HasWorkerService + HasOplogService + HasConfig + Sync,
+    >(
+        deps: &T,
+        owned_worker_id: &OwnedWorkerId,
+    ) -> Result<Option<WorkerMetadata>, GolemError> {
+        if let Some(worker) = deps.active_workers().try_get(owned_worker_id).await {
+            Ok(Some(worker.get_metadata().await?))
+        } else if let Some(previous_metadata) = deps.worker_service().get(owned_worker_id).await {
+            Ok(Some(WorkerMetadata {
+                last_known_status: calculate_last_known_status(
+                    deps,
+                    owned_worker_id,
+                    &Some(previous_metadata.clone()),
+                )
+                .await?,
+                ..previous_metadata
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn new<T: HasAll<Ctx>>(
@@ -873,6 +899,105 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
+    /// Reverts the worker to a previous state, selected by either the last oplog index to keep
+    /// or the number of invocations to drop.
+    ///
+    /// The revert operations is implemented by inserting a special oplog entry that
+    /// extends the worker's deleted oplog regions, skipping entries from the end of the oplog.
+    pub async fn revert(&self, target: RevertWorkerTarget) -> Result<(), GolemError> {
+        match target {
+            RevertWorkerTarget::RevertToOplogIndex(target) => {
+                self.revert_to_last_oplog_index(target.last_oplog_index)
+                    .await
+            }
+            RevertWorkerTarget::RevertLastInvocations(target) => {
+                if let Some(last_oplog_index) = self
+                    .find_nth_invocation_from_end(target.number_of_invocations as usize)
+                    .await
+                {
+                    self.revert_to_last_oplog_index(last_oplog_index.previous())
+                        .await
+                } else {
+                    Err(GolemError::invalid_request(format!(
+                        "Could not find {} invocations to revert",
+                        target.number_of_invocations
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Starting from the end of the oplog, find the Nth ExportedFunctionInvoked entry's index.
+    async fn find_nth_invocation_from_end(&self, n: usize) -> Option<OplogIndex> {
+        let mut current = self.oplog.current_oplog_index().await;
+        let mut found = 0;
+        loop {
+            let entry = self.oplog.read(current).await;
+
+            if matches!(entry, OplogEntry::ExportedFunctionInvoked { .. }) {
+                found += 1;
+                if found == n {
+                    return Some(current);
+                }
+            }
+
+            if current == OplogIndex::INITIAL {
+                return None;
+            } else {
+                current = current.previous();
+            }
+        }
+    }
+
+    async fn revert_to_last_oplog_index(
+        &self,
+        last_oplog_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        self.stop().await;
+
+        let region_end = self.oplog.current_oplog_index().await;
+        let region_start = last_oplog_index.next();
+        let metadata = self.get_metadata().await?;
+
+        if metadata
+            .last_known_status
+            .skipped_regions
+            .is_in_deleted_region(region_start)
+        {
+            Err(GolemError::invalid_request(format!(
+                "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+            )))
+        } else {
+            let region = OplogRegion {
+                start: region_start,
+                end: region_end,
+            };
+
+            // Resetting the worker status so it is recalculated even if the server crashes
+            self.worker_service()
+                .update_status(
+                    &self.owned_worker_id,
+                    &WorkerStatusRecord::default(),
+                    self.component_type(),
+                )
+                .await;
+            self.oplog.add_and_commit(OplogEntry::revert(region)).await;
+
+            // Recalculating the status from the whole oplog, because the newly deleted region may contain things like worker updates.
+            let recalculated_status =
+                calculate_last_known_status(self, &self.owned_worker_id, &None).await?;
+            self.worker_service()
+                .update_status(
+                    &self.owned_worker_id,
+                    &recalculated_status,
+                    self.component_type(),
+                )
+                .await;
+
+            Ok(())
+        }
+    }
+
     async fn wait_for_invocation_result(
         &self,
         key: &IdempotencyKey,
@@ -1057,7 +1182,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn get_or_create_worker_metadata<
-        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService,
+        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
     >(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
@@ -1094,12 +1219,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
-                        extensions: WorkerStatusRecordExtensions::Extension1 {
+                        extensions: WorkerStatusRecordExtensions::Extension2 {
                             active_plugins: component_metadata
                                 .plugin_installations
                                 .iter()
                                 .map(|i| i.id.clone())
                                 .collect(),
+                            deleted_regions: initial_status.deleted_regions().clone(),
                         },
                         ..initial_status
                     },
@@ -1366,7 +1492,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.component_version,
                 worker_metadata.args.clone(),
                 worker_metadata.env.clone(),
-                worker_metadata.last_known_status.deleted_regions.clone(),
+                worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
             ),
             parent.execution_status.clone(),
@@ -2031,512 +2157,6 @@ enum WorkerCommand {
     Invocation,
     ResumeReplay,
     Interrupt(InterruptKind),
-}
-
-pub async fn get_component_metadata<Ctx: WorkerCtx>(
-    worker: &Arc<Worker<Ctx>>,
-) -> Result<ComponentMetadata, GolemError> {
-    let account_id = worker.owned_worker_id.account_id();
-    let component_id = worker.owned_worker_id.component_id();
-    let worker_metadata = worker.get_metadata().await?;
-
-    let component_version = worker_metadata.last_known_status.component_version;
-
-    let component_metadata = worker
-        .component_service()
-        .get_metadata(&account_id, &component_id, Some(component_version))
-        .await?;
-
-    Ok(component_metadata)
-}
-
-/// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
-pub async fn calculate_last_known_status<T>(
-    this: &T,
-    owned_worker_id: &OwnedWorkerId,
-    metadata: &Option<WorkerMetadata>,
-) -> Result<WorkerStatusRecord, GolemError>
-where
-    T: HasOplogService + HasConfig,
-{
-    let last_known = metadata
-        .as_ref()
-        .map(|metadata| metadata.last_known_status.clone())
-        .unwrap_or_default();
-
-    let last_oplog_index = this.oplog_service().get_last_index(owned_worker_id).await;
-
-    if last_known.oplog_idx == last_oplog_index {
-        Ok(last_known)
-    } else {
-        let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
-            .oplog_service()
-            .read_range(
-                owned_worker_id,
-                last_known.oplog_idx.next(),
-                last_oplog_index,
-            )
-            .await;
-
-        let active_plugins = last_known.active_plugins().clone();
-
-        let overridden_retry_config = calculate_overridden_retry_policy(
-            last_known.overridden_retry_config.clone(),
-            &new_entries,
-        );
-        let status = calculate_latest_worker_status(
-            &last_known.status,
-            &this.config().retry,
-            last_known.overridden_retry_config.clone(),
-            &new_entries,
-        );
-
-        let mut initial_deleted_regions = last_known.deleted_regions;
-        if initial_deleted_regions.is_overridden() {
-            initial_deleted_regions.drop_override();
-        }
-
-        let mut deleted_regions = calculate_deleted_regions(initial_deleted_regions, &new_entries);
-        let pending_invocations =
-            calculate_pending_invocations(last_known.pending_invocations, &new_entries);
-        let (
-            pending_updates,
-            failed_updates,
-            successful_updates,
-            component_version,
-            component_size,
-        ) = calculate_update_fields(
-            last_known.pending_updates,
-            last_known.failed_updates,
-            last_known.successful_updates,
-            last_known.component_version,
-            last_known.component_size,
-            &new_entries,
-        );
-
-        if let Some(TimestampedUpdateDescription {
-            oplog_index,
-            description: UpdateDescription::SnapshotBased { .. },
-            ..
-        }) = pending_updates.front()
-        {
-            deleted_regions.set_override(DeletedRegions::from_regions(vec![
-                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=*oplog_index),
-            ]));
-        }
-
-        let (invocation_results, current_idempotency_key) = calculate_invocation_results(
-            last_known.invocation_results,
-            last_known.current_idempotency_key,
-            &new_entries,
-        );
-
-        let total_linear_memory_size =
-            calculate_total_linear_memory_size(last_known.total_linear_memory_size, &new_entries);
-
-        let owned_resources = calculate_owned_resources(last_known.owned_resources, &new_entries);
-
-        let active_plugins = calculate_active_plugins(active_plugins, &new_entries);
-
-        let result = WorkerStatusRecord {
-            oplog_idx: last_oplog_index,
-            status,
-            overridden_retry_config,
-            pending_invocations,
-            deleted_regions,
-            pending_updates,
-            failed_updates,
-            successful_updates,
-            invocation_results,
-            current_idempotency_key,
-            component_version,
-            component_size,
-            owned_resources,
-            total_linear_memory_size,
-            extensions: WorkerStatusRecordExtensions::Extension1 { active_plugins },
-        };
-        Ok(result)
-    }
-}
-
-fn calculate_latest_worker_status(
-    initial: &WorkerStatus,
-    default_retry_policy: &RetryConfig,
-    initial_retry_policy: Option<RetryConfig>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> WorkerStatus {
-    let mut result = initial.clone();
-    let mut last_error_count = 0;
-    let mut current_retry_policy = initial_retry_policy;
-    for entry in entries.values() {
-        if !matches!(entry, OplogEntry::Error { .. }) {
-            last_error_count = 0;
-        }
-
-        match entry {
-            OplogEntry::Create { .. } => {
-                result = WorkerStatus::Idle;
-            }
-            OplogEntry::ImportedFunctionInvokedV1 { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::ImportedFunctionInvoked { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::ExportedFunctionInvoked { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::ExportedFunctionCompleted { .. } => {
-                result = WorkerStatus::Idle;
-            }
-            OplogEntry::Suspend { .. } => {
-                result = WorkerStatus::Suspended;
-            }
-            OplogEntry::Error { error, .. } => {
-                last_error_count += 1;
-
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    last_error_count,
-                ) {
-                    result = WorkerStatus::Retrying;
-                } else {
-                    result = WorkerStatus::Failed;
-                }
-            }
-            OplogEntry::NoOp { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::Jump { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::Interrupted { .. } => {
-                result = WorkerStatus::Interrupted;
-            }
-            OplogEntry::Exited { .. } => {
-                result = WorkerStatus::Exited;
-            }
-            OplogEntry::ChangeRetryPolicy { new_policy, .. } => {
-                current_retry_policy = Some(new_policy.clone());
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::BeginAtomicRegion { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::EndAtomicRegion { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::BeginRemoteWrite { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::EndRemoteWrite { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::PendingWorkerInvocation { .. } => {}
-            OplogEntry::PendingUpdate { .. } => {
-                if result == WorkerStatus::Failed {
-                    result = WorkerStatus::Retrying;
-                }
-            }
-            OplogEntry::FailedUpdate { .. } => {}
-            OplogEntry::SuccessfulUpdate { .. } => {}
-            OplogEntry::GrowMemory { .. } => {}
-            OplogEntry::CreateResource { .. } => {}
-            OplogEntry::DropResource { .. } => {}
-            OplogEntry::DescribeResource { .. } => {}
-            OplogEntry::Log { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::Restart { .. } => {
-                result = WorkerStatus::Idle;
-            }
-            OplogEntry::CreateV1 { .. } => {
-                result = WorkerStatus::Idle;
-            }
-            OplogEntry::SuccessfulUpdateV1 { .. } => {}
-            OplogEntry::ActivatePlugin { .. } => {}
-            OplogEntry::DeactivatePlugin { .. } => {}
-        }
-    }
-    result
-}
-
-fn calculate_deleted_regions(
-    initial: DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> DeletedRegions {
-    let mut builder = DeletedRegionsBuilder::from_regions(initial.into_regions());
-    for entry in entries.values() {
-        if let OplogEntry::Jump { jump, .. } = entry {
-            builder.add(jump.clone());
-        }
-    }
-    builder.build()
-}
-
-fn calculate_overridden_retry_policy(
-    initial: Option<RetryConfig>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Option<RetryConfig> {
-    let mut result = initial;
-    for entry in entries.values() {
-        if let OplogEntry::ChangeRetryPolicy { new_policy, .. } = entry {
-            result = Some(new_policy.clone());
-        }
-    }
-    result
-}
-
-fn calculate_pending_invocations(
-    initial: Vec<TimestampedWorkerInvocation>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Vec<TimestampedWorkerInvocation> {
-    let mut result = initial;
-    for entry in entries.values() {
-        match entry {
-            OplogEntry::PendingWorkerInvocation {
-                timestamp,
-                invocation,
-                ..
-            } => {
-                result.push(TimestampedWorkerInvocation {
-                    timestamp: *timestamp,
-                    invocation: invocation.clone(),
-                });
-            }
-            OplogEntry::ExportedFunctionInvoked {
-                idempotency_key, ..
-            } => {
-                result.retain(|invocation| match invocation {
-                    TimestampedWorkerInvocation {
-                        invocation:
-                            WorkerInvocation::ExportedFunction {
-                                idempotency_key: key,
-                                ..
-                            },
-                        ..
-                    } => key != idempotency_key,
-                    _ => true,
-                });
-            }
-            OplogEntry::PendingUpdate {
-                description: UpdateDescription::SnapshotBased { target_version, .. },
-                ..
-            } => result.retain(|invocation| match invocation {
-                TimestampedWorkerInvocation {
-                    invocation:
-                        WorkerInvocation::ManualUpdate {
-                            target_version: version,
-                            ..
-                        },
-                    ..
-                } => version != target_version,
-                _ => true,
-            }),
-            _ => {}
-        }
-    }
-    result
-}
-
-fn calculate_update_fields(
-    initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
-    initial_failed_updates: Vec<FailedUpdateRecord>,
-    initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_version: u64,
-    initial_component_size: u64,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (
-    VecDeque<TimestampedUpdateDescription>,
-    Vec<FailedUpdateRecord>,
-    Vec<SuccessfulUpdateRecord>,
-    u64,
-    u64,
-) {
-    let mut pending_updates = initial_pending_updates;
-    let mut failed_updates = initial_failed_updates;
-    let mut successful_updates = initial_successful_updates;
-    let mut version = initial_version;
-    let mut component_size = initial_component_size;
-    for (oplog_idx, entry) in entries {
-        match entry {
-            OplogEntry::Create {
-                component_version, ..
-            } => {
-                version = *component_version;
-            }
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                ..
-            } => {
-                pending_updates.push_back(TimestampedUpdateDescription {
-                    timestamp: *timestamp,
-                    oplog_index: *oplog_idx,
-                    description: description.clone(),
-                });
-            }
-            OplogEntry::FailedUpdate {
-                timestamp,
-                target_version,
-                details,
-            } => {
-                failed_updates.push(FailedUpdateRecord {
-                    timestamp: *timestamp,
-                    target_version: *target_version,
-                    details: details.clone(),
-                });
-                pending_updates.pop_front();
-            }
-            OplogEntry::SuccessfulUpdateV1 {
-                timestamp,
-                target_version,
-                new_component_size,
-            } => {
-                successful_updates.push(SuccessfulUpdateRecord {
-                    timestamp: *timestamp,
-                    target_version: *target_version,
-                });
-                version = *target_version;
-                component_size = *new_component_size;
-                pending_updates.pop_front();
-            }
-            OplogEntry::SuccessfulUpdate {
-                timestamp,
-                target_version,
-                new_component_size,
-                ..
-            } => {
-                successful_updates.push(SuccessfulUpdateRecord {
-                    timestamp: *timestamp,
-                    target_version: *target_version,
-                });
-                version = *target_version;
-                component_size = *new_component_size;
-                pending_updates.pop_front();
-            }
-            _ => {}
-        }
-    }
-    (
-        pending_updates,
-        failed_updates,
-        successful_updates,
-        version,
-        component_size,
-    )
-}
-
-fn calculate_invocation_results(
-    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
-    current_idempotency_key: Option<IdempotencyKey>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
-    let mut invocation_results = invocation_results;
-    let mut current_idempotency_key = current_idempotency_key;
-
-    for (oplog_idx, entry) in entries {
-        match entry {
-            OplogEntry::ExportedFunctionInvoked {
-                idempotency_key, ..
-            } => {
-                current_idempotency_key = Some(idempotency_key.clone());
-            }
-            OplogEntry::ExportedFunctionCompleted { .. } => {
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
-                }
-                current_idempotency_key = None;
-            }
-            OplogEntry::Error { .. } => {
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
-                }
-            }
-            OplogEntry::Exited { .. } => {
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    (invocation_results, current_idempotency_key)
-}
-
-fn calculate_total_linear_memory_size(
-    total: u64,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> u64 {
-    let mut result = total;
-    for entry in entries.values() {
-        if let OplogEntry::GrowMemory { delta, .. } = entry {
-            result += *delta;
-        }
-    }
-    result
-}
-
-fn calculate_owned_resources(
-    initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
-    let mut result = initial;
-    for entry in entries.values() {
-        match entry {
-            OplogEntry::CreateResource { id, timestamp } => {
-                result.insert(
-                    *id,
-                    WorkerResourceDescription {
-                        created_at: *timestamp,
-                        indexed_resource_key: None,
-                    },
-                );
-            }
-            OplogEntry::DropResource { id, .. } => {
-                result.remove(id);
-            }
-            OplogEntry::DescribeResource {
-                id,
-                indexed_resource,
-                ..
-            } => {
-                if let Some(description) = result.get_mut(id) {
-                    description.indexed_resource_key = Some(indexed_resource.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-    result
-}
-
-fn calculate_active_plugins(
-    initial: HashSet<PluginInstallationId>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashSet<PluginInstallationId> {
-    let mut result = initial;
-    for entry in entries.values() {
-        match entry {
-            OplogEntry::ActivatePlugin { plugin, .. } => {
-                result.insert(plugin.clone());
-            }
-            OplogEntry::DeactivatePlugin { plugin, .. } => {
-                result.remove(plugin);
-            }
-            OplogEntry::SuccessfulUpdate {
-                new_active_plugins, ..
-            } => {
-                result = new_active_plugins.clone();
-            }
-            _ => {}
-        }
-    }
-    result
 }
 
 pub fn is_worker_error_retriable(

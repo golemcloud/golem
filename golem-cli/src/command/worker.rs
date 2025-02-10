@@ -15,7 +15,9 @@
 use crate::command::ComponentRefSplit;
 use clap::builder::ValueParser;
 use clap::{ArgMatches, Args, Error, FromArgMatches, Subcommand};
-use golem_client::model::ScanCursor;
+use golem_client::model::{
+    RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, ScanCursor,
+};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
@@ -461,6 +463,18 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(long, conflicts_with = "from")]
         query: Option<String>,
     },
+    /// Reverts a worker by undoing its last recorded operations
+    #[command()]
+    Revert {
+        #[command(flatten)]
+        worker_ref: WorkerRef,
+
+        #[arg(long, conflicts_with = "number_of_invocations")]
+        last_oplog_index: Option<u64>,
+
+        #[arg(long, conflicts_with = "to_oplog_index")]
+        number_of_invocations: Option<u64>,
+    },
 }
 
 pub trait WorkerRefSplit<ProjectRef> {
@@ -686,6 +700,35 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                     }
                     (Some(from), None) => service.get_oplog(worker_uri, from, project_id).await,
                 }
+            }
+            WorkerSubcommand::Revert {
+                worker_ref,
+                number_of_invocations,
+                last_oplog_index,
+            } => {
+                let (worker_uri, project_ref) = worker_ref.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                let target = match (number_of_invocations, last_oplog_index) {
+                    (Some(_), Some(_)) => Err(GolemError(
+                        "Only one of 'number-of-invocations' and 'last-oplog-index' can be specified"
+                            .to_string(),
+                    )),
+                    (Some(number_of_invocations), None) => Ok(
+                        RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                            number_of_invocations,
+                        }),
+                    ),
+                    (None, Some(last_oplog_index)) => {
+                        Ok(RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                            last_oplog_index,
+                        }))
+                    }
+                    (None, None) => Err(GolemError(
+                        "Either 'number-of-invocations' or 'last-oplog-index' must be specified"
+                            .to_string(),
+                    )),
+                }?;
+                service.revert(worker_uri, target, project_id).await
             }
         }
     }
