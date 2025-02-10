@@ -38,7 +38,7 @@ use std::str::FromStr;
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
-    SelectIndex(Box<Expr>, usize,  Option<TypeName>, InferredType),
+    SelectIndex(Box<Expr>, usize, Option<TypeName>, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
@@ -478,7 +478,11 @@ impl Expr {
         )
     }
 
-    pub fn select_field_with_type_annotation(expr: Expr, field: impl AsRef<str>, type_name: TypeName) -> Self {
+    pub fn select_field_with_type_annotation(
+        expr: Expr,
+        field: impl AsRef<str>,
+        type_name: TypeName,
+    ) -> Self {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),
@@ -489,6 +493,19 @@ impl Expr {
 
     pub fn select_index(expr: Expr, index: usize) -> Self {
         Expr::SelectIndex(Box::new(expr), index, None, InferredType::Unknown)
+    }
+
+    pub fn select_index_with_type_annotation(
+        expr: Expr,
+        index: usize,
+        type_name: TypeName,
+    ) -> Self {
+        Expr::SelectIndex(
+            Box::new(expr),
+            index,
+            Some(type_name),
+            InferredType::Unknown,
+        )
     }
 
     pub fn get_tag(expr: Expr) -> Self {

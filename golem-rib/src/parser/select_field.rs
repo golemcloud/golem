@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use combine::parser;
-use combine::parser::char::spaces;
-use combine::{attempt, choice, ParseError, Parser, Stream};
+use combine::{choice, ParseError, Stream};
 
 use internal::*;
 
@@ -35,15 +34,15 @@ mod internal {
     use combine::parser::char::{char, digit, letter};
     use combine::{many1, optional, ParseError};
 
+    use super::*;
     use crate::parser::errors::RibParseError;
     use crate::parser::select_index::select_index;
+    use crate::parser::type_name::parse_type_name;
     use combine::{
         attempt,
         parser::char::{char as char_, spaces},
         Parser,
     };
-    use crate::parser::type_name::parse_type_name;
-    use super::*;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
@@ -68,31 +67,31 @@ mod internal {
                         .skip(spaces())
                         .with(parse_type_name())
                         .skip(spaces()),
-                )
-            ).and_then(|(base, _, opt, optional)| {
+                ),
+            )
+                .and_then(|(base, _, opt, optional)| {
+                    let expr = build_selector(base, opt);
 
-                let expr = build_selector(base, opt);
-
-                match expr {
-                    Some(Expr::SelectField(field, name, _, inferred_typ)) => {
-                        if let Some(typ) = optional {
-                            Ok(Expr::SelectField(field, name, Some(typ), inferred_typ))
-                        } else {
-                            Ok(Expr::SelectField(field, name, None, inferred_typ))
+                    match expr {
+                        Some(Expr::SelectField(field, name, inner_typ, inferred_typ)) => {
+                            if let Some(typ) = optional {
+                                Ok(Expr::SelectField(field, name, Some(typ), inferred_typ))
+                            } else {
+                                Ok(Expr::SelectField(field, name, inner_typ, inferred_typ))
+                            }
                         }
-                    }
 
-                    Some(Expr::SelectIndex(field, index, _, inferred_type)) => {
-                        if let Some(typ) = optional {
-                            Ok(Expr::SelectIndex(field, index, Some(typ), inferred_type))
-                        } else {
-                            Ok(Expr::SelectIndex(field, index, None, inferred_type))
+                        Some(Expr::SelectIndex(field, index, inner_typ, inferred_type)) => {
+                            if let Some(typ) = optional {
+                                Ok(Expr::SelectIndex(field, index, Some(typ), inferred_type))
+                            } else {
+                                Ok(Expr::SelectIndex(field, index, inner_typ, inferred_type))
+                            }
                         }
-                    }
 
-                    _ => Err(RibParseError::Message("Invalid Select Index".to_string()))
-                }
-            }),
+                        _ => Err(RibParseError::Message("Invalid Select Index".to_string())),
+                    }
+                }),
         )
     }
 
@@ -100,18 +99,29 @@ mod internal {
     // but we offload this recursion in `build-selector`.
     // This implies the last expression after a dot could be an index selection or a field selection
     // and with `inner select` we accumulate the selection towards the left side.
+    // We also propagate any type name in between towards the outer.
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
             Expr::Identifier(variable_id, _) => {
                 Some(Expr::select_field(base, variable_id.name().as_str()))
             }
-            Expr::SelectField(second, last, _, _) => {
+            Expr::SelectField(second, last, type_name, inferred_type) => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::select_field(inner_select, last.as_str()))
+                Some(Expr::SelectField(
+                    Box::new(inner_select),
+                    last,
+                    type_name,
+                    inferred_type,
+                ))
             }
-            Expr::SelectIndex(second, last_index, _, _) => {
+            Expr::SelectIndex(second, last_index, type_name, inferred_type) => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::select_index(inner_select, last_index))
+                Some(Expr::SelectIndex(
+                    Box::new(inner_select),
+                    last_index,
+                    type_name,
+                    inferred_type,
+                ))
             }
             _ => None,
         }
@@ -155,44 +165,42 @@ mod tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use combine::EasyParser;
-
     use crate::expr::*;
-    use crate::parser::rib_expr::rib_expr;
     use crate::TypeName;
 
     #[test]
     fn test_select_field() {
         let input = "foo.bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::select_field(Expr::identifier("foo"), "bar"), ""))
+            Ok(Expr::select_field(Expr::identifier("foo"), "bar"))
         );
     }
 
     #[test]
-    fn test_select_field_with_inline_type() {
+    fn test_select_field_with_type_annotation() {
         let input = "foo.bar: u32";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::select_field_with_type_annotation(Expr::identifier("foo"), "bar", TypeName::U32), ""))
+            Ok(Expr::select_field_with_type_annotation(
+                Expr::identifier("foo"),
+                "bar",
+                TypeName::U32
+            ))
         );
     }
 
     #[test]
     fn test_select_field_from_record() {
         let input = "{foo: bar}.foo";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field(
-                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
-                    "foo"
-                ),
-                ""
+            Ok(Expr::select_field(
+                Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
+                "foo"
             ))
         );
     }
@@ -200,16 +208,13 @@ mod tests {
     #[test]
     fn test_select_field_from_record_with_type_annotation() {
         let input = "{foo: bar}.foo: u32";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field_with_type_annotation(
-                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
-                    "foo",
-                    TypeName::U32
-                ),
-                ""
+            Ok(Expr::select_field_with_type_annotation(
+                Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
+                "foo",
+                TypeName::U32
             ))
         );
     }
@@ -217,42 +222,60 @@ mod tests {
     #[test]
     fn test_nested_field_selection() {
         let input = "foo.bar.baz";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field(Expr::select_field(Expr::identifier("foo"), "bar"), "baz"),
-                ""
+            Ok(Expr::select_field(
+                Expr::select_field(Expr::identifier("foo"), "bar"),
+                "baz"
             ))
         );
     }
 
     #[test]
     fn test_nested_field_selection_with_type_annotation() {
-        let input = "foo.bar.baz";
-        let result = rib_expr().easy_parse(input);
+        let input = "foo.bar.baz: u32";
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field_with_type_annotation(Expr::select_field(Expr::identifier("foo"), "bar"), "baz", TypeName::U32),
-                ""
+            Ok(Expr::select_field_with_type_annotation(
+                Expr::select_field(Expr::identifier("foo"), "bar"),
+                "baz",
+                TypeName::U32
             ))
         );
     }
 
+    #[test]
+    fn test_nested_field_selection_with_double_type_annotation() {
+        let input = "foo.bar: u32.baz: u32";
+        let result = Expr::from_text(input);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_recursive_select_index_in_select_field() {
         let input = "foo[0].bar[1]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_index(
-                    Expr::select_field(Expr::select_index(Expr::identifier("foo"), 0), "bar"),
-                    1
-                ),
-                ""
+            Ok(Expr::select_index(
+                Expr::select_field(Expr::select_index(Expr::identifier("foo"), 0), "bar"),
+                1
+            ))
+        );
+    }
+
+    #[test]
+    fn test_recursive_select_index_in_select_field_with_type_annotation() {
+        let input = "foo[0].bar[1]: u32";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::select_index_with_type_annotation(
+                Expr::select_field(Expr::select_index(Expr::identifier("foo"), 0), "bar"),
+                1,
+                TypeName::U32
             ))
         );
     }
@@ -260,45 +283,36 @@ mod tests {
     #[test]
     fn test_recursive_select_field_in_select_index() {
         let input = "foo.bar[0].baz";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field(
-                    Expr::select_index(Expr::select_field(Expr::identifier("foo"), "bar"), 0),
-                    "baz"
-                ),
-                ""
+            Ok(Expr::select_field(
+                Expr::select_index(Expr::select_field(Expr::identifier("foo"), "bar"), 0),
+                "baz"
             ))
         );
     }
 
     #[test]
     fn test_selection_field_with_binary_comparison_1() {
-        let result = rib_expr().easy_parse("foo.bar > \"bar\"");
+        let result = Expr::from_text("foo.bar > \"bar\"");
         assert_eq!(
             result,
-            Ok((
-                Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::literal("bar")
-                ),
-                ""
+            Ok(Expr::greater_than(
+                Expr::select_field(Expr::identifier("foo"), "bar"),
+                Expr::literal("bar")
             ))
         );
     }
 
     #[test]
     fn test_selection_field_with_binary_comparison_2() {
-        let result = rib_expr().easy_parse("foo.bar > 1");
+        let result = Expr::from_text("foo.bar > 1");
         assert_eq!(
             result,
-            Ok((
-                Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::untyped_number(BigDecimal::from(1))
-                ),
-                ""
+            Ok(Expr::greater_than(
+                Expr::select_field(Expr::identifier("foo"), "bar"),
+                Expr::untyped_number(BigDecimal::from(1))
             ))
         );
     }
@@ -306,19 +320,16 @@ mod tests {
     #[test]
     fn test_select_field_in_if_condition() {
         let input = "if foo.bar > 1 then foo.bar else foo.baz";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
-                    Expr::greater_than(
-                        Expr::select_field(Expr::identifier("foo"), "bar"),
-                        Expr::untyped_number(BigDecimal::from(1))
-                    ),
+            Ok(Expr::cond(
+                Expr::greater_than(
                     Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::select_field(Expr::identifier("foo"), "baz")
+                    Expr::untyped_number(BigDecimal::from(1))
                 ),
-                ""
+                Expr::select_field(Expr::identifier("foo"), "bar"),
+                Expr::select_field(Expr::identifier("foo"), "baz")
             ))
         );
     }
@@ -326,46 +337,43 @@ mod tests {
     #[test]
     fn test_selection_field_in_match_expr() {
         let input = "match foo { _ => bar, ok(x) => x, err(x) => x, none => foo, some(x) => x, foo => foo.bar }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo"),
-                    vec![
-                        MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
-                            ),
-                            Expr::identifier("x"),
+            Ok(Expr::pattern_match(
+                Expr::identifier("foo"),
+                vec![
+                    MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "ok",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
-                            ),
-                            Expr::identifier("x"),
+                        Expr::identifier("x"),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "err",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::identifier("foo"),
+                        Expr::identifier("x"),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor("none", vec![]),
+                        Expr::identifier("foo"),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "some",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
-                            ),
-                            Expr::identifier("x"),
-                        ),
-                        MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::identifier("foo"))),
-                            Expr::select_field(Expr::identifier("foo"), "bar"),
-                        ),
-                    ]
-                ),
-                ""
+                        Expr::identifier("x"),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::Literal(Box::new(Expr::identifier("foo"))),
+                        Expr::select_field(Expr::identifier("foo"), "bar"),
+                    ),
+                ]
             ))
         );
     }

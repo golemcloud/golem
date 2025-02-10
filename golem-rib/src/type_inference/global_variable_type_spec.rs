@@ -488,7 +488,7 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::SelectField(Box::new(expr.clone()), field.to_string(),None,  new_type),
+                    Expr::SelectField(Box::new(expr.clone()), field.to_string(), None, new_type),
                     continue_search,
                 ));
             } else {
@@ -527,8 +527,12 @@ mod internal {
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
-        let new_select_index =
-            Expr::SelectIndex(Box::new(expr.0.clone()), *index, None, current_index_type.clone());
+        let new_select_index = Expr::SelectIndex(
+            Box::new(expr.0.clone()),
+            *index,
+            None,
+            current_index_type.clone(),
+        );
         temp_stack.push_front((new_select_index, false));
 
         Ok(())
