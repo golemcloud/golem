@@ -121,6 +121,21 @@ mod type_inference_tests {
 
         #[test]
         async fn test_inline_type_annotation_1() {
+            let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
+            let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        async fn test_inline_type_annotation_2() {
             let type_spec = GlobalVariableTypeSpec {
                 variable_id: VariableId::global("foo".to_string()),
                 path: Path::from_elems(vec!["bar"]),
