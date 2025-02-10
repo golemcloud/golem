@@ -22,10 +22,10 @@ use crate::preview2::golem_api_0_2_x::host::GetWorkers;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     ComponentId, ComponentVersion, FilterComparator, Host, HostGetWorkers, OplogIndex,
-    PersistenceLevel, PromiseId, RetryPolicy, StringFilterComparator, UpdateMode, Uuid,
-    WorkerAllFilter, WorkerAnyFilter, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerId,
-    WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter,
+    PersistenceLevel, PromiseId, RetryPolicy, RevertWorkerTarget, StringFilterComparator,
+    UpdateMode, Uuid, WorkerAllFilter, WorkerAnyFilter, WorkerCreatedAtFilter, WorkerEnvFilter,
+    WorkerId, WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus,
+    WorkerStatusFilter, WorkerVersionFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
@@ -217,6 +217,37 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     (source_worker_id, target_worker_id, oplog_idx_cut_off),
                     result,
                 )
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        Ok(())
+    }
+
+    async fn revert_worker(
+        &mut self,
+        worker_id: WorkerId,
+        revert_target: RevertWorkerTarget,
+    ) -> anyhow::Result<()> {
+        let durability = Durability::<(), SerializableError>::new(
+            self,
+            "golem::api",
+            "revert_worker",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            let worker_id: golem_common::model::WorkerId = worker_id.into();
+            let revert_target: golem_service_base::model::RevertWorkerTarget = revert_target.into();
+
+            let result = self
+                .worker_proxy()
+                .revert(worker_id.clone(), revert_target.clone())
+                .await;
+            durability
+                .persist(self, (worker_id, revert_target), result)
                 .await
         } else {
             durability.replay(self).await
@@ -837,6 +868,27 @@ impl From<uuid::Uuid> for Uuid {
         Uuid {
             high_bits,
             low_bits,
+        }
+    }
+}
+
+impl From<RevertWorkerTarget> for golem_service_base::model::RevertWorkerTarget {
+    fn from(value: RevertWorkerTarget) -> Self {
+        match value {
+            RevertWorkerTarget::RevertToOplogIndex(index) => {
+                golem_service_base::model::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_service_base::model::RevertToOplogIndex {
+                        last_oplog_index: golem_common::model::OplogIndex::from_u64(index),
+                    },
+                )
+            }
+            RevertWorkerTarget::RevertLastInvocations(n) => {
+                golem_service_base::model::RevertWorkerTarget::RevertLastInvocations(
+                    golem_service_base::model::RevertLastInvocations {
+                        number_of_invocations: n,
+                    },
+                )
+            }
         }
     }
 }

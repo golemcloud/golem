@@ -55,6 +55,7 @@ use golem_common::model::{
     WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
+use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, result, result_err, str, tuple, u16, u32, u64, u8,
     unit_case, variant,
@@ -899,6 +900,31 @@ fn encode_host_function_request_as_value(
                 ]),
             ))
         }
+        "golem::api::fork-worker" => {
+            let payload: (WorkerId, WorkerId, OplogIndex) = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(
+                Value::Record(vec![
+                    payload.0.into_value(),
+                    payload.1.into_value(),
+                    payload.2.into_value(),
+                ]),
+                record(vec![
+                    field("source_worker_id", WorkerId::get_type()),
+                    field("target_worker_id", WorkerId::get_type()),
+                    field("oplog_idx_cut_off", u64()),
+                ]),
+            ))
+        }
+        "golem::api::revert-worker" => {
+            let payload: (WorkerId, RevertWorkerTarget) = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(
+                Value::Record(vec![payload.0.into_value(), payload.1.into_value()]),
+                record(vec![
+                    field("worker_id", WorkerId::get_type()),
+                    field("target", RevertWorkerTarget::get_type()),
+                ]),
+            ))
+        }
         "http::types::incoming_body_stream::skip" => {
             let payload: SerializableHttpRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
@@ -1184,6 +1210,14 @@ fn encode_host_function_response_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem::api::update-worker" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::fork-worker" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::revert-worker" => {
             let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
