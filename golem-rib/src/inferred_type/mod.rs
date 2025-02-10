@@ -58,7 +58,7 @@ pub enum InferredType {
     Sequence(Vec<InferredType>),
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum InferredNumber {
     S8,
     U8,
@@ -81,72 +81,119 @@ impl Display for InferredNumber {
 
 impl InferredType {
     pub fn as_number(&self) -> Result<InferredNumber, String> {
-        match self {
-            InferredType::Bool => Err("Expected InferredNumber. Found bool".to_string()),
-            InferredType::S8 => Ok(InferredNumber::S8),
-            InferredType::U8 => Ok(InferredNumber::U8),
-            InferredType::S16 => Ok(InferredNumber::S16),
-            InferredType::U16 => Ok(InferredNumber::U16),
-            InferredType::S32 => Ok(InferredNumber::S32),
-            InferredType::U32 => Ok(InferredNumber::U32),
-            InferredType::S64 => Ok(InferredNumber::S64),
-            InferredType::U64 => Ok(InferredNumber::U64),
-            InferredType::F32 => Ok(InferredNumber::F32),
-            InferredType::F64 => Ok(InferredNumber::F64),
-            InferredType::Chr => Err("Expected a number type. Found char".to_string()),
-            InferredType::Str => Err("Expected a number type. Found string".to_string()),
-            InferredType::List(_) => Err("Expected a number type. Found list".to_string()),
-            InferredType::Tuple(_) => Err("Expected a number type. Found tuple".to_string()),
-            InferredType::Record(_) => Err("Expected a number type. Found record".to_string()),
-            InferredType::Flags(_) => Err("Expected a number type. Found flags".to_string()),
-            InferredType::Enum(_) => Err("Expected a number type. Found enum".to_string()),
-            InferredType::Option(_) => Err("Expected a number type. Found option".to_string()),
-            InferredType::Result { .. } => Err("Expected a number type. Found result".to_string()),
-            InferredType::Variant(_) => Err("Expected a number type. Found variant".to_string()),
-            InferredType::Resource { .. } => {
-                Err("Expected a number type. Found resource".to_string())
-            }
-            InferredType::OneOf(all_variables) => {
-                let mut found: Option<InferredNumber> = None;
+        fn go(inferred_type: &InferredType, found: &mut Vec<InferredNumber>) -> Result<(), String> {
+            match inferred_type {
+                InferredType::S8 => {
+                    found.push(InferredNumber::S8);
+                    Ok(())
+                }
+                InferredType::U8 => {
+                    found.push(InferredNumber::U8);
+                    Ok(())
+                }
+                InferredType::S16 => {
+                    found.push(InferredNumber::S16);
+                    Ok(())
+                }
+                InferredType::U16 => {
+                    found.push(InferredNumber::U16);
+                    Ok(())
+                }
+                InferredType::S32 => {
+                    found.push(InferredNumber::U16);
+                    Ok(())
+                }
+                InferredType::U32 => {
+                    found.push(InferredNumber::U32);
+                    Ok(())
+                }
+                InferredType::S64 => {
+                    found.push(InferredNumber::S64);
+                    Ok(())
+                }
+                InferredType::U64 => {
+                    found.push(InferredNumber::U64);
+                    Ok(())
+                }
+                InferredType::F32 => {
+                    found.push(InferredNumber::F32);
+                    Ok(())
+                }
+                InferredType::F64 => {
+                    found.push(InferredNumber::F64);
+                    Ok(())
+                }
+                InferredType::AllOf(all_variables) => {
+                    let mut previous: Option<InferredNumber> = None;
+                    for variable in all_variables {
+                        go(variable, found)?;
 
-                for variable in all_variables {
-                    let number = variable.as_number()?;
-                    if let Some(found) = &found {
-                        if found != &number {
-                            return Err(format!(
-                                "Expected the same type of number. But found {}, {}",
-                                found, number
-                            ));
+                        if let Some(current) = found.first() {
+                            match &previous {
+                                None => {
+                                    previous = Some(current.clone());
+                                    found.push(current.clone());
+                                }
+                                Some(previous) => {
+                                    if previous != current {
+                                        return Err(format!(
+                                            "Expected the same type of number. But found {}, {}",
+                                            current, previous
+                                        ));
+                                    }
+
+                                    found.push(current.clone());
+                                }
+                            }
+                        } else {
+                            return Err("Failed to get a number".to_string());
                         }
-                    } else {
-                        found = Some(number);
                     }
+
+                    Ok(())
+                }
+                InferredType::Bool => Err(format!("Expected a number type. Found {}", "bool")),
+                InferredType::Chr => Err(format!("Expected a number type. Found {}", "char")),
+                InferredType::Str => Err(format!("Expected a number type. Found {}", "string")),
+                InferredType::List(_) => Err(format!("Expected a number type. Found {}", "tuple")),
+                InferredType::Tuple(_) => {
+                    Err(format!("Expected a number type. Found {}", "record"))
+                }
+                InferredType::Record(_) => {
+                    Err(format!("Expected a number type. Found {}", "flags"))
+                }
+                InferredType::Flags(_) => Err(format!("Expected a number type. Found {}", "enum")),
+                InferredType::Enum(_) => Err(format!("Expected a number type. Found {}", "option")),
+                InferredType::Option(_) => {
+                    Err(format!("Expected a number type. Found {}", "result"))
+                }
+                InferredType::Result { .. } => {
+                    Err(format!("Expected a number type. Found {}", "result"))
+                }
+                InferredType::Variant(_) => {
+                    Err(format!("Expected a number type. Found {}", "variant"))
                 }
 
-                found.ok_or("Expected Number. Found other types".to_string())
-            }
-            InferredType::AllOf(all_variables) => {
-                let mut found: Option<InferredNumber> = None;
-
-                for variable in all_variables {
-                    let number = variable.as_number()?;
-                    if let Some(found) = &found {
-                        if found != &number {
-                            return Err(format!(
-                                "Expected the same type of number. But found {}, {}",
-                                found, number
-                            ));
-                        }
+                InferredType::OneOf(_) => {
+                    if found.is_empty() {
+                        Err("Not a number.".to_string())
                     } else {
-                        found = Some(number);
+                        Ok(())
                     }
                 }
-
-                found.ok_or("Expected Number. Found other types".to_string())
+                InferredType::Unknown => Err("Expected Number. Type Unknown".to_string()),
+                InferredType::Sequence(_) => {
+                    Err(format!("Expected a number type. Found {}", "sequence"))
+                }
+                InferredType::Resource { .. } => {
+                    Err(format!("Expected a number type. Found {}", "resource"))
+                }
             }
-            InferredType::Unknown => Err("Expected Number. Type Unknown".to_string()),
-            InferredType::Sequence(_) => Err("Expected Number. Found Sequence".to_string()),
         }
+
+        let mut found: Vec<InferredNumber> = vec![];
+        go(self, &mut found)?;
+        found.first().cloned().ok_or("Failed".to_string())
     }
 
     pub fn number() -> InferredType {
