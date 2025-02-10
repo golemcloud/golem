@@ -79,7 +79,7 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_1_2 as golem_rpc_0_1_x;
+pub use bindings::golem::rpc0_1_3 as golem_rpc_0_1_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
@@ -111,6 +111,7 @@ mod generated {
         with: {
             "golem:rpc/types/wasm-rpc": super::WasmRpcEntry,
             "golem:rpc/types/future-invoke-result": super::FutureInvokeResultEntry,
+            "golem:rpc/types/cancellation-token": super::CancellationTokenEntry,
             "wasi:io/poll/pollable": super::Pollable,
         },
         wasmtime_crate: ::wasmtime
@@ -118,7 +119,7 @@ mod generated {
 }
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_1_2 as golem_rpc_0_1_x;
+pub use generated::golem::rpc0_1_3 as golem_rpc_0_1_x;
 
 #[cfg(feature = "host-bindings")]
 pub use golem_rpc_0_1_x::types::{
@@ -160,6 +161,11 @@ impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
     async fn ready(&mut self) {
         self.payload.ready().await
     }
+}
+
+#[cfg(feature = "host-bindings")]
+pub struct CancellationTokenEntry {
+    pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }
 
 #[cfg(all(feature = "typeinfo", feature = "protobuf"))]
