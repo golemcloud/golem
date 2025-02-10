@@ -120,6 +120,21 @@ mod type_inference_tests {
         use test_r::test;
 
         #[test]
+        async fn test_inline_type_annotation_numbers_backward_compatible() {
+            let mut old = Expr::from_text(r#"1u32"#).unwrap();
+
+            let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+
+            // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
+            let mut new = Expr::from_text(r#"1: u32"#).unwrap();
+            let result = new.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
         async fn test_inline_type_annotation_1() {
             let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
