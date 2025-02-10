@@ -267,11 +267,11 @@ mod internal {
                 );
             }
 
-            Expr::SelectField(record_expr, field_name, _) => {
+            Expr::SelectField(record_expr, field_name, _, _) => {
                 stack.push(ExprState::from_expr(record_expr.deref()));
                 instructions.push(RibIR::SelectField(field_name.clone()));
             }
-            Expr::SelectIndex(sequence_expr, index, _) => {
+            Expr::SelectIndex(sequence_expr, index,_, _) => {
                 stack.push(ExprState::from_expr(sequence_expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));
             }
@@ -1144,7 +1144,7 @@ mod compiler_tests {
             ]),
         );
 
-        let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
+        let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), None, InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1191,7 +1191,7 @@ mod compiler_tests {
             InferredType::List(Box::new(InferredType::Str)),
         );
 
-        let expr = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
+        let expr = Expr::SelectIndex(Box::new(sequence), 1, None, InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();

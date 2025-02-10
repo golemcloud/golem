@@ -71,7 +71,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::SelectField(expr, field, current_inferred_type) => {
+            Expr::SelectField(expr, field, _, current_inferred_type) => {
                 internal::handle_select_field(
                     expr,
                     field,
@@ -80,7 +80,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 )?;
             }
 
-            Expr::SelectIndex(expr, index, current_inferred_type) => {
+            Expr::SelectIndex(expr, index, _, current_inferred_type) => {
                 internal::handle_select_index(
                     expr,
                     index,
@@ -446,6 +446,7 @@ mod internal {
         let new_select_field = Expr::SelectField(
             Box::new(expr.clone()),
             field.to_string(),
+            None,
             current_field_type.merge(selection_field_type),
         );
 
@@ -469,6 +470,7 @@ mod internal {
         let new_select_index = Expr::SelectIndex(
             Box::new(expr.clone()),
             *index,
+            None,
             current_index_type.merge(list_type),
         );
         inferred_type_stack.push_front(new_select_index);
@@ -1121,6 +1123,7 @@ mod type_pull_up_tests {
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     0,
+                    None,
                     InferredType::U64,
                 )),
                 Box::new(Expr::SelectIndex(
@@ -1129,6 +1132,7 @@ mod type_pull_up_tests {
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     1,
+                    None,
                     InferredType::U64,
                 )),
                 InferredType::Bool,
@@ -1139,6 +1143,7 @@ mod type_pull_up_tests {
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 0,
+                None,
                 InferredType::U64,
             )),
             Box::new(Expr::SelectIndex(
@@ -1147,6 +1152,7 @@ mod type_pull_up_tests {
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 1,
+                None,
                 InferredType::U64,
             )),
             InferredType::U64,
@@ -1320,6 +1326,7 @@ mod type_pull_up_tests {
                                     ]),
                                 )),
                                 "foo".to_string(),
+                                None,
                                 InferredType::Str,
                             )],
                             method: "checkout".to_string(),
@@ -1378,6 +1385,7 @@ mod type_pull_up_tests {
                                 vec![("bar".to_string(), InferredType::Str)],
                             ))),
                             "bar".to_string(),
+                            None,
                             InferredType::Unknown,
                         )))],
                     ),
@@ -1386,6 +1394,7 @@ mod type_pull_up_tests {
                             vec![("qux".to_string(), InferredType::Str)],
                         ))),
                         "qux".to_string(),
+                        None,
                         InferredType::Unknown,
                     )),
                 },
@@ -1400,6 +1409,7 @@ mod type_pull_up_tests {
                                 )]),
                             )),
                             "corge".to_string(),
+                            None,
                             InferredType::Unknown,
                         )))],
                     ),
@@ -1410,6 +1420,7 @@ mod type_pull_up_tests {
                             ])),
                         ),
                         "garply".to_string(),
+                        None,
                         InferredType::Unknown,
                     )),
                 },
@@ -1431,6 +1442,7 @@ mod type_pull_up_tests {
                         InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
                     )),
                     "bar".to_string(),
+                    None,
                     InferredType::Str,
                 )),
                 vec![
@@ -1446,6 +1458,7 @@ mod type_pull_up_tests {
                                     )]),
                                 )),
                                 "bar".to_string(),
+                                None,
                                 InferredType::Str,
                             )))],
                         ),
@@ -1455,6 +1468,7 @@ mod type_pull_up_tests {
                                 InferredType::Record(vec![("qux".to_string(), InferredType::Str)]),
                             )),
                             "qux".to_string(),
+                            None,
                             InferredType::Str,
                         )),
                     },
@@ -1470,6 +1484,7 @@ mod type_pull_up_tests {
                                     )]),
                                 )),
                                 "corge".to_string(),
+                                None,
                                 InferredType::Str,
                             )))],
                         ),
@@ -1482,6 +1497,7 @@ mod type_pull_up_tests {
                                 )]),
                             )),
                             "garply".to_string(),
+                            None,
                             InferredType::Str,
                         )),
                     },

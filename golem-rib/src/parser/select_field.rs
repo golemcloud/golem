@@ -33,11 +33,16 @@ parser! {
 
 mod internal {
     use combine::parser::char::{char, digit, letter};
-    use combine::{many1, ParseError};
+    use combine::{many1, optional, ParseError};
 
     use crate::parser::errors::RibParseError;
     use crate::parser::select_index::select_index;
-
+    use combine::{
+        attempt,
+        parser::char::{char as char_, spaces},
+        Parser,
+    };
+    use crate::parser::type_name::parse_type_name;
     use super::*;
 
     // We make base_expr and the children strict enough carefully, to avoid
@@ -58,29 +63,53 @@ mod internal {
                     attempt(select_index()),
                     attempt(identifier()),
                 )),
-            )
-                .map(|(base, _, opt)| {
-                    build_selector(base, opt).expect("Invalid field/index selection")
-                }),
+                optional(
+                    char_(':')
+                        .skip(spaces())
+                        .with(parse_type_name())
+                        .skip(spaces()),
+                )
+            ).and_then(|(base, _, opt, optional)| {
+
+                let expr = build_selector(base, opt);
+
+                match expr {
+                    Some(Expr::SelectField(field, name, _, inferred_typ)) => {
+                        if let Some(typ) = optional {
+                            Ok(Expr::SelectField(field, name, Some(typ), inferred_typ))
+                        } else {
+                            Ok(Expr::SelectField(field, name, None, inferred_typ))
+                        }
+                    }
+
+                    Some(Expr::SelectIndex(field, index, _, inferred_type)) => {
+                        if let Some(typ) = optional {
+                            Ok(Expr::SelectIndex(field, index, Some(typ), inferred_type))
+                        } else {
+                            Ok(Expr::SelectIndex(field, index, None, inferred_type))
+                        }
+                    }
+
+                    _ => Err(RibParseError::Message("Invalid Select Index".to_string()))
+                }
+            }),
         )
     }
 
     // To avoid stack overflow, we reverse the field selection to avoid direct recursion to be the first step
     // but we offload this recursion in `build-selector`.
     // This implies the last expression after a dot could be an index selection or a field selection
-    // and with `inner select` we accumulate the selection towards the left side
-    // This will not affect the grammer, however, refactoring this logic should fail for some tests
+    // and with `inner select` we accumulate the selection towards the left side.
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
-        // a.b
         match nest {
             Expr::Identifier(variable_id, _) => {
                 Some(Expr::select_field(base, variable_id.name().as_str()))
             }
-            Expr::SelectField(second, last, _) => {
+            Expr::SelectField(second, last, _, _) => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::select_field(inner_select, last.as_str()))
             }
-            Expr::SelectIndex(second, last_index, _) => {
+            Expr::SelectIndex(second, last_index, _, _) => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::select_index(inner_select, last_index))
             }
@@ -130,6 +159,7 @@ mod tests {
 
     use crate::expr::*;
     use crate::parser::rib_expr::rib_expr;
+    use crate::TypeName;
 
     #[test]
     fn test_select_field() {
@@ -138,6 +168,16 @@ mod tests {
         assert_eq!(
             result,
             Ok((Expr::select_field(Expr::identifier("foo"), "bar"), ""))
+        );
+    }
+
+    #[test]
+    fn test_select_field_with_inline_type() {
+        let input = "foo.bar: u32";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((Expr::select_field_with_type_annotation(Expr::identifier("foo"), "bar", TypeName::U32), ""))
         );
     }
 
@@ -158,6 +198,23 @@ mod tests {
     }
 
     #[test]
+    fn test_select_field_from_record_with_type_annotation() {
+        let input = "{foo: bar}.foo: u32";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::select_field_with_type_annotation(
+                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
+                    "foo",
+                    TypeName::U32
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
     fn test_nested_field_selection() {
         let input = "foo.bar.baz";
         let result = rib_expr().easy_parse(input);
@@ -169,6 +226,20 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn test_nested_field_selection_with_type_annotation() {
+        let input = "foo.bar.baz";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::select_field_with_type_annotation(Expr::select_field(Expr::identifier("foo"), "bar"), "baz", TypeName::U32),
+                ""
+            ))
+        );
+    }
+
 
     #[test]
     fn test_recursive_select_index_in_select_field() {

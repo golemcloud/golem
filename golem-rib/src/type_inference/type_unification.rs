@@ -235,7 +235,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::SelectField(expr, _, inferred_type) => {
+            Expr::SelectField(expr, _, _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -249,7 +249,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::SelectIndex(expr, _, inferred_type) => {
+            Expr::SelectIndex(expr, _,  _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 

@@ -92,12 +92,12 @@ impl<W: Write> Writer<W> {
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField(expr, field_name, _) => {
+            Expr::SelectField(expr, field_name, _, _) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
                 self.write_str(field_name)
             }
-            Expr::SelectIndex(expr, index, _) => {
+            Expr::SelectIndex(expr, index, _, _) => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;

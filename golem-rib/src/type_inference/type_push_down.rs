@@ -24,7 +24,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectField(expr, field, inferred_type) => {
+            Expr::SelectField(expr, field, _, inferred_type) => {
                 let field_type = inferred_type.clone();
                 let record_type = vec![(field.to_string(), field_type)];
                 let inferred_record_type = InferredType::Record(record_type);
@@ -33,7 +33,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex(expr, _, inferred_type) => {
+            Expr::SelectIndex(expr, _, _, inferred_type) => {
                 let field_type = inferred_type.clone();
                 let inferred_record_type = InferredType::List(Box::new(field_type));
                 expr.add_infer_type_mut(inferred_record_type);

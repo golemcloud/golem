@@ -46,8 +46,8 @@ mod internal {
         match expr {
             Expr::Identifier(_, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)

@@ -12,13 +12,13 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Let(_, _, expr, _) => {
                 queue.push_back(expr);
             }
-            Expr::SelectField(expr, field, inferred_type) => {
+            Expr::SelectField(expr, field, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_field(field.clone()));
                 }
             }
-            Expr::SelectIndex(expr, index, inferred_type) => {
+            Expr::SelectIndex(expr, index, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_index(*index));

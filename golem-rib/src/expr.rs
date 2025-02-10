@@ -37,8 +37,8 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
-    SelectField(Box<Expr>, String, InferredType),
-    SelectIndex(Box<Expr>, usize, InferredType),
+    SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
+    SelectIndex(Box<Expr>, usize,  Option<TypeName>, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
@@ -158,7 +158,7 @@ impl Expr {
     }
 
     pub fn is_select_field(&self) -> bool {
-        matches!(self, Expr::SelectField(_, _, _))
+        matches!(self, Expr::SelectField(_, _, _, _))
     }
 
     pub fn is_if_else(&self) -> bool {
@@ -174,7 +174,7 @@ impl Expr {
     }
 
     pub fn is_select_index(&self) -> bool {
-        matches!(self, Expr::SelectIndex(_, _, _))
+        matches!(self, Expr::SelectIndex(_, _, _, _))
     }
 
     pub fn is_boolean(&self) -> bool {
@@ -473,12 +473,22 @@ impl Expr {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),
+            None,
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn select_field_with_type_annotation(expr: Expr, field: impl AsRef<str>, type_name: TypeName) -> Self {
+        Expr::SelectField(
+            Box::new(expr),
+            field.as_ref().to_string(),
+            Some(type_name),
             InferredType::Unknown,
         )
     }
 
     pub fn select_index(expr: Expr, index: usize) -> Self {
-        Expr::SelectIndex(Box::new(expr), index, InferredType::Unknown)
+        Expr::SelectIndex(Box::new(expr), index, None, InferredType::Unknown)
     }
 
     pub fn get_tag(expr: Expr) -> Self {
@@ -509,8 +519,8 @@ impl Expr {
     pub fn inferred_type(&self) -> InferredType {
         match self {
             Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
@@ -663,8 +673,8 @@ impl Expr {
         match self {
             Expr::Identifier(_, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
@@ -711,8 +721,8 @@ impl Expr {
         match self {
             Expr::Identifier(_, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
@@ -814,9 +824,9 @@ impl Number {
             AnalysedType::S32(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
             AnalysedType::S64(_) => self.value.to_i64().map(|v| v.into_value_and_type()),
             AnalysedType::U8(_) => self.value.to_u8().map(|v| v.into_value_and_type()),
-            AnalysedType::S8(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
+            AnalysedType::S8(_) => self.value.to_i8().map(|v| v.into_value_and_type()),
             AnalysedType::U16(_) => self.value.to_u16().map(|v| v.into_value_and_type()),
-            AnalysedType::S16(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
+            AnalysedType::S16(_) => self.value.to_i16().map(|v| v.into_value_and_type()),
             _ => None,
         }
     }
@@ -1377,7 +1387,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::SelectField(expr, field, _) => {
+                Expr::SelectField(expr, field, _, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
                             expr: Some(Box::new((*expr).into())),
@@ -1385,7 +1395,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::SelectIndex(expr, index, _) => {
+                Expr::SelectIndex(expr, index, _, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
                             expr: Some(Box::new((*expr).into())),

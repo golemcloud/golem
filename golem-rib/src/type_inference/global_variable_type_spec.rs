@@ -80,7 +80,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
             expr @ Expr::Identifier(variable_id, _) => {
                 if variable_id == &type_spec.variable_id {
                     if path.is_empty() {
-                        let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _)) if inner.as_ref() == expr);
+                        let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
 
                         if continue_traverse {
                             temp_stack.push_front((expr.clone(), true));
@@ -101,8 +101,8 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 }
             }
 
-            outer @ Expr::SelectField(inner_expr, field, current_inferred_type) => {
-                let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _)) if inner.as_ref() == outer);
+            outer @ Expr::SelectField(inner_expr, field, _, current_inferred_type) => {
+                let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
 
                 internal::handle_select_field(
                     inner_expr,
@@ -123,7 +123,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 temp_stack.push_front((expr.clone(), false));
             }
 
-            Expr::SelectIndex(expr, index, current_inferred_type) => {
+            Expr::SelectIndex(expr, index, _, current_inferred_type) => {
                 internal::handle_select_index(expr, index, current_inferred_type, &mut temp_stack)?;
             }
 
@@ -488,7 +488,7 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::SelectField(Box::new(expr.clone()), field.to_string(), new_type),
+                    Expr::SelectField(Box::new(expr.clone()), field.to_string(),None,  new_type),
                     continue_search,
                 ));
             } else {
@@ -496,6 +496,7 @@ mod internal {
                     Expr::SelectField(
                         Box::new(expr.clone()),
                         field.to_string(),
+                        None,
                         current_field_type.clone(),
                     ),
                     true,
@@ -506,6 +507,7 @@ mod internal {
                 Expr::SelectField(
                     Box::new(expr.clone()),
                     field.to_string(),
+                    None,
                     current_field_type.clone(),
                 ),
                 false,
@@ -526,7 +528,7 @@ mod internal {
             .unwrap_or((original_selection_expr.clone(), false));
 
         let new_select_index =
-            Expr::SelectIndex(Box::new(expr.0.clone()), *index, current_index_type.clone());
+            Expr::SelectIndex(Box::new(expr.0.clone()), *index, None, current_index_type.clone());
         temp_stack.push_front((new_select_index, false));
 
         Ok(())
@@ -955,6 +957,7 @@ mod tests {
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -981,6 +984,7 @@ mod tests {
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -1007,6 +1011,7 @@ mod tests {
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -1051,12 +1056,14 @@ mod tests {
                                 )]),
                             )),
                             "bar".to_string(),
+                            None,
                             InferredType::Record(vec![
                                 ("number".to_string(), InferredType::U64),
                                 ("user-id".to_string(), InferredType::Str),
                             ]),
                         )),
                         "user-id".to_string(),
+                        None,
                         InferredType::Str,
                     )),
                     InferredType::Unknown,
@@ -1077,12 +1084,14 @@ mod tests {
                                 )]),
                             )),
                             "bar".to_string(),
+                            None,
                             InferredType::Record(vec![
                                 ("number".to_string(), InferredType::U64),
                                 ("user-id".to_string(), InferredType::Str),
                             ]),
                         )),
                         "number".to_string(),
+                        None,
                         InferredType::U64,
                     )),
                     InferredType::Unknown,

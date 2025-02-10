@@ -7,8 +7,8 @@ use std::ops::Deref;
 pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_back(&mut *expr),
-        Expr::SelectField(expr, _, _) => queue.push_back(&mut *expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_back(&mut *expr),
+        Expr::SelectField(expr, _, _, _) => queue.push_back(&mut *expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_back(&mut *expr),
         Expr::Sequence(exprs, _) => queue.extend(exprs.iter_mut()),
         Expr::Record(exprs, _) => queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr)),
         Expr::Tuple(exprs, _) => queue.extend(exprs.iter_mut()),
@@ -122,8 +122,8 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
 pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_back(expr),
-        Expr::SelectField(expr, _, _) => queue.push_back(expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_back(expr),
+        Expr::SelectField(expr, _,  _, _) => queue.push_back(expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_back(expr),
         Expr::Sequence(exprs, _) => queue.extend(exprs.iter()),
         Expr::Record(exprs, _) => queue.extend(exprs.iter().map(|(_, expr)| expr.deref())),
         Expr::Tuple(exprs, _) => queue.extend(exprs.iter()),
@@ -234,8 +234,8 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
 pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_front(&mut *expr),
-        Expr::SelectField(expr, _, _) => queue.push_front(&mut *expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_front(&mut *expr),
+        Expr::SelectField(expr, _, _, _) => queue.push_front(&mut *expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_front(&mut *expr),
         Expr::Sequence(exprs, _) => {
             for expr in exprs.iter_mut() {
                 queue.push_front(expr);
