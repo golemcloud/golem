@@ -472,7 +472,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(long, conflicts_with = "number_of_invocations")]
         last_oplog_index: Option<u64>,
 
-        #[arg(long, conflicts_with = "to_oplog_index")]
+        #[arg(long, conflicts_with = "last_oplog_index")]
         number_of_invocations: Option<u64>,
     },
 }
