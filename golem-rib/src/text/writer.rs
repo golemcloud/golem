@@ -80,7 +80,15 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display("\"")
             }
-            Expr::Identifier(identifier, _, _) => self.write_str(identifier.name()),
+            Expr::Identifier(identifier, type_name, _) => {
+                self.write_str(identifier.name())?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
+            }
 
             Expr::Let(variable_id, type_name, expr, _) => {
                 self.write_str("let ")?;
@@ -92,16 +100,28 @@ impl<W: Write> Writer<W> {
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField(expr, field_name, _, _) => {
+            Expr::SelectField(expr, field_name, type_name, _) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
-                self.write_str(field_name)
+                self.write_str(field_name)?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
-            Expr::SelectIndex(expr, index, _, _) => {
+            Expr::SelectIndex(expr, index, type_name, _) => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;
-                self.write_display("]")
+                self.write_display("]")?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
             Expr::Sequence(sequence, _) => {
                 self.write_display("[")?;

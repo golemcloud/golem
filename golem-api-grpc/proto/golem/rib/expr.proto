@@ -54,11 +54,13 @@ message LetExpr {
 message SelectFieldExpr {
   string field = 1;
   Expr expr = 2;
+  optional TypeName type_name = 3;
 }
 
 message SelectIndexExpr {
   uint64 index = 1;
   Expr expr = 2;
+  optional TypeName type_name = 3;
 }
 
 message SequenceExpr {
@@ -98,6 +100,7 @@ message FlagsExpr {
 
 message IdentifierExpr {
   string name = 1;
+  optional TypeName type_name = 2;
 }
 
 message BooleanExpr {

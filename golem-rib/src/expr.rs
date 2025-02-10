@@ -1187,8 +1187,16 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => Expr::literal(value),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
-                golem_api_grpc::proto::golem::rib::IdentifierExpr { name },
-            ) => Expr::identifier(name.as_str()),
+                golem_api_grpc::proto::golem::rib::IdentifierExpr { name, type_name },
+            ) => {
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                if let Some(type_name) = type_name {
+                    Expr::identifier_with_type_annotation(name.as_str(), type_name)
+                } else {
+                    Expr::identifier(name.as_str())
+                }
+            }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
@@ -1417,19 +1425,21 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::SelectField(expr, field, _, _) => {
+                Expr::SelectField(expr, field, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
                             expr: Some(Box::new((*expr).into())),
                             field,
+                            type_name: type_name.map(|t| t.into()),
                         }),
                     ))
                 }
-                Expr::SelectIndex(expr, index, _, _) => {
+                Expr::SelectIndex(expr, index, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
                             expr: Some(Box::new((*expr).into())),
                             index: index as u64,
+                            type_name: type_name.map(|t| t.into()),
                         }),
                     ))
                 }
@@ -1481,10 +1491,11 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::FlagsExpr { values },
                     ))
                 }
-                Expr::Identifier(variable_id, _, _) => {
+                Expr::Identifier(variable_id, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
                         golem_api_grpc::proto::golem::rib::IdentifierExpr {
                             name: variable_id.name(),
+                            type_name: type_name.map(|t| t.into()),
                         },
                     ))
                 }
