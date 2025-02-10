@@ -713,6 +713,11 @@ mod internal {
             operation.extensions.insert("x-golem-security-schemes".to_string(), serde_json::Value::Array(sec_array));
         }
 
+        if operation.operation_id.is_none() || operation.operation_id.as_ref().unwrap().trim().is_empty() {
+            let sanitized_path = route.path.to_string().replace("/", "_").replace("{", "").replace("}", "");
+            let generated_op_id = format!("{}_{}", route.method.to_string().to_lowercase(), sanitized_path);
+            operation.operation_id = Some(generated_op_id);
+        }
         Ok(operation)
     }
 }
@@ -720,6 +725,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use test_r::test;
+    use crate::gateway_api_definition::http::http_oas_api_definition::internal;
 
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
@@ -731,16 +737,23 @@ mod tests {
     use serde_json::json;
     use indexmap::IndexMap;
 
+    fn verify_openapi_schema(schema: &openapiv3::OpenAPI) {
+        let json_str = serde_json::to_string_pretty(&schema).expect("Failed to serialize OpenAPI schema");
+        let _deserialized: openapiv3::OpenAPI = serde_json::from_str(&json_str).expect("Failed to deserialize OpenAPI schema");
+    }
+
     #[test]
     fn test_get_route_with_cors_preflight_binding() {
         let path_item = Operation {
-            extensions: vec![(
-                "x-golem-api-gateway-binding".to_string(),
-                json!({
-                    "binding-type": "cors-preflight",
-                    "response" : "{Access-Control-Allow-Origin: \"apple.com\"}"
-                }),
-            )]
+            extensions: vec![
+                (
+                    "x-golem-api-gateway-binding".to_string(),
+                    json!({
+                        "binding-type": "cors-preflight",
+                        "response" : "{Access-Control-Allow-Origin: \"apple.com\"}"
+                    })
+                )
+            ]
             .into_iter()
             .collect(),
             ..Default::default()
@@ -748,7 +761,7 @@ mod tests {
 
         let path_pattern = AllPathPatterns::parse("/test").unwrap();
 
-        let result = get_route_from_path_item("options", &path_item, &path_pattern);
+        let result = internal::get_route_from_path_item("options", &path_item, &path_pattern);
 
         let expected = expected_route_with_cors_preflight_binding(&path_pattern);
         assert_eq!(result, Ok(expected));
@@ -757,12 +770,14 @@ mod tests {
     #[test]
     fn test_get_route_with_cors_preflight_binding_default_response() {
         let path_item = Operation {
-            extensions: vec![(
-                "x-golem-api-gateway-binding".to_string(),
-                json!({
-                    "binding-type": "cors-preflight"
-                }),
-            )]
+            extensions: vec![
+                (
+                    "x-golem-api-gateway-binding".to_string(),
+                    json!({
+                        "binding-type": "cors-preflight"
+                    })
+                )
+            ]
             .into_iter()
             .collect(),
             ..Default::default()
@@ -770,7 +785,7 @@ mod tests {
 
         let path_pattern = AllPathPatterns::parse("/test").unwrap();
 
-        let result = get_route_from_path_item("options", &path_item, &path_pattern);
+        let result = internal::get_route_from_path_item("options", &path_item, &path_pattern);
 
         let expected = expected_route_with_cors_preflight_binding_default(&path_pattern);
         assert_eq!(result, Ok(expected));
@@ -782,7 +797,7 @@ mod tests {
 
         let path_pattern = AllPathPatterns::parse("/test").unwrap();
 
-        let result = get_route_from_path_item("options", &path_item, &path_pattern);
+        let result = internal::get_route_from_path_item("options", &path_item, &path_pattern);
 
         let expected = expected_route_with_cors_preflight_binding_default(&path_pattern);
         assert_eq!(result, Ok(expected));
@@ -860,7 +875,7 @@ mod tests {
         paths.insert("/test".to_string(), ReferenceOr::Item(path_item));
         open_api.paths = openapiv3::Paths {
             paths: paths.into_iter()
-                .map(|(k, v)| (k, v))  // No need for extra ReferenceOr wrapping
+                .map(|(k, v)| (k, v))
                 .collect(),
             extensions: Default::default()
         };
@@ -869,21 +884,21 @@ mod tests {
         let api_def_req = openapi_req.to_http_api_definition_request().unwrap();
 
         assert!(api_def_req.security.is_some(), "Global security should be preserved.");
-        let global_sec_preserved = api_def_req.security.unwrap();
+        let global_sec_preserved = api_def_req.security.clone().unwrap();
         let has_api_key = global_sec_preserved.into_iter().any(|sec| sec.security_scheme_identifier.to_string() == "api_key");
         assert!(has_api_key, "Global security should include 'api_key'.");
 
         let mut found_get = false;
         let mut found_options = false;
-        for route in api_def_req.routes {
+        for route in &api_def_req.routes {
             if route.method == MethodPattern::Get {
                 found_get = true;
-                if let crate::gateway_binding::GatewayBinding::Default(_) = route.binding {
+                if let crate::gateway_binding::GatewayBinding::Default(ref _binding) = route.binding {
                 } else {
                     panic!("GET route should use default binding.");
                 }
                 assert!(route.security.is_some(), "GET route should have security set.");
-                let sec_ref = route.security.unwrap();
+                let sec_ref = route.security.as_ref().unwrap();
                 assert_eq!(
                     sec_ref.security_scheme_identifier.to_string(),
                     "api_key",
@@ -891,7 +906,7 @@ mod tests {
                 );
             } else if route.method == MethodPattern::Options {
                 found_options = true;
-                if let crate::gateway_binding::GatewayBinding::Static(sb) = route.binding {
+                if let crate::gateway_binding::GatewayBinding::Static(ref sb) = route.binding {
                     if let Some(cors) = sb.get_cors_preflight() {
                         assert_eq!(cors.get_allow_origin(), "example.com", "OPTIONS route should have custom allow origin 'example.com'.");
                     } else {
@@ -904,5 +919,9 @@ mod tests {
         }
         assert!(found_get, "GET route not found.");
         assert!(found_options, "OPTIONS route not found.");
+
+        let openapi_req_round_trip = OpenApiHttpApiDefinitionRequest::from_http_api_definition_request(&api_def_req)
+            .expect("Round-trip conversion should succeed");
+        verify_openapi_schema(&openapi_req_round_trip.0);
     }
 }

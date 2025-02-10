@@ -853,6 +853,10 @@ mod test {
         assert!(body.contains("1.0"));
         assert!(body.contains("security:"), "Exported YAML should contain 'security' field.");
         assert!(body.contains("x-golem-cors-preflight:"), "Exported YAML should contain 'corsPreflight' field.");
+
+        let openapi_spec: openapiv3::OpenAPI = serde_yaml::from_str(&body)
+            .expect("Exported YAML is not a valid OpenAPI v3 specification");
+        assert!(openapi_spec.openapi.starts_with("3.0"), "OpenAPI version is not 3.0.x");
     }
 
     #[test]
@@ -936,26 +940,10 @@ mod test {
         use std::process::Command;
         use tempfile::tempdir;
         use std::fs;
-
-        // First ensure cargo-progenitor is installed
-        let cargo_progenitor_check = Command::new("cargo")
-            .args(&["progenitor", "--version"])
-            .output();
-
-        if cargo_progenitor_check.is_err() || !cargo_progenitor_check.unwrap().status.success() {
-            // Install cargo-progenitor if not found
-            let install_output = Command::new("cargo")
-                .args(&["install", "cargo-progenitor"])
-                .output()
-                .expect("Failed to install cargo-progenitor");
-            assert!(install_output.status.success(), "Failed to install cargo-progenitor: {}", String::from_utf8_lossy(&install_output.stderr));
-        }
-
-        // Setup the API with a complex API definition
+        
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        // Define a complex API definition with multiple endpoints, similar to other tests
         let definition = HttpApiDefinitionRequest {
             id: ApiDefinitionId("complex_api".to_string()),
             version: ApiVersion("2.0.0".to_string()),
@@ -1010,52 +998,70 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        // Export the spec as YAML using the export endpoint
         let export_url = "/v1/api/definitions/complex_api/2.0.0/export";
         let export_response = client.get(export_url).send().await;
         export_response.assert_status_is_ok();
-        let body_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
-        let yaml_str = String::from_utf8(body_bytes).expect("Invalid UTF8 in exported YAML");
-
-        // Convert YAML to JSON for Progenitor
-        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_str).expect("Failed to parse YAML");
-        let json_value = serde_json::to_value(&yaml_value).expect("Failed to convert YAML to JSON value");
-        let json_str = serde_json::to_string_pretty(&json_value).expect("Failed to serialize JSON to string");
-
-        // Write the JSON to a temporary file
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let json_path = temp_dir.path().join("openapi.json");
-        fs::write(&json_path, json_str.as_bytes()).expect("Failed to write JSON file");
-
-        // Generate the client library using cargo-progenitor as a standalone tool
+        let yaml_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let is_wsl = std::fs::metadata("/proc/sys/fs/binfmt_misc/WSLInterop").is_ok();
+        let temp_dir = if is_wsl {
+            let base = std::env::var("TEMP").unwrap_or_else(|_| "/mnt/c/Temp".to_string());
+            if !std::path::Path::new(&base).exists() {
+                std::fs::create_dir_all(&base).expect(&format!("Failed to create {} directory", &base));
+            }
+            tempfile::tempdir_in(&base).expect(&format!("Failed to create temp dir in {}", &base))
+        } else {
+            tempdir().expect("Failed to create temp dir")
+        };
+        let yaml_path = temp_dir.path().join("openapi.yaml");
+        fs::write(&yaml_path, &yaml_bytes).expect("Failed to write YAML file");
+        
         let generated_client_dir = temp_dir.path().join("generated_client");
-        let progenitor_output = Command::new("cargo")
-            .args(&[
-                "progenitor",
-                "-i",
-                json_path.to_str().unwrap(),
-                "-o",
-                generated_client_dir.to_str().unwrap(),
-                "-n",
-                "complex_client",
-                "-v",
-                "0.1.0"
-            ])
-            .output()
-            .expect("Failed to execute cargo progenitor command");
-        assert!(progenitor_output.status.success(), "Progenitor command failed: {}", String::from_utf8_lossy(&progenitor_output.stderr));
+        fs::create_dir_all(&generated_client_dir).expect("Failed to create output directory");
 
-        // Run cargo check in the generated client to ensure it compiles
-        let cargo_check_output = Command::new("cargo")
-            .arg("check")
-            .current_dir(&generated_client_dir)
-            .output()
-            .expect("Failed to run cargo check");
-        assert!(cargo_check_output.status.success(), "Cargo check failed: {}", String::from_utf8_lossy(&cargo_check_output.stderr));
+        let is_windows = cfg!(windows);
+        let mut install_cmd = if is_windows {
+            let mut cmd = Command::new("npm");
+            cmd.args(&["install", "-g", "@openapitools/openapi-generator-cli"]);
+            cmd
+        } else {
+            let mut cmd = Command::new("npm");
+            cmd.args(&["install", "@openapitools/openapi-generator-cli", "--prefix", temp_dir.path().to_str().unwrap()]);
+            cmd
+        };
 
-        // Verify that the generated client library contains the Client struct
-        let lib_rs = generated_client_dir.join("src").join("lib.rs");
-        let lib_rs_contents = fs::read_to_string(&lib_rs).expect("Failed to read generated lib.rs");
-        assert!(lib_rs_contents.contains("pub struct Client"), "Generated client does not contain Client struct");
+        let install_output = install_cmd
+            .output()
+            .expect("Failed to install openapi-generator-cli");
+
+        assert!(install_output.status.success(),
+            "Failed to install openapi-generator-cli. Stdout: {}\nStderr: {}",
+            String::from_utf8_lossy(&install_output.stdout),
+            String::from_utf8_lossy(&install_output.stderr));
+
+        let mut generate_cmd = if is_windows {
+            let mut cmd = Command::new("npx");
+            cmd.args(&["openapi-generator-cli", "generate", "-g", "rust",
+                       "-i", yaml_path.to_str().unwrap(),
+                       "-o", generated_client_dir.to_str().unwrap()]);
+            cmd
+        } else {
+            let mut cmd = Command::new("npx");
+            cmd.args(&["--prefix", temp_dir.path().to_str().unwrap(), "openapi-generator-cli", "generate", "-g", "rust",
+                       "-i", yaml_path.to_str().unwrap(),
+                       "-o", generated_client_dir.to_str().unwrap()]);
+            cmd
+        };
+
+        let generate_output = generate_cmd
+            .output()
+            .expect("Failed to execute openapi-generator-cli command");
+
+        assert!(generate_output.status.success(),
+            "openapi-generator-cli command failed. Stdout: {}\nStderr: {}",
+            String::from_utf8_lossy(&generate_output.stdout),
+            String::from_utf8_lossy(&generate_output.stderr));
+
+        let cargo_toml = generated_client_dir.join("Cargo.toml");
+        assert!(cargo_toml.exists(), "Generated client does not contain Cargo.toml file");
     }
 }

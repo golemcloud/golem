@@ -67,7 +67,4 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
-tempfile = "3.3"
-progenitor = "0.4"
-prettyplease = "0.2"
-syn = "2.0"
+tempfile = "3.16.0"
