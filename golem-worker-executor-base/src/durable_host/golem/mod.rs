@@ -256,7 +256,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
         } else if self
             .state
             .replay_state
-            .is_in_deleted_region(jump_target)
+            .is_in_skipped_region(jump_target)
             .await
         {
             Err(anyhow!(
@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
             // Write an oplog entry with the new jump and then restart the worker
             self.state
                 .replay_state
-                .add_deleted_region(jump.clone())
+                .add_skipped_region(jump.clone())
                 .await;
             self.state
                 .oplog
@@ -351,7 +351,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
                     };
                     self.state
                         .replay_state
-                        .add_deleted_region(deleted_region.clone())
+                        .add_skipped_region(deleted_region.clone())
                         .await;
                     self.state
                         .oplog

@@ -324,8 +324,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut status = self.get_worker_status_record();
 
         let mut skipped_regions = self.state.replay_state.skipped_regions().await;
-        let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();
-        skipped_regions.set_override(extra_deleted_regions);
+        let (pending_updates, extra_skipped_regions) = self.public_state.worker().pending_updates();
+        skipped_regions.set_override(extra_skipped_regions);
 
         status.skipped_regions = skipped_regions;
         status
@@ -1110,6 +1110,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_version,
                 details: details.clone(),
             });
+
+            // As part of performing a manual update, after the executor called the save-snapshot function
+            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
+            // version. As the history is skipped it immediately can start with calling load-snapshot on the
+            // saved binary. However, if this fails, we have to revert the worker to the original version. As part
+            // of this we restore the original set of skipped regions by dropping the override.
+            //
+            // Note that we can always recalculate the old set of skipped regions from the oplog - the "override layer"
+            // is just an optimization so we don't have to.
             if status.skipped_regions.is_overridden() {
                 status.skipped_regions.drop_override()
             }
@@ -1145,6 +1154,12 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_version,
             });
             *status.active_plugins_mut() = new_active_plugins;
+
+            // As part of performing a manual update, after the executor called the save-snapshot function
+            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
+            // version. As the history is skipped it immediately can start with calling load-snapshot on the
+            // saved binary. Once that succeeds, the update is considered done and we make this skipped region
+            // "final" by merging it into the set of skipped regions.
             if status.skipped_regions.is_overridden() {
                 status.skipped_regions.merge_override()
             }
@@ -1448,7 +1463,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .durable_ctx_mut()
                 .state
                 .replay_state
-                .get_out_of_deleted_region()
+                .get_out_of_skipped_region()
                 .await;
 
             let result = Self::resume_replay(store, instance).await;
@@ -1959,7 +1974,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
                             end: self.replay_state.replay_target().next(), // skipping the Jump entry too
                         };
                         self.replay_state
-                            .add_deleted_region(deleted_region.clone())
+                            .add_skipped_region(deleted_region.clone())
                             .await;
                         self.oplog
                             .add_and_commit(OplogEntry::jump(deleted_region))
