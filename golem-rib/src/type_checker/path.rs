@@ -5,8 +5,31 @@ use std::fmt::Display;
 pub struct Path(Vec<PathElem>);
 
 impl Path {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn current(&self) -> Option<&PathElem> {
+        self.0.first()
+    }
+
+    pub fn progress(&mut self) {
+        if !self.0.is_empty() {
+            self.0.remove(0);
+        }
+    }
+
     pub fn from_elem(elem: PathElem) -> Self {
         Path(vec![elem])
+    }
+
+    pub fn from_elems(elems: Vec<&str>) -> Self {
+        Path(
+            elems
+                .iter()
+                .map(|x| PathElem::Field(x.to_string()))
+                .collect(),
+        )
     }
 
     pub fn push_front(&mut self, elem: PathElem) {

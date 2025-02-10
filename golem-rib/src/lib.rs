@@ -19,6 +19,7 @@ pub use inferred_type::*;
 pub use interpreter::*;
 pub use parser::type_name::TypeName;
 pub use text::*;
+pub use type_checker::*;
 pub use type_inference::*;
 pub use type_registry::*;
 pub use variable_id::*;

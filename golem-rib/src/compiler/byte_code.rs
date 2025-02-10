@@ -120,18 +120,18 @@ mod internal {
                 instructions.push(RibIR::LoadVar(variable_id.clone()));
             }
             Expr::Literal(str, _) => {
-                let type_annotated_value = str.clone().into_value_and_type();
-                instructions.push(RibIR::PushLit(type_annotated_value));
+                let value_and_type = str.clone().into_value_and_type();
+                instructions.push(RibIR::PushLit(value_and_type));
             }
             Expr::Number(num, _, inferred_type) => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
-                let type_annotated_value = num.to_val(&analysed_type).ok_or(format!(
+                let value_and_type = num.to_val(&analysed_type).ok_or(format!(
                     "Internal error: convert a number to wasm value using {:?}",
                     analysed_type
                 ))?;
 
-                instructions.push(RibIR::PushLit(type_annotated_value));
+                instructions.push(RibIR::PushLit(value_and_type));
             }
             Expr::EqualTo(lhs, rhs, _) => {
                 stack.push(ExprState::from_expr(rhs.deref()));
@@ -706,7 +706,7 @@ mod compiler_tests {
     fn test_instructions_for_literal() {
         let literal = Expr::Literal("hello".to_string(), InferredType::Str);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -725,7 +725,7 @@ mod compiler_tests {
         let variable_id = VariableId::local("request", 0);
         let empty_registry = FunctionTypeRegistry::empty();
         let expr = Expr::Identifier(variable_id.clone(), inferred_input_type);
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -752,7 +752,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -787,16 +787,16 @@ mod compiler_tests {
 
         let expr = Expr::equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
-        let type_annotated_value1 = 1.0f32.into_value_and_type();
-        let type_annotated_value2 = 1u32.into_value_and_type();
+        let value_and_type1 = 1.0f32.into_value_and_type();
+        let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
-            RibIR::PushLit(type_annotated_value2),
-            RibIR::PushLit(type_annotated_value1),
+            RibIR::PushLit(value_and_type2),
+            RibIR::PushLit(value_and_type1),
             RibIR::EqualTo,
         ];
 
@@ -826,16 +826,16 @@ mod compiler_tests {
 
         let expr = Expr::greater_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
-        let type_annotated_value1 = 1.0f32.into_value_and_type();
-        let type_annotated_value2 = 2u32.into_value_and_type();
+        let value_and_type1 = 1.0f32.into_value_and_type();
+        let value_and_type2 = 2u32.into_value_and_type();
 
         let instruction_set = vec![
-            RibIR::PushLit(type_annotated_value2),
-            RibIR::PushLit(type_annotated_value1),
+            RibIR::PushLit(value_and_type2),
+            RibIR::PushLit(value_and_type1),
             RibIR::GreaterThan,
         ];
 
@@ -865,16 +865,16 @@ mod compiler_tests {
 
         let expr = Expr::less_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
-        let type_annotated_value1 = 1.0f32.into_value_and_type();
-        let type_annotated_value2 = 1u32.into_value_and_type();
+        let value_and_type1 = 1.0f32.into_value_and_type();
+        let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
-            RibIR::PushLit(type_annotated_value2),
-            RibIR::PushLit(type_annotated_value1),
+            RibIR::PushLit(value_and_type2),
+            RibIR::PushLit(value_and_type1),
             RibIR::LessThan,
         ];
 
@@ -904,16 +904,16 @@ mod compiler_tests {
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
-        let type_annotated_value1 = 1.0f32.into_value_and_type();
-        let type_annotated_value2 = 1u32.into_value_and_type();
+        let value_and_type1 = 1.0f32.into_value_and_type();
+        let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
-            RibIR::PushLit(type_annotated_value2),
-            RibIR::PushLit(type_annotated_value1),
+            RibIR::PushLit(value_and_type2),
+            RibIR::PushLit(value_and_type1),
             RibIR::GreaterThanOrEqualTo,
         ];
 
@@ -943,16 +943,16 @@ mod compiler_tests {
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
-        let type_annotated_value1 = 1.0f32.into_value_and_type();
-        let type_annotated_value2 = 1u32.into_value_and_type();
+        let value_and_type1 = 1.0f32.into_value_and_type();
+        let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
-            RibIR::PushLit(type_annotated_value2),
-            RibIR::PushLit(type_annotated_value1),
+            RibIR::PushLit(value_and_type2),
+            RibIR::PushLit(value_and_type1),
             RibIR::LessThanOrEqualTo,
         ];
 
@@ -983,7 +983,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1027,7 +1027,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1057,7 +1057,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1097,7 +1097,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1147,7 +1147,7 @@ mod compiler_tests {
         let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1194,7 +1194,7 @@ mod compiler_tests {
         let expr = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1243,7 +1243,7 @@ mod compiler_tests {
         );
 
         let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 

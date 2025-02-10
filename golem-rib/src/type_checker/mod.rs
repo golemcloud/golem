@@ -1,5 +1,5 @@
 pub(crate) use missing_fields::*;
-pub(crate) use path::*;
+pub use path::*;
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
