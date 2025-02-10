@@ -138,9 +138,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
-
-            let (params, result) = match params {
+            let (params, result) = match to_db_values(params) {
                 Ok(params) => {
                     let result = self
                         .state
@@ -150,7 +148,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                         .await;
                     (params, result)
                 }
-                Err(error) => (vec![], Err(error)),
+                Err(error) => (vec![], Err(RdbmsError::QueryParameterFailure(error))),
             };
             let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
@@ -183,9 +181,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
-
-            let (params, result) = match params {
+            let (params, result) = match to_db_values(params) {
                 Ok(params) => {
                     let result = self
                         .state
@@ -195,7 +191,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                         .await;
                     (params, result)
                 }
-                Err(error) => (vec![], Err(error)),
+                Err(error) => (vec![], Err(RdbmsError::QueryParameterFailure(error))),
             };
             let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
@@ -281,10 +277,6 @@ impl DbResultStreamEntry {
     ) {
         self.state = DbResultStreamState::Open(value);
     }
-
-    pub fn is_open(&self) -> bool {
-        matches!(self.state, DbResultStreamState::Open(_))
-    }
 }
 
 #[derive(Clone)]
@@ -318,13 +310,12 @@ async fn get_db_query_stream<Ctx: WorkerCtx>(
                         .await
                 }
                 None => {
-                    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
                     ctx.state
                         .rdbms_service
                         .mysql()
                         .query_stream(
                             &query_stream_entry.request.pool_key,
-                            &worker_id,
+                            &ctx.state.owned_worker_id.worker_id,
                             &query_stream_entry.request.statement,
                             query_stream_entry.request.params,
                         )
@@ -336,8 +327,8 @@ async fn get_db_query_stream<Ctx: WorkerCtx>(
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<DbResultStreamEntry>(entry)
-                        .map(|e| e.set_open(query_stream.clone()))
-                        .map_err(|e| RdbmsError::Other(e.to_string()))?;
+                        .map_err(|e| RdbmsError::Other(e.to_string()))?
+                        .set_open(query_stream.clone());
 
                     Ok(query_stream)
                 }
@@ -460,10 +451,6 @@ impl DbTransactionEntry {
     ) {
         self.state = DbTransactionState::Open(value);
     }
-
-    pub fn is_open(&self) -> bool {
-        matches!(self.state, DbTransactionState::Open(_))
-    }
 }
 
 #[derive(Clone)]
@@ -491,20 +478,22 @@ async fn get_db_transaction<Ctx: WorkerCtx>(
 
     match transaction_entry.state {
         DbTransactionState::New => {
-            let worker_id = ctx.state.owned_worker_id.worker_id.clone();
             let transaction = ctx
                 .state
                 .rdbms_service
                 .mysql()
-                .begin_transaction(&transaction_entry.pool_key, &worker_id)
+                .begin_transaction(
+                    &transaction_entry.pool_key,
+                    &ctx.state.owned_worker_id.worker_id,
+                )
                 .await;
             match transaction {
                 Ok(transaction) => {
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<DbTransactionEntry>(entry)
-                        .map(|e| e.set_open(transaction.clone()))
-                        .map_err(|e| RdbmsError::Other(e.to_string()))?;
+                        .map_err(|e| RdbmsError::Other(e.to_string()))?
+                        .set_open(transaction.clone());
 
                     Ok((transaction_entry.pool_key, transaction))
                 }
@@ -534,8 +523,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             )
             .await?;
         let result = if durability.is_live() {
-            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
-            let (input, result) = match params {
+            let (input, result) = match to_db_values(params) {
                 Ok(params) => {
                     let transaction = get_db_transaction(self, &self_).await;
                     match transaction {
@@ -549,7 +537,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                         Err(e) => (None, Err(e)),
                     }
                 }
-                Err(error) => (None, Err(error)),
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
             };
             durability.persist(self, input, result).await
         } else {
@@ -574,15 +562,14 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let result = if durability.is_live() {
-            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
-            let result = match params {
+            let result = match to_db_values(params) {
                 Ok(params) => self
                     .as_wasi_view()
                     .table()
                     .get::<DbTransactionEntry>(&self_)
                     .map_err(|e| RdbmsError::Other(e.to_string()))
                     .map(|e| RdbmsRequest::<MysqlType>::new(e.pool_key.clone(), statement, params)),
-                Err(error) => Err(error),
+                Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
             };
             durability.persist(self, (), result).await
         } else {
@@ -619,8 +606,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let result = if durability.is_live() {
-            let params = to_db_values(params).map_err(RdbmsError::QueryParameterFailure);
-            let (input, result) = match params {
+            let (input, result) = match to_db_values(params) {
                 Ok(params) => {
                     let transaction = get_db_transaction(self, &self_).await;
                     match transaction {
@@ -634,7 +620,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                         Err(e) => (None, Err(e)),
                     }
                 }
-                Err(error) => (None, Err(error)),
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
             };
             durability.persist(self, input, result).await
         } else {
