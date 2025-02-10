@@ -32,7 +32,7 @@ pub struct OplogRegion {
 
 impl OplogRegion {
     pub fn contains(&self, target: OplogIndex) -> bool {
-        target > self.end && target <= self.start
+        self.start <= target && target <= self.end
     }
 
     pub fn union(&self, other: &OplogRegion) -> Option<OplogRegion> {
@@ -169,6 +169,29 @@ impl DeletedRegions {
 
     pub fn drop_override(&mut self) {
         self.regions.pop();
+    }
+
+    pub fn get_override(&self) -> Option<DeletedRegions> {
+        if self.is_overridden() {
+            self.regions.last().map(|regions| {
+                DeletedRegionsBuilder::from_regions(regions.values().cloned().collect::<Vec<_>>())
+                    .build()
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn merge_override(&mut self) {
+        if let Some(regions) = self.regions.pop() {
+            let current = self.regions.pop().unwrap();
+            let mut builder = DeletedRegionsBuilder::from_regions(current.into_values());
+            for region in regions.values() {
+                builder.add(region.clone());
+            }
+            let mut temp = builder.build().regions;
+            self.regions.push(temp.pop().unwrap());
+        }
     }
 
     pub fn is_empty(&self) -> bool {

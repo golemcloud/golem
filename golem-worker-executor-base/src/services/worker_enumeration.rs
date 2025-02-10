@@ -4,7 +4,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
-use crate::worker::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{

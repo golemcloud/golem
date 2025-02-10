@@ -357,6 +357,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker

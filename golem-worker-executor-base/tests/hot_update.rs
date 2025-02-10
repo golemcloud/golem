@@ -35,13 +35,13 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
-struct F1Blocker {
+pub struct F1Blocker {
     pub value: u64,
     pub reached: tokio::sync::oneshot::Sender<()>,
     pub resume: tokio::sync::oneshot::Receiver<()>,
 }
 
-struct F1Control {
+pub struct F1Control {
     reached: Option<tokio::sync::oneshot::Receiver<()>>,
     resume: tokio::sync::oneshot::Sender<()>,
 }
@@ -58,7 +58,7 @@ impl F1Control {
     }
 }
 
-struct TestHttpServer {
+pub struct TestHttpServer {
     handle: JoinHandle<()>,
     f1_blocker: Arc<Mutex<Option<F1Blocker>>>,
 }
