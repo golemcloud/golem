@@ -348,7 +348,7 @@ message DeactivatePluginResponse {
 
 message RevertWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.RevertWorkerTarget target = 3;
+  golem.common.RevertWorkerTarget target = 2;
 }
 
 message RevertWorkerResponse {
