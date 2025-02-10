@@ -75,7 +75,7 @@ pub enum InferredNumber {
 impl Display for InferredNumber {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let type_name = TypeName::from(self);
-        write!(f, "{}", type_name.to_string())
+        write!(f, "{}", type_name)
     }
 }
 
