@@ -280,6 +280,87 @@ impl From<TypeName> for InferredType {
     }
 }
 
+impl TryFrom<InferredType> for TypeName {
+    type Error = String;
+
+    fn try_from(value: InferredType) -> Result<Self, Self::Error> {
+        match value {
+            InferredType::Bool => Ok(TypeName::Bool),
+            InferredType::S8 => Ok(TypeName::S8),
+            InferredType::U8 => Ok(TypeName::U8),
+            InferredType::S16 => Ok(TypeName::S16),
+            InferredType::U16 => Ok(TypeName::U16),
+            InferredType::S32 => Ok(TypeName::S32),
+            InferredType::U32 => Ok(TypeName::U32),
+            InferredType::S64 => Ok(TypeName::S64),
+            InferredType::U64 => Ok(TypeName::U64),
+            InferredType::F32 => Ok(TypeName::F32),
+            InferredType::F64 => Ok(TypeName::F64),
+            InferredType::Chr => Ok(TypeName::Chr),
+            InferredType::Str => Ok(TypeName::Str),
+            InferredType::List(inferred_type) => {
+                let verified = inferred_type.deref().clone().try_into()?;
+                Ok(TypeName::List(Box::new(verified)))
+            }
+            InferredType::Tuple(inferred_types) => {
+                let mut verified_types = vec![];
+                for typ in inferred_types {
+                    let verified = typ.try_into()?;
+                    verified_types.push(verified);
+                }
+                Ok(TypeName::Tuple(verified_types))
+            }
+            InferredType::Record(name_and_types) => {
+                let mut fields = vec![];
+                for (field, typ) in name_and_types {
+                    let verified = typ.try_into()?;
+                    fields.push((field, Box::new(verified)));
+                }
+                Ok(TypeName::Record(fields))
+            }
+            InferredType::Flags(flags) => Ok(TypeName::Flags(flags)),
+            InferredType::Enum(enums) => Ok(TypeName::Enum(enums)),
+            InferredType::Option(inferred_type) => {
+                let result = inferred_type.deref().clone().try_into()?;
+                Ok(TypeName::Option(Box::new(result)))
+            }
+            InferredType::Result { ok, error } => {
+                let ok_unified = ok.map(|ok| ok.deref().clone().try_into()).transpose()?;
+                let err_unified = error
+                    .map(|err| err.deref().clone().try_into())
+                    .transpose()?;
+                Ok(TypeName::Result {
+                    ok: ok_unified.map(Box::new),
+                    error: err_unified.map(Box::new),
+                })
+            }
+            InferredType::Variant(variant) => {
+                let mut cases = vec![];
+                for (case, typ) in variant {
+                    let verified = typ.map(TypeName::try_from).transpose()?;
+                    cases.push((case, verified.map(Box::new)));
+                }
+                Ok(TypeName::Variant { cases })
+            }
+            InferredType::Resource { .. } => {
+                Err("Cannot convert a resource type to a type name".to_string())
+            }
+            InferredType::OneOf(_) => {
+                Err("Cannot convert a one of type to a type name".to_string())
+            }
+            InferredType::AllOf(_) => {
+                Err("Cannot convert a all of type to a type name".to_string())
+            }
+            InferredType::Unknown => {
+                Err("Cannot convert an unknown type to a type name".to_string())
+            }
+            InferredType::Sequence(_) => {
+                Err("Cannot convert a sequence type to a type name".to_string())
+            }
+        }
+    }
+}
+
 pub fn parse_basic_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,

@@ -161,7 +161,7 @@ impl InterpreterStack {
         self.stack.push(RibInterpreterStackValue::val(element));
     }
 
-    pub fn push_to_sink(&mut self, type_annotated_value: ValueAndType) -> Result<(), String> {
+    pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> Result<(), String> {
         let sink = self.pop();
         // sink always followed by an iterator
         let possible_iterator = self
@@ -174,7 +174,7 @@ impl InterpreterStack {
 
         match sink {
             Some(RibInterpreterStackValue::Sink(mut list, analysed_type)) => {
-                list.push(type_annotated_value);
+                list.push(value_and_type);
                 self.push(possible_iterator);
                 self.push(RibInterpreterStackValue::Sink(list, analysed_type));
                 Ok(())

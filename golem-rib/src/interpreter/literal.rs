@@ -322,10 +322,8 @@ mod internal {
     use crate::interpreter::literal::CoercedNumericValue;
     use golem_wasm_rpc::{Value, ValueAndType};
 
-    pub(crate) fn get_numeric_value(
-        type_annotated_value: &ValueAndType,
-    ) -> Option<CoercedNumericValue> {
-        match &type_annotated_value.value {
+    pub(crate) fn get_numeric_value(value_and_type: &ValueAndType) -> Option<CoercedNumericValue> {
+        match &value_and_type.value {
             Value::S8(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
             Value::S16(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
             Value::S32(value) => Some(CoercedNumericValue::NegInt(*value as i64)),
