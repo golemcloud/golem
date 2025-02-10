@@ -494,18 +494,18 @@ mod comprehensive_test {
         let actual_as_text = test_utils::convert_value_and_type_to_str(&result.get_val().unwrap());
 
         let expected_as_text =
-            test_utils::convert_value_and_type_to_str(&expected_type_annotated_value());
+            test_utils::convert_value_and_type_to_str(&expected_value_and_type());
 
         assert_eq!(
             result.get_val().unwrap(),
-            expected_type_annotated_value(),
+            expected_value_and_type(),
             "Assertion failed! \n\n Actual value as string  : {} \n\n Expected value as string: {}\n",
             actual_as_text,
             expected_as_text
         );
     }
 
-    fn expected_type_annotated_value() -> ValueAndType {
+    fn expected_value_and_type() -> ValueAndType {
         let wasm_wave_str = r#"
           {
             a: "foo",

@@ -402,11 +402,10 @@ mod internal {
 
                 match &mut existing_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
-                        if let Some(type_annotated_value) = iter.next() {
+                        if let Some(value_and_type) = iter.next() {
                             interpreter_stack.push(existing_iterator);
                             interpreter_stack.push(rib_result);
-                            interpreter_stack
-                                .push(RibInterpreterStackValue::Val(type_annotated_value));
+                            interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                             Ok(())
                         } else {
                             Err("Internal Error: Iterator has no more items".to_string())
@@ -421,9 +420,9 @@ mod internal {
             }
 
             RibInterpreterStackValue::Iterator(iter) => {
-                if let Some(type_annotated_value) = iter.next() {
+                if let Some(value_and_type) = iter.next() {
                     interpreter_stack.push(rib_result);
-                    interpreter_stack.push(RibInterpreterStackValue::Val(type_annotated_value));
+                    interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                     Ok(())
                 } else {
                     Err("Internal Error: Iterator has no more items".to_string())
@@ -1716,10 +1715,10 @@ mod interpreter_tests {
                 .unwrap();
 
             let expected = r#"[]"#;
-            let expected_type_annotated_value =
+            let expected_value_and_type =
                 golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
 
-            assert_eq!(result, expected_type_annotated_value);
+            assert_eq!(result, expected_value_and_type);
         }
     }
 
