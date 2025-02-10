@@ -25,12 +25,7 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
-    UpdateWorkerRequest,
-};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -270,6 +265,13 @@ pub trait WorkerService {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 }
@@ -1272,6 +1274,36 @@ impl WorkerService for WorkerServiceDefault {
                     result: Some(workerexecutor::v1::revert_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
                 workerexecutor::v1::RevertWorkerResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey, metadata: WorkerRequestMetadata) -> WorkerResult<()> {
+        let worker_id = worker_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "cancel_invocation",
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                let idempotency_key = idempotency_key.clone();
+                Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
+                    worker_id: Some(worker_id.into()),
+                    idempotency_key: Some(idempotency_key.into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CancelInvocationResponse {
+                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::v1::CancelInvocationResponse {
+                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::CancelInvocationResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
         )

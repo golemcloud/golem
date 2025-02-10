@@ -41,9 +41,9 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
+    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
@@ -727,6 +727,15 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                 timestamp,
                 dropped_region,
             })),
+            OplogEntry::CancelPendingInvocation {
+                timestamp,
+                idempotency_key,
+            } => Ok(PublicOplogEntry::CancelInvocation(
+                CancelInvocationParameters {
+                    timestamp,
+                    idempotency_key,
+                },
+            )),
         }
     }
 }

@@ -54,6 +54,7 @@ service WorkerService {
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
 
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
+  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 }
 
 
@@ -354,6 +355,18 @@ message RevertWorkerRequest {
 message RevertWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    WorkerError failure = 2;
+    WorkerError error = 2;
+  }
+}
+
+message CancelInvocationRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+}
+
+message CancelInvocationResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    WorkerError error = 2;
   }
 }

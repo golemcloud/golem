@@ -1263,7 +1263,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         match response.result {
             Some(revert_worker_response::Result::Success(_)) => Ok(()),
-            Some(revert_worker_response::Result::Failure(error)) => {
+            Some(revert_worker_response::Result::Error(error)) => {
                 Err(anyhow!("Failed to fork worker: {error:?}"))
             }
             _ => Err(anyhow!("Failed to revert worker: unknown error")),

@@ -911,7 +911,7 @@ impl WorkerService for ForwardingWorkerService {
             }
             Some(workerexecutor::v1::revert_worker_response::Result::Failure(error)) => {
                 Ok(RevertWorkerResponse {
-                    result: Some(revert_worker_response::Result::Failure(WorkerError {
+                    result: Some(revert_worker_response::Result::Error(WorkerError {
                         error: Some(worker::v1::worker_error::Error::InternalError(error)),
                     })),
                 })
