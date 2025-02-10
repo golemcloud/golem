@@ -1,7 +1,8 @@
-use golem_wasm_rpc::Value;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::thread_rng;
 
@@ -36,13 +37,22 @@ impl Data {
     }
 }
 
-impl From<Data> for Value {
-    fn from(data: Data) -> Self {
+impl IntoValue for Data {
+    fn into_value(self) -> Value {
         Value::Record(vec![
-            Value::String(data.id),
-            Value::String(data.name),
-            Value::String(data.desc),
-            Value::U64(data.timestamp),
+            Value::String(self.id),
+            Value::String(self.name),
+            Value::String(self.desc),
+            Value::U64(self.timestamp),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("id", analysed_type::str()),
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("desc", analysed_type::str()),
+            analysed_type::field("timestamp", analysed_type::u64()),
         ])
     }
 }

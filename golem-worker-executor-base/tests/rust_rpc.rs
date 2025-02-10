@@ -18,7 +18,8 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
-use golem_wasm_rpc::Value;
+use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tracing::{debug, info};
@@ -37,8 +38,11 @@ async fn auction_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
-    let auction_component_id = executor.store_component("auction").await;
+    let registry_component_id = executor
+        .component("auction_registry_composed")
+        .store()
+        .await;
+    let auction_component_id = executor.component("auction").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -60,10 +64,10 @@ async fn auction_example_1(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -106,8 +110,11 @@ async fn auction_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
-    let auction_component_id = executor.store_component("auction").await;
+    let registry_component_id = executor
+        .component("auction_registry_composed")
+        .store()
+        .await;
+    let auction_component_id = executor.component("auction").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -129,10 +136,10 @@ async fn auction_example_2(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction-res}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -175,8 +182,8 @@ async fn counter_resource_test_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -217,8 +224,8 @@ async fn counter_resource_test_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -260,8 +267,8 @@ async fn counter_resource_test_2_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -307,8 +314,8 @@ async fn counter_resource_test_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -350,8 +357,8 @@ async fn counter_resource_test_3_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -397,8 +404,8 @@ async fn context_inheritance(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -487,8 +494,8 @@ async fn counter_resource_test_5(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -532,8 +539,8 @@ async fn counter_resource_test_5_with_restart(
     let executor = start(deps, &context).await.unwrap();
 
     // using store_unique_component to avoid collision with counter_resource_test_5
-    let counters_component_id = executor.store_unique_component("counters").await;
-    let caller_component_id = executor.store_unique_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").unique().store().await;
+    let caller_component_id = executor.component("caller_composed").unique().store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -597,8 +604,8 @@ async fn wasm_rpc_bug_32_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let counters_component_id = executor.store_component("counters").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let counters_component_id = executor.component("counters").store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -613,9 +620,12 @@ async fn wasm_rpc_bug_32_test(
         .invoke_and_await(
             &caller_worker_id,
             "rpc:caller-exports/caller-inline-functions.{bug-wasm-rpc-i32}",
-            vec![Value::Variant {
-                case_idx: 0,
-                case_value: None,
+            vec![ValueAndType {
+                value: Value::Variant {
+                    case_idx: 0,
+                    case_value: None,
+                },
+                typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
             }],
         )
         .await;
@@ -641,7 +651,10 @@ async fn error_message_invalid_uri(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor
+        .component("auction_registry_composed")
+        .store()
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -668,10 +681,10 @@ async fn error_message_invalid_uri(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -696,7 +709,10 @@ async fn error_message_non_existing_target_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let registry_component_id = executor
+        .component("auction_registry_composed")
+        .store()
+        .await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -723,10 +739,10 @@ async fn error_message_non_existing_target_component(
             &registry_worker_id,
             "auction:registry-exports/api.{create-auction}",
             vec![
-                Value::String("test-auction".to_string()),
-                Value::String("this is a test".to_string()),
-                Value::F32(100.0),
-                Value::U64(expiration + 600),
+                "test-auction".into_value_and_type(),
+                "this is a test".into_value_and_type(),
+                100.0f32.into_value_and_type(),
+                (expiration + 600).into_value_and_type(),
             ],
         )
         .await;
@@ -747,8 +763,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let ephemeral_component_id = executor.store_ephemeral_component("ephemeral").await;
-    let caller_component_id = executor.store_component("caller_composed").await;
+    let ephemeral_component_id = executor.component("ephemeral").ephemeral().store().await;
+    let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();
     env.insert(

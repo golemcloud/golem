@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
 use golem_common::model::OwnedWorkerId;
-use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, HostFutureInvokeResult};
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
 use golem_wasm_rpc::{HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;

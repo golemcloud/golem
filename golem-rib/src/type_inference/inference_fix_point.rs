@@ -389,7 +389,8 @@ mod tests {
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .unwrap();
         let expected = Expr::ExprBlock(
             vec![
                 Expr::Let(

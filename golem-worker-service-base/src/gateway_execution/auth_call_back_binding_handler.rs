@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
 };
@@ -24,6 +23,7 @@ use golem_common::SafeDisplay;
 use openidconnect::core::CoreTokenResponse;
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::sync::Arc;
+use url::Url;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -31,7 +31,7 @@ pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 pub trait AuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
-        http_request_details: &HttpRequestDetails,
+        api_url: &Url,
         security_scheme: &SecuritySchemeWithProviderMetadata,
         gateway_session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
@@ -123,15 +123,11 @@ pub struct DefaultAuthCallBack;
 impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     async fn handle_auth_call_back(
         &self,
-        http_request_details: &HttpRequestDetails,
+        api_url: &Url,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
-        let api_url = &http_request_details
-            .url()
-            .map_err(AuthorisationError::Internal)?;
-
         let query_pairs = api_url.query_pairs();
 
         let mut code = None;

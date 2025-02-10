@@ -19,7 +19,7 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,7 @@ async fn javascript_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-1").await;
+    let component_id = executor.component("js-1").store().await;
     let worker_id = executor.start_worker(&component_id, "js-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -48,7 +48,7 @@ async fn javascript_example_1(
         .invoke_and_await(
             &worker_id,
             "hello",
-            vec![Value::String("JavaScript component".to_string())],
+            vec!["JavaScript component".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -106,16 +106,24 @@ async fn javascript_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("js-2").await;
+    let component_id = executor.component("js-2").store().await;
     let worker_id = executor.start_worker(&component_id, "js-2").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(5)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add}",
+            vec![5u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(6)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add}",
+            vec![6u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -139,7 +147,7 @@ async fn csharp_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("csharp-1").await;
+    let component_id = executor.component("csharp-1").store().await;
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor

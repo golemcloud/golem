@@ -4,11 +4,12 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/golem-wasm-ast/"
+repository = "https://github.com/golemcloud/golem/"
 description = "WASM AST"
 
 [dependencies]
 bincode = { workspace = true, optional = true }
+itertools = { workspace = true }
 leb128 = { version = "0.2.5", optional = true }
 mappable-rc = "0.1.1"
 poem-openapi = { workspace = true, optional = true }
@@ -19,6 +20,7 @@ wasmparser = { version = "0.221.2", optional = true }
 wasm-encoder = { version = "0.221.2", optional = true }
 wasm-metadata = { version = "0.221.2", optional = true }
 wasm-wave = { workspace = true, optional = true }
+wit-parser = { version = "=0.221.2", optional = true }
 
 [dev-dependencies]
 colored-diff = "0.2.3"
@@ -30,10 +32,13 @@ wasmprinter = "0.221.2"
 prost-build = "0.13.4"
 
 [features]
-default = ["parser", "writer", "component", "metadata", "analysis", "wave", "json", "bincode", "poem_openapi", "protobuf"]
+default = ["parser", "wit-parser", "writer", "component", "metadata", "analysis", "wave", "json", "bincode", "poem_openapi", "protobuf"]
 
 # Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
 parser = ["dep:wasmparser", "dep:leb128"]
+
+# Support building up AnalyzedTypes from WIT definitions.
+wit-parser = ["dep:wit-parser"]
 
 # Support writing out a binary WASM module or component using the wasm-encoder library
 writer = ["dep:wasm-encoder"]

@@ -10,10 +10,11 @@ description = "Integration tests for Golem"
 autotests = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }

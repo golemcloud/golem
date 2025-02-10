@@ -14,19 +14,18 @@ use std::collections::HashMap;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
-use tokio::task::JoinSet;
-
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use integration_tests::benchmarks::data::Data;
 use integration_tests::benchmarks::{
     invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
 };
+use tokio::task::JoinSet;
 
 struct RpcLargeInput {
     config: RunConfig,
@@ -89,11 +88,15 @@ impl Benchmark for RpcLargeInput {
     ) -> Self::IterationContext {
         let child_component_id = benchmark_context
             .deps
-            .store_unique_component("child_component")
+            .component("child_component")
+            .unique()
+            .store()
             .await;
         let component_id = benchmark_context
             .deps
-            .store_unique_component("parent_component_composed")
+            .component("parent_component_composed")
+            .unique()
+            .store()
             .await;
 
         let mut worker_ids = Vec::new();
@@ -155,7 +158,7 @@ impl Benchmark for RpcLargeInput {
                 .map(|w| w.parent.clone())
                 .collect::<Vec<WorkerId>>(),
             "golem:itrpc/rpc-api.{echo}",
-            vec![Value::String("hello".to_string())],
+            vec!["hello".into_value_and_type()],
         )
         .await;
     }
@@ -166,14 +169,6 @@ impl Benchmark for RpcLargeInput {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        let data = Data::generate_list(2000);
-
-        let values = data
-            .clone()
-            .into_iter()
-            .map(|d| d.into())
-            .collect::<Vec<Value>>();
-
         let shard_manager = benchmark_context.deps.shard_manager();
 
         let mut shard_manager_client = shard_manager.client().await;
@@ -197,7 +192,7 @@ impl Benchmark for RpcLargeInput {
             &recorder,
             &shard_manager_routing_table,
             "golem:itrpc/rpc-api.{process}",
-            vec![Value::List(values)],
+            vec![Data::generate_list(2000).into_value_and_type()],
             "worker-process-invocation",
         )
         .await;
@@ -231,7 +226,7 @@ impl RpcLargeInput {
         recorder: &BenchmarkRecorder,
         shard_manager_routing_table: &RoutingTable,
         function: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
         name: &str,
     ) {
         let mut fibers = JoinSet::new();

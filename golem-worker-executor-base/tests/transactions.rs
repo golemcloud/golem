@@ -26,7 +26,7 @@ use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_message,
     TestDslUnsafe,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -133,7 +133,7 @@ async fn jump(
 
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -192,7 +192,7 @@ async fn explicit_oplog_commit(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let worker_id = executor
         .start_worker(&component_id, "runtime-service-explicit-oplog-commit")
@@ -205,7 +205,7 @@ async fn explicit_oplog_commit(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{explicit-commit}",
-            vec![Value::U8(0)],
+            vec![0u8.into_value_and_type()],
         )
         .await;
 
@@ -223,7 +223,7 @@ async fn set_retry_policy(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "set-retry-policy-1")
         .await;
@@ -235,7 +235,7 @@ async fn set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(2)],
+            vec![2u64.into_value_and_type()],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -244,7 +244,7 @@ async fn set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(1)],
+            vec![1u64.into_value_and_type()],
         )
         .await;
 
@@ -271,7 +271,7 @@ async fn atomic_region(
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -307,7 +307,7 @@ async fn idempotence_on(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -320,7 +320,7 @@ async fn idempotence_on(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(true)],
+            vec![true.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -347,7 +347,7 @@ async fn idempotence_off(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -360,7 +360,7 @@ async fn idempotence_off(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(false)],
+            vec![false.into_value_and_type()],
         )
         .await;
 
@@ -388,7 +388,7 @@ async fn persist_nothing(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let component_id = executor.store_component("runtime-service").await;
+    let component_id = executor.component("runtime-service").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -424,7 +424,7 @@ async fn golem_rust_explicit_oplog_commit(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let worker_id = executor
         .start_worker(&component_id, "golem-rust-tests-explicit-oplog-commit")
@@ -437,7 +437,7 @@ async fn golem_rust_explicit_oplog_commit(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{explicit-commit}",
-            vec![Value::U8(0)],
+            vec![0u8.into_value_and_type()],
         )
         .await;
 
@@ -455,7 +455,7 @@ async fn golem_rust_set_retry_policy(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
     let worker_id = executor
         .start_worker(&component_id, "golem-rust-tests-set-retry-policy-1")
         .await;
@@ -467,7 +467,7 @@ async fn golem_rust_set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(2)],
+            vec![2u64.into_value_and_type()],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -476,7 +476,7 @@ async fn golem_rust_set_retry_policy(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{fail-with-custom-max-retries}",
-            vec![Value::U64(1)],
+            vec![1u64.into_value_and_type()],
         )
         .await;
 
@@ -503,7 +503,7 @@ async fn golem_rust_atomic_region(
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -539,7 +539,7 @@ async fn golem_rust_idempotence_on(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -557,7 +557,7 @@ async fn golem_rust_idempotence_on(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(true)],
+            vec![true.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -584,7 +584,7 @@ async fn golem_rust_idempotence_off(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -602,7 +602,7 @@ async fn golem_rust_idempotence_off(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
-            vec![Value::Bool(false)],
+            vec![false.into_value_and_type()],
         )
         .await;
 
@@ -630,7 +630,7 @@ async fn golem_rust_persist_nothing(
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -679,7 +679,7 @@ async fn golem_rust_fallible_transaction(
         true,
     );
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -741,7 +741,7 @@ async fn golem_rust_infallible_transaction(
         true,
     );
 
-    let component_id = executor.store_component("golem-rust-tests").await;
+    let component_id = executor.component("golem-rust-tests").store().await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
@@ -794,7 +794,11 @@ async fn idempotency_keys_in_ephemeral_workers(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_ephemeral_component("runtime-service").await;
+    let component_id = executor
+        .component("runtime-service")
+        .ephemeral()
+        .store()
+        .await;
 
     let target_worker_id = TargetWorkerId {
         component_id,

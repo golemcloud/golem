@@ -11,23 +11,26 @@ repository = "https://github.com/golemcloud/golem"
 harness = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0", default-features = false, features = ["host"] }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-client = { path = "../golem-client", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
 async-dropper-simple = { version = "0.2.6", features = ["no-default-bound"] }
 async-scoped = "0.9.0"
 async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
 colored = "2.1.0"
 console-subscriber = { workspace = true }
+futures-util = { workspace = true }
 itertools = { workspace = true }
 k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
@@ -37,14 +40,17 @@ log = { workspace = true }
 once_cell = { workspace = true }
 postgres = { workspace = true }
 redis = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -53,3 +59,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+
+[features]
+default = []

@@ -2721,6 +2721,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
+]
+
+[[package]]
 name = "dirs-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2737,7 +2746,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b1d1d91c932ef41c0f2663aa8b0ca0342d444d842c06914aa0a7e352d0bada6"
 dependencies = [
  "libc",
- "redox_users",
+ "redox_users 0.4.6",
  "winapi",
 ]
 
@@ -2749,8 +2758,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2760,7 +2781,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
 dependencies = [
  "libc",
- "redox_users",
+ "redox_users 0.4.6",
  "winapi",
 ]
 
@@ -3658,6 +3679,7 @@ dependencies = [
  "anyhow",
  "bytes 1.9.0",
  "clap",
+ "dirs 6.0.0",
  "futures",
  "golem-cli",
  "golem-common",
@@ -3689,7 +3711,6 @@ dependencies = [
  "test-r",
  "tokio",
  "tracing",
- "xdg",
 ]
 
 [[package]]
@@ -3731,7 +3752,7 @@ dependencies = [
  "cli-table",
  "colored",
  "derive_more",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "env_logger 0.11.6",
  "futures-util",
  "glob",
@@ -3777,13 +3798,13 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tokio-tungstenite 0.24.0",
+ "tokio-tungstenite",
  "tonic",
  "tonic-health",
  "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
- "tungstenite 0.24.0",
+ "tungstenite",
  "url",
  "uuid",
  "version-compare",
@@ -4010,9 +4031,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.12"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
+checksum = "658a571e83d658c1e1e6deaba66f6a308627b20a8320f9655662da76b1997448"
 dependencies = [
  "clap",
  "convert_case",
@@ -4147,13 +4168,16 @@ dependencies = [
  "async-dropper-simple",
  "async-scoped",
  "async-trait",
+ "async_zip",
  "bytes 1.9.0",
  "chrono",
  "clap",
  "cli-table",
  "colored",
  "console-subscriber",
+ "futures-util",
  "golem-api-grpc",
+ "golem-client",
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
@@ -4167,15 +4191,18 @@ dependencies = [
  "once_cell",
  "postgres",
  "redis",
+ "reqwest 0.12.12",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-tungstenite",
  "tonic",
  "tracing",
  "tracing-subscriber",
@@ -4208,6 +4235,7 @@ version = "0.0.0"
 dependencies = [
  "bincode",
  "colored-diff",
+ "itertools 0.13.0",
  "leb128",
  "mappable-rc",
  "poem-openapi",
@@ -4222,6 +4250,7 @@ dependencies = [
  "wasm-wave",
  "wasmparser 0.221.2",
  "wasmprinter 0.221.2",
+ "wit-parser 0.221.2",
 ]
 
 [[package]]
@@ -4234,6 +4263,7 @@ dependencies = [
  "bigdecimal",
  "bincode",
  "cargo_metadata",
+ "chrono",
  "git-version",
  "golem-wasm-ast",
  "poem-openapi",
@@ -4268,6 +4298,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-wit",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4298,9 +4329,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.1.2"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf53fc25db491f96c480d7f195175f6da5f18dcc6ef548d04b2ae648b7796bbf"
+checksum = "f7474ab148bafb0768427ffd714089ce906fb606fe4468ab3954aa4a5c3f9e8f"
 
 [[package]]
 name = "golem-worker-executor"
@@ -4344,6 +4375,7 @@ dependencies = [
  "async-fs",
  "async-lock",
  "async-mutex",
+ "async-recursion",
  "async-scoped",
  "async-stream",
  "async-trait",
@@ -4356,7 +4388,6 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
- "cargo_metadata",
  "chrono",
  "console-subscriber",
  "dashmap",
@@ -4377,7 +4408,6 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
  "hex",
  "http 1.2.0",
  "http-body 1.0.1",
@@ -4405,6 +4435,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "sysinfo",
+ "system-interface",
  "tempfile",
  "test-r",
  "testcontainers",
@@ -4505,6 +4536,7 @@ dependencies = [
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 1.2.0",
+ "http-body-util",
  "humantime-serde",
  "hyper 1.5.2",
  "lazy_static 1.5.0",
@@ -5358,6 +5390,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "poem",
  "rand",
@@ -7217,7 +7250,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.25.0",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "wildmatch",
@@ -8021,6 +8054,17 @@ dependencies = [
  "getrandom",
  "libredox",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "redox_users"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
+dependencies = [
+ "getrandom",
+ "libredox",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -9719,9 +9763,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d8cb299f722f145e6379e79c8c406f923340f28b33497c3957ef9cf9fa2b225"
+checksum = "5c752de9d8ad6913f1c869438aa9a3a5ce40fa65d5c0319e77f58d3208b492dc"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9731,9 +9775,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065e701871bdcf15c796c9c12c7806b7f67b75603f54ddcf9531f927a54919bb"
+checksum = "bc0d07b4ec88b97a69cb45b6a9cfb302872f7eb1269387370ad98555454d0bbd"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9754,9 +9798,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3356b06edde5f3c37f868e1113fb86347a0f4837814fe45c98d4dc778a2f2eb2"
+checksum = "196317fa7e132bc12e40927b4e17f70e0379ed80505c753fd607b5936cc3cbeb"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -10087,28 +10131,16 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
-dependencies = [
- "futures-util",
- "log 0.4.22",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tungstenite 0.24.0",
-]
-
-[[package]]
-name = "tokio-tungstenite"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c28562dd8aea311048ed1ab9372a6b9a59977e1b308afb87c985c1f2b3206938"
 dependencies = [
  "futures-util",
  "log 0.4.22",
+ "native-tls",
  "tokio",
- "tungstenite 0.25.0",
+ "tokio-native-tls",
+ "tungstenite",
 ]
 
 [[package]]
@@ -10454,25 +10486,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
-dependencies = [
- "byteorder",
- "bytes 1.9.0",
- "data-encoding",
- "http 1.2.0",
- "httparse",
- "log 0.4.22",
- "native-tls",
- "rand",
- "sha1",
- "thiserror 1.0.69",
- "utf-8",
-]
-
-[[package]]
-name = "tungstenite"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "326eb16466ed89221beef69dbc94f517ee888bae959895472133924a25f7070e"
@@ -10483,6 +10496,7 @@ dependencies = [
  "http 1.2.0",
  "httparse",
  "log 0.4.22",
+ "native-tls",
  "rand",
  "sha1",
  "thiserror 2.0.11",
@@ -12474,12 +12488,6 @@ dependencies = [
  "linux-raw-sys",
  "rustix",
 ]
-
-[[package]]
-name = "xdg"
-version = "2.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "213b7324336b53d2414b2db8537e56544d981803139155afa84f76eeebb7a546"
 
 [[package]]
 name = "xdg-home"

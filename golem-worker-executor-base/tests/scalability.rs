@@ -21,7 +21,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::future::Future;
 use std::time::Duration;
 use tokio::spawn;
@@ -55,7 +55,7 @@ async fn spawning_many_workers_that_sleep(
     }
 
     let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.store_component("clocks").await;
+    let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
 
@@ -144,14 +144,18 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     }
 
     let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.store_component("clocks").await;
+    let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
         executor_clone
-            .invoke_and_await(&warmup_worker, "sleep-for", vec![Value::F64(15.0)])
+            .invoke_and_await(
+                &warmup_worker,
+                "sleep-for",
+                vec![15.0f64.into_value_and_type()],
+            )
             .await
             .unwrap()
     })
@@ -175,7 +179,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                     .await;
                 timed(async move {
                     executor_clone
-                        .invoke_and_await(&worker, "sleep-for", vec![Value::F64(15.0)])
+                        .invoke_and_await(&worker, "sleep-for", vec![15.0f64.into_value_and_type()])
                         .await
                         .unwrap()
                 })
@@ -238,7 +242,7 @@ async fn initial_large_memory_allocation(
     let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
         .await
         .unwrap();
-    let component_id = executor.store_component("large-initial-memory").await;
+    let component_id = executor.component("large-initial-memory").store().await;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();
@@ -280,7 +284,7 @@ async fn dynamic_large_memory_allocation(
     let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
         .await
         .unwrap();
-    let component_id = executor.store_component("large-dynamic-memory").await;
+    let component_id = executor.component("large-dynamic-memory").store().await;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();

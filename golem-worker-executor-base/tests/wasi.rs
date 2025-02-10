@@ -31,13 +31,13 @@ use bytes::Bytes;
 use futures_util::stream;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
-    WorkerStatus,
+    ComponentFileSystemNodeDetails, IdempotencyKey, InitialComponentFile, WorkerStatus,
 };
+use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
@@ -58,7 +58,7 @@ async fn write_stdout(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("write-stdout").await;
+    let component_id = executor.component("write-stdout").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -90,7 +90,7 @@ async fn write_stderr(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("write-stderr").await;
+    let component_id = executor.component("write-stderr").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -122,7 +122,7 @@ async fn read_stdin(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("read-stdin").await;
+    let component_id = executor.component("read-stdin").store().await;
     let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
@@ -142,7 +142,7 @@ async fn clocks(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clocks").await;
+    let component_id = executor.component("clocks").store().await;
     let worker_id = executor.start_worker(&component_id, "clocks-1").await;
 
     let result = executor
@@ -192,7 +192,7 @@ async fn file_write_read_delete(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-write-read-delete").await;
+    let component_id = executor.component("file-write-read-delete").store().await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -257,11 +257,10 @@ async fn initial_file_read_write(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -334,11 +333,10 @@ async fn initial_file_listing_through_api(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -429,11 +427,10 @@ async fn initial_file_reading_through_api(
     ];
 
     let component_id = executor
-        .store_unique_component_with_files(
-            "initial-file-read-write",
-            ComponentType::Durable,
-            &component_files,
-        )
+        .component("initial-file-read-write")
+        .unique()
+        .with_files(&component_files)
+        .store()
         .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -469,7 +466,7 @@ async fn directories(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("directories").await;
+    let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
@@ -527,7 +524,7 @@ async fn directories_replay(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("directories").await;
+    let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
@@ -594,7 +591,7 @@ async fn file_write_read(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-1").await;
 
     let _ = executor
@@ -602,8 +599,8 @@ async fn file_write_read(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -616,7 +613,7 @@ async fn file_write_read(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -660,7 +657,7 @@ async fn http_client(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client").await;
+    let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
@@ -728,7 +725,7 @@ async fn http_client_using_reqwest(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -763,7 +760,7 @@ async fn environment_service(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("environment-service").await;
+    let component_id = executor.component("environment-service").store().await;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
@@ -849,7 +846,7 @@ async fn http_client_response_persisted_between_invocations(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client").await;
+    let component_id = executor.component("http-client").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -927,7 +924,7 @@ async fn http_client_interrupting_response_stream(
         axum::serve(listener, route).await.unwrap();
     });
 
-    let component_id = executor.store_component("http-client-2").await;
+    let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -986,13 +983,17 @@ async fn sleep(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clock-service").await;
+    let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "clock-service-1")
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![10u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -1001,7 +1002,11 @@ async fn sleep(
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -1019,7 +1024,7 @@ async fn resuming_sleep(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("clock-service").await;
+    let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "clock-service-2")
         .await;
@@ -1031,7 +1036,7 @@ async fn resuming_sleep(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:it/api.{sleep}",
-                vec![Value::U64(10)],
+                vec![10u64.into_value_and_type()],
             )
             .await
             .unwrap();
@@ -1050,7 +1055,11 @@ async fn resuming_sleep(
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![10u64.into_value_and_type()],
+        )
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -1069,20 +1078,24 @@ async fn failing_worker(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("failing-component").await;
+    let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
         .start_worker(&component_id, "failing-worker-1")
         .await;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{add}", vec![Value::U64(5)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![5u64.into_value_and_type()],
+        )
         .await;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:component/api.{add}",
-            vec![Value::U64(50)],
+            vec![50u64.into_value_and_type()],
         )
         .await;
 
@@ -1112,7 +1125,7 @@ async fn file_service_write_direct(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-2").await;
 
     let _ = executor
@@ -1120,8 +1133,8 @@ async fn file_service_write_direct(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1134,7 +1147,7 @@ async fn file_service_write_direct(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1157,7 +1170,7 @@ async fn filesystem_write_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1165,8 +1178,8 @@ async fn filesystem_write_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1175,7 +1188,7 @@ async fn filesystem_write_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1187,7 +1200,7 @@ async fn filesystem_write_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1205,14 +1218,14 @@ async fn filesystem_create_dir_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-4").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1220,7 +1233,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/".to_string())],
+            vec!["/".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1232,7 +1245,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/".to_string())],
+            vec!["/".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1250,7 +1263,7 @@ async fn file_hard_link(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-5").await;
 
     let _ = executor
@@ -1258,8 +1271,8 @@ async fn file_hard_link(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1270,8 +1283,8 @@ async fn file_hard_link(
             &worker_id,
             "golem:it/api.{create-link}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("/link.txt".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1281,7 +1294,7 @@ async fn file_hard_link(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{read-file}",
-            vec![Value::String("/link.txt".to_string())],
+            vec!["/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1304,14 +1317,14 @@ async fn filesystem_link_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-6").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1319,7 +1332,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1328,8 +1341,8 @@ async fn filesystem_link_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1339,8 +1352,8 @@ async fn filesystem_link_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{create-link}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1350,7 +1363,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1358,7 +1371,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1370,7 +1383,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1378,7 +1391,7 @@ async fn filesystem_link_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1397,14 +1410,14 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-7").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1412,7 +1425,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test/a".to_string())],
+            vec!["/test/a".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1420,7 +1433,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-directory}",
-            vec![Value::String("/test/a".to_string())],
+            vec!["/test/a".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1428,7 +1441,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1440,7 +1453,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1458,14 +1471,14 @@ async fn filesystem_symlink_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-8").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1473,7 +1486,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1482,8 +1495,8 @@ async fn filesystem_symlink_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1493,8 +1506,8 @@ async fn filesystem_symlink_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{create-sym-link}",
             vec![
-                Value::String("../test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "../test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1504,7 +1517,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1512,7 +1525,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1525,7 +1538,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1533,7 +1546,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1552,14 +1565,14 @@ async fn filesystem_rename_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-9").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1567,7 +1580,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1576,8 +1589,8 @@ async fn filesystem_rename_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1587,8 +1600,8 @@ async fn filesystem_rename_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{rename-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("/test2/link.txt".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "/test2/link.txt".into_value_and_type(),
             ],
         )
         .await
@@ -1598,7 +1611,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1606,7 +1619,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1614,7 +1627,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1626,7 +1639,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1634,7 +1647,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2".to_string())],
+            vec!["/test2".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1642,7 +1655,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test2/link.txt".to_string())],
+            vec!["/test2/link.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1662,7 +1675,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor
         .start_worker(&component_id, "file-service-10")
         .await;
@@ -1671,7 +1684,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1680,8 +1693,8 @@ async fn filesystem_remove_file_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/test/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/test/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1690,7 +1703,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
-            vec![Value::String("/test/testfile.txt".to_string())],
+            vec!["/test/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1698,7 +1711,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1710,7 +1723,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
-            vec![Value::String("/test".to_string())],
+            vec!["/test".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1728,7 +1741,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1736,8 +1749,8 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
             &worker_id,
             "golem:it/api.{write-file}",
             vec![
-                Value::String("/testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "/testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1746,7 +1759,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1758,7 +1771,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
-            vec![Value::String("/testfile.txt".to_string())],
+            vec!["/testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1776,7 +1789,7 @@ async fn filesystem_metadata_hash(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("file-service").await;
+    let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
@@ -1784,8 +1797,8 @@ async fn filesystem_metadata_hash(
             &worker_id,
             "golem:it/api.{write-file-direct}",
             vec![
-                Value::String("testfile.txt".to_string()),
-                Value::String("hello world".to_string()),
+                "testfile.txt".into_value_and_type(),
+                "hello world".into_value_and_type(),
             ],
         )
         .await
@@ -1794,7 +1807,7 @@ async fn filesystem_metadata_hash(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{hash}",
-            vec![Value::String("testfile.txt".to_string())],
+            vec!["testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1806,7 +1819,7 @@ async fn filesystem_metadata_hash(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{hash}",
-            vec![Value::String("testfile.txt".to_string())],
+            vec!["testfile.txt".into_value_and_type()],
         )
         .await
         .unwrap();
@@ -1824,7 +1837,7 @@ async fn ip_address_resolve(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_component("networking").await;
+    let component_id = executor.component("networking").store().await;
     let worker_id = executor
         .start_worker(&component_id, "ip-address-resolve-1")
         .await;
@@ -1861,21 +1874,30 @@ async fn wasi_incoming_request_handler(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler")
+        .component("wasi-http-incoming-request-handler")
+        .store()
         .await;
     let worker_id = executor
         .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
         .await;
 
-    let args: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::List(vec![]),
-        Value::Option(None),
-    ]);
+    let args = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(None),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result = executor
         .invoke_and_await(
@@ -1910,52 +1932,61 @@ async fn wasi_incoming_request_handler_echo(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-echo")
+        .component("wasi-http-incoming-request-handler-echo")
+        .store()
         .await;
 
     let worker_id = executor
         .start_worker(&component_id, "wasi-http-incoming-request-handler-echo-1")
         .await;
 
-    let args: Value = Value::Record(vec![
-        Value::String("http://localhost:8000/foo?bar=baz".to_string()),
-        Value::Variant {
-            case_idx: 2,
-            case_value: None,
-        },
-        Value::List(vec![Value::Tuple(vec![
-            Value::String("test-header".to_string()),
-            Value::List(
-                "foobar"
-                    .to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-        ])]),
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::List(
-                "test-body"
-                    .to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-            Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
-                Value::String("test-trailer".to_string()),
+    let args = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/foo?bar=baz".to_string()),
+            Value::List(vec![Value::Tuple(vec![
+                Value::String("test-header".to_string()),
                 Value::List(
-                    "barfoo"
+                    "foobar"
                         .to_string()
                         .into_bytes()
                         .into_iter()
                         .map(Value::U8)
                         .collect(),
                 ),
-            ])])))),
-        ])))),
-    ]);
+            ])]),
+            Value::Option(Some(Box::new(Value::Record(vec![
+                Value::List(
+                    "test-body"
+                        .to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .map(Value::U8)
+                        .collect(),
+                ),
+                Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
+                    Value::String("test-trailer".to_string()),
+                    Value::List(
+                        "barfoo"
+                            .to_string()
+                            .into_bytes()
+                            .into_iter()
+                            .map(Value::U8)
+                            .collect(),
+                    ),
+                ])])))),
+            ])))),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result = executor
         .invoke_and_await(
@@ -2044,41 +2075,58 @@ async fn wasi_incoming_request_handler_state(
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
-        .store_component("wasi-http-incoming-request-handler-state")
+        .component("wasi-http-incoming-request-handler-state")
+        .store()
         .await;
 
     let worker_id = executor
         .start_worker(&component_id, "wasi-http-incoming-request-handler-state-1")
         .await;
 
-    let args_put: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
-        Value::Variant {
-            case_idx: 3,
-            case_value: None,
-        },
-        Value::List(vec![]),
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::List(
-                "1".to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .map(Value::U8)
-                    .collect(),
-            ),
-            Value::Option(None),
-        ])))),
-    ]);
+    let args_put = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(Some(Box::new(Value::Record(vec![
+                Value::List(
+                    "1".to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .map(Value::U8)
+                        .collect(),
+                ),
+                Value::Option(None),
+            ])))),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
-    let args_get: Value = Value::Record(vec![
-        Value::String("http://localhost:8000".to_string()),
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        Value::List(vec![]),
-        Value::Option(None),
-    ]);
+    let args_get = ValueAndType {
+        value: Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Value::String("localhost:8000".to_string()),
+            Value::String("/".to_string()),
+            Value::List(vec![]),
+            Value::Option(None),
+        ]),
+        typ: IncomingHttpRequest::analysed_type(),
+    };
 
     let result1 = executor
         .invoke_and_await(
@@ -2161,4 +2209,109 @@ async fn wasi_incoming_request_handler_state(
                 ]))))
             ])
     );
+}
+
+/// Test scheduling an invocation for the worker itself.
+#[test_r::timeout(5000)]
+#[test]
+#[tracing::instrument]
+async fn scheduled_invocation_self(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("scheduled-invocation").store().await;
+
+    let worker_id = executor
+        .start_worker(&component_id, "scheduled-invocation-1")
+        .await;
+
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/scheduled-invocation-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let mut done = false;
+    while !done {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:it/scheduled-invocation-api.{get}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        if result.len() == 1 && result[0] == Value::U64(1) {
+            done = true;
+        } else {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+}
+
+/// Test scheduling an invocation for a different worker.
+#[test_r::timeout(5000)]
+#[test]
+#[tracing::instrument]
+async fn scheduled_invocation_other(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("scheduled-invocation").store().await;
+
+    let worker_id_1 = executor
+        .start_worker(&component_id, "scheduled-invocation-2")
+        .await;
+
+    let mut worker_2_env = HashMap::new();
+    worker_2_env.insert("COMPONENT_ID".to_string(), component_id.to_string());
+    worker_2_env.insert("WORKER_NAME".to_string(), worker_id_1.worker_name.clone());
+
+    let worker_id_2 = executor
+        .start_worker_with(
+            &component_id,
+            "scheduled-invocation-3",
+            vec![],
+            worker_2_env,
+        )
+        .await;
+
+    executor
+        .invoke_and_await(
+            &worker_id_2,
+            "golem:it/scheduled-invocation-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let mut done = false;
+    while !done {
+        let result = executor
+            .invoke_and_await(
+                &worker_id_1,
+                "golem:it/scheduled-invocation-api.{get}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        if result.len() == 1 && result[0] == Value::U64(1) {
+            done = true;
+        } else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

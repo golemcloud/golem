@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/wasm-rpc"
+repository = "https://github.com/golemcloud/golem"
 description = "Golem WASM RPC support library"
 
 include = []
@@ -22,8 +22,9 @@ async-recursion = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bigdecimal = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+chrono = { workspace = true }
 git-version = "0.3.9"
-golem-wasm-ast = { path = "../wasm-ast", version = "0.0.0", optional = true }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", optional = true }
 poem-openapi = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
@@ -95,6 +96,9 @@ package = "golem:rpc"
 
 [package.metadata.component.target]
 path = "wit"
+world = "wasm-rpc"
 
 [package.metadata.component.target.dependencies]
+"golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "wasi:io" = { path = "wit/deps/io" }
+"wasi:clocks" = { path = "wit/deps/clocks" }

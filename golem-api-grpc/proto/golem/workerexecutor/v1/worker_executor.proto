@@ -3,6 +3,7 @@ syntax = "proto3";
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/plugin_installation_id.proto";
+import public "golem/common/revert_worker_response.proto";
 import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invocation_context.proto";
 import public "golem/worker/log_event.proto";
@@ -46,6 +47,7 @@ service WorkerExecutor {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
+  rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
 
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
@@ -390,6 +392,19 @@ message DeactivatePluginRequest {
 }
 
 message DeactivatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message RevertWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.RevertWorkerTarget target = 3;
+}
+
+message RevertWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;

@@ -22,17 +22,18 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::DefaultFileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
+    DefaultHttpHandlerBindingHandler, HttpHandlerBindingHandler,
+};
 use worker_request_executor::UnauthorisedWorkerRequestExecutor;
 
-use golem_worker_service_base::gateway_api_definition::http::{
-    CompiledHttpApiDefinition, HttpApiDefinition,
-};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::{GatewaySessionStorageConfig, WorkerServiceBaseConfig};
 
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-    ApiDefinitionsLookup, HttpApiDefinitionLookup,
+    DefaultHttpApiDefinitionLookup, HttpApiDefinitionsLookup,
 };
 use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 use golem_worker_service_base::repo::api_definition;
@@ -56,7 +57,6 @@ use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
 };
-use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{
@@ -78,13 +78,8 @@ pub struct Services {
         Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
-    pub http_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<
-                InputHttpRequest,
-                ApiDefinition = CompiledHttpApiDefinition<DefaultNamespace>,
-            > + Sync
-            + Send,
-    >,
+    pub http_definition_lookup_service:
+        Arc<dyn HttpApiDefinitionsLookup<DefaultNamespace> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
     pub gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
@@ -92,6 +87,8 @@ pub struct Services {
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
+    pub http_handler_binding_handler:
+        Arc<dyn HttpHandlerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
 
 impl Services {
@@ -254,6 +251,12 @@ impl Services {
             worker_service.clone(),
         ));
 
+        let http_handler_binding_handler: Arc<
+            dyn HttpHandlerBindingHandler<DefaultNamespace> + Sync + Send,
+        > = Arc::new(DefaultHttpHandlerBindingHandler::new(
+            worker_to_http_service.clone(),
+        ));
+
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
@@ -281,8 +284,9 @@ impl Services {
             component_service.clone(),
         ));
 
-        let http_definition_lookup_service =
-            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
+        let http_definition_lookup_service = Arc::new(DefaultHttpApiDefinitionLookup::new(
+            deployment_service.clone(),
+        ));
 
         Ok(Services {
             worker_service,
@@ -295,6 +299,7 @@ impl Services {
             api_definition_validator_service,
             fileserver_binding_handler,
             gateway_session_store,
+            http_handler_binding_handler,
         })
     }
 }

@@ -5,7 +5,7 @@ mod tests {
     use test_r::{flaky, test, test_dep, timeout};
 
     use async_trait::async_trait;
-    use golem_wasm_rpc::Value;
+    use golem_wasm_rpc::IntoValueAndType;
     use rand::prelude::*;
     use std::env;
     use std::time::Duration;
@@ -364,7 +364,7 @@ mod tests {
 
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
             info!("Storing component");
-            let component_id = self.store_component("option-service").await;
+            let component_id = self.component("option-service").store().await;
             info!("ComponentId: {}", component_id);
 
             let mut worker_ids = Vec::new();
@@ -400,9 +400,7 @@ mod tests {
                                     &worker_id,
                                     &idempotency_key,
                                     "golem:it/api.{echo}",
-                                    vec![Value::Option(Some(Box::new(Value::String(
-                                        "Hello".to_string(),
-                                    ))))],
+                                    vec![Some("Hello".to_string()).into_value_and_type()],
                                 )
                                 .await,
                         )

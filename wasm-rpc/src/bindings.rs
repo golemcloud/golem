@@ -4,13 +4,14 @@
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod golem {
-    pub mod rpc {
+    pub mod rpc0_1_2 {
         #[allow(dead_code, clippy::all)]
         pub mod types {
             #[used]
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
+            pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             pub type NodeIndex = i32;
             pub type ResourceId = u64;
@@ -367,7 +368,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
                             fn drop(_: u32);
@@ -404,7 +405,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
@@ -422,7 +423,7 @@ pub mod golem {
                         let ptr1 = vec1.as_ptr().cast::<u8>();
                         let len1 = vec1.len();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[constructor]wasm-rpc"]
                             fn wit_import(_: *mut u8, _: usize) -> i32;
@@ -684,7 +685,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke-and-await"]
                             fn wit_import(
@@ -1320,7 +1321,7 @@ pub mod golem {
                         }
                         let ptr13 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.invoke"]
                             fn wit_import(
@@ -1678,7 +1679,7 @@ pub mod golem {
                             }
                         }
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
                             fn wit_import(
@@ -1718,12 +1719,305 @@ pub mod golem {
                     }
                 }
             }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Schedule invocation for later
+                pub fn schedule_invocation(
+                    &self,
+                    scheduled_time: Datetime,
+                    function_name: &str,
+                    function_params: &[WitValue],
+                ) {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        let super::super::super::wasi::clocks::wall_clock::Datetime {
+                            seconds: seconds0,
+                            nanoseconds: nanoseconds0,
+                        } = scheduled_time;
+                        let vec1 = function_name;
+                        let ptr1 = vec1.as_ptr().cast::<u8>();
+                        let len1 = vec1.len();
+                        let vec13 = function_params;
+                        let len13 = vec13.len();
+                        let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
+                            vec13.len() * 8,
+                            4,
+                        );
+                        let result13 = if layout13.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout13);
+                            }
+                            ptr
+                        } else {
+                            ::core::ptr::null_mut()
+                        };
+                        for (i, e) in vec13.into_iter().enumerate() {
+                            let base = result13.add(i * 8);
+                            {
+                                let WitValue { nodes: nodes2 } = e;
+                                let vec12 = nodes2;
+                                let len12 = vec12.len();
+                                let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec12.len() * 24,
+                                    8,
+                                );
+                                let result12 = if layout12.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                    if ptr.is_null() {
+                                        _rt::alloc::handle_alloc_error(layout12);
+                                    }
+                                    ptr
+                                } else {
+                                    ::core::ptr::null_mut()
+                                };
+                                for (i, e) in vec12.into_iter().enumerate() {
+                                    let base = result12.add(i * 24);
+                                    {
+                                        match e {
+                                            WitNode::RecordValue(e) => {
+                                                *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(12).cast::<usize>() = len3;
+                                                *base.add(8).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            WitNode::VariantValue(e) => {
+                                                *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                let (t4_0, t4_1) = e;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(t4_0);
+                                                match t4_1 {
+                                                    Some(e) => {
+                                                        *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::EnumValue(e) => {
+                                                *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::FlagsValue(e) => {
+                                                *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                let vec5 = e;
+                                                let len5 = vec5.len();
+                                                let layout5 = _rt::alloc::Layout::from_size_align_unchecked(
+                                                    vec5.len() * 1,
+                                                    1,
+                                                );
+                                                let result5 = if layout5.size() != 0 {
+                                                    let ptr = _rt::alloc::alloc(layout5).cast::<u8>();
+                                                    if ptr.is_null() {
+                                                        _rt::alloc::handle_alloc_error(layout5);
+                                                    }
+                                                    ptr
+                                                } else {
+                                                    ::core::ptr::null_mut()
+                                                };
+                                                for (i, e) in vec5.into_iter().enumerate() {
+                                                    let base = result5.add(i * 1);
+                                                    {
+                                                        *base.add(0).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        }) as u8;
+                                                    }
+                                                }
+                                                *base.add(12).cast::<usize>() = len5;
+                                                *base.add(8).cast::<*mut u8>() = result5;
+                                                cleanup_list.extend_from_slice(&[(result5, layout5)]);
+                                            }
+                                            WitNode::TupleValue(e) => {
+                                                *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                *base.add(12).cast::<usize>() = len6;
+                                                *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                            }
+                                            WitNode::ListValue(e) => {
+                                                *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                let vec7 = e;
+                                                let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                let len7 = vec7.len();
+                                                *base.add(12).cast::<usize>() = len7;
+                                                *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                            }
+                                            WitNode::OptionValue(e) => {
+                                                *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                match e {
+                                                    Some(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(12).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::ResultValue(e) => {
+                                                *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                match e {
+                                                    Ok(e) => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    Err(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                };
+                                            }
+                                            WitNode::PrimU8(e) => {
+                                                *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimU16(e) => {
+                                                *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimU32(e) => {
+                                                *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimU64(e) => {
+                                                *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimS8(e) => {
+                                                *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimS16(e) => {
+                                                *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimS32(e) => {
+                                                *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimS64(e) => {
+                                                *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimFloat32(e) => {
+                                                *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            WitNode::PrimFloat64(e) => {
+                                                *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            WitNode::PrimChar(e) => {
+                                                *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimBool(e) => {
+                                                *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                *base.add(8).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                }) as u8;
+                                            }
+                                            WitNode::PrimString(e) => {
+                                                *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                let vec8 = e;
+                                                let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                let len8 = vec8.len();
+                                                *base.add(12).cast::<usize>() = len8;
+                                                *base.add(8).cast::<*mut u8>() = ptr8.cast_mut();
+                                            }
+                                            WitNode::Handle(e) => {
+                                                *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                let (t9_0, t9_1) = e;
+                                                let Uri { value: value10 } = t9_0;
+                                                let vec11 = value10;
+                                                let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                let len11 = vec11.len();
+                                                *base.add(12).cast::<usize>() = len11;
+                                                *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t9_1);
+                                            }
+                                        }
+                                    }
+                                }
+                                *base.add(4).cast::<usize>() = len12;
+                                *base.add(0).cast::<*mut u8>() = result12;
+                                cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
+                        extern "C" {
+                            #[link_name = "[method]wasm-rpc.schedule-invocation"]
+                            fn wit_import(
+                                _: i32,
+                                _: i64,
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: i64,
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            _rt::as_i64(seconds0),
+                            _rt::as_i32(nanoseconds0),
+                            ptr1.cast_mut(),
+                            len1,
+                            result13,
+                            len13,
+                        );
+                        if layout13.size() != 0 {
+                            _rt::alloc::dealloc(result13.cast(), layout13);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                    }
+                }
+            }
             impl FutureInvokeResult {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.subscribe"]
                             fn wit_import(_: i32) -> i32;
@@ -1750,7 +2044,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                         extern "C" {
                             #[link_name = "[method]future-invoke-result.get"]
                             fn wit_import(_: i32, _: *mut u8);
@@ -2577,7 +2871,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                     extern "C" {
                         #[link_name = "extract-value"]
                         fn wit_import(
@@ -3341,7 +3635,7 @@ pub mod golem {
                     }
                     let ptr27 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.1.1")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.1.2")]
                     extern "C" {
                         #[link_name = "extract-type"]
                         fn wit_import(
@@ -3598,6 +3892,114 @@ pub mod golem {
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod wasi {
+    pub mod clocks {
+        /// WASI Wall Clock is a clock API intended to let users query the current
+        /// time. The name "wall" makes an analogy to a "clock on the wall", which
+        /// is not necessarily monotonic as it may be reset.
+        ///
+        /// It is intended to be portable at least between Unix-family platforms and
+        /// Windows.
+        ///
+        /// A wall clock is a clock which measures the date and time according to
+        /// some external reference.
+        ///
+        /// External references may be reset, so this clock is not necessarily
+        /// monotonic, making it unsuitable for measuring elapsed time.
+        ///
+        /// It is intended for reporting the current date and time for humans.
+        #[allow(dead_code, clippy::all)]
+        pub mod wall_clock {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            /// A time and date in seconds plus nanoseconds.
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct Datetime {
+                pub seconds: u64,
+                pub nanoseconds: u32,
+            }
+            impl ::core::fmt::Debug for Datetime {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Datetime")
+                        .field("seconds", &self.seconds)
+                        .field("nanoseconds", &self.nanoseconds)
+                        .finish()
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Read the current value of the clock.
+            ///
+            /// This clock is not monotonic, therefore calling this function repeatedly
+            /// will not necessarily produce a sequence of non-decreasing values.
+            ///
+            /// The returned timestamps represent the number of seconds since
+            /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
+            /// also known as [Unix Time].
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            ///
+            /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
+            /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
+            pub fn now() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "now"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Query the resolution of the clock.
+            ///
+            /// The nanoseconds field of the output is always less than 1000000000.
+            pub fn resolution() -> Datetime {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                        #[link_name = "resolution"]
+                        fn wit_import(_: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i32>();
+                    Datetime {
+                        seconds: l1 as u64,
+                        nanoseconds: l2 as u32,
+                    }
+                }
+            }
+        }
+    }
     pub mod io {
         /// A poll API intended to let users wait for I/O events on multiple handles
         /// at once.
@@ -3996,48 +4398,53 @@ mod _rt {
     extern crate alloc as alloc_crate;
 }
 #[cfg(target_arch = "wasm32")]
-#[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc@0.1.1:wit-value:encoded world"]
+#[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc:wasm-rpc:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1875] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd3\x0d\x01A\x02\x01\
-A\x05\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
-\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
-ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
-\x03\0\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B@\x02\x03\x02\x01\
-\x01\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01w\x04\0\x0b\
-resource-id\x03\0\x04\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
-\x06\x01o\x02s\x03\x01p\x08\x01k\x03\x01o\x02s\x0a\x01p\x0b\x01ps\x01p\x03\x01o\x02\
-\x0a\x0a\x01o\x02\x05\x07\x01q\x16\x0brecord-type\x01\x09\0\x0cvariant-type\x01\x0c\
-\0\x09enum-type\x01\x0d\0\x0aflags-type\x01\x0d\0\x0atuple-type\x01\x0e\0\x09lis\
-t-type\x01\x03\0\x0boption-type\x01\x03\0\x0bresult-type\x01\x0f\0\x0cprim-u8-ty\
-pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
--type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
--f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
-prim-string-type\0\0\x0bhandle-type\x01\x10\0\x04\0\x0dwit-type-node\x03\0\x11\x01\
-p\x12\x01r\x01\x05nodes\x13\x04\0\x08wit-type\x03\0\x14\x01r\x01\x05values\x04\0\
-\x03uri\x03\0\x16\x01o\x02y\x0a\x01p\x7f\x01j\x01\x0a\x01\x0a\x01o\x02\x17w\x01q\
-\x16\x0crecord-value\x01\x0e\0\x0dvariant-value\x01\x18\0\x0aenum-value\x01y\0\x0b\
-flags-value\x01\x19\0\x0btuple-value\x01\x0e\0\x0alist-value\x01\x0e\0\x0coption\
--value\x01\x0a\0\x0cresult-value\x01\x1a\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
-prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
-rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1b\0\
-\x04\0\x08wit-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x09wit-value\x03\
-\0\x1f\x01r\x02\x05value\x20\x03typ\x15\x04\0\x0evalue-and-type\x03\0!\x01q\x04\x0e\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2102] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb7\x0f\x01A\x02\x01\
+A\x08\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
+@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
+wall-clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04sel\
+f\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\
+\0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\
+\0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\
+\x03\0\x01\x08pollable\x01BD\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
+\x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01z\x04\0\x0anode-index\x03\0\x04\x01w\
+\x04\0\x0bresource-id\x03\0\x06\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-\
+mode\x03\0\x08\x01o\x02s\x05\x01p\x0a\x01k\x05\x01o\x02s\x0c\x01p\x0d\x01ps\x01p\
+\x05\x01o\x02\x0c\x0c\x01o\x02\x07\x09\x01q\x16\x0brecord-type\x01\x0b\0\x0cvari\
+ant-type\x01\x0e\0\x09enum-type\x01\x0f\0\x0aflags-type\x01\x0f\0\x0atuple-type\x01\
+\x10\0\x09list-type\x01\x05\0\x0boption-type\x01\x05\0\x0bresult-type\x01\x11\0\x0c\
+prim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0c\
+prim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0d\
+prim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\
+\0\x10prim-string-type\0\0\x0bhandle-type\x01\x12\0\x04\0\x0dwit-type-node\x03\0\
+\x13\x01p\x14\x01r\x01\x05nodes\x15\x04\0\x08wit-type\x03\0\x16\x01r\x01\x05valu\
+es\x04\0\x03uri\x03\0\x18\x01o\x02y\x0c\x01p\x7f\x01j\x01\x0c\x01\x0c\x01o\x02\x19\
+w\x01q\x16\x0crecord-value\x01\x10\0\x0dvariant-value\x01\x1a\0\x0aenum-value\x01\
+y\0\x0bflags-value\x01\x1b\0\x0btuple-value\x01\x10\0\x0alist-value\x01\x10\0\x0c\
+option-value\x01\x0c\0\x0cresult-value\x01\x1c\0\x07prim-u8\x01}\0\x08prim-u16\x01\
+{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08\
+prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\
+\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x1d\
+\0\x04\0\x08wit-node\x03\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x09wit-value\
+\x03\0!\x01r\x02\x05value\"\x03typ\x17\x04\0\x0evalue-and-type\x03\0#\x01q\x04\x0e\
 protocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-er\
-ror\x01s\0\x04\0\x09rpc-error\x03\0#\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
-nvoke-result\x03\x01\x01i%\x01@\x01\x08location\x17\0'\x04\0\x15[constructor]was\
-m-rpc\x01(\x01h%\x01p\x20\x01j\x01\x20\x01$\x01@\x03\x04self)\x0dfunction-names\x0f\
-function-params*\0+\x04\0![method]wasm-rpc.invoke-and-await\x01,\x01j\0\x01$\x01\
-@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0-\x04\0\x17[method]wasm-rp\
-c.invoke\x01.\x01i&\x01@\x03\x04self)\x0dfunction-names\x0ffunction-params*\0/\x04\
-\0'[method]wasm-rpc.async-invoke-and-await\x010\x01h&\x01i\x01\x01@\x01\x04self1\
-\02\x04\0&[method]future-invoke-result.subscribe\x013\x01k+\x01@\x01\x04self1\04\
-\x04\0\x20[method]future-invoke-result.get\x015\x01@\x01\x03vnt\"\0\x20\x04\0\x0d\
-extract-value\x016\x01@\x01\x03vnt\"\0\x15\x04\0\x0cextract-type\x017\x03\0\x15g\
-olem:rpc/types@0.1.1\x05\x02\x04\0\x19golem:rpc/wit-value@0.1.1\x04\0\x0b\x0f\x01\
-\0\x09wit-value\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\
-\x070.220.0\x10wit-bindgen-rust\x060.36.0";
+ror\x01s\0\x04\0\x09rpc-error\x03\0%\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-i\
+nvoke-result\x03\x01\x01i'\x01@\x01\x08location\x19\0)\x04\0\x15[constructor]was\
+m-rpc\x01*\x01h'\x01p\"\x01j\x01\"\x01&\x01@\x03\x04self+\x0dfunction-names\x0ff\
+unction-params,\0-\x04\0![method]wasm-rpc.invoke-and-await\x01.\x01j\0\x01&\x01@\
+\x03\x04self+\x0dfunction-names\x0ffunction-params,\0/\x04\0\x17[method]wasm-rpc\
+.invoke\x010\x01i(\x01@\x03\x04self+\x0dfunction-names\x0ffunction-params,\01\x04\
+\0'[method]wasm-rpc.async-invoke-and-await\x012\x01@\x04\x04self+\x0escheduled-t\
+ime\x01\x0dfunction-names\x0ffunction-params,\x01\0\x04\0$[method]wasm-rpc.sched\
+ule-invocation\x013\x01h(\x01i\x03\x01@\x01\x04self4\05\x04\0&[method]future-inv\
+oke-result.subscribe\x016\x01k-\x01@\x01\x04self4\07\x04\0\x20[method]future-inv\
+oke-result.get\x018\x01@\x01\x03vnt$\0\"\x04\0\x0dextract-value\x019\x01@\x01\x03\
+vnt$\0\x17\x04\0\x0cextract-type\x01:\x03\0\x15golem:rpc/types@0.1.2\x05\x04\x04\
+\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\0\0\0G\x09producers\
+\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36\
+.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

@@ -32,13 +32,14 @@ pub fn new(
     match example {
         Some(example) => {
             let cwd = env::current_dir().expect("Failed to get current working directory");
+            let target_path = cwd.join(component_name.as_str());
             match instantiate_example(
                 example,
                 &ExampleParameters {
                     component_name,
                     package_name: package_name
                         .unwrap_or(PackageName::from_string("golem:component").unwrap()),
-                    target_path: cwd,
+                    target_path,
                 },
                 TargetExistsResolveMode::Fail,
             ) {

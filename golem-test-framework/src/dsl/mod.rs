@@ -24,17 +24,16 @@ use golem_api_grpc::proto::golem::worker::v1::{
     fork_worker_response, get_oplog_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
     invoke_and_await_response, invoke_response, launch_new_worker_response,
-    list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
-    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
-    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    list_directory_response, resume_worker_response, revert_worker_response, search_oplog_response,
+    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
+    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{
-    log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
-};
+use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
@@ -51,8 +50,8 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
-use golem_service_base::model::PublicOplogEntryWithIndex;
-use golem_wasm_rpc::Value;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -62,35 +61,126 @@ use tokio::sync::oneshot::Sender;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
+    dsl: &'a DSL,
+    name: String,
+    component_type: ComponentType,
+    unique: bool,
+    unverified: bool,
+    files: Vec<InitialComponentFile>,
+    dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
+}
+
+impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
+    pub fn new(dsl: &'a DSL, name: impl AsRef<str>) -> Self {
+        Self {
+            dsl,
+            name: name.as_ref().to_string(),
+            component_type: ComponentType::Durable,
+            unique: false,
+            unverified: false,
+            files: vec![],
+            dynamic_linking: vec![],
+        }
+    }
+
+    /// Set the component type to ephemeral.
+    pub fn ephemeral(mut self) -> Self {
+        self.component_type = ComponentType::Ephemeral;
+        self
+    }
+
+    /// Set the component type to durable.
+    pub fn durable(mut self) -> Self {
+        self.component_type = ComponentType::Durable;
+        self
+    }
+
+    /// Always create as a new component - otherwise, if the same component was already uploaded, it will be reused
+    pub fn unique(mut self) -> Self {
+        self.unique = true;
+        self
+    }
+
+    /// Reuse an existing component of the same WASM if it exists
+    pub fn reused(mut self) -> Self {
+        self.unique = false;
+        self
+    }
+
+    /// Local filesystem mode only - do not try to parse the component
+    pub fn unverified(mut self) -> Self {
+        self.unverified = true;
+        self
+    }
+
+    /// Local filesystem mode only - parse the component before storing
+    pub fn verified(mut self) -> Self {
+        self.unverified = false;
+        self
+    }
+
+    /// Set the initial files for the component
+    pub fn with_files(mut self, files: &[InitialComponentFile]) -> Self {
+        self.files = files.to_vec();
+        self
+    }
+
+    /// Adds an initial file to the component
+    pub fn add_file(mut self, file: InitialComponentFile) -> Self {
+        self.files.push(file);
+        self
+    }
+
+    /// Set the dynamic linking for the component
+    pub fn with_dynamic_linking(
+        mut self,
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> Self {
+        self.dynamic_linking = dynamic_linking.to_vec();
+        self
+    }
+
+    /// Adds a dynamic linked instance to the component
+    pub fn add_dynamic_linking(
+        mut self,
+        name: &'static str,
+        instance: DynamicLinkedInstance,
+    ) -> Self {
+        self.dynamic_linking.push((name, instance));
+        self
+    }
+
+    /// Stores the component
+    pub async fn store(self) -> ComponentId {
+        self.dsl
+            .store_component_with(
+                &self.name,
+                self.component_type,
+                self.unique,
+                self.unverified,
+                &self.files,
+                &self.dynamic_linking,
+            )
+            .await
+    }
+}
+
 #[async_trait]
 pub trait TestDsl {
-    async fn store_component(&self, name: &str) -> ComponentId;
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
-    async fn store_unique_component(&self, name: &str) -> ComponentId;
-    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self>;
+
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
@@ -98,7 +188,7 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
@@ -165,40 +255,40 @@ pub trait TestDsl {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_and_await(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_json(
         &self,
@@ -271,41 +361,65 @@ pub trait TestDsl {
         target_worker_id: &WorkerId,
         oplog_index: OplogIndex,
     ) -> crate::Result<()>;
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()>;
 }
 
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-
-        self.component_service()
-            .get_or_add_component(&source_path, ComponentType::Durable)
-            .await
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self> {
+        StoreComponentBuilder::new(self, name)
     }
 
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let component_name = if unique {
+            let uuid = Uuid::new_v4();
+            format!("{name}-{uuid}")
+        } else {
+            match component_type {
+                ComponentType::Durable => name.to_string(),
+                ComponentType::Ephemeral => format!("{name}-ephemeral"),
+            }
+        };
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
 
-        self.component_service()
-            .get_or_add_component(&source_path, ComponentType::Ephemeral)
-            .await
-    }
-
-    async fn store_unique_component(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        self.component_service()
-            .add_component_with_name(&source_path, &unique_name, ComponentType::Durable)
-            .await
-            .expect("Failed to store unique component")
-    }
-
-    async fn store_component_unverified(&self, name: &str) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
-            .get_or_add_component_unverified(&source_path, ComponentType::Durable)
-            .await
+        if unique {
+            self.component_service()
+                .add_component(
+                    &source_path,
+                    &component_name,
+                    component_type,
+                    files,
+                    &dynamic_linking,
+                    unverified,
+                )
+                .await
+                .expect("Failed to add component")
+        } else {
+            self.component_service()
+                .get_or_add_component(
+                    &source_path,
+                    &component_name,
+                    component_type,
+                    files,
+                    &dynamic_linking,
+                    unverified,
+                )
+                .await
+        }
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
@@ -316,93 +430,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to store component");
     }
 
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                &unique_name,
-                component_type,
-                files,
-                &HashMap::new(),
-            )
-            .await
-            .expect("Failed to store component")
-    }
-
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
-            .add_component_with_files(&source_path, name, component_type, files, &HashMap::new())
-            .await
-            .expect("Failed to store component with id {component_id}")
-    }
-
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                name,
-                ComponentType::Durable,
-                &[],
-                &dynamic_linking,
-            )
-            .await
-            .expect("Failed to store component with id {component_id}")
-    }
-
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        let uuid = Uuid::new_v4();
-        let unique_name = format!("{name}-{uuid}");
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
-        self.component_service()
-            .add_component_with_files(
-                &source_path,
-                &unique_name,
-                ComponentType::Durable,
-                &[],
-                &dynamic_linking,
-            )
-            .await
-            .expect("Failed to store component")
-    }
-
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey {
+        if self.component_service().handles_ifs_upload() {
+            return InitialComponentFileKey("dummy-ifs-key".to_string());
+        }
+
         let source_path = self.component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await
@@ -417,7 +453,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .update_component(component_id, &source_path, ComponentType::Durable)
+            .update_component(
+                component_id,
+                &source_path,
+                ComponentType::Durable,
+                None,
+                None,
+            )
             .await
     }
 
@@ -425,16 +467,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .update_component_with_files(
+            .update_component(
                 component_id,
                 &source_path,
                 ComponentType::Durable,
                 files,
-                &HashMap::new(),
+                None,
             )
             .await
     }
@@ -579,20 +621,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke(InvokeRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: None,
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke(
+                target_worker_id.into(),
+                None,
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -612,20 +652,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke(InvokeRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke(
+                target_worker_id.into(),
+                Some(idempotency_key.clone().into()),
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -644,7 +682,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
     }
@@ -654,7 +692,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         TestDsl::invoke_and_await_custom_with_key(
             self,
@@ -670,7 +708,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_custom_with_key(
@@ -688,20 +726,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
-            .invoke_and_await(InvokeAndAwaitRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters {
-                    params: params.into_iter().map(|v| v.into()).collect(),
-                }),
-                context: None,
-            })
+            .invoke_and_await(
+                target_worker_id.into(),
+                Some(idempotency_key.clone().into()),
+                function_name.to_string(),
+                Some(params),
+                None,
+            )
             .await?;
 
         match invoke_response.result {
@@ -1215,6 +1251,24 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             _ => Err(anyhow!("Failed to fork worker: unknown error")),
         }
     }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
+        let response = self
+            .worker_service()
+            .revert_worker(RevertWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                target: Some(target.into()),
+            })
+            .await?;
+
+        match response.result {
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to fork worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to revert worker: unknown error")),
+        }
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1435,7 +1489,7 @@ pub fn to_worker_metadata(
                 oplog_idx: OplogIndex::default(),
                 status: metadata.status.try_into().expect("invalid status"),
                 overridden_retry_config: None, // not passed through gRPC
-                deleted_regions: DeletedRegions::new(),
+                skipped_regions: DeletedRegions::new(),
                 pending_invocations: vec![],
                 pending_updates: metadata
                     .updates
@@ -1508,7 +1562,7 @@ pub fn to_worker_metadata(
                         )
                     })
                     .collect(),
-                extensions: WorkerStatusRecordExtensions::Extension1 {
+                extensions: WorkerStatusRecordExtensions::Extension2 {
                     active_plugins: HashSet::from_iter(
                         metadata
                             .active_plugins
@@ -1516,6 +1570,7 @@ pub fn to_worker_metadata(
                             .cloned()
                             .map(|id| id.try_into().expect("invalid plugin installation id")),
                     ),
+                    deleted_regions: DeletedRegions::new(),
                 },
             },
             parent: None,
@@ -1526,40 +1581,28 @@ pub fn to_worker_metadata(
 
 #[async_trait]
 pub trait TestDslUnsafe {
-    async fn store_component(&self, name: &str) -> ComponentId;
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
-    async fn store_unique_component(&self, name: &str) -> ComponentId;
-    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    type Safe: TestDsl;
+
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
+
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId;
+
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId;
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
     async fn update_component_with_files(
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion;
     async fn add_initial_component_file(
         &self,
@@ -1620,27 +1663,27 @@ pub trait TestDslUnsafe {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error>;
     async fn invoke_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error>;
     async fn invoke_and_await(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_json(
         &self,
@@ -1703,63 +1746,41 @@ pub trait TestDslUnsafe {
         target_worker_id: &WorkerId,
         oplog_index: OplogIndex,
     );
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget);
 }
 
 #[async_trait]
 impl<T: TestDsl + Sync> TestDslUnsafe for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_component(self, name).await
+    type Safe = T;
+
+    fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
+        StoreComponentBuilder::new(self, name)
     }
 
-    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_ephemeral_component(self, name).await
-    }
-
-    async fn store_unique_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_unique_component(self, name).await
-    }
-
-    async fn store_component_unverified(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_component_unverified(self, name).await
+    async fn store_component_with(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: &[InitialComponentFile],
+        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+    ) -> ComponentId {
+        <T as TestDsl>::store_component_with(
+            self,
+            name,
+            component_type,
+            unique,
+            unverified,
+            files,
+            dynamic_linking,
+        )
+        .await
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
-    }
-
-    async fn store_unique_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        <T as TestDsl>::store_unique_component_with_files(self, name, component_type, files).await
-    }
-
-    async fn store_component_with_files(
-        &self,
-        name: &str,
-        component_type: ComponentType,
-        files: &[InitialComponentFile],
-    ) -> ComponentId {
-        <T as TestDsl>::store_component_with_files(self, name, component_type, files).await
-    }
-
-    async fn store_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        <T as TestDsl>::store_component_with_dynamic_linking(self, name, dynamic_linking).await
-    }
-
-    async fn store_unique_component_with_dynamic_linking(
-        &self,
-        name: &str,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
-        <T as TestDsl>::store_unique_component_with_dynamic_linking(self, name, dynamic_linking)
-            .await
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
@@ -1770,7 +1791,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Option<Vec<InitialComponentFile>>,
+        files: Option<&[InitialComponentFile]>,
     ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
@@ -1855,7 +1876,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error> {
         <T as TestDsl>::invoke(self, worker_id, function_name, params)
             .await
@@ -1867,7 +1888,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<(), Error> {
         <T as TestDsl>::invoke_with_key(self, worker_id, idempotency_key, function_name, params)
             .await
@@ -1878,7 +1899,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error> {
         <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
             .await
@@ -1901,7 +1922,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<Value>,
+        params: Vec<ValueAndType>,
     ) -> Result<Vec<Value>, Error> {
         <T as TestDsl>::invoke_and_await_with_key(
             self,
@@ -2061,5 +2082,11 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
             .await
             .expect("Failed to fork worker")
+    }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) {
+        <T as TestDsl>::revert(self, worker_id, target)
+            .await
+            .expect("Failed to revert worker")
     }
 }

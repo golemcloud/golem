@@ -34,48 +34,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    Default,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct OplogIndex(u64);
-
-impl OplogIndex {
-    pub const NONE: OplogIndex = OplogIndex(0);
-    pub const INITIAL: OplogIndex = OplogIndex(1);
-
-    pub const fn from_u64(value: u64) -> OplogIndex {
-        OplogIndex(value)
-    }
-
-    /// Gets the previous oplog index
-    pub fn previous(&self) -> OplogIndex {
-        OplogIndex(self.0 - 1)
-    }
-
-    /// Gets the next oplog index
-    pub fn next(&self) -> OplogIndex {
-        OplogIndex(self.0 + 1)
-    }
-
-    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
-    /// having `count` elements.
-    pub fn range_end(&self, count: u64) -> OplogIndex {
-        OplogIndex(self.0 + count - 1)
-    }
-}
+pub use crate::base_model::OplogIndex;
 
 pub struct OplogIndexRange {
     current: u64,
@@ -102,28 +61,6 @@ impl OplogIndexRange {
             current: start.0,
             end: end.0,
         }
-    }
-}
-
-impl Display for OplogIndex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<OplogIndex> for u64 {
-    fn from(value: OplogIndex) -> Self {
-        value.0
-    }
-}
-
-impl IntoValue for OplogIndex {
-    fn into_value(self) -> Value {
-        Value::U64(self.0)
-    }
-
-    fn get_type() -> AnalysedType {
-        u64()
     }
 }
 
@@ -384,6 +321,9 @@ pub enum OplogEntry {
         invocation: WorkerInvocation,
     },
     /// An update request arrived and will be applied as soon the worker restarts
+    ///
+    /// For automatic updates worker is expected to immediately get interrupted and restarted after inserting this entry.
+    /// For manual updates, this entry is only inserted when the worker is idle, and it is also restarted.
     PendingUpdate {
         timestamp: Timestamp,
         description: UpdateDescription,
@@ -464,6 +404,11 @@ pub enum OplogEntry {
         target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
+    },
+    // Similar to `Jump` but caused by an external revert request. TODO: Golem 2.0 should probably merge with Jump
+    Revert {
+        timestamp: Timestamp,
+        dropped_region: OplogRegion,
     },
 }
 
@@ -660,6 +605,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn revert(dropped_region: OplogRegion) -> OplogEntry {
+        OplogEntry::Revert {
+            timestamp: Timestamp::now_utc(),
+            dropped_region,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -712,6 +664,7 @@ impl OplogEntry {
                 | OplogEntry::Restart { .. }
                 | OplogEntry::ActivatePlugin { .. }
                 | OplogEntry::DeactivatePlugin { .. }
+                | OplogEntry::Revert { .. }
         )
     }
 
@@ -746,7 +699,8 @@ impl OplogEntry {
             | OplogEntry::CreateV1 { timestamp, .. }
             | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
-            | OplogEntry::DeactivatePlugin { timestamp, .. } => *timestamp,
+            | OplogEntry::DeactivatePlugin { timestamp, .. }
+            | OplogEntry::Revert { timestamp, .. } => *timestamp,
         }
     }
 

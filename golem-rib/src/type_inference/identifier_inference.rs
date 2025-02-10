@@ -15,7 +15,7 @@
 use crate::Expr;
 
 pub fn infer_all_identifiers(expr: &mut Expr) -> Result<(), String> {
-    // We scan top-down and bottom-up to inform the type info between the identifiers
+    // We scan top-down and bottom-up to inform the type between the identifiers
     // It doesn't matter which order we do it in (i.e, which identifier expression has the right type isn't a problem),
     // as we accumulate all the types in both directions
     internal::infer_all_identifiers_bottom_up(expr)?;

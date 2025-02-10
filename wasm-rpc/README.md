@@ -18,19 +18,24 @@ The `golem-wasm-rpc` crate can be both used in host and guest environments:
 To compile the host version:
 
 ```shell
-cargo build -p wasm-rpc --no-default-features --features host
+cargo build -p golem-wasm-rpc --no-default-features --features host
 ```
 
 To compile the guest version, has minimal dependencies and feature set to be used in generated stubs:
 
 ```shell
-cargo component build -p wasm-rpc --no-default-features --features stub
+cargo component build -p golem-wasm-rpc --no-default-features --features stub
 ```
 
 ## Feature flags
 - `arbitrary` adds an `Arbitrary` instance for `Value`
+- `bincode` adds Bincode codecs for some types
+- `host-bindings` enables WIT-generated types for wasmtime hosts
 - `json` adds conversion functions for mapping of a WIT value and type definition to/from JSON
+- `poem_openapi` adds poem OpenAPI type class instances for some of the types
 - `protobuf` adds the protobuf message types
+- `serde` adds serde JSON serialization for some of the types
+- `text` enables `wasm-wave` based text representation for values
 - `wasmtime` adds conversion to `wasmtime` `Val` values
-- `host` enables all features: `arbitrary`, `json`, `protobuf`, `typeinfo`, and `wasmtime`
+- `host` enables all features: `arbitrary`, `bincode`, `host-bindings`, `json`, `poem_openapi`, `protobuf`, `serde`, `text`, `typeinfo`, and `wasmtime`
 - `stub` is to be used in generated WASM stubs and disables all features, and generates guest bindings instead of host bindings

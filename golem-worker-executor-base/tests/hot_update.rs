@@ -21,7 +21,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
@@ -35,13 +35,13 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
-struct F1Blocker {
+pub struct F1Blocker {
     pub value: u64,
     pub reached: tokio::sync::oneshot::Sender<()>,
     pub resume: tokio::sync::oneshot::Receiver<()>,
 }
 
-struct F1Control {
+pub struct F1Control {
     reached: Option<tokio::sync::oneshot::Receiver<()>>,
     resume: tokio::sync::oneshot::Sender<()>,
 }
@@ -58,7 +58,7 @@ impl F1Control {
     }
 }
 
-struct TestHttpServer {
+pub struct TestHttpServer {
     handle: JoinHandle<()>,
     f1_blocker: Arc<Mutex<Option<F1Blocker>>>,
 }
@@ -144,7 +144,7 @@ async fn auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "auto_update_on_running", vec![], env)
         .await;
@@ -164,7 +164,7 @@ async fn auto_update_on_running(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(50)],
+                vec![50u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -213,7 +213,7 @@ async fn auto_update_on_idle(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
@@ -260,7 +260,7 @@ async fn failing_auto_update_on_idle(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "failing_auto_update_on_idle", vec![], env)
         .await;
@@ -272,7 +272,11 @@ async fn failing_auto_update_on_idle(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -312,7 +316,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap();
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -372,7 +376,7 @@ async fn failing_auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "failing_auto_update_on_running", vec![], env)
         .await;
@@ -397,7 +401,7 @@ async fn failing_auto_update_on_running(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(20)],
+                vec![20u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -453,7 +457,7 @@ async fn manual_update_on_idle(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2").await;
+    let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
         .start_worker_with(&component_id, "manual_update_on_idle", vec![], env)
         .await;
@@ -465,7 +469,11 @@ async fn manual_update_on_idle(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -514,7 +522,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -531,7 +539,11 @@ async fn manual_update_on_idle_without_save_snapshot(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -574,7 +586,7 @@ async fn auto_update_on_running_followed_by_manual(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v1").await;
+    let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -605,7 +617,7 @@ async fn auto_update_on_running_followed_by_manual(
             .invoke_and_await(
                 &worker_id_clone,
                 "golem:component/api.{f1}",
-                vec![Value::U64(20)],
+                vec![20u64.into_value_and_type()],
             )
             .await
             .unwrap()
@@ -666,7 +678,7 @@ async fn manual_update_on_idle_with_failing_load(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2").await;
+    let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -683,7 +695,11 @@ async fn manual_update_on_idle_with_failing_load(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 
@@ -725,7 +741,11 @@ async fn manual_update_on_idle_using_v11(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
-    let component_id = executor.store_unique_component("update-test-v2-11").await;
+    let component_id = executor
+        .component("update-test-v2-11")
+        .unique()
+        .store()
+        .await;
     let worker_id = executor
         .start_worker_with(
             &component_id,
@@ -742,7 +762,11 @@ async fn manual_update_on_idle_using_v11(
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
         .await
         .unwrap();
 

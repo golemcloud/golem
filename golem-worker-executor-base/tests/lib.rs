@@ -40,6 +40,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
+use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 
 mod common;
 
@@ -55,6 +56,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
+pub mod revert;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
@@ -75,6 +77,7 @@ tag_suite!(guest_languages1, group2);
 
 tag_suite!(transactions, group3);
 tag_suite!(wasi, group3);
+tag_suite!(revert, group3);
 
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);
@@ -176,7 +179,7 @@ impl WorkerExecutorTestDependencies {
             Level::ERROR,
         ));
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+            SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
         );
         let component_directory = Path::new("../test-components").to_path_buf();
         let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
@@ -309,4 +312,11 @@ pub fn last_unique_id() -> LastUniqueId {
     LastUniqueId {
         id: AtomicU16::new(0),
     }
+}
+
+#[test_dep(tagged_as = "golem_host")]
+pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
+    SharedAnalysedTypeResolve::new(
+        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
+    )
 }

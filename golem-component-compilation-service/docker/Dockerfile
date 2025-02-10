@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim as base
+FROM ubuntu:latest as base
 
 ARG TARGETARCH
 

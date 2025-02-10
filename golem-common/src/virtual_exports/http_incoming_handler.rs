@@ -15,14 +15,33 @@
 use bytes::Bytes;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
-use lazy_static::lazy_static;
-use semver::Version;
+use std::sync::LazyLock;
 
 // The following wit is modelled here:
 //
 // type fields = list<tuple<string, list<u8>>>;
 // type body = list<u8>;
+//
+// variant method {
+//   get,
+//   head,
+//   post,
+//   put,
+//   delete,
+//   connect,
+//   options,
+//   trace,
+//   patch,
+//   custom(string)
+// }
+//
+// variant scheme {
+//    HTTP,
+//    HTTPS,
+//    custom(string)
+//  }
 //
 // record body-and-trailers {
 //   body: body,
@@ -30,8 +49,10 @@ use semver::Version;
 // }
 //
 // record request {
-//   uri: string
 //   method: method,
+//   scheme: scheme,
+//   authority: string,
+//   path-and-query: string,
 //   headers: fields,
 //   body-and-trailers: option<body-and-trailers>
 // }
@@ -45,92 +66,61 @@ use semver::Version;
 // handle: func(request: request) -> response;
 //
 
-lazy_static! {
-    pub static ref REQUIRED_FUNCTIONS: Vec<rib::ParsedFunctionName> = vec![
-        rib::ParsedFunctionName {
-            site: rib::ParsedFunctionSite::PackagedInterface {
-                namespace: "wasi".to_string(),
-                package: "http".to_string(),
-                interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 0)))
-            },
-            function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
-        },
-        rib::ParsedFunctionName {
-            site: rib::ParsedFunctionSite::PackagedInterface {
-                namespace: "wasi".to_string(),
-                package: "http".to_string(),
-                interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 1)))
-            },
-            function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
-        },
-        rib::ParsedFunctionName {
-            site: rib::ParsedFunctionSite::PackagedInterface {
-                namespace: "wasi".to_string(),
-                package: "http".to_string(),
-                interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 2)))
-            },
-            function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
-        },
-        rib::ParsedFunctionName {
-            site: rib::ParsedFunctionSite::PackagedInterface {
-                namespace: "wasi".to_string(),
-                package: "http".to_string(),
-                interface: "incoming-handler".to_string(),
-                version: Some(rib::SemVer(Version::new(0, 2, 3)))
-            },
-            function: rib::ParsedFunctionReference::Function {
-                function: "handle".to_string()
-            }
-        }
-    ];
-    pub static ref PARSED_FUNCTION_NAME: rib::ParsedFunctionName = rib::ParsedFunctionName {
+pub static PARSED_FUNCTION_NAME: LazyLock<rib::ParsedFunctionName> =
+    LazyLock::new(|| rib::ParsedFunctionName {
         site: rib::ParsedFunctionSite::PackagedInterface {
             namespace: "golem".to_string(),
             package: "http".to_string(),
             interface: "incoming-handler".to_string(),
-            version: None
+            version: None,
         },
         function: rib::ParsedFunctionReference::Function {
-            function: "handle".to_string()
-        }
-    };
-    pub static ref ANALYZED_FUNCTION_PARAMETERS: Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter> = {
-        use golem_wasm_ast::analysis::*;
+            function: "handle".to_string(),
+        },
+    });
+
+pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
+    Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter>,
+> = {
+    use golem_wasm_ast::analysis::*;
+    LazyLock::new(|| {
         vec![AnalysedFunctionParameter {
             name: "request".to_string(),
             typ: IncomingHttpRequest::analysed_type(),
         }]
-    };
-    pub static ref ANALYZED_FUNCTION_RESULTS: Vec<golem_wasm_ast::analysis::AnalysedFunctionResult> = {
-        use golem_wasm_ast::analysis::*;
+    })
+};
+
+pub static ANALYZED_FUNCTION_RESULTS: LazyLock<
+    Vec<golem_wasm_ast::analysis::AnalysedFunctionResult>,
+> = {
+    use golem_wasm_ast::analysis::*;
+    LazyLock::new(|| {
         vec![AnalysedFunctionResult {
             name: None,
             typ: HttpResponse::analysed_type(),
         }]
-    };
-    pub static ref ANALYZED_FUNCTION: AnalysedFunction = {
-        use golem_wasm_ast::analysis::*;
+    })
+};
 
-        AnalysedFunction {
-            name: "handle".to_string(),
-            parameters: ANALYZED_FUNCTION_PARAMETERS.clone(),
-            results: ANALYZED_FUNCTION_RESULTS.clone(),
-        }
-    };
-    pub static ref ANALYZED_EXPORT: AnalysedExport = AnalysedExport::Instance(AnalysedInstance {
+pub static ANALYZED_FUNCTION: LazyLock<AnalysedFunction> = {
+    use golem_wasm_ast::analysis::*;
+
+    LazyLock::new(|| AnalysedFunction {
+        name: "handle".to_string(),
+        parameters: ANALYZED_FUNCTION_PARAMETERS.clone(),
+        results: ANALYZED_FUNCTION_RESULTS.clone(),
+    })
+};
+
+pub const FUNCTION_NAME: &str = "golem:http/incoming-handler.{handle}";
+
+pub static ANALYZED_EXPORT: LazyLock<AnalysedExport> = LazyLock::new(|| {
+    AnalysedExport::Instance(AnalysedInstance {
         name: "golem:http/incoming-handler".to_string(),
-        functions: vec![ANALYZED_FUNCTION.clone()]
-    });
-}
+        functions: vec![ANALYZED_FUNCTION.clone()],
+    })
+});
 
 pub fn implements_required_interfaces(exports: &[AnalysedExport]) -> bool {
     let compatible_interfaces = [
@@ -155,6 +145,85 @@ macro_rules! extract {
             _ => Err($err)
         }
     };
+}
+
+pub enum HttpScheme {
+    HTTP,
+    HTTPS,
+    Custom(String),
+}
+
+impl HttpScheme {
+    pub fn analyzed_type() -> AnalysedType {
+        use golem_wasm_ast::analysis::*;
+        AnalysedType::Variant(TypeVariant {
+            cases: vec![
+                NameOptionTypePair {
+                    name: "HTTP".to_string(),
+                    typ: None,
+                },
+                NameOptionTypePair {
+                    name: "HTTPS".to_string(),
+                    typ: None,
+                },
+                NameOptionTypePair {
+                    name: "custom".to_string(),
+                    typ: Some(AnalysedType::Str(TypeStr)),
+                },
+            ],
+        })
+    }
+
+    pub fn from_value(value: &Value) -> Result<Self, String> {
+        let (case_idx, case_value) = extract!(
+            value,
+            Value::Variant {
+                case_idx,
+                case_value
+            },
+            (case_idx, case_value),
+            "not a variant"
+        )?;
+
+        match case_idx {
+            0 => Ok(Self::HTTP),
+            1 => Ok(Self::HTTPS),
+            2 => {
+                let value = case_value.as_ref().ok_or("no case_value provided")?;
+                let custom_method =
+                    extract!(*value.clone(), Value::String(inner), inner, "not a string")?;
+                Ok(Self::Custom(custom_method))
+            }
+            _ => Err("unknown case")?,
+        }
+    }
+
+    pub fn to_value(self) -> Value {
+        match self {
+            Self::HTTP => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Self::HTTPS => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            Self::Custom(custom_method) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(Value::String(custom_method))),
+            },
+        }
+    }
+}
+
+impl From<http::uri::Scheme> for HttpScheme {
+    fn from(value: http::uri::Scheme) -> Self {
+        match value {
+            well_known if well_known == http::uri::Scheme::HTTP => Self::HTTP,
+            well_known if well_known == http::uri::Scheme::HTTPS => Self::HTTPS,
+            other => Self::Custom(other.to_string()),
+        }
+    }
 }
 
 pub enum HttpMethod {
@@ -212,7 +281,7 @@ impl HttpMethod {
                     typ: None,
                 },
                 NameOptionTypePair {
-                    name: "Custom".to_string(),
+                    name: "custom".to_string(),
                     typ: Some(AnalysedType::Str(TypeStr)),
                 },
             ],
@@ -231,22 +300,84 @@ impl HttpMethod {
         )?;
 
         match case_idx {
-            0 => Ok(HttpMethod::GET),
-            1 => Ok(HttpMethod::HEAD),
-            2 => Ok(HttpMethod::POST),
-            3 => Ok(HttpMethod::PUT),
-            4 => Ok(HttpMethod::DELETE),
-            5 => Ok(HttpMethod::CONNECT),
-            6 => Ok(HttpMethod::OPTIONS),
-            7 => Ok(HttpMethod::TRACE),
-            8 => Ok(HttpMethod::PATCH),
+            0 => Ok(Self::GET),
+            1 => Ok(Self::HEAD),
+            2 => Ok(Self::POST),
+            3 => Ok(Self::PUT),
+            4 => Ok(Self::DELETE),
+            5 => Ok(Self::CONNECT),
+            6 => Ok(Self::OPTIONS),
+            7 => Ok(Self::TRACE),
+            8 => Ok(Self::PATCH),
             9 => {
                 let value = case_value.as_ref().ok_or("no case_value provided")?;
                 let custom_method =
                     extract!(*value.clone(), Value::String(inner), inner, "not a string")?;
-                Ok(HttpMethod::Custom(custom_method))
+                Ok(Self::Custom(custom_method))
             }
             _ => Err("unknown case")?,
+        }
+    }
+
+    pub fn to_value(self) -> Value {
+        match self {
+            Self::GET => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            Self::HEAD => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            Self::POST => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            Self::PUT => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            Self::DELETE => Value::Variant {
+                case_idx: 4,
+                case_value: None,
+            },
+            Self::CONNECT => Value::Variant {
+                case_idx: 5,
+                case_value: None,
+            },
+            Self::OPTIONS => Value::Variant {
+                case_idx: 6,
+                case_value: None,
+            },
+            Self::TRACE => Value::Variant {
+                case_idx: 7,
+                case_value: None,
+            },
+            Self::PATCH => Value::Variant {
+                case_idx: 8,
+                case_value: None,
+            },
+            Self::Custom(custom_method) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(Value::String(custom_method))),
+            },
+        }
+    }
+
+    pub fn from_http_method(value: http::Method) -> Self {
+        use http::Method as M;
+
+        match value {
+            M::GET => Self::GET,
+            M::CONNECT => Self::CONNECT,
+            M::DELETE => Self::DELETE,
+            M::HEAD => Self::HEAD,
+            M::OPTIONS => Self::OPTIONS,
+            M::PATCH => Self::PATCH,
+            M::POST => Self::POST,
+            M::PUT => Self::PUT,
+            M::TRACE => Self::TRACE,
+            other => Self::Custom(other.to_string()),
         }
     }
 }
@@ -413,8 +544,10 @@ impl HttpBodyAndTrailers {
 }
 
 pub struct IncomingHttpRequest {
-    pub uri: String,
     pub method: HttpMethod,
+    pub scheme: HttpScheme,
+    pub authority: String,
+    pub path_and_query: String,
     pub headers: HttpFields,
     pub body: Option<HttpBodyAndTrailers>,
 }
@@ -426,12 +559,20 @@ impl IncomingHttpRequest {
         AnalysedType::Record(TypeRecord {
             fields: vec![
                 NameTypePair {
-                    name: "uri".to_string(),
+                    name: "method".to_string(),
+                    typ: HttpMethod::analyzed_type(),
+                },
+                NameTypePair {
+                    name: "scheme".to_string(),
+                    typ: HttpScheme::analyzed_type(),
+                },
+                NameTypePair {
+                    name: "authority".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
-                    name: "method".to_string(),
-                    typ: HttpMethod::analyzed_type(),
+                    name: "path-and-query".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
                     name: "headers".to_string(),
@@ -458,20 +599,27 @@ impl IncomingHttpRequest {
     fn from_value(value: &Value) -> Result<Self, String> {
         let record_values = extract!(value, Value::Record(inner), inner, "not a record")?;
 
-        if record_values.len() != 4 {
+        if record_values.len() != 6 {
             Err("wrong length of record data")?;
         };
 
-        let uri = extract!(
-            record_values[0].clone(),
+        let method = HttpMethod::from_value(&record_values[0])?;
+        let scheme = HttpScheme::from_value(&record_values[1])?;
+        let authority = extract!(
+            record_values[2].clone(),
             Value::String(inner),
             inner,
             "not a string"
         )?;
-        let method = HttpMethod::from_value(&record_values[1])?;
-        let headers = HttpFields::from_value(&record_values[2])?;
+        let path_and_query = extract!(
+            record_values[3].clone(),
+            Value::String(inner),
+            inner,
+            "not a string"
+        )?;
+        let headers = HttpFields::from_value(&record_values[4])?;
         let body = extract!(
-            &record_values[3],
+            &record_values[5],
             Value::Option(inner),
             match inner {
                 Some(v) => Some(HttpBodyAndTrailers::from_value(v)?),
@@ -481,11 +629,24 @@ impl IncomingHttpRequest {
         )?;
 
         Ok(IncomingHttpRequest {
-            uri,
             method,
+            scheme,
+            authority,
+            path_and_query,
             headers,
             body,
         })
+    }
+
+    pub fn to_value(self) -> Value {
+        Value::Record(vec![
+            self.method.to_value(),
+            self.scheme.to_value(),
+            Value::String(self.authority),
+            Value::String(self.path_and_query),
+            self.headers.to_value(),
+            Value::Option(self.body.map(|b| Box::new(b.to_value()))),
+        ])
     }
 }
 
@@ -517,6 +678,53 @@ impl HttpResponse {
                 },
             ],
         })
+    }
+
+    pub fn from_value(value: Value) -> Result<Self, String> {
+        let record_values = extract!(value, Value::Record(inner), inner, "not a record")?;
+
+        if record_values.len() != 3 {
+            Err("wrong length of record data")?;
+        };
+
+        let status = extract!(
+            record_values[0].clone(),
+            Value::U16(inner),
+            inner,
+            "not a u16"
+        )?;
+
+        let headers = HttpFields::from_value(&record_values[1])?;
+
+        let body = extract!(
+            &record_values[2],
+            Value::Option(inner),
+            inner.as_ref(),
+            "not an option"
+        )?;
+        let body = if let Some(b) = body {
+            Some(HttpBodyAndTrailers::from_value(b)?)
+        } else {
+            None
+        };
+
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    pub fn from_function_output(output: TypeAnnotatedValue) -> Result<Self, String> {
+        let value: Value = output.try_into()?;
+
+        let mut tuple_values = extract!(value, Value::Tuple(inner), inner, "not a tuple")?;
+
+        if tuple_values.len() != 1 {
+            Err("unexpected number of outputs")?
+        };
+
+        Self::from_value(tuple_values.remove(0))
     }
 
     pub fn to_value(self) -> Value {

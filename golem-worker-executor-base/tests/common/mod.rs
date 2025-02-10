@@ -60,7 +60,6 @@ use tokio::runtime::Handle;
 
 use tokio::task::JoinSet;
 
-use golem::api0_2_0;
 use golem_common::config::RedisConfig;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -79,10 +78,10 @@ use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
-use golem_wasm_rpc::golem::rpc::types::{FutureInvokeResult, WasmRpc};
-use golem_wasm_rpc::golem::rpc::types::{HostFutureInvokeResult, Pollable};
-use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::preview2::golem::{api1_1_0, api1_2_0};
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, WasmRpc};
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{HostFutureInvokeResult, Pollable};
+use golem_worker_executor_base::preview2::golem::durability;
+use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
@@ -97,6 +96,7 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{debug, info};
+use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
@@ -259,17 +259,22 @@ impl TestDependencies for TestWorkerExecutor {
 }
 
 pub struct TestContext {
+    base_prefix: String,
     unique_id: u16,
 }
 
 impl TestContext {
     pub fn new(last_unique_id: &LastUniqueId) -> Self {
+        let base_prefix = Uuid::new_v4().to_string();
         let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
-        Self { unique_id }
+        Self {
+            base_prefix,
+            unique_id,
+        }
     }
 
     pub fn redis_prefix(&self) -> String {
-        format!("test-{}:", self.unique_id)
+        format!("test-{}-{}:", self.base_prefix, self.unique_id)
     }
 
     pub fn grpc_port(&self) -> u16 {
@@ -443,9 +448,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, owned_worker_id)
-            .await
+        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
+            this,
+            owned_worker_id,
+            latest_worker_status,
+        )
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
@@ -838,6 +848,18 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn schedule_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .schedule_invocation(self_, datetime, function_name, function_params)
+            .await
+    }
+
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
@@ -1018,11 +1040,14 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_1_0::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        api1_2_0::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_0_2_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem_rpc_0_1_x::types::add_to_linker_get_host(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         Ok(linker)
     }
 }

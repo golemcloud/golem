@@ -265,7 +265,7 @@ jobs:
         run: cargo make --profile ci check
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
@@ -296,6 +296,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare WIT dependencies
+        run: cargo make wit
       - name: Build wasm-rpc in stub mode
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
@@ -343,7 +345,7 @@ jobs:
         timeout-minutes: 20
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
@@ -405,7 +407,7 @@ jobs:
         timeout-minutes: 40
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
@@ -461,13 +463,15 @@ jobs:
         timeout-minutes: 30
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
   cli-tests:
     runs-on: ubuntu-latest-xlarge
+    env:
+      CARGO_BUILD_JOBS: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -500,7 +504,7 @@ jobs:
         timeout-minutes: 35
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
@@ -541,7 +545,7 @@ jobs:
         timeout-minutes: 40
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
-        if: success() || failure() # always run even if the previous step fails
+        if: always()
         with:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
