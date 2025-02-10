@@ -107,7 +107,7 @@ mod type_binding_tests {
     use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
 
     #[test]
-    fn test_bind_type() {
+    fn test_bind_type_in_let() {
         let expr_str = r#"
             let x: u64 = 1
         "#;
@@ -127,6 +127,67 @@ mod type_binding_tests {
                 InferredType::U64,
             )),
             InferredType::Unknown,
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_select_field() {
+        let expr_str = r#"
+            foo.bar.baz: u32
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::SelectField(
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Identifier(
+                    VariableId::Global("foo".to_string()),
+                    InferredType::Unknown,
+                )),
+                "bar".to_string(),
+                None,
+                InferredType::Unknown,
+            )),
+            "baz".to_string(),
+            Some(TypeName::U32),
+            InferredType::U32,
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_select_index() {
+        let expr_str = r#"
+            foo.bar.baz[1]: u32
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::SelectIndex(
+            Box::new(Expr::SelectField(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Identifier(
+                        VariableId::Global("foo".to_string()),
+                        InferredType::Unknown,
+                    )),
+                    "bar".to_string(),
+                    None,
+                    InferredType::Unknown,
+                )),
+                "baz".to_string(),
+                None,
+                InferredType::Unknown,
+            )),
+            1,
+            Some(TypeName::U32),
+            InferredType::U32,
         );
 
         assert_eq!(expr, expected);
