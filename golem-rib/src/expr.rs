@@ -1249,17 +1249,33 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
                 let field = expr.field;
+                let type_name = expr.type_name.map(|x| TypeName::try_from(x)).transpose()?;
                 let expr = *expr.expr.ok_or(
                     "Mi\
                 ssing expr",
                 )?;
-                Expr::select_field(expr.try_into()?, field.as_str())
+
+                if let Some(type_name) = type_name {
+                    Expr::select_field_with_type_annotation(
+                        expr.try_into()?,
+                        field.as_str(),
+                        type_name,
+                    )
+                } else {
+                    Expr::select_field(expr.try_into()?, field.as_str())
+                }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
                 let expr = *expr;
+                let type_name = expr.type_name.map(|x| TypeName::try_from(x)).transpose()?;
                 let index = expr.index as usize;
                 let expr = *expr.expr.ok_or("Missing expr")?;
-                Expr::select_index(expr.try_into()?, index)
+
+                if let Some(type_name) = type_name {
+                    Expr::select_index_with_type_annotation(expr.try_into()?, index, type_name)
+                } else {
+                    Expr::select_index(expr.try_into()?, index)
+                }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => match expr.expr {
                 Some(expr) => Expr::option(Some((*expr).try_into()?)),
