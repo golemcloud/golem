@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerError;
 use golem_client::model::{
-    InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest, WorkerCreationRequest,
-    WorkerFilter, WorkerId, WorkersMetadataRequest,
+    InvokeParameters, InvokeResult, RevertWorkerTarget, ScanCursor, UpdateWorkerRequest,
+    WorkerCreationRequest, WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::{Context, Error};
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -577,6 +577,24 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         }
 
         Ok(entries)
+    }
+
+    async fn revert(
+        &self,
+        worker_urn: WorkerUrn,
+        target: RevertWorkerTarget,
+    ) -> Result<(), GolemError> {
+        info!("Reverting worker {worker_urn}");
+
+        let _ = self
+            .client
+            .revert_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+                &target,
+            )
+            .await?;
+        Ok(())
     }
 }
 
