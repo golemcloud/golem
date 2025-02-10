@@ -12,7 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::DurableWorkerCtx;
+use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
+use golem_common::base_model::OplogIndex;
+
 pub mod mysql;
 pub mod postgres;
 pub mod serialized;
 pub mod types;
+
+pub(crate) fn get_begin_oplog_index<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> anyhow::Result<OplogIndex> {
+    let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
+        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
+    })?;
+    Ok(begin_oplog_idx)
+}

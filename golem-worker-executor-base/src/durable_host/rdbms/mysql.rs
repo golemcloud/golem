@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::get_begin_oplog_index;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
@@ -24,10 +25,8 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
 use async_trait::async_trait;
 use bit_vec::BitVec;
-use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::DurableFunctionType;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -95,7 +94,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
         match to_db_values(params) {
             Ok(params) => {
-                let request = RdbmsRequest::new(pool_key, statement, params);
+                let request = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
                 let entry = DbResultStreamEntry::new(request, DbResultStreamState::New, None);
                 let resource = self.as_wasi_view().table().push(entry)?;
                 let handle = resource.rep();
@@ -114,36 +113,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 Ok(Err(Error::QueryParameterFailure(error)))
             }
         }
-
-        // let worker_id = self.state.owned_worker_id.worker_id.clone();
-        //
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<MysqlDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        //
-        // match to_db_values(params) {
-        //     Ok(params) => {
-        //         let result = self
-        //             .state
-        //             .rdbms_service
-        //             .mysql()
-        //             .query_stream(&pool_key, &worker_id, &statement, params)
-        //             .await;
-        //
-        //         match result {
-        //             Ok(result) => {
-        //                 let entry = DbResultStreamEntry::new(result);
-        //                 let resource = self.as_wasi_view().table().push(entry)?;
-        //                 Ok(Ok(resource))
-        //             }
-        //             Err(e) => Ok(Err(e.into())),
-        //         }
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn query(
@@ -183,7 +152,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = RdbmsRequest::new(pool_key, statement, params);
+            let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -228,7 +197,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = RdbmsRequest::new(pool_key, statement, params);
+            let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -260,30 +229,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .open_function_table
             .insert(handle, begin_oplog_index);
         Ok(Ok(resource))
-
-        // let worker_id = self.state.owned_worker_id.worker_id.clone();
-        // let pool_key = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<MysqlDbConnection>(&self_)?
-        //     .pool_key
-        //     .clone();
-        //
-        // let result = self
-        //     .state
-        //     .rdbms_service
-        //     .mysql()
-        //     .begin_transaction(&pool_key, &worker_id)
-        //     .await;
-        //
-        // match result {
-        //     Ok(result) => {
-        //         let entry = DbTransactionEntry::new(pool_key, result);
-        //         let resource = self.as_wasi_view().table().push(entry)?;
-        //         Ok(Ok(resource))
-        //     }
-        //     Err(e) => Ok(Err(e.into())),
-        // }
     }
 
     async fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
@@ -312,14 +257,14 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
 #[derive(Clone)]
 pub struct DbResultStreamEntry {
-    pub request: RdbmsRequest<mysql_types::DbValue>,
+    pub request: RdbmsRequest<MysqlType>,
     pub state: DbResultStreamState,
     pub transaction_handle: Option<u32>,
 }
 
 impl DbResultStreamEntry {
     pub fn new(
-        request: RdbmsRequest<mysql_types::DbValue>,
+        request: RdbmsRequest<MysqlType>,
         state: DbResultStreamState,
         transaction_handle: Option<u32>,
     ) -> Self {
@@ -429,19 +374,6 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
             Ok(columns) => Ok(columns.into_iter().map(|c| c.into()).collect()),
             Err(e) => Err(Error::from(e).into()),
         }
-
-        // let internal = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<DbResultStreamEntry>(&self_)?
-        //     .internal
-        //     .clone();
-        //
-        // let columns = internal.deref().get_columns().await.map_err(Error::from)?;
-        //
-        // let columns = columns.into_iter().map(|c| c.into()).collect();
-        //
-        // Ok(columns)
     }
 
     async fn get_next(
@@ -477,19 +409,6 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
             Ok(rows) => Ok(rows.map(|r| r.into_iter().map(|r| r.into()).collect())),
             Err(e) => Err(Error::from(e).into()),
         }
-
-        // let internal = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<DbResultStreamEntry>(&self_)?
-        //     .internal
-        //     .clone();
-        //
-        // let rows = internal.deref().get_next().await.map_err(Error::from)?;
-        //
-        // let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
-        //
-        // Ok(rows)
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
@@ -608,7 +527,10 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                     match transaction {
                         Ok((pool_key, transaction)) => {
                             let result = transaction.query(&statement, params.clone()).await;
-                            (Some(RdbmsRequest::new(pool_key, statement, params)), result)
+                            (
+                                Some(RdbmsRequest::<MysqlType>::new(pool_key, statement, params)),
+                                result,
+                            )
                         }
                         Err(e) => (None, Err(e)),
                     }
@@ -620,24 +542,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
         Ok(result.map(DbResult::from).map_err(Error::from))
-
-        // match to_db_values(params) {
-        //     Ok(params) => {
-        //         let internal = self
-        //             .as_wasi_view()
-        //             .table()
-        //             .get::<DbTransactionEntry>(&self_)?
-        //             .internal
-        //             .clone();
-        //         let result = internal
-        //             .query(&statement, params)
-        //             .await
-        //             .map(DbResult::from)
-        //             .map_err(Error::from);
-        //         Ok(result)
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn query_stream(
@@ -648,7 +552,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
         let handle = self_.rep();
         let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
-        let durability = Durability::<RdbmsRequest<mysql_types::DbValue>, SerializableError>::new(
+        let durability = Durability::<RdbmsRequest<MysqlType>, SerializableError>::new(
             self,
             "rdbms::mysql::db-transaction",
             "query-stream",
@@ -663,7 +567,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                     .table()
                     .get::<DbTransactionEntry>(&self_)
                     .map_err(|e| RdbmsError::Other(e.to_string()))
-                    .map(|e| RdbmsRequest::new(e.pool_key.clone(), statement, params)),
+                    .map(|e| RdbmsRequest::<MysqlType>::new(e.pool_key.clone(), statement, params)),
                 Err(error) => Err(error),
             };
             durability.persist(self, (), result).await
@@ -672,7 +576,8 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         };
         match result {
             Ok(request) => {
-                let entry = DbResultStreamEntry::new(request, DbResultStreamState::New, None);
+                let entry =
+                    DbResultStreamEntry::new(request, DbResultStreamState::New, Some(handle));
                 let resource = self.as_wasi_view().table().push(entry)?;
                 let handle = resource.rep();
                 self.state
@@ -682,32 +587,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             }
             Err(error) => Ok(Err(error.into())),
         }
-
-        // match to_db_values(params) {
-        //     Ok(params) => {
-        //         let handle = self_.rep();
-        //         let (pool_key, internal) = self
-        //             .as_wasi_view()
-        //             .table()
-        //             .get::<DbTransactionEntry>(&self_)
-        //             .map(|e| (e.pool_key.clone(), e.internal.clone()))?;
-        //         let request = RdbmsRequest::new(pool_key, statement.clone(), params.clone());
-        //         let result = internal.query_stream(&statement, params).await;
-        //         match result {
-        //             Ok(result) => {
-        //                 let entry = DbResultStreamEntry::new(
-        //                     request,
-        //                     DbResultStreamState::Opened(result),
-        //                     Some(handle),
-        //                 );
-        //                 let resource = self.as_wasi_view().table().push(entry)?;
-        //                 Ok(Ok(resource))
-        //             }
-        //             Err(e) => Ok(Err(e.into())),
-        //         }
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn execute(
@@ -733,7 +612,10 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                     match transaction {
                         Ok((pool_key, transaction)) => {
                             let result = transaction.execute(&statement, params.clone()).await;
-                            (Some(RdbmsRequest::new(pool_key, statement, params)), result)
+                            (
+                                Some(RdbmsRequest::<MysqlType>::new(pool_key, statement, params)),
+                                result,
+                            )
                         }
                         Err(e) => (None, Err(e)),
                     }
@@ -745,22 +627,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
         Ok(result.map_err(Error::from))
-        // match to_db_values(params) {
-        //     Ok(params) => {
-        //         let internal = self
-        //             .as_wasi_view()
-        //             .table()
-        //             .get::<DbTransactionEntry>(&self_)?
-        //             .internal
-        //             .clone();
-        //         let result = internal
-        //             .execute(&statement, params)
-        //             .await
-        //             .map_err(Error::from);
-        //         Ok(result)
-        //     }
-        //     Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        // }
     }
 
     async fn commit(
@@ -795,15 +661,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
         Ok(result.map_err(Error::from))
-        //
-        // let internal = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<DbTransactionEntry>(&self_)?
-        //     .internal
-        //     .clone();
-        // let result = internal.commit().await.map_err(Error::from);
-        // Ok(result)
     }
 
     async fn rollback(
@@ -838,14 +695,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
         Ok(result.map_err(Error::from))
-        // let internal = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<DbTransactionEntry>(&self_)?
-        //     .internal
-        //     .clone();
-        // let result = internal.rollback().await.map_err(Error::from);
-        // Ok(result)
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
@@ -874,16 +723,6 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
-}
-
-fn get_begin_oplog_index<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<OplogIndex> {
-    let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
-        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
-    })?;
-    Ok(begin_oplog_idx)
 }
 
 impl TryFrom<DbValue> for mysql_types::DbValue {

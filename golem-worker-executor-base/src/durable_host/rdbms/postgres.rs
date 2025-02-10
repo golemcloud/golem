@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::rdbms::get_begin_oplog_index;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
@@ -84,7 +85,11 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
         self.observe_function_call("rdbms::postgres::db-connection", "query-stream");
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
+
+        let begin_oplog_idx = self
+            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+            .await?;
+
         let pool_key = self
             .as_wasi_view()
             .table()
@@ -94,23 +99,24 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
         match to_db_values(params, self.as_wasi_view().table()) {
             Ok(params) => {
-                let result = self
-                    .state
-                    .rdbms_service
-                    .postgres()
-                    .query_stream(&pool_key, &worker_id, &statement, params)
-                    .await;
-
-                match result {
-                    Ok(result) => {
-                        let entry = DbResultStreamEntry::new(result);
-                        let resource = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(resource))
-                    }
-                    Err(e) => Ok(Err(e.into())),
-                }
+                let request = RdbmsRequest::<PostgresType>::new(pool_key, statement, params);
+                let entry = DbResultStreamEntry::new(request, DbResultStreamState::New, None);
+                let resource = self.as_wasi_view().table().push(entry)?;
+                let handle = resource.rep();
+                self.state
+                    .open_function_table
+                    .insert(handle, begin_oplog_idx);
+                Ok(Ok(resource))
             }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+            Err(error) => {
+                self.end_durable_function(
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    begin_oplog_idx,
+                    false,
+                )
+                .await?;
+                Ok(Err(Error::QueryParameterFailure(error)))
+            }
         }
     }
 
@@ -120,12 +126,11 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        self.observe_function_call("rdbms::postgres::db-connection", "query");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
         let durability =
             Durability::<crate::services::rdbms::DbResult<PostgresType>, SerializableError>::new(
                 self,
-                "golem rdbms::postgres::db-connection",
+                "rdbms::postgres::db-connection",
                 "query",
                 DurableFunctionType::ReadRemote,
             )
@@ -153,7 +158,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = RdbmsRequest::new(pool_key, statement, params);
+            let input = RdbmsRequest::<PostgresType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -174,12 +179,11 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        self.observe_function_call("rdbms::postgres::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.worker_id.clone();
 
         let durability = Durability::<u64, SerializableError>::new(
             self,
-            "golem rdbms::postgres::db-connection",
+            "rdbms::postgres::db-connection",
             "execute",
             DurableFunctionType::WriteRemote,
         )
@@ -207,7 +211,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => (vec![], Err(error)),
             };
-            let input = RdbmsRequest::new(pool_key, statement, params);
+            let input = RdbmsRequest::<PostgresType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -221,7 +225,11 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         self_: Resource<PostgresDbConnection>,
     ) -> anyhow::Result<Result<Resource<DbTransactionEntry>, Error>> {
         self.observe_function_call("rdbms::postgres::db-connection", "begin-transaction");
-        let worker_id = self.state.owned_worker_id.worker_id.clone();
+
+        let begin_oplog_index = self
+            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+            .await?;
+
         let pool_key = self
             .as_wasi_view()
             .table()
@@ -229,21 +237,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .pool_key
             .clone();
 
-        let result = self
-            .state
-            .rdbms_service
-            .postgres()
-            .begin_transaction(&pool_key, &worker_id)
-            .await;
-
-        match result {
-            Ok(result) => {
-                let entry = DbTransactionEntry::new(result);
-                let resource = self.as_wasi_view().table().push(entry)?;
-                Ok(Ok(resource))
-            }
-            Err(e) => Ok(Err(e.into())),
-        }
+        let entry = DbTransactionEntry::new(pool_key, DbTransactionState::New);
+        let resource = self.as_wasi_view().table().push(entry)?;
+        let handle = resource.rep();
+        self.state
+            .open_function_table
+            .insert(handle, begin_oplog_index);
+        Ok(Ok(resource))
     }
 
     async fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
@@ -269,15 +269,90 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[derive(Clone)]
 pub struct DbResultStreamEntry {
-    pub internal: Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>,
+    pub request: RdbmsRequest<PostgresType>,
+    pub state: DbResultStreamState,
+    pub transaction_handle: Option<u32>,
 }
 
 impl DbResultStreamEntry {
     pub fn new(
-        internal: Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>,
+        request: RdbmsRequest<PostgresType>,
+        state: DbResultStreamState,
+        transaction_handle: Option<u32>,
     ) -> Self {
-        Self { internal }
+        Self {
+            request,
+            state,
+            transaction_handle,
+        }
+    }
+
+    pub fn is_opened(&self) -> bool {
+        matches!(self.state, DbResultStreamState::Opened(_))
+    }
+}
+
+#[derive(Clone)]
+pub enum DbResultStreamState {
+    New,
+    Opened(Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>),
+}
+
+async fn get_db_query_stream<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<DbResultStreamEntry>,
+) -> Result<Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>, RdbmsError>
+{
+    let query_stream_entry = ctx
+        .as_wasi_view()
+        .table()
+        .get::<DbResultStreamEntry>(entry)
+        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .clone();
+
+    match query_stream_entry.state {
+        DbResultStreamState::New => {
+            let query_stream = match query_stream_entry.transaction_handle {
+                Some(transaction_handle) => {
+                    let (_, transaction) =
+                        get_db_transaction(ctx, &Resource::new_own(transaction_handle)).await?;
+                    transaction
+                        .query_stream(
+                            &query_stream_entry.request.statement,
+                            query_stream_entry.request.params,
+                        )
+                        .await
+                }
+                None => {
+                    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+                    ctx.state
+                        .rdbms_service
+                        .postgres()
+                        .query_stream(
+                            &query_stream_entry.request.pool_key,
+                            &worker_id,
+                            &query_stream_entry.request.statement,
+                            query_stream_entry.request.params,
+                        )
+                        .await
+                }
+            };
+            match query_stream {
+                Ok(query_stream) => {
+                    ctx.as_wasi_view()
+                        .table()
+                        .get_mut::<DbResultStreamEntry>(entry)
+                        .map(|e| e.state = DbResultStreamState::Opened(query_stream.clone()))
+                        .map_err(|e| RdbmsError::Other(e.to_string()))?;
+
+                    Ok(query_stream)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        DbResultStreamState::Opened(query_stream) => Ok(query_stream),
     }
 }
 
@@ -287,65 +362,171 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Vec<DbColumn>> {
-        self.observe_function_call("rdbms::postgres::db-result-stream", "get-columns");
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<Vec<postgres_types::DbColumn>, SerializableError>::new(
+            self,
+            "rdbms::postgres::db-result-stream",
+            "get-columns",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
 
-        let internal = self
-            .as_wasi_view()
-            .table()
-            .get::<DbResultStreamEntry>(&self_)?
-            .internal
-            .clone();
+        let result = if durability.is_live() {
+            let query_stream = get_db_query_stream(self, &self_).await;
 
-        let columns = internal.deref().get_columns().await.map_err(Error::from)?;
+            let result = match query_stream {
+                Ok(query_stream) => query_stream.deref().get_columns().await,
+                Err(e) => Err(e),
+            };
 
-        let columns = from_db_columns(columns, self.as_wasi_view().table())
-            .map_err(Error::QueryResponseFailure)?;
-        Ok(columns)
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        };
+
+        match result {
+            Ok(columns) => {
+                let columns = from_db_columns(columns, self.as_wasi_view().table())
+                    .map_err(Error::QueryResponseFailure)?;
+                Ok(columns)
+            }
+            Err(e) => Err(Error::from(e).into()),
+        }
     }
 
     async fn get_next(
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
-        self.observe_function_call("rdbms::postgres::db-result-stream", "get-next");
-        let internal = self
-            .as_wasi_view()
-            .table()
-            .get::<DbResultStreamEntry>(&self_)?
-            .internal
-            .clone();
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<
+            Option<Vec<crate::services::rdbms::DbRow<postgres_types::DbValue>>>,
+            SerializableError,
+        >::new(
+            self,
+            "rdbms::postgres::db-result-stream",
+            "get-next",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
 
-        let rows = internal.deref().get_next().await.map_err(Error::from)?;
+        let result = if durability.is_live() {
+            let query_stream = get_db_query_stream(self, &self_).await;
 
-        let rows = match rows {
-            Some(rows) => {
-                let result = from_db_rows(rows, self.as_wasi_view().table())
-                    .map_err(Error::QueryResponseFailure)?;
-                Some(result)
-            }
-            None => None,
+            let result = match query_stream {
+                Ok(query_stream) => query_stream.deref().get_next().await,
+                Err(e) => Err(e),
+            };
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
         };
-        Ok(rows)
+
+        match result {
+            Ok(rows) => {
+                let rows = match rows {
+                    Some(rows) => {
+                        let result = from_db_rows(rows, self.as_wasi_view().table())
+                            .map_err(Error::QueryResponseFailure)?;
+                        Some(result)
+                    }
+                    None => None,
+                };
+                Ok(rows)
+            }
+            Err(e) => Err(Error::from(e).into()),
+        }
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
         self.observe_function_call("rdbms::postgres::db-result-stream", "drop");
-        self.as_wasi_view()
+        let handle = rep.rep();
+        let entry = self
+            .as_wasi_view()
             .table()
             .delete::<DbResultStreamEntry>(rep)?;
+
+        if entry.transaction_handle.is_none() {
+            let begin_oplog_idx = get_begin_oplog_index(self, handle);
+            if let Ok(begin_oplog_idx) = begin_oplog_idx {
+                self.end_durable_function(
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    begin_oplog_idx,
+                    false,
+                )
+                .await?;
+                self.state.open_function_table.remove(&handle);
+            }
+        }
+
         Ok(())
     }
 }
 
+#[derive(Clone)]
 pub struct DbTransactionEntry {
-    pub internal: Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
+    pub pool_key: RdbmsPoolKey,
+    pub state: DbTransactionState,
 }
 
 impl DbTransactionEntry {
-    pub fn new(
-        internal: Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
-    ) -> Self {
-        Self { internal }
+    pub fn new(pool_key: RdbmsPoolKey, state: DbTransactionState) -> Self {
+        Self { pool_key, state }
+    }
+
+    pub fn is_opened(&self) -> bool {
+        matches!(self.state, DbTransactionState::Opened(_))
+    }
+}
+
+#[derive(Clone)]
+pub enum DbTransactionState {
+    New,
+    Opened(Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>),
+}
+
+async fn get_db_transaction<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<DbTransactionEntry>,
+) -> Result<
+    (
+        RdbmsPoolKey,
+        Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
+    ),
+    RdbmsError,
+> {
+    let transaction_entry = ctx
+        .as_wasi_view()
+        .table()
+        .get::<DbTransactionEntry>(entry)
+        .map_err(|e| RdbmsError::Other(e.to_string()))?
+        .clone();
+
+    match transaction_entry.state {
+        DbTransactionState::New => {
+            let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+            let transaction = ctx
+                .state
+                .rdbms_service
+                .postgres()
+                .begin_transaction(&transaction_entry.pool_key, &worker_id)
+                .await;
+            match transaction {
+                Ok(transaction) => {
+                    ctx.as_wasi_view()
+                        .table()
+                        .get_mut::<DbTransactionEntry>(entry)
+                        .map(|e| e.state = DbTransactionState::Opened(transaction.clone()))
+                        .map_err(|e| RdbmsError::Other(e.to_string()))?;
+
+                    Ok((transaction_entry.pool_key, transaction))
+                }
+                Err(e) => Err(e),
+            }
+        }
+        DbTransactionState::Opened(transaction) => Ok((transaction_entry.pool_key, transaction)),
     }
 }
 
@@ -357,26 +538,48 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
-        self.observe_function_call("rdbms::postgres::db-transaction", "query");
-        match to_db_values(params, self.as_wasi_view().table()) {
-            Ok(params) => {
-                let internal = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<DbTransactionEntry>(&self_)?
-                    .internal
-                    .clone();
-                let result = internal.query(&statement, params).await;
-                match result {
-                    Ok(result) => {
-                        let result = from_db_result(result, self.as_wasi_view().table())
-                            .map_err(Error::QueryResponseFailure);
-                        Ok(result)
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability =
+            Durability::<crate::services::rdbms::DbResult<PostgresType>, SerializableError>::new(
+                self,
+                "rdbms::postgres::db-transaction",
+                "query",
+                DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+            )
+            .await?;
+        let result = if durability.is_live() {
+            let params = to_db_values(params, self.as_wasi_view().table())
+                .map_err(RdbmsError::QueryParameterFailure);
+            let (input, result) = match params {
+                Ok(params) => {
+                    let transaction = get_db_transaction(self, &self_).await;
+                    match transaction {
+                        Ok((pool_key, transaction)) => {
+                            let result = transaction.query(&statement, params.clone()).await;
+                            (
+                                Some(RdbmsRequest::<PostgresType>::new(
+                                    pool_key, statement, params,
+                                )),
+                                result,
+                            )
+                        }
+                        Err(e) => (None, Err(e)),
                     }
-                    Err(e) => Ok(Err(e.into())),
                 }
+                Err(error) => (None, Err(error)),
+            };
+            durability.persist(self, input, result).await
+        } else {
+            durability.replay(self).await
+        };
+        match result {
+            Ok(result) => {
+                let result = from_db_result(result, self.as_wasi_view().table())
+                    .map_err(Error::QueryResponseFailure);
+                Ok(result)
             }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+            Err(e) => Ok(Err(e.into())),
         }
     }
 
@@ -386,26 +589,45 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        self.observe_function_call("rdbms::postgres::db-transaction", "query-stream");
-        match to_db_values(params, self.as_wasi_view().table()) {
-            Ok(params) => {
-                let internal = self
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<RdbmsRequest<PostgresType>, SerializableError>::new(
+            self,
+            "rdbms::postgres::db-transaction",
+            "query-stream",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let params = to_db_values(params, self.as_wasi_view().table())
+                .map_err(RdbmsError::QueryParameterFailure);
+            let result = match params {
+                Ok(params) => self
                     .as_wasi_view()
                     .table()
-                    .get::<DbTransactionEntry>(&self_)?
-                    .internal
-                    .clone();
-                let result = internal.query_stream(&statement, params).await;
-                match result {
-                    Ok(result) => {
-                        let entry = DbResultStreamEntry::new(result);
-                        let resource = self.as_wasi_view().table().push(entry)?;
-                        Ok(Ok(resource))
-                    }
-                    Err(e) => Ok(Err(e.into())),
-                }
+                    .get::<DbTransactionEntry>(&self_)
+                    .map_err(|e| RdbmsError::Other(e.to_string()))
+                    .map(|e| {
+                        RdbmsRequest::<PostgresType>::new(e.pool_key.clone(), statement, params)
+                    }),
+                Err(error) => Err(error),
+            };
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        };
+        match result {
+            Ok(request) => {
+                let entry =
+                    DbResultStreamEntry::new(request, DbResultStreamState::New, Some(handle));
+                let resource = self.as_wasi_view().table().push(entry)?;
+                let handle = resource.rep();
+                self.state
+                    .open_function_table
+                    .insert(handle, begin_oplog_idx);
+                Ok(Ok(resource))
             }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+            Err(error) => Ok(Err(error.into())),
         }
     }
 
@@ -415,62 +637,134 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
-        self.observe_function_call("rdbms::postgres::db-transaction", "execute");
-        match to_db_values(params, self.as_wasi_view().table()) {
-            Ok(params) => {
-                let internal = self
-                    .as_wasi_view()
-                    .table()
-                    .get::<DbTransactionEntry>(&self_)?
-                    .internal
-                    .clone();
-                let result = internal
-                    .execute(&statement, params)
-                    .await
-                    .map_err(Error::from);
-                Ok(result)
-            }
-            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
-        }
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<u64, SerializableError>::new(
+            self,
+            "rdbms::postgres::db-transaction",
+            "execute",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let params = to_db_values(params, self.as_wasi_view().table())
+                .map_err(RdbmsError::QueryParameterFailure);
+            let (input, result) = match params {
+                Ok(params) => {
+                    let transaction = get_db_transaction(self, &self_).await;
+                    match transaction {
+                        Ok((pool_key, transaction)) => {
+                            let result = transaction.execute(&statement, params.clone()).await;
+                            (
+                                Some(RdbmsRequest::<PostgresType>::new(
+                                    pool_key, statement, params,
+                                )),
+                                result,
+                            )
+                        }
+                        Err(e) => (None, Err(e)),
+                    }
+                }
+                Err(error) => (None, Err(error)),
+            };
+            durability.persist(self, input, result).await
+        } else {
+            durability.replay(self).await
+        };
+        Ok(result.map_err(Error::from))
     }
 
     async fn commit(
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        self.observe_function_call("rdbms::postgres::db-transaction", "commit");
-        let internal = self
-            .as_wasi_view()
-            .table()
-            .get::<DbTransactionEntry>(&self_)?
-            .internal
-            .clone();
-        let result = internal.commit().await.map_err(Error::from);
-        Ok(result)
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<(), SerializableError>::new(
+            self,
+            "rdbms::postgres::db-transaction",
+            "commit",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let state = self
+                .as_wasi_view()
+                .table()
+                .get::<DbTransactionEntry>(&self_)
+                .map_err(|e| RdbmsError::Other(e.to_string()))
+                .map(|e| e.state.clone());
+
+            let result = match state {
+                Ok(DbTransactionState::Opened(transaction)) => transaction.commit().await,
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            };
+
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        };
+        Ok(result.map_err(Error::from))
     }
 
     async fn rollback(
         &mut self,
         self_: Resource<DbTransactionEntry>,
     ) -> anyhow::Result<Result<(), Error>> {
-        self.observe_function_call("rdbms::postgres::db-transaction", "query");
-        let internal = self
-            .as_wasi_view()
-            .table()
-            .get::<DbTransactionEntry>(&self_)?
-            .internal
-            .clone();
-        let result = internal.rollback().await.map_err(Error::from);
-        Ok(result)
+        let handle = self_.rep();
+        let begin_oplog_idx = get_begin_oplog_index(self, handle)?;
+        let durability = Durability::<(), SerializableError>::new(
+            self,
+            "rdbms::postgres::db-transaction",
+            "rollback",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let state = self
+                .as_wasi_view()
+                .table()
+                .get::<DbTransactionEntry>(&self_)
+                .map_err(|e| RdbmsError::Other(e.to_string()))
+                .map(|e| e.state.clone());
+
+            let result = match state {
+                Ok(DbTransactionState::Opened(transaction)) => transaction.rollback().await,
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            };
+
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        };
+        Ok(result.map_err(Error::from))
     }
 
     async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
         self.observe_function_call("rdbms::postgres::db-result-stream", "drop");
+        let handle = rep.rep();
+
         let entry = self
             .as_wasi_view()
             .table()
             .delete::<DbTransactionEntry>(rep)?;
-        let _ = entry.internal.rollback_if_open().await;
+
+        if let DbTransactionState::Opened(transaction) = entry.state {
+            let _ = transaction.rollback_if_open().await;
+        }
+
+        let begin_oplog_idx = get_begin_oplog_index(self, handle);
+        if let Ok(begin_oplog_idx) = begin_oplog_idx {
+            self.end_durable_function(
+                &DurableFunctionType::WriteRemoteBatched(None),
+                begin_oplog_idx,
+                false,
+            )
+            .await?;
+            self.state.open_function_table.remove(&handle);
+        }
         Ok(())
     }
 }
