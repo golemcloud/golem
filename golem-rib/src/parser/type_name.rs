@@ -24,7 +24,7 @@ use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use crate::parser::errors::RibParseError;
-use crate::InferredType;
+use crate::{InferredNumber, InferredType};
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
@@ -142,6 +142,23 @@ impl Display for TypeName {
                 }
                 write!(f, ">")
             }
+        }
+    }
+}
+
+impl From<InferredNumber> for TypeName {
+    fn from(value: InferredNumber) -> Self {
+        match value {
+            InferredNumber::S8 => TypeName::S8,
+            InferredNumber::U8 => TypeName::U8,
+            InferredNumber::S16 => TypeName::S16,
+            InferredNumber::U16 => TypeName::U16,
+            InferredNumber::S32 => TypeName::S32,
+            InferredNumber::U32 => TypeName::U32,
+            InferredNumber::S64 => TypeName::S64,
+            InferredNumber::U64 => TypeName::U64,
+            InferredNumber::F32 => TypeName::F32,
+            InferredNumber::F64 => TypeName::F64,
         }
     }
 }

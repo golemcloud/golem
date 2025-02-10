@@ -113,6 +113,44 @@ mod type_inference_tests {
         }
     }
 
+    mod inline_type_annotations {
+        use crate::type_checker::Path;
+        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::{compile, Expr, FunctionTypeRegistry, InferredType, RibInput, VariableId};
+        use test_r::test;
+
+        #[test]
+        async fn test_inline_type_annotation_1() {
+            // by default request.path.user-id is inferred to be a string (given a type spec) and
+            // request.path.user-id + 1u32 should fail compilation since we add string with a u32.
+            let rib_expr = r#"
+             "foo" + 1u32
+            "#;
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("request".to_string()),
+                path: Path::from_elems(vec!["path"]),
+                inferred_type: InferredType::Str,
+            };
+
+            let result = expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            let compile = compile(&expr, &vec![]).unwrap();
+            let result = crate::interpret_pure(
+                &compile.byte_code,
+                &RibInput::default(),
+            ).await;
+
+            dbg!(result);
+
+            assert!(expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
+                .is_err());
+        }
+    }
+
     mod let_binding_tests {
         use bigdecimal::BigDecimal;
         use test_r::test;

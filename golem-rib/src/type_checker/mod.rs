@@ -11,6 +11,7 @@ mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
+mod math;
 
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::type_mismatch_call_args::check_type_errors_in_function_call;
