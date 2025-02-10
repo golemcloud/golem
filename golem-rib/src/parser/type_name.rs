@@ -146,8 +146,8 @@ impl Display for TypeName {
     }
 }
 
-impl From<InferredNumber> for TypeName {
-    fn from(value: InferredNumber) -> Self {
+impl From<&InferredNumber> for TypeName {
+    fn from(value: &InferredNumber) -> Self {
         match value {
             InferredNumber::S8 => TypeName::S8,
             InferredNumber::U8 => TypeName::U8,

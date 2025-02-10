@@ -5,15 +5,16 @@ pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
 mod exhaustive_pattern_match;
+mod math;
 mod missing_fields;
 mod path;
 mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
-mod math;
 
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
+use crate::type_checker::math::check_types_in_math_expr;
 use crate::type_checker::type_mismatch_call_args::check_type_errors_in_function_call;
 use crate::{Expr, FunctionTypeRegistry};
 
@@ -24,6 +25,7 @@ pub fn type_check(
     check_type_errors_in_function_call(expr, function_type_registry)
         .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
     check_unresolved_types(expr).map_err(|unresolved_error| unresolved_error.to_string())?;
+    check_types_in_math_expr(expr).map_err(|invalid_math_error| invalid_math_error.to_string())?;
     check_exhaustive_pattern_match(expr, function_type_registry)
         .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
     Ok(())
