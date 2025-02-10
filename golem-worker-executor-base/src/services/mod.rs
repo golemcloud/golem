@@ -185,6 +185,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasOplogProcessorPlugin
     + HasExtraDeps<Ctx>
     + Clone
+    + Sync
 {
 }
 
@@ -214,7 +215,8 @@ impl<
             + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
             + HasOplogProcessorPlugin
             + HasExtraDeps<Ctx>
-            + Clone,
+            + Clone
+            + Sync,
     > HasAll<Ctx> for T
 {
 }

@@ -163,17 +163,14 @@ impl<
             },
             Absent | Locked => None,
         };
-
-        if (result.is_some()) {
+        if result.is_some() {
             self.update_last_access(key);
         }
-
         result
     }
 
     /// Gets a cached value for the given key. If the value is pending, it awaits it.
     /// If the pending value fails, it returns None.
-    #[allow(unused)]
     pub async fn get(&self, key: &K) -> Option<V> {
         let result = match self.state.items.get(key) {
             Some(item) => match item.deref() {
@@ -186,7 +183,7 @@ impl<
             None => None,
         };
 
-        if (result.is_some()) {
+        if result.is_some() {
             self.update_last_access(key);
         }
 

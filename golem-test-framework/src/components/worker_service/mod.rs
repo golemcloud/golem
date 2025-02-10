@@ -32,19 +32,20 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     delete_worker_response, get_file_contents_response, get_oplog_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    search_oplog_response, update_worker_response, ConnectWorkerRequest, DeleteWorkerRequest,
-    DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest,
-    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
+    launch_new_worker_response, list_directory_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response, ConnectWorkerRequest,
+    DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse,
+    GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
     InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
@@ -789,6 +790,50 @@ pub trait WorkerService {
             }
             WorkerServiceClient::Http(_client) => {
                 panic!("Fork worker is not available on HTTP API");
+            }
+        }
+    }
+
+    async fn revert_worker(
+        &self,
+        request: RevertWorkerRequest,
+    ) -> crate::Result<RevertWorkerResponse> {
+        match self.client() {
+            WorkerServiceClient::Grpc(mut client) => {
+                Ok(client.revert_worker(request).await?.into_inner())
+            }
+            WorkerServiceClient::Http(client) => {
+                match client
+                    .revert_worker(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name,
+                        &match request.target.as_ref().and_then(|target| target.target) {
+                            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
+                                golem_client::model::RevertWorkerTarget::RevertToOplogIndex(golem_client::model::RevertToOplogIndex {
+                                    last_oplog_index: target.last_oplog_index as u64,
+                                })
+                            }
+                            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
+                                golem_client::model::RevertWorkerTarget::RevertLastInvocations(golem_client::model::RevertLastInvocations {
+                                    number_of_invocations: target.number_of_invocations as u64,
+                                })
+                            }
+                            _ => Err(anyhow!("RevertWorkerRequest.target is required"))?,
+                        }
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(RevertWorkerResponse { result: Some(revert_worker_response::Result::Success(Empty {})) }),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
             }
         }
     }

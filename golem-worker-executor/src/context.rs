@@ -105,8 +105,14 @@ impl ExternalOperations<Context> for Context {
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
+        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
+            this,
+            worker_id,
+            latest_worker_status,
+        )
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(

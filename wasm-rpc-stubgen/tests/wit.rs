@@ -43,76 +43,88 @@ fn all_wit_types() {
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
-    assert_has_package_name(&resolve, "test:main-stub");
-    assert_has_world(&resolve, "wasm-rpc-stub-api");
-    assert_has_interface(&resolve, "stub-api");
+    assert_has_package_name(&resolve, "test:main-client");
+    assert_has_world(&resolve, "wasm-rpc-client-api");
+    assert_has_interface(&resolve, "api-client");
 
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "no-op", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-bool", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "set-bool", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-bool", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-s8", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-s16", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-s32", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-s64", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-u8", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-u16", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-u32", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-u64", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-f32", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-f64", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-char", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "identity-string", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-orders", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "set-orders", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "apply-metadata", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-option-bool", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "set-option-bool", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-coordinates", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "no-op", false);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "get-bool", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "set-bool", false);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-bool", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-s8", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-s16", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-s32", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-s64", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-u8", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-u16", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-u32", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-u64", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-f32", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-f64", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-char", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "identity-string", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "get-orders", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "set-orders", false);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "apply-metadata", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "get-option-bool", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "set-option-bool", false);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "get-coordinates", true);
     assert_has_stub_function(
         &resolve,
-        "stub-api",
+        "api-client",
         "iface1",
         "get-coordinates-alias",
         true,
     );
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "set-coordinates", false);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "set-coordinates", false);
     assert_has_stub_function(
         &resolve,
-        "stub-api",
+        "api-client",
         "iface1",
         "set-coordinates-alias",
         false,
     );
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "tuple-to-point", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "pt-log-error", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "validate-pt", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "tuple-to-point", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "pt-log-error", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "validate-pt", true);
     assert_has_stub_function(
         &resolve,
-        "stub-api",
+        "api-client",
         "iface1",
         "print-checkout-result",
         true,
     );
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-checkout-result", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "get-color", true);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "set-color", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "validate-permissions", true);
+    assert_has_stub_function(
+        &resolve,
+        "api-client",
+        "iface1",
+        "get-checkout-result",
+        true,
+    );
+    assert_has_stub_function(&resolve, "api-client", "iface1", "get-color", true);
+    assert_has_stub_function(&resolve, "api-client", "iface1", "set-color", false);
+    assert_has_stub_function(
+        &resolve,
+        "api-client",
+        "iface1",
+        "validate-permissions",
+        true,
+    );
 
-    assert_defines_enum(&resolve, "test:main-interface", "iface1", "color");
-    assert_defines_flags(&resolve, "test:main-interface", "iface1", "permissions");
-    assert_defines_record(&resolve, "test:main-interface", "iface1", "metadata");
-    assert_defines_record(&resolve, "test:main-interface", "iface1", "point");
-    assert_defines_record(&resolve, "test:main-interface", "iface1", "product-item");
-    assert_defines_record(&resolve, "test:main-interface", "iface1", "order");
+    assert_defines_enum(&resolve, "test:main-exports", "iface1", "color");
+    assert_defines_flags(&resolve, "test:main-exports", "iface1", "permissions");
+    assert_defines_record(&resolve, "test:main-exports", "iface1", "metadata");
+    assert_defines_record(&resolve, "test:main-exports", "iface1", "point");
+    assert_defines_record(&resolve, "test:main-exports", "iface1", "product-item");
+    assert_defines_record(&resolve, "test:main-exports", "iface1", "order");
     assert_defines_record(
         &resolve,
-        "test:main-interface",
+        "test:main-exports",
         "iface1",
         "order-confirmation",
     );
-    assert_defines_tuple_alias(&resolve, "test:main-interface", "iface1", "point-tuple");
-    assert_defines_variant(&resolve, "test:main-interface", "iface1", "checkout-result");
+    assert_defines_tuple_alias(&resolve, "test:main-exports", "iface1", "point-tuple");
+    assert_defines_variant(&resolve, "test:main-exports", "iface1", "checkout-result");
 
     // TODO: duplicated rec1 types
 }
@@ -134,16 +146,23 @@ fn many_ways_to_export() {
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;
 
-    assert_has_package_name(&resolve, "test:exports-stub");
-    assert_has_world(&resolve, "wasm-rpc-stub-api");
-    assert_has_interface(&resolve, "stub-api");
+    assert_has_package_name(&resolve, "test:exports-client");
 
-    assert_has_stub_function(&resolve, "stub-api", "api-inline-functions", "func1", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface1", "func2", false);
+    assert_has_world(&resolve, "wasm-rpc-client-api");
+    assert_has_interface(&resolve, "api-client");
+
+    assert_has_stub_function(
+        &resolve,
+        "api-client",
+        "api-inline-functions",
+        "func1",
+        false,
+    );
+    assert_has_stub_function(&resolve, "api-client", "iface1", "func2", false);
     // TODO:
-    // assert_has_stub_function(&resolve, "stub-api", "iface2", "func3", true);
-    assert_has_stub_function(&resolve, "stub-api", "api-inline-iface", "func4", false);
-    assert_has_stub_function(&resolve, "stub-api", "iface4", "func5", false);
+    // assert_has_stub_function(&resolve, "api-client", "iface2", "func3", true);
+    assert_has_stub_function(&resolve, "api-client", "api-inline-iface", "func4", false);
+    assert_has_stub_function(&resolve, "api-client", "iface4", "func5", false);
 
     // TODO: add asserts for non-unique types
 }

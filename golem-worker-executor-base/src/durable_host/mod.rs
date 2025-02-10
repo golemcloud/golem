@@ -21,8 +21,6 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
-use crate::function_result_interpreter::interpret_function_results;
-use crate::invocation::{find_first_available_function, invoke_worker, InvokeResult};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -45,8 +43,10 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::function_result_interpreter::interpret_function_results;
+use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
+use crate::worker::status::calculate_last_known_status;
+use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationHooks,
     InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
@@ -317,19 +317,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
-    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
-        let mut status = self
-            .execution_status
+    pub fn get_worker_status_record(&self) -> WorkerStatusRecord {
+        self.execution_status
             .read()
             .unwrap()
             .last_known_status()
-            .clone();
+            .clone()
+    }
 
-        let mut deleted_regions = self.state.replay_state.deleted_regions().await;
-        let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();
-        deleted_regions.set_override(extra_deleted_regions);
+    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
+        let mut status = self.get_worker_status_record();
 
-        status.deleted_regions = deleted_regions;
+        let mut skipped_regions = self.state.replay_state.skipped_regions().await;
+        let (pending_updates, extra_skipped_regions) = self.public_state.worker().pending_updates();
+        skipped_regions.set_override(extra_skipped_regions);
+
+        status.skipped_regions = skipped_regions;
         status
             .overridden_retry_config
             .clone_from(&self.state.overridden_retry_policy);
@@ -505,6 +508,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok(worker_id)
             }
         }
+    }
+
+    /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
+    /// It also returns the last error stored in these entries.
+    pub async fn trailing_error_count(&self) -> u64 {
+        let status = self.get_worker_status_record();
+        last_error_and_retry_count(&self.state, &self.owned_worker_id, &status)
+            .await
+            .map(|last_error| last_error.retry_count)
+            .unwrap_or_default()
     }
 }
 
@@ -901,7 +914,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        let previous_tries = self.state.trailing_error_count().await;
+        let previous_tries = self.trailing_error_count().await;
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
             .state
@@ -1101,7 +1114,19 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 timestamp,
                 target_version,
                 details: details.clone(),
-            })
+            });
+
+            // As part of performing a manual update, after the executor called the save-snapshot function
+            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
+            // version. As the history is skipped it immediately can start with calling load-snapshot on the
+            // saved binary. However, if this fails, we have to revert the worker to the original version. As part
+            // of this we restore the original set of skipped regions by dropping the override.
+            //
+            // Note that we can always recalculate the old set of skipped regions from the oplog - the "override layer"
+            // is just an optimization so we don't have to.
+            if status.skipped_regions.is_overridden() {
+                status.skipped_regions.drop_override()
+            }
         })
         .await;
 
@@ -1134,6 +1159,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_version,
             });
             *status.active_plugins_mut() = new_active_plugins;
+
+            // As part of performing a manual update, after the executor called the save-snapshot function
+            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
+            // version. As the history is skipped it immediately can start with calling load-snapshot on the
+            // saved binary. Once that succeeds, the update is considered done and we make this skipped region
+            // "final" by merging it into the set of skipped regions.
+            if status.skipped_regions.is_overridden() {
+                status.skipped_regions.merge_override()
+            }
         })
         .await;
     }
@@ -1199,8 +1233,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        last_error_and_retry_count(this, owned_worker_id).await
+        last_error_and_retry_count(this, owned_worker_id, latest_worker_status).await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
@@ -1433,7 +1468,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .durable_ctx_mut()
                 .state
                 .replay_state
-                .get_out_of_deleted_region()
+                .get_out_of_skipped_region()
                 .await;
 
             let result = Self::resume_replay(store, instance).await;
@@ -1485,11 +1520,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let default_retry_config = &this.config().retry;
         for worker in workers {
             let owned_worker_id = worker.owned_worker_id();
-            let actualized_metadata =
+            let latest_worker_status =
                 calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
-            let last_error = Self::get_last_error_and_retry_count(this, &owned_worker_id).await;
+            let last_error =
+                Self::get_last_error_and_retry_count(this, &owned_worker_id, &latest_worker_status)
+                    .await;
             let decision = Self::get_recovery_decision_on_startup(
-                actualized_metadata
+                latest_worker_status
                     .overridden_retry_config
                     .as_ref()
                     .unwrap_or(default_retry_config),
@@ -1662,6 +1699,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
 async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
+    latest_worker_status: &WorkerStatusRecord,
 ) -> Option<LastError> {
     let mut idx = this.oplog_service().get_last_index(owned_worker_id).await;
     let mut retry_count = 0;
@@ -1670,68 +1708,58 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     } else {
         let mut first_error = None;
         let mut last_error_index = idx;
-        let result = loop {
-            let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
-            match oplog_entry.first_key_value() {
-                Some((_, OplogEntry::Error { error, .. })) => {
-                    retry_count += 1;
-                    last_error_index = idx;
-                    if first_error.is_none() {
-                        first_error = Some(error.clone());
-                    }
-                    if idx > OplogIndex::INITIAL {
-                        idx = idx.previous();
-                        continue;
-                    } else {
-                        break Some(LastError {
-                            error: first_error.unwrap(),
-                            retry_count,
-                            stderr: recover_stderr_logs(this, owned_worker_id, last_error_index)
-                                .await,
-                        });
-                    }
+        loop {
+            if latest_worker_status
+                .deleted_regions()
+                .is_in_deleted_region(idx)
+            {
+                if idx > OplogIndex::INITIAL {
+                    idx = idx.previous();
+                    continue;
+                } else {
+                    break;
                 }
-                Some((_, entry)) if entry.is_hint() => {
-                    // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
-                    if idx > OplogIndex::INITIAL {
-                        idx = idx.previous();
-                        continue;
-                    } else {
-                        match first_error {
-                            Some(error) => {
-                                break Some(LastError {
-                                    error,
-                                    retry_count,
-                                    stderr: recover_stderr_logs(
-                                        this,
-                                        owned_worker_id,
-                                        last_error_index,
-                                    )
-                                    .await,
-                                })
-                            }
-                            None => break None,
+            } else {
+                let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+                match oplog_entry.first_key_value() {
+                    Some((_, OplogEntry::Error { error, .. })) => {
+                        retry_count += 1;
+                        last_error_index = idx;
+                        if first_error.is_none() {
+                            first_error = Some(error.clone());
+                        }
+                        if idx > OplogIndex::INITIAL {
+                            idx = idx.previous();
+                            continue;
+                        } else {
+                            break;
                         }
                     }
-                }
-                Some((_, _)) => match first_error {
-                    Some(error) => {
-                        break Some(LastError {
-                            error,
-                            retry_count,
-                            stderr: recover_stderr_logs(this, owned_worker_id, last_error_index)
-                                .await,
-                        })
+                    Some((_, entry)) if entry.is_hint() => {
+                        // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
+                        if idx > OplogIndex::INITIAL {
+                            idx = idx.previous();
+                            continue;
+                        } else {
+                            break;
+                        }
                     }
-                    None => break None,
-                },
-                None => {
-                    // This is possible if the oplog has been deleted between the get_last_index and the read call
-                    break None;
+                    Some((_, _)) => break,
+                    None => {
+                        // This is possible if the oplog has been deleted between the get_last_index and the read call
+                        break;
+                    }
                 }
             }
-        };
-        result
+        }
+        match first_error {
+            Some(error) => Some(LastError {
+                error,
+                retry_count,
+                stderr: recover_stderr_logs(this, owned_worker_id, last_error_index).await,
+            }),
+            None => None,
+        }
     }
 }
 
@@ -1954,7 +1982,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
                             end: self.replay_state.replay_target().next(), // skipping the Jump entry too
                         };
                         self.replay_state
-                            .add_deleted_region(deleted_region.clone())
+                            .add_skipped_region(deleted_region.clone())
                             .await;
                         self.oplog
                             .add_and_commit(OplogEntry::jump(deleted_region))
@@ -2053,15 +2081,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-    }
-
-    /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
-    /// It also returns the last error stored in these entries.
-    pub async fn trailing_error_count(&self) -> u64 {
-        last_error_and_retry_count(self, &self.owned_worker_id)
-            .await
-            .map(|last_error| last_error.retry_count)
-            .unwrap_or_default()
     }
 
     pub async fn get_workers(
