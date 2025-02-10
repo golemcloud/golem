@@ -3900,6 +3900,17 @@ components:
           type: string
       required:
       - host
+    CancelInvocationParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+      required:
+      - timestamp
+      - idempotency_key
     CancelInvocationResponse:
       type: object
     ChangeRetryPolicyParameters:
@@ -5189,6 +5200,7 @@ components:
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
           Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
+          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5219,6 +5231,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5242,6 +5255,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ActivatePluginParameters'
+    PublicOplogEntry_CancelInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CancelInvocation
+            type: string
+            enum:
+            - CancelInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/CancelInvocationParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
