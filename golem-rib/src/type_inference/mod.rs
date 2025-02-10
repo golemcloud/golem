@@ -67,6 +67,30 @@ mod type_inference_tests {
         #[test]
         fn test_global_variable_inference_1() {
             let rib_expr = r#"
+             let res = foo;
+             res
+            "#;
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("foo".to_string()),
+                path: Path::from_elems(vec![]),
+                inferred_type: InferredType::Str,
+            };
+
+            let with_type_spec = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec]);
+
+            assert!(with_type_spec.is_ok());
+
+            let mut new_expr = Expr::from_text(rib_expr).unwrap();
+            let without_type_spec = new_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(without_type_spec.is_err())
+        }
+
+        #[test]
+        fn test_global_variable_inference_2() {
+            let rib_expr = r#"
              let res = request.path.user-id;
              let hello: u64 = request.path.number;
              hello
@@ -85,7 +109,7 @@ mod type_inference_tests {
         }
 
         #[test]
-        fn test_global_variable_inference_2() {
+        fn test_global_variable_inference_3() {
             let rib_expr = r#"
              let res1 = request.path.user-id;
              let res2 = request.headers.name;
@@ -168,6 +192,31 @@ mod type_inference_tests {
 
             // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
             let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
+            let result = valid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        async fn test_inline_type_annotation_3() {
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("foo".to_string()),
+                path: Path::from_elems(vec![]),
+                inferred_type: InferredType::Str,
+            };
+
+            // by default foo will be inferred to be a string (given the above type spec) and
+            // foo + 1u32 should fail compilation since we are adding string with a u32.
+            let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_err());
+
+            // We inline the type of foo identifier with u32 (over-riding what's given in the type spec)
+            let mut valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
             let result = valid_rib_expr
                 .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
 
