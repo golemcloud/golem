@@ -43,11 +43,11 @@ use wasmtime_wasi::WasiView;
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 pub struct PostgresDbConnection {
-    pub pool_key: RdbmsPoolKey,
+    pool_key: RdbmsPoolKey,
 }
 
 impl PostgresDbConnection {
-    pub fn new(pool_key: RdbmsPoolKey) -> Self {
+    fn new(pool_key: RdbmsPoolKey) -> Self {
         Self { pool_key }
     }
 }
@@ -271,13 +271,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
 #[derive(Clone)]
 pub struct DbResultStreamEntry {
-    pub request: RdbmsRequest<PostgresType>,
-    pub state: DbResultStreamState,
-    pub transaction_handle: Option<u32>,
+    request: RdbmsRequest<PostgresType>,
+    state: DbResultStreamState,
+    transaction_handle: Option<u32>,
 }
 
 impl DbResultStreamEntry {
-    pub fn new(
+    fn new(
         request: RdbmsRequest<PostgresType>,
         state: DbResultStreamState,
         transaction_handle: Option<u32>,
@@ -289,15 +289,22 @@ impl DbResultStreamEntry {
         }
     }
 
-    pub fn is_opened(&self) -> bool {
-        matches!(self.state, DbResultStreamState::Opened(_))
+    fn set_open(
+        &mut self,
+        value: Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>,
+    ) {
+        self.state = DbResultStreamState::Open(value);
+    }
+
+    pub fn is_open(&self) -> bool {
+        matches!(self.state, DbResultStreamState::Open(_))
     }
 }
 
 #[derive(Clone)]
 pub enum DbResultStreamState {
     New,
-    Opened(Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>),
+    Open(Arc<dyn crate::services::rdbms::DbResultStream<PostgresType> + Send + Sync>),
 }
 
 async fn get_db_query_stream<Ctx: WorkerCtx>(
@@ -344,7 +351,7 @@ async fn get_db_query_stream<Ctx: WorkerCtx>(
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<DbResultStreamEntry>(entry)
-                        .map(|e| e.state = DbResultStreamState::Opened(query_stream.clone()))
+                        .map(|e| e.set_open(query_stream.clone()))
                         .map_err(|e| RdbmsError::Other(e.to_string()))?;
 
                     Ok(query_stream)
@@ -352,7 +359,7 @@ async fn get_db_query_stream<Ctx: WorkerCtx>(
                 Err(e) => Err(e),
             }
         }
-        DbResultStreamState::Opened(query_stream) => Ok(query_stream),
+        DbResultStreamState::Open(query_stream) => Ok(query_stream),
     }
 }
 
@@ -467,24 +474,31 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
 
 #[derive(Clone)]
 pub struct DbTransactionEntry {
-    pub pool_key: RdbmsPoolKey,
-    pub state: DbTransactionState,
+    pool_key: RdbmsPoolKey,
+    state: DbTransactionState,
 }
 
 impl DbTransactionEntry {
-    pub fn new(pool_key: RdbmsPoolKey, state: DbTransactionState) -> Self {
+    fn new(pool_key: RdbmsPoolKey, state: DbTransactionState) -> Self {
         Self { pool_key, state }
     }
 
-    pub fn is_opened(&self) -> bool {
-        matches!(self.state, DbTransactionState::Opened(_))
+    fn set_open(
+        &mut self,
+        transaction: Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>,
+    ) {
+        self.state = DbTransactionState::Open(transaction);
+    }
+
+    pub fn is_open(&self) -> bool {
+        matches!(self.state, DbTransactionState::Open(_))
     }
 }
 
 #[derive(Clone)]
 pub enum DbTransactionState {
     New,
-    Opened(Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>),
+    Open(Arc<dyn crate::services::rdbms::DbTransaction<PostgresType> + Send + Sync>),
 }
 
 async fn get_db_transaction<Ctx: WorkerCtx>(
@@ -518,7 +532,7 @@ async fn get_db_transaction<Ctx: WorkerCtx>(
                     ctx.as_wasi_view()
                         .table()
                         .get_mut::<DbTransactionEntry>(entry)
-                        .map(|e| e.state = DbTransactionState::Opened(transaction.clone()))
+                        .map(|e| e.set_open(transaction.clone()))
                         .map_err(|e| RdbmsError::Other(e.to_string()))?;
 
                     Ok((transaction_entry.pool_key, transaction))
@@ -526,7 +540,7 @@ async fn get_db_transaction<Ctx: WorkerCtx>(
                 Err(e) => Err(e),
             }
         }
-        DbTransactionState::Opened(transaction) => Ok((transaction_entry.pool_key, transaction)),
+        DbTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
     }
 }
 
@@ -696,7 +710,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                 .map(|e| e.state.clone());
 
             let result = match state {
-                Ok(DbTransactionState::Opened(transaction)) => transaction.commit().await,
+                Ok(DbTransactionState::Open(transaction)) => transaction.commit().await,
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             };
@@ -730,7 +744,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
                 .map(|e| e.state.clone());
 
             let result = match state {
-                Ok(DbTransactionState::Opened(transaction)) => transaction.rollback().await,
+                Ok(DbTransactionState::Open(transaction)) => transaction.rollback().await,
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             };
@@ -751,7 +765,7 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
             .table()
             .delete::<DbTransactionEntry>(rep)?;
 
-        if let DbTransactionState::Opened(transaction) = entry.state {
+        if let DbTransactionState::Open(transaction) = entry.state {
             let _ = transaction.rollback_if_open().await;
         }
 
