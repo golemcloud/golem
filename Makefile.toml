@@ -200,6 +200,7 @@ description = "Runs unit tests only"
 script = '''
 cargo test --workspace --lib --all-features --exclude wasm-rpc-stubgen-tests-integration -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test -p golem-wasm-rpc-stubgen --tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]

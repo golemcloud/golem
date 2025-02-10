@@ -54,13 +54,13 @@ fn all_wit_types_no_collision() {
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-stub", None),
+        &PackageName::new("test", "main-client", None),
         &dest_wit_root,
         &stub_wit_root,
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None),
+        &PackageName::new("test", "main-exports", None),
         &dest_wit_root,
         &stub_wit_root,
     );
@@ -86,17 +86,17 @@ fn all_wit_types_re_add_with_changes() {
     assert_valid_wit_root(&dest_wit_root);
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None),
+        &PackageName::new("test", "main-exports", None),
         source_dir.path(),
         &stub_wit_root,
     );
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None),
+        &PackageName::new("test", "main-exports", None),
         source_dir.path(),
         &dest_wit_root,
     );
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-stub", None),
+        &PackageName::new("test", "main-client", None),
         &stub_wit_root,
         &dest_wit_root,
     );
@@ -111,17 +111,17 @@ fn all_wit_types_re_add_with_changes() {
     assert_valid_wit_root(&dest_wit_root);
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None),
+        &PackageName::new("test", "main-exports", None),
         alternative_source_dir.path(),
         &alternative_stub_wit_root,
     );
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None),
+        &PackageName::new("test", "main-exports", None),
         alternative_source_dir.path(),
         &dest_wit_root,
     );
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-stub", None),
+        &PackageName::new("test", "main-client", None),
         &alternative_stub_wit_root,
         &dest_wit_root,
     );
@@ -192,13 +192,13 @@ fn direct_circular() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-stub", None),
+        &PackageName::new("test", "b-client", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-interface", None),
+        &PackageName::new("test", "b-exports", None),
         dest_a.path(),
         _source_b_dir.path(),
     );
@@ -206,13 +206,13 @@ fn direct_circular() {
     assert_has_wasm_rpc_wit_deps(dest_b.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_b.path(),
         &stub_a_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-interface", None),
+        &PackageName::new("test", "a-exports", None),
         dest_b.path(),
         _source_a_dir.path(),
     );
@@ -268,7 +268,7 @@ fn direct_circular_readd() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-stub", None),
+        &PackageName::new("test", "b-client", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
@@ -283,7 +283,7 @@ fn direct_circular_readd() {
     assert_has_wasm_rpc_wit_deps(dest_b.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_b.path(),
         &stub_a_dir.path().join("wit"),
     );
@@ -325,13 +325,13 @@ fn direct_circular_same_world_name() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-stub", None),
+        &PackageName::new("test", "b-client", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-interface", None),
+        &PackageName::new("test", "b-exports", None),
         dest_a.path(),
         source_b_dir.path(),
     );
@@ -339,13 +339,13 @@ fn direct_circular_same_world_name() {
     assert_has_wasm_rpc_wit_deps(dest_b.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_b.path(),
         &stub_a_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-interface", None),
+        &PackageName::new("test", "a-exports", None),
         dest_b.path(),
         source_a_dir.path(),
     );
@@ -387,13 +387,13 @@ fn indirect_circular() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-stub", None),
+        &PackageName::new("test", "b-client", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-interface", None),
+        &PackageName::new("test", "b-exports", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
@@ -401,7 +401,7 @@ fn indirect_circular() {
     assert_has_wasm_rpc_wit_deps(dest_b.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "c-stub", None),
+        &PackageName::new("test", "c-client", None),
         dest_b.path(),
         &stub_c_dir.path().join("wit"),
     );
@@ -409,13 +409,13 @@ fn indirect_circular() {
     assert_has_wasm_rpc_wit_deps(dest_c.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_c.path(),
         &stub_a_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-interface", None),
+        &PackageName::new("test", "a-exports", None),
         dest_c.path(),
         source_a_dir.path(),
     );
@@ -492,13 +492,13 @@ fn indirect_circular_readd() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-stub", None),
+        &PackageName::new("test", "b-client", None),
         dest_a.path(),
         &stub_b_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b-interface", None),
+        &PackageName::new("test", "b-exports", None),
         dest_a.path(),
         dest_b.path(),
     );
@@ -506,30 +506,24 @@ fn indirect_circular_readd() {
     assert_has_wasm_rpc_wit_deps(dest_b.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "c-stub", None),
+        &PackageName::new("test", "c-client", None),
         dest_b.path(),
         &stub_c_dir.path().join("wit"),
     );
 
-    assert_has_no_package_by_name(
-        &PackageName::new("test", "c-interface", None),
-        dest_b.path(),
-    );
-    assert_has_package_by_name(
-        &PackageName::new("test", "c-interface", None),
-        dest_c.path(),
-    );
+    assert_has_no_package_by_name(&PackageName::new("test", "c-exports", None), dest_b.path());
+    assert_has_package_by_name(&PackageName::new("test", "c-exports", None), dest_c.path());
 
     assert_has_wasm_rpc_wit_deps(dest_c.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_c.path(),
         &stub_a_dir.path().join("wit"),
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-interface", None),
+        &PackageName::new("test", "a-exports", None),
         dest_c.path(),
         dest_a.path(),
     );
@@ -555,7 +549,7 @@ fn self_circular() {
     assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a-stub", None),
+        &PackageName::new("test", "a-client", None),
         dest_a.path(),
         &stub_a_dir.path().join("wit"),
     );
@@ -706,7 +700,7 @@ fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
         deps.as_slice(),
     );
     assert_has_same_wit_package(
-        &PackageName::new("golem", "rpc", Some(Version::new(0, 1, 0))),
+        &PackageName::new("golem", "rpc", Some(Version::new(0, 1, 2))),
         wit_dir,
         deps.as_slice(),
     );
