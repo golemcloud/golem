@@ -80,7 +80,7 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display("\"")
             }
-            Expr::Identifier(identifier, _) => self.write_str(identifier.name()),
+            Expr::Identifier(identifier, _, _) => self.write_str(identifier.name()),
 
             Expr::Let(variable_id, type_name, expr, _) => {
                 self.write_str("let ")?;
@@ -513,7 +513,7 @@ mod internal {
             }
 
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Identifier(s, _) => writer.write_str(s.name()),
+                Expr::Identifier(s, _, _) => writer.write_str(s.name()),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

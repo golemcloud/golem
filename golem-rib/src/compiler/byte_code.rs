@@ -116,7 +116,7 @@ mod internal {
             Expr::Throw(msg, _) => {
                 instructions.push(RibIR::Throw(msg.to_string()));
             }
-            Expr::Identifier(variable_id, _) => {
+            Expr::Identifier(variable_id, _, _) => {
                 instructions.push(RibIR::LoadVar(variable_id.clone()));
             }
             Expr::Literal(str, _) => {
@@ -724,7 +724,7 @@ mod compiler_tests {
         let inferred_input_type = InferredType::Str;
         let variable_id = VariableId::local("request", 0);
         let empty_registry = FunctionTypeRegistry::empty();
-        let expr = Expr::Identifier(variable_id.clone(), inferred_input_type);
+        let expr = Expr::Identifier(variable_id.clone(), None, inferred_input_type);
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();

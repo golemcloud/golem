@@ -63,7 +63,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            expr @ Expr::Identifier(_, _) => {
+            expr @ Expr::Identifier(_, _, _) => {
                 inferred_type_stack.push_front(expr.clone());
             }
 
@@ -1120,6 +1120,7 @@ mod type_pull_up_tests {
                 Box::new(Expr::SelectIndex(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     0,
@@ -1129,6 +1130,7 @@ mod type_pull_up_tests {
                 Box::new(Expr::SelectIndex(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     1,
@@ -1140,6 +1142,7 @@ mod type_pull_up_tests {
             Box::new(Expr::SelectIndex(
                 Box::new(Expr::Identifier(
                     VariableId::global("bar".to_string()),
+                    None,
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 0,
@@ -1149,6 +1152,7 @@ mod type_pull_up_tests {
             Box::new(Expr::SelectIndex(
                 Box::new(Expr::Identifier(
                     VariableId::global("bar".to_string()),
+                    None,
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 1,
@@ -1320,6 +1324,7 @@ mod type_pull_up_tests {
                             resource_params: vec![Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::local("input", 0),
+                                    None,
                                     InferredType::Record(vec![
                                         ("foo".to_string(), InferredType::Str),
                                         ("bar".to_string(), InferredType::Str),
@@ -1439,6 +1444,7 @@ mod type_pull_up_tests {
                 Box::new(Expr::SelectField(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
                     )),
                     "bar".to_string(),
@@ -1452,6 +1458,7 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::global("foo".to_string()),
+                                    None,
                                     InferredType::Record(vec![(
                                         "bar".to_string(),
                                         InferredType::Str,
@@ -1465,6 +1472,7 @@ mod type_pull_up_tests {
                         arm_resolution_expr: Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::global("baz".to_string()),
+                                None,
                                 InferredType::Record(vec![("qux".to_string(), InferredType::Str)]),
                             )),
                             "qux".to_string(),
@@ -1478,6 +1486,7 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::global("quux".to_string()),
+                                    None,
                                     InferredType::Record(vec![(
                                         "corge".to_string(),
                                         InferredType::Str,
@@ -1491,6 +1500,7 @@ mod type_pull_up_tests {
                         arm_resolution_expr: Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::global("grault".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "garply".to_string(),
                                     InferredType::Str,

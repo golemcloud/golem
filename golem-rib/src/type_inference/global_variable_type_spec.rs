@@ -73,13 +73,11 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
 
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
-    dbg!(expr_queue.clone());
-
     let mut temp_stack = VecDeque::new();
 
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
-            expr @ Expr::Identifier(variable_id, _) => {
+            expr @ Expr::Identifier(variable_id, type_name, _) => {
                 if variable_id == &type_spec.variable_id {
                     if path.is_empty() {
                         let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
@@ -90,6 +88,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                             temp_stack.push_front((
                                 Expr::Identifier(
                                     variable_id.clone(),
+                                    type_name.clone(),
                                     type_spec.inferred_type.clone(),
                                 ),
                                 false,
@@ -951,7 +950,11 @@ mod tests {
 
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
-        let expected = Expr::Identifier(VariableId::global("foo".to_string()), InferredType::Str);
+        let expected = Expr::Identifier(
+            VariableId::global("foo".to_string()),
+            None,
+            InferredType::Str,
+        );
 
         assert_eq!(result, expected);
     }
@@ -1067,6 +1070,7 @@ mod tests {
                         Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::Global("foo".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1095,6 +1099,7 @@ mod tests {
                         Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::Global("foo".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1118,6 +1123,7 @@ mod tests {
                 ),
                 Expr::Identifier(
                     VariableId::Local("hello".to_string(), Some(Id(0))),
+                    None,
                     InferredType::U64,
                 ),
             ],

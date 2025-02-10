@@ -157,7 +157,7 @@ mod internal {
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
-            Expr::Identifier(identifier, inferred_type) => {
+            Expr::Identifier(identifier, _, inferred_type) => {
                 let assign_var = Expr::Let(
                     identifier.clone(),
                     None,
@@ -605,6 +605,7 @@ mod desugar_tests {
                     Box::new(Expr::GetTag(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -620,6 +621,7 @@ mod desugar_tests {
                             Box::new(Expr::Unwrap(
                                 Box::new(Expr::Identifier(
                                     VariableId::local("x", 0),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::U64)),
                                 )),
                                 InferredType::Unknown,
@@ -628,6 +630,7 @@ mod desugar_tests {
                         ),
                         Expr::Identifier(
                             VariableId::match_identifier("x".to_string(), 1),
+                            None,
                             InferredType::U64,
                         ),
                     ],
@@ -638,6 +641,7 @@ mod desugar_tests {
                         Box::new(Expr::GetTag(
                             Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Option(Box::new(InferredType::U64)),
                             )),
                             InferredType::Unknown,

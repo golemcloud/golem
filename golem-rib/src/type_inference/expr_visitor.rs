@@ -112,7 +112,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
         Expr::Option(None, _) => {}
         Expr::Throw(_, _) => {}
@@ -224,7 +224,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
         Expr::Option(None, _) => {}
         Expr::Throw(_, _) => {}
@@ -360,7 +360,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
         Expr::Option(None, _) => {}
         Expr::Throw(_, _) => {}

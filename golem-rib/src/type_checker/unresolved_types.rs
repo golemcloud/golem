@@ -63,7 +63,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Identifier(_, inferred_type) => {
+            Expr::Identifier(_, _, inferred_type) => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).with_additional_message(
                         format!("`{}` is unknown identifier", expr).as_str(),

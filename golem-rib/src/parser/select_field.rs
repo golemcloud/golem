@@ -19,7 +19,6 @@ use internal::*;
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::identifier::identifier;
 use crate::parser::record::record;
 
 parser! {
@@ -36,6 +35,7 @@ mod internal {
 
     use super::*;
     use crate::parser::errors::RibParseError;
+    use crate::parser::identifier::identifier_text;
     use crate::parser::select_index::select_index;
     use crate::parser::type_name::parse_type_name;
     use combine::{
@@ -60,7 +60,7 @@ mod internal {
                 choice((
                     attempt(select_field()),
                     attempt(select_index()),
-                    attempt(identifier()),
+                    attempt(identifier_text().map(Expr::identifier)),
                 )),
                 optional(
                     char_(':')
@@ -102,7 +102,7 @@ mod internal {
     // We also propagate any type name in between towards the outer.
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
-            Expr::Identifier(variable_id, _) => {
+            Expr::Identifier(variable_id, _, _) => {
                 Some(Expr::select_field(base, variable_id.name().as_str()))
             }
             Expr::SelectField(second, last, type_name, inferred_type) => {

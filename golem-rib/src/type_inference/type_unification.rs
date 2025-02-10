@@ -290,7 +290,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Identifier(_, inferred_type) => {
+            Expr::Identifier(_, _, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {

@@ -210,7 +210,7 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, existing_inferred_type) => {
+                    Expr::Identifier(v, _, existing_inferred_type) => {
                         if let VariableId::ListComprehension(l) = v {
                             if l.name == variable_id.name() {
                                 *existing_inferred_type =
@@ -245,7 +245,7 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, existing_inferred_type) => {
+                    Expr::Identifier(v, _, existing_inferred_type) => {
                         if let VariableId::ListComprehension(l) = v {
                             if l.name == iterated_variable.name() {
                                 *existing_inferred_type =
@@ -551,6 +551,7 @@ mod type_push_down_tests {
                 "titles".to_string(),
                 Box::new(Expr::Identifier(
                     VariableId::global("x".to_string()),
+                    None,
                     InferredType::U64,
                 )),
             )],
@@ -577,10 +578,12 @@ mod type_push_down_tests {
             vec![
                 Expr::Identifier(
                     VariableId::global("x".to_string()),
+                    None,
                     InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
                 ),
                 Expr::Identifier(
                     VariableId::global("y".to_string()),
+                    None,
                     InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
                 ),
             ],

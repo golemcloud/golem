@@ -45,7 +45,7 @@ pub enum Expr {
     Literal(String, InferredType),
     Number(Number, Option<TypeName>, InferredType),
     Flags(Vec<String>, InferredType),
-    Identifier(VariableId, InferredType),
+    Identifier(VariableId, Option<TypeName>, InferredType),
     Boolean(bool, InferredType),
     Concat(Vec<Expr>, InferredType),
     ExprBlock(Vec<Expr>, InferredType),
@@ -154,7 +154,7 @@ impl Expr {
     }
 
     pub fn is_identifier(&self) -> bool {
-        matches!(self, Expr::Identifier(_, _))
+        matches!(self, Expr::Identifier(_, _, _))
     }
 
     pub fn is_select_field(&self) -> bool {
@@ -300,6 +300,15 @@ impl Expr {
     pub fn identifier(name: impl AsRef<str>) -> Self {
         Expr::Identifier(
             VariableId::global(name.as_ref().to_string()),
+            None,
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn identifier_with_type_annotation(name: impl AsRef<str>, type_name: TypeName) -> Self {
+        Expr::Identifier(
+            VariableId::global(name.as_ref().to_string()),
+            Some(type_name),
             InferredType::Unknown,
         )
     }
@@ -544,7 +553,7 @@ impl Expr {
             | Expr::Literal(_, inferred_type)
             | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
-            | Expr::Identifier(_, inferred_type)
+            | Expr::Identifier(_, _, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
             | Expr::ExprBlock(_, inferred_type)
@@ -594,11 +603,9 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        dbg!(self.clone());
         *self = self
             .bind_global_variables_type(type_spec)
             .map_err(|x| vec![x])?;
-        dbg!(self.clone());
         self.bind_types();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
@@ -690,7 +697,7 @@ impl Expr {
 
     pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier(_, inferred_type)
+            Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
@@ -738,7 +745,7 @@ impl Expr {
 
     pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier(_, inferred_type)
+            Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
@@ -804,7 +811,7 @@ impl Expr {
         Expr::Number(Number { value: big_decimal }, None, inferred_type)
     }
 
-    pub fn number_with_type_name(
+    pub fn number_with_type_annotation(
         big_decimal: BigDecimal,
         type_name: TypeName,
         inferred_type: InferredType,
@@ -822,7 +829,7 @@ impl Expr {
 
     // TODO; introduced to minimise the number of changes in tests.
     pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
-        Expr::number_with_type_name(big_decimal, type_name, InferredType::number())
+        Expr::number_with_type_annotation(big_decimal, type_name, InferredType::number())
     }
 }
 
@@ -975,6 +982,7 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Ok(Box::new(Expr::Identifier(
                 VariableId::global(binding_variable.to_string()),
+                None,
                 InferredType::Unknown,
             ))),
             InferredType::Result {
@@ -989,6 +997,7 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Err(Box::new(Expr::Identifier(
                 VariableId::global(binding_variable.to_string()),
+                None,
                 InferredType::Unknown,
             ))),
             InferredType::Result {
@@ -1003,6 +1012,7 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Option(
             Some(Box::new(Expr::Identifier(
                 VariableId::local_with_no_id(binding_variable),
+                None,
                 InferredType::Unknown,
             ))),
             InferredType::Unknown,
@@ -1016,6 +1026,7 @@ impl ArmPattern {
     pub fn identifier(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Identifier(
             VariableId::global(binding_variable.to_string()),
+            None,
             InferredType::Unknown,
         )))
     }
@@ -1470,7 +1481,7 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::FlagsExpr { values },
                     ))
                 }
-                Expr::Identifier(variable_id, _) => {
+                Expr::Identifier(variable_id, _, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
                         golem_api_grpc::proto::golem::rib::IdentifierExpr {
                             name: variable_id.name(),

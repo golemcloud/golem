@@ -183,7 +183,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::U8,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -200,7 +204,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::U16,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -217,7 +225,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::U32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -234,7 +246,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::U64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -251,7 +267,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::S8,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -268,7 +288,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::S16,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -285,7 +309,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::S32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -302,7 +330,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::S64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -319,7 +351,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::F32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -336,7 +372,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::F64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -353,7 +393,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::Chr,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))
@@ -370,7 +414,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::Str,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    )
                 ),
                 ""
             ))

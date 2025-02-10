@@ -409,20 +409,24 @@ mod tests {
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     )),
                     Box::new(Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::U64,
                     )),
                     Box::new(Expr::Identifier(
                         VariableId::global("y".to_string()),
+                        None,
                         InferredType::U64,
                     )),
                     InferredType::U64,

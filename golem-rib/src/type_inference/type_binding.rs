@@ -58,7 +58,7 @@ mod internal {
 
     pub(crate) fn override_type(expr: &mut Expr, new_type: InferredType) {
         match expr {
-            Expr::Identifier(_, inferred_type)
+            Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
@@ -148,6 +148,7 @@ mod type_binding_tests {
             Box::new(Expr::SelectField(
                 Box::new(Expr::Identifier(
                     VariableId::Global("foo".to_string()),
+                    None,
                     InferredType::Unknown,
                 )),
                 "bar".to_string(),
@@ -177,6 +178,7 @@ mod type_binding_tests {
                 Box::new(Expr::SelectField(
                     Box::new(Expr::Identifier(
                         VariableId::Global("foo".to_string()),
+                        None,
                         InferredType::Unknown,
                     )),
                     "bar".to_string(),
@@ -251,7 +253,11 @@ mod type_binding_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::global("y".to_string()), InferredType::Unknown),
+                    Expr::Identifier(
+                        VariableId::global("y".to_string()),
+                        None,
+                        InferredType::Unknown,
+                    ),
                 ],
                 InferredType::Unknown,
             )),
@@ -276,11 +282,13 @@ mod type_binding_tests {
         let expected = Expr::PatternMatch(
             Box::new(Expr::Identifier(
                 VariableId::global("x".to_string()),
+                None,
                 InferredType::Unknown,
             )),
             vec![MatchArm {
                 arm_pattern: ArmPattern::Literal(Box::new(Expr::Identifier(
                     VariableId::global("a".to_string()),
+                    None,
                     InferredType::Unknown,
                 ))),
                 arm_resolution_expr: Box::new(Expr::Number(
@@ -313,6 +321,7 @@ mod type_binding_tests {
         let expected = Expr::Cond(
             Box::new(Expr::Identifier(
                 VariableId::global("x".to_string()),
+                None,
                 InferredType::Unknown,
             )),
             Box::new(Expr::Number(

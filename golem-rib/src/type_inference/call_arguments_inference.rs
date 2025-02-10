@@ -530,6 +530,7 @@ mod function_parameters_inference_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::global("x".to_string()),
+                None,
                 InferredType::U64, // Call argument's types are updated
             )],
             InferredType::Sequence(vec![]), // Call Expressions return type is updated
