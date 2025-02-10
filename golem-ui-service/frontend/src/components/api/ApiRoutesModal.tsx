@@ -16,6 +16,7 @@ import { Route } from "../../pages/ApiDefinitionDetail";
 import toast from "react-hot-toast";
 import { useComponents } from "../../api/components";
 import { useWorkers } from "../../api/workers";
+import { KeyValueInput } from "./KeyValueInput";
 
 const HTTP_METHODS = [
   { value: "Get", color: "text-green-500 bg-green-500/10" },
@@ -132,11 +133,10 @@ const Tooltip = ({ content, title }: { content: string; title: string }) => {
     <div className="relative inline-block">
       <button onClick={() => setIsOpen(!isOpen)}>
         <HelpCircle
-          className={`w-4 h-4 cursor-pointer transition-colors ${
-            isOpen
+          className={`w-4 h-4 cursor-pointer transition-colors ${isOpen
               ? "text-primary"
               : "text-muted-foreground hover:text-gray-300"
-          }`}
+            }`}
         />
       </button>
       {isOpen && (
@@ -236,8 +236,9 @@ export const RouteModal = ({
   const [isCustomWorker, setIsCustomWorker] = useState(false);
   const [isCustomResponse, setIsCustomResponse] = useState(false);
   const [selectedFunction, setSelectedFunction] = useState("");
-
   const [bindingType, setBindingType] = useState("default");
+  const [corsHeaders, setCorsHeaders] = useState<Record<string, string>>({});
+
   const { data: components } = useComponents();
   const { data: workersData } = useWorkers(
     selectedComponent?.versionedComponentId.componentId || "",
@@ -267,9 +268,9 @@ export const RouteModal = ({
         components?.find(
           (c) =>
             c.versionedComponentId.componentId ===
-              existingRoute.binding.componentId.componentId &&
+            existingRoute.binding.componentId.componentId &&
             c.versionedComponentId.version ===
-              existingRoute.binding.componentId.version,
+            existingRoute.binding.componentId.version,
         ),
       );
       setSelectedVersion(existingRoute.binding.componentId.version);
@@ -297,6 +298,22 @@ export const RouteModal = ({
         setResponse(existingRoute.binding.response!);
         setSelectedFunction("");
       }
+
+      if (existingRoute.binding.bindingType === "cors-preflight") {
+        // Parse the existing CORS response into key-value pairs
+        const corsResponse = existingRoute.binding.response || "";
+        const corsPairs = corsResponse
+          .replace(/[\{\}]/g, "")
+          .split(",")
+          .map((pair) => pair.trim().split(":").map((s) => s.trim()));
+        const corsHeaders = corsPairs.reduce((acc, [key, value]) => {
+          if (key && value) {
+            acc[key] = value.replace(/['"]/g, "");
+          }
+          return acc;
+        }, {} as Record<string, string>);
+        setCorsHeaders(corsHeaders);
+      }
     }
   }, [existingRoute, components]);
 
@@ -305,16 +322,14 @@ export const RouteModal = ({
     if (bindingType === "file-server" && !response) {
       setResponse('let file: string = request.path.file; "/files/${{file}}"');
     } else if (bindingType === "cors-preflight" && !response) {
-      setResponse(`
-  {
-                  Access-Control-Allow-Origin: "{}",
-                  Access-Control-Allow-Methods: "{}",
-                  Access-Control-Allow-Headers: "{}",
-                  Access-Control-Expose-Headers: "{}",
-                  Access-Control-Allow-Credentials: {},
-                  Access-Control-Max-Age: {}u64
-}
-  `);
+      setCorsHeaders({
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Expose-Headers": "Content-Length, X-Request-Id",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Max-Age": "86400",
+      });
     }
   }, [bindingType, response]);
 
@@ -380,7 +395,16 @@ export const RouteModal = ({
         finalResponse = formatResponse(response, selectedRibType);
       }
     } else {
-      finalResponse = response;
+      if (bindingType === "cors-preflight") {
+        // Convert CORS headers to string format
+        finalResponse = `{
+  ${Object.entries(corsHeaders)
+            .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            .join(",\n  ")}
+}`;
+      } else {
+        finalResponse = response;
+      }
     }
 
     const route = {
@@ -640,6 +664,12 @@ export const RouteModal = ({
                     onChange={setSelectedFunction}
                     placeholder="Select function"
                     error={errors.response && isCustomResponse}
+                  />
+                ) : bindingType === "cors-preflight" ? (
+                  <KeyValueInput
+                    label="CORS Headers"
+                    value={corsHeaders}
+                    onChange={setCorsHeaders}
                   />
                 ) : bindingType !== "default" ||
                   typeof response === "string" ? (

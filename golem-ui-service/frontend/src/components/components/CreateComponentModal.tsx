@@ -2,6 +2,7 @@ import {
   AlertCircle,
   Cloud,
   FileIcon,
+  Folder,
   Loader2,
   Plus,
   Server,
@@ -12,6 +13,7 @@ import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
 
 import { Component } from "../../types/api";
+import JSZip from "jszip";
 import toast from "react-hot-toast";
 
 type ComponentType = "Durable" | "Ephemeral";
@@ -22,142 +24,105 @@ interface ComponentModalProps {
   existingComponent?: Component;
 }
 
-export interface InputProps
-  extends React.InputHTMLAttributes<HTMLInputElement> {
-  label: string;
-  error?: string;
+interface FileItem {
+  id: string;
+  name: string;
+  type: "file" | "folder";
+  parentId: string | null;
+  fileObject?: File;
+  isLocked?: boolean;
+  path?: string;
 }
 
-const Input: React.FC<InputProps> = ({ label, error, ...props }) => (
-  <div>
-    <label className="block text-sm font-medium mb-1.5 text-gray-300">
-      {label}
-    </label>
-    <input
-      {...props}
-      className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
-                     focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none
-                     transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-    />
-    {error && (
-      <div className="mt-1 flex items-center gap-1 text-red-400 text-sm">
-        <AlertCircle size={14} />
-        <span>{error}</span>
-      </div>
-    )}
-  </div>
-);
-
-type DropzoneProps = {
-  onFileDrop: (e: React.DragEvent) => void;
-  onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  inputRef: React.RefObject<HTMLInputElement>;
-  file: File | null | File[];
-  onRemove: (index?: number) => void;
-  isSubmitting: boolean;
-  accept?: string;
-  multiple?: boolean;
-  dragActive: boolean;
-  setDragActive: React.Dispatch<React.SetStateAction<boolean>>;
-  placeholder: string;
-};
-
-const FileDropzone = ({
-  onFileDrop,
-  onFileSelect,
-  inputRef,
-  file,
-  onRemove,
+const FileDropzone = ({ 
+  onDrop, 
+  files, 
+  onRemove, 
   isSubmitting,
-  accept = "*",
-  multiple = false,
-  dragActive,
-  setDragActive,
   placeholder,
-}: DropzoneProps) => (
-  <div
-    onClick={() => !isSubmitting && inputRef.current?.click()}
-    onDragOver={(e) => {
-      e.preventDefault();
-      if (!isSubmitting) {
-        setDragActive(true);
-      }
-    }}
-    onDragLeave={() => setDragActive(false)}
-    onDrop={onFileDrop}
-    className={`border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200
-            ${isSubmitting ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-blue-400/50"} 
-            ${dragActive ? "border-blue-500 bg-primary/10" : "border-gray-600"}`}
-  >
-    {file || (multiple && file?.length > 0) ? (
-      <div className="space-y-2">
-        {multiple ? (
-          file.map((f: File, index: number) => (
+  accept = "*"
+}: {
+  onDrop: (files: FileList) => void;
+  files: FileItem[];
+  onRemove: (id: string) => void;
+  isSubmitting: boolean;
+  placeholder: string;
+  accept?: string;
+}) => {
+  const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    if (e.dataTransfer.files.length) {
+      onDrop(e.dataTransfer.files);
+    }
+  };
+
+  return (
+    <div
+      onClick={() => !isSubmitting && inputRef.current?.click()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        !isSubmitting && setDragActive(true);
+      }}
+      onDragLeave={() => setDragActive(false)}
+      onDrop={handleDrop}
+      className={`border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200
+        ${isSubmitting ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-primary"} 
+        ${dragActive ? "border-primary bg-primary/10" : "border-muted"}`}
+    >
+      {files.length > 0 ? (
+        <div className="space-y-2">
+          {files.map((file) => (
             <div
-              key={index}
+              key={file.id}
               className="flex items-center justify-between bg-card/50 rounded-lg px-4 py-2"
             >
               <div className="flex items-center gap-2">
-                <FileIcon size={16} className="text-primary" />
-                <span className="text-sm truncate">{f.name}</span>
+                {file.type === 'folder' ? 
+                  <Folder size={16} className="text-primary" /> :
+                  <FileIcon size={16} className="text-primary" />
+                }
+                <span className="text-sm truncate">{file.name}</span>
               </div>
               {!isSubmitting && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onRemove(index);
+                    onRemove(file.id);
                   }}
-                  className="p-1 text-muted-foreground hover:text-red-400 rounded-md
-                                             hover:bg-gray-600/50 transition-colors"
+                  className="p-1 text-muted-foreground hover:text-destructive rounded-md
+                    hover:bg-destructive/10 transition-colors"
                 >
                   <X size={14} />
                 </button>
               )}
             </div>
-          ))
-        ) : (
-          <div className="flex items-center justify-between bg-card/50 rounded-lg px-4 py-2">
-            <div className="flex items-center gap-2">
-              <FileIcon size={16} className="text-primary" />
-              <span className="text-sm">{file.name}</span>
-            </div>
-            {!isSubmitting && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemove();
-                }}
-                className="p-1 text-muted-foreground hover:text-red-400 rounded-md
-                                         hover:bg-gray-600/50 transition-colors"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    ) : (
-      <div className="space-y-3">
-        <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
-        <div>
-          <p className="text-sm text-gray-300">{placeholder}</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            or click to browse
-          </p>
+          ))}
         </div>
-      </div>
-    )}
-    <input
-      ref={inputRef}
-      type="file"
-      accept={accept}
-      multiple={multiple}
-      onChange={onFileSelect}
-      className="hidden"
-      disabled={isSubmitting}
-    />
-  </div>
-);
+      ) : (
+        <div className="space-y-3">
+          <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
+          <div>
+            <p className="text-sm text-foreground">{placeholder}</p>
+            <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+          </div>
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        multiple
+        onChange={(e) => e.target.files && onDrop(e.target.files)}
+        className="hidden"
+        disabled={isSubmitting}
+      />
+    </div>
+  );
+};
 
 const CreateComponentModal = ({
   isOpen,
@@ -165,14 +130,11 @@ const CreateComponentModal = ({
   existingComponent,
 }: ComponentModalProps) => {
   const isUpdateMode = !!existingComponent;
-  const [dragActive, setDragActive] = useState(false);
-  const [mainFile, setMainFile] = useState<File | null>(null);
-  const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
   const [name, setName] = useState("");
   const [componentType, setComponentType] = useState<ComponentType>("Durable");
+  const [mainFile, setMainFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<FileItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const mainInputRef = useRef<HTMLInputElement | null>(null);
-  const additionalInputRef = useRef<HTMLInputElement | null>(null);
 
   const createComponent = useCreateComponent();
   const updateComponent = useUpdateComponent();
@@ -184,35 +146,65 @@ const CreateComponentModal = ({
     }
   }, [existingComponent]);
 
-  const handleMainFileDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile?.name.endsWith(".wasm")) {
-      setMainFile(droppedFile);
+  // Function to get the full path of a file
+  const getFullPath = (file: FileItem, allFiles: FileItem[]): string => {
+    if (!file.parentId) return `/${file.name}`;
+    const parent = allFiles.find((f) => f.id === file.parentId);
+    if (!parent) return file.name;
+    return `${getFullPath(parent, allFiles)}/${file.name}`;
+  };
+
+  // Function to capture file metadata
+  const captureFileMetadata = (allFiles: FileItem[]) => {
+    const filesPath: { path: string; permissions: string }[] = [];
+    allFiles.forEach((file) => {
+      if (file.type !== "folder") {
+        filesPath.push({
+          path: getFullPath(file, allFiles),
+          permissions: file.isLocked ? "read-only" : "read-write",
+        });
+      }
+    });
+    return { values: filesPath };
+  };
+
+  // Function to add files to zip
+  const addFilesToZip = async (zipFolder: JSZip, parentId: string | null) => {
+    const children = files.filter((file) => file.parentId === parentId);
+    for (const child of children) {
+      if (child.type === "folder") {
+        const folder = zipFolder.folder(child.name);
+        if (folder) {
+          await addFilesToZip(folder, child.id);
+        }
+      } else if (child.type === "file" && child.fileObject) {
+        zipFolder.file(child.name, child.fileObject);
+      }
+    }
+  };
+
+  const handleMainFileDrop = (fileList: FileList) => {
+    const file = fileList[0];
+    if (file?.name.endsWith(".wasm")) {
+      setMainFile(file);
     } else {
       toast.error("Please upload a .wasm file");
     }
   };
 
-  const handleMainFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0] || null;
-    if (selectedFile?.name.endsWith(".wasm")) {
-      setMainFile(selectedFile);
-    } else {
-      toast.error("Please upload a .wasm file");
-    }
+  const handleAdditionalFiles = (fileList: FileList) => {
+    const newFiles = Array.from(fileList).map(file => ({
+      id: Math.random().toString(36).substring(7),
+      name: file.name,
+      type: 'file' as const,
+      parentId: null,
+      fileObject: file
+    }));
+    setFiles(prev => [...prev, ...newFiles]);
   };
 
-  const handleAdditionalFileSelect = (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const newFiles = Array.from(e.target.files || []);
-    setAdditionalFiles((prev) => [...prev, ...newFiles]);
-  };
-
-  const removeAdditionalFile = (index: number) => {
-    setAdditionalFiles((prev) => prev.filter((_, i) => i !== index));
+  const removeFile = (id: string) => {
+    setFiles(prev => prev.filter(file => file.id !== id));
   };
 
   const handleSubmit = async () => {
@@ -227,11 +219,21 @@ const CreateComponentModal = ({
       formData.append("component", mainFile);
     }
 
-    additionalFiles.forEach((file) => {
-      formData.append("files", file);
-    });
-
     try {
+      // Create zip file containing additional files
+      if (files.length > 0) {
+        const zip = new JSZip();
+        await addFilesToZip(zip, null);
+        const blob = await zip.generateAsync({ type: "blob" });
+        formData.append("files", blob, "files.zip");
+        
+        // Add file permissions metadata
+        formData.append(
+          "filesPermissions",
+          JSON.stringify(captureFileMetadata(files))
+        );
+      }
+
       if (isUpdateMode && existingComponent) {
         await updateComponent.mutateAsync({
           componentId: existingComponent.versionedComponentId.componentId,
@@ -243,14 +245,14 @@ const CreateComponentModal = ({
         toast.success("Component created successfully");
       }
 
-      // Reset form
       setMainFile(null);
-      setAdditionalFiles([]);
+      setFiles([]);
       setName("");
       setComponentType("Durable");
       setIsSubmitting(false);
       onClose();
     } catch (error) {
+      toast.error(`Failed to ${isUpdateMode ? "update" : "create"} component`);
       setIsSubmitting(false);
       console.error(error);
     }
@@ -259,8 +261,8 @@ const CreateComponentModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48">
-      <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl">
+    <div className="fixed inset-0 bg-background/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+      <div className="bg-card rounded-xl p-6 max-w-xl w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-md bg-primary/10 text-primary">
@@ -277,28 +279,30 @@ const CreateComponentModal = ({
           </div>
           <button
             onClick={onClose}
-            className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
-                                 rounded-md transition-colors"
+            className="text-muted-foreground hover:text-foreground p-1 hover:bg-muted/50 
+              rounded-md transition-colors"
           >
             <X size={20} />
           </button>
         </div>
 
         <div className="space-y-6">
-          <Input
-            label="Component Name"
-            value={name}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setName(e.target.value)
-            }
-            placeholder="Enter component name"
-            disabled={isSubmitting || isUpdateMode}
-          />
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Component Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter component name"
+              disabled={isSubmitting || isUpdateMode}
+              className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-input 
+                focus:border-primary focus:ring-1 focus:ring-primary outline-none
+                transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+          </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1.5 text-gray-300">
-              Component Type
-            </label>
+            <label className="block text-sm font-medium mb-1.5">Component Type</label>
             <div className="grid grid-cols-2 gap-4">
               {[
                 { value: "Durable", label: "Durable", icon: Server },
@@ -306,23 +310,17 @@ const CreateComponentModal = ({
               ].map((option) => (
                 <button
                   key={option.value}
-                  onClick={() =>
-                    setComponentType(option.value as ComponentType)
-                  }
+                  onClick={() => setComponentType(option.value as ComponentType)}
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                                             ${
-                                               componentType === option.value
-                                                 ? "border-blue-500 bg-primary/10"
-                                                 : "border-gray-600 hover:border-gray-500"
-                                             }`}
+                    ${componentType === option.value 
+                      ? "border-primary bg-primary/10" 
+                      : "border-input hover:border-muted"}`}
                   disabled={isSubmitting}
                 >
                   <option.icon
-                    className={
-                      componentType === option.value
-                        ? "text-primary"
-                        : "text-muted-foreground"
-                    }
+                    className={componentType === option.value 
+                      ? "text-primary" 
+                      : "text-muted-foreground"}
                     size={20}
                   />
                   <span>{option.label}</span>
@@ -333,41 +331,30 @@ const CreateComponentModal = ({
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5 text-gray-300">
-                WASM File
-              </label>
+              <label className="block text-sm font-medium mb-1.5">WASM File</label>
               <FileDropzone
-                onFileDrop={handleMainFileDrop}
-                onFileSelect={handleMainFileSelect}
-                inputRef={mainInputRef}
-                file={mainFile}
-                onRemove={() => {
-                  setMainFile(null);
-                  if (mainInputRef.current) {
-                    mainInputRef.current.value = "";
-                  }
-                }}
+                onDrop={handleMainFileDrop}
+                files={mainFile ? [{
+                  id: 'main',
+                  name: mainFile.name,
+                  type: 'file',
+                  parentId: null,
+                  fileObject: mainFile
+                }] : []}
+                onRemove={() => setMainFile(null)}
                 isSubmitting={isSubmitting}
                 accept=".wasm"
-                dragActive={dragActive}
-                setDragActive={setDragActive}
                 placeholder="Drag and drop your WASM file here"
               />
             </div>
 
-            <div className="hidden">
-              <label className="block text-sm font-medium mb-1.5 text-gray-300">
-                Additional Files
-              </label>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Additional Files</label>
               <FileDropzone
-                onFileSelect={handleAdditionalFileSelect}
-                inputRef={additionalInputRef}
-                file={additionalFiles}
-                onRemove={removeAdditionalFile}
+                onDrop={handleAdditionalFiles}
+                files={files}
+                onRemove={removeFile}
                 isSubmitting={isSubmitting}
-                multiple={true}
-                dragActive={dragActive}
-                setDragActive={setDragActive}
                 placeholder="Add additional files"
               />
             </div>
@@ -376,8 +363,8 @@ const CreateComponentModal = ({
           <div className="flex justify-end items-center gap-3 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
-                                     transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-card hover:bg-muted 
+                transition-colors disabled:opacity-50 rounded-lg"
               disabled={isSubmitting}
             >
               Cancel
@@ -385,8 +372,8 @@ const CreateComponentModal = ({
             <button
               onClick={handleSubmit}
               disabled={!name || (!mainFile && !isUpdateMode) || isSubmitting}
-              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
-                                     disabled:opacity-50 transition-colors flex items-center gap-2"
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90
+                disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {isSubmitting ? (
                 <>
@@ -396,9 +383,7 @@ const CreateComponentModal = ({
               ) : (
                 <>
                   <Plus size={16} />
-                  <span>
-                    {isUpdateMode ? "Update Component" : "Create Component"}
-                  </span>
+                  <span>{isUpdateMode ? "Update Component" : "Create Component"}</span>
                 </>
               )}
             </button>
