@@ -78,6 +78,7 @@ rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
+sqlx-core = { workspace = true }
 sysinfo = "0.33.0"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -97,8 +98,6 @@ wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.59.0"
 zstd = "0.13"
-sqlx = { workspace = true }
-sqlx-core = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }

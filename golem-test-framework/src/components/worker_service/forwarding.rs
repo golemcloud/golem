@@ -24,12 +24,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
     GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
+    InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, TargetWorkerId,
