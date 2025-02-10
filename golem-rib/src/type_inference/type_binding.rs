@@ -34,16 +34,18 @@ pub(crate) fn bind_type(expr: &mut Expr) {
                 }
             }
 
-            Expr::SelectField(_, _, optional_type_name, inferred_type) => {
+            Expr::SelectField(expr, _, optional_type_name, inferred_type) => {
                 if let Some(type_name) = optional_type_name {
                     *inferred_type = type_name.clone().into();
                 }
+                queue.push_back(expr);
             }
 
-            Expr::SelectIndex(_, _, optional_type_name, inferred_type) => {
+            Expr::SelectIndex(expr, _, optional_type_name, inferred_type) => {
                 if let Some(type_name) = optional_type_name {
                     *inferred_type = type_name.clone().into();
                 }
+                queue.push_back(expr);
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),

@@ -594,9 +594,11 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
+        dbg!(self.clone());
         *self = self
             .bind_global_variables_type(type_spec)
             .map_err(|x| vec![x])?;
+        dbg!(self.clone());
         self.bind_types();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
@@ -873,7 +875,7 @@ impl MatchArm {
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
-    Constructor(String, Vec<ArmPattern>), // Can handle enums, variants, option, result etc
+    Constructor(String, Vec<ArmPattern>),
     TupleConstructor(Vec<ArmPattern>),
     RecordConstructor(Vec<(String, ArmPattern)>),
     ListConstructor(Vec<ArmPattern>),

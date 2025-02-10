@@ -121,22 +121,30 @@ mod type_inference_tests {
 
         #[test]
         async fn test_inline_type_annotation_1() {
-            // by default request.path.user-id is inferred to be a string (given a type spec) and
-            // request.path.user-id + 1u32 should fail compilation since we add string with a u32.
-            let invalid_rib_expr = r#"
-             "foo" + 1u32
-            "#;
-
-            let mut expr = Expr::from_text(invalid_rib_expr).unwrap();
             let type_spec = GlobalVariableTypeSpec {
                 variable_id: VariableId::global("request".to_string()),
                 path: Path::from_elems(vec!["path"]),
                 inferred_type: InferredType::Str,
             };
 
-            let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+            // by default request.path.user-id is inferred to be a string (given a type spec) and
+            // foo.bar.baz + 1u32 should fail compilation since we add string with a u32.
+            let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
 
             assert!(result.is_err());
+
+            let rib_expr = r#"
+              foo.bar.baz: u32
+            "#;
+
+            let mut valid_rib_expr = Expr::from_text(rib_expr).unwrap();
+            let result = valid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_ok());
         }
     }
 

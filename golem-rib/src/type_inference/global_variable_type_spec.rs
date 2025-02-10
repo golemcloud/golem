@@ -73,6 +73,8 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
 
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
+    dbg!(expr_queue.clone());
+
     let mut temp_stack = VecDeque::new();
 
     while let Some(expr) = expr_queue.pop_back() {
@@ -101,7 +103,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 }
             }
 
-            outer @ Expr::SelectField(inner_expr, field, _, current_inferred_type) => {
+            outer @ Expr::SelectField(inner_expr, field, type_name, current_inferred_type) => {
                 let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
 
                 internal::handle_select_field(
@@ -112,6 +114,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                     &mut temp_stack,
                     &mut path,
                     &type_spec.inferred_type,
+                    type_name,
                 )?;
             }
 
@@ -123,8 +126,14 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 temp_stack.push_front((expr.clone(), false));
             }
 
-            Expr::SelectIndex(expr, index, _, current_inferred_type) => {
-                internal::handle_select_index(expr, index, current_inferred_type, &mut temp_stack)?;
+            Expr::SelectIndex(expr, index, type_name, current_inferred_type) => {
+                internal::handle_select_index(
+                    expr,
+                    index,
+                    current_inferred_type,
+                    &mut temp_stack,
+                    type_name,
+                )?;
             }
 
             Expr::Result(Ok(_), current_inferred_type) => {
@@ -357,7 +366,7 @@ mod internal {
     use crate::call_type::CallType;
 
     use crate::type_checker::{Path, PathElem};
-    use crate::{Expr, InferredType, MatchArm, VariableId};
+    use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -467,6 +476,7 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
         path: &mut Path,
         override_type: &InferredType,
+        type_name: &Option<TypeName>,
     ) -> Result<(), String> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
@@ -488,7 +498,12 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::SelectField(Box::new(expr.clone()), field.to_string(), None, new_type),
+                    Expr::SelectField(
+                        Box::new(expr.clone()),
+                        field.to_string(),
+                        type_name.clone(),
+                        new_type,
+                    ),
                     continue_search,
                 ));
             } else {
@@ -496,7 +511,7 @@ mod internal {
                     Expr::SelectField(
                         Box::new(expr.clone()),
                         field.to_string(),
-                        None,
+                        type_name.clone(),
                         current_field_type.clone(),
                     ),
                     true,
@@ -507,7 +522,7 @@ mod internal {
                 Expr::SelectField(
                     Box::new(expr.clone()),
                     field.to_string(),
-                    None,
+                    type_name.clone(),
                     current_field_type.clone(),
                 ),
                 false,
@@ -522,6 +537,7 @@ mod internal {
         index: &usize,
         current_index_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) -> Result<(), String> {
         let expr = temp_stack
             .pop_front()
@@ -530,7 +546,7 @@ mod internal {
         let new_select_index = Expr::SelectIndex(
             Box::new(expr.0.clone()),
             *index,
-            None,
+            type_name.clone(),
             current_index_type.clone(),
         );
         temp_stack.push_front((new_select_index, false));
