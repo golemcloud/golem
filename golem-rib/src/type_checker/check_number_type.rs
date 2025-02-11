@@ -13,7 +13,7 @@ pub fn check_number_types(expr: &Expr) -> Result<(), String> {
                     let type_name = TypeName::try_from(inferred_type.clone())?;
                     return Err(format!(
                         "{} has invalid type {}. {}",
-                        expr.to_string(),
+                        expr,
                         type_name,
                         msg
                     ));
