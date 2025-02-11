@@ -11,12 +11,7 @@ pub fn check_number_types(expr: &Expr) -> Result<(), String> {
                 Ok(_) => {}
                 Err(msg) => {
                     let type_name = TypeName::try_from(inferred_type.clone())?;
-                    return Err(format!(
-                        "{} has invalid type {}. {}",
-                        expr,
-                        type_name,
-                        msg
-                    ));
+                    return Err(format!("{} has invalid type {}. {}", expr, type_name, msg));
                 }
             },
             _ => expr.visit_children_bottom_up(&mut queue),
