@@ -935,6 +935,7 @@ mod test {
         assert!(swagger_ui_html.contains("<html"), "Swagger UI HTML should contain an <html> tag.");
     }
 
+    #[ignore] // This test really should be tried in local, rather than github actions build. It needs openapi generator installed, alongside with java, and versioning of it set.
     #[test]
     async fn export_and_generate_client_integration() {
         use std::process::Command;
