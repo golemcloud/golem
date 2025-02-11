@@ -52,7 +52,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 expr.add_infer_type_mut(inferred_type.clone());
                 queue.push_back(expr);
             }
-            Expr::Option(Some(expr), inferred_type) => {
+            Expr::Option(Some(expr), _, inferred_type) => {
                 internal::handle_option(expr, inferred_type)?;
                 queue.push_back(expr);
             }

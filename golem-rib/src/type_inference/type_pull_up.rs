@@ -101,12 +101,16 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Option(Some(expr), current_inferred_type) => {
+            Expr::Option(Some(expr), _, current_inferred_type) => {
                 internal::handle_option_some(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
-            Expr::Option(None, current_inferred_type) => {
-                inferred_type_stack.push_front(Expr::Option(None, current_inferred_type.clone()));
+            Expr::Option(None, type_name, current_inferred_type) => {
+                inferred_type_stack.push_front(Expr::Option(
+                    None,
+                    type_name.clone(),
+                    current_inferred_type.clone(),
+                ));
             }
 
             Expr::Cond(pred, then, else_, current_inferred_type) => {
@@ -530,6 +534,7 @@ mod internal {
         let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
         let new_option = Expr::Option(
             Some(Box::new(expr.clone())),
+            None,
             current_some_type.merge(option_type),
         );
         inferred_type_stack.push_front(new_option);

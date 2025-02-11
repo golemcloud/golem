@@ -269,14 +269,23 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::Option(constructor, _) => match constructor {
-                Some(expr) => {
-                    self.write_str("some(")?;
-                    self.write_expr(expr)?;
-                    self.write_str(")")
+            Expr::Option(constructor, type_name, _) => {
+                match constructor {
+                    Some(expr) => {
+                        self.write_str("some(")?;
+                        self.write_expr(expr)?;
+                        self.write_str(")")?;
+                    }
+                    None => self.write_str("none")?,
                 }
-                None => self.write_str("none"),
-            },
+
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
+            }
             Expr::Result(constructor, _) => match constructor {
                 Ok(expr) => {
                     self.write_str("ok(")?;

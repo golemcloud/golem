@@ -1276,6 +1276,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1509,6 +1510,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         vec![
@@ -1528,8 +1530,10 @@ mod type_inference_tests {
                                             None,
                                             InferredType::U64,
                                         ))),
+                                        None,
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     ))),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::Option(Box::new(
                                         InferredType::U64,
                                     )))),
@@ -1544,8 +1548,10 @@ mod type_inference_tests {
                                             None,
                                             InferredType::U64,
                                         ))),
+                                        None,
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     ))),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::Option(Box::new(
                                         InferredType::U64,
                                     )))),
@@ -1596,6 +1602,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1676,6 +1683,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1793,6 +1801,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1839,6 +1848,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::List(Box::new(InferredType::U64)),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::List(Box::new(
                                 InferredType::U64,
                             )))),
@@ -1917,6 +1927,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1959,6 +1970,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1972,6 +1984,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::Option(Box::new(InferredType::U64)),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Option(Box::new(
                                 InferredType::U64,
                             )))),

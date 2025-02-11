@@ -275,7 +275,7 @@ mod internal {
                 stack.push(ExprState::from_expr(sequence_expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));
             }
-            Expr::Option(Some(inner_expr), inferred_type) => {
+            Expr::Option(Some(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushSome(convert_to_analysed_type(
                     expr,
@@ -283,7 +283,7 @@ mod internal {
                 )?));
             }
 
-            Expr::Option(None, inferred_type) => {
+            Expr::Option(None, _, inferred_type) => {
                 let optional = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::PushNone(optional.ok()));
             }

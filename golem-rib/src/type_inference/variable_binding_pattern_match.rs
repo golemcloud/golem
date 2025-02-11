@@ -269,6 +269,7 @@ mod pattern_match_bindings {
                         None,
                         InferredType::Unknown,
                     ))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Unknown)),
                 )),
                 vec![
@@ -346,6 +347,7 @@ mod pattern_match_bindings {
                             None,
                             InferredType::Unknown,
                         ))),
+                        None,
                         InferredType::Option(Box::new(InferredType::Unknown)),
                     ))),
                     InferredType::Result {

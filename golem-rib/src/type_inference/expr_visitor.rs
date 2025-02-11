@@ -64,7 +64,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_back(&mut *expr),
+        Expr::Option(Some(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Result(Ok(expr), _) => queue.push_back(&mut *expr),
         Expr::Result(Err(expr), _) => queue.push_back(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
@@ -114,7 +114,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }
@@ -179,7 +179,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
                 queue.push_back(&*arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_back(expr),
+        Expr::Option(Some(expr), _, _) => queue.push_back(expr),
         Expr::Result(Ok(expr), _) => queue.push_back(expr),
         Expr::Result(Err(expr), _) => queue.push_back(expr),
         Expr::Call(call_type, arguments, _) => {
@@ -226,7 +226,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }
@@ -320,7 +320,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_front(&mut *expr),
+        Expr::Option(Some(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Result(Ok(expr), _) => queue.push_front(&mut *expr),
         Expr::Result(Err(expr), _) => queue.push_front(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
@@ -362,7 +362,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }

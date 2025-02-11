@@ -63,7 +63,7 @@ pub enum Expr {
     LessThan(Box<Expr>, Box<Expr>, InferredType),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
-    Option(Option<Box<Expr>>, InferredType),
+    Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, InferredType),
     Call(CallType, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
@@ -138,7 +138,7 @@ impl Expr {
     }
 
     pub fn is_option(&self) -> bool {
-        matches!(self, Expr::Option(_, _))
+        matches!(self, Expr::Option(_, _, _))
     }
 
     pub fn is_tuple(&self) -> bool {
@@ -202,8 +202,10 @@ impl Expr {
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
         match self {
-            Expr::Option(Some(expr), _) => Some(("some".to_string(), Some(expr.deref().clone()))),
-            Expr::Option(None, _) => Some(("some".to_string(), None)),
+            Expr::Option(Some(expr), _, _) => {
+                Some(("some".to_string(), Some(expr.deref().clone())))
+            }
+            Expr::Option(None, _, _) => Some(("some".to_string(), None)),
             Expr::Result(Ok(expr), _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
             Expr::Result(Err(expr), _) => Some(("err".to_string(), Some(expr.deref().clone()))),
             _ => None,
@@ -449,6 +451,20 @@ impl Expr {
 
         Expr::Option(
             expr.map(Box::new),
+            None,
+            InferredType::Option(Box::new(inferred_type)),
+        )
+    }
+
+    pub fn option_with_type_annotation(expr: Option<Expr>, type_name: TypeName) -> Self {
+        let inferred_type = match &expr {
+            Some(expr) => expr.inferred_type(),
+            None => InferredType::Unknown,
+        };
+
+        Expr::Option(
+            expr.map(Box::new),
+            Some(type_name),
             InferredType::Option(Box::new(inferred_type)),
         )
     }
@@ -569,7 +585,7 @@ impl Expr {
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
@@ -722,7 +738,7 @@ impl Expr {
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
@@ -770,7 +786,7 @@ impl Expr {
             | Expr::Multiply(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
@@ -1015,12 +1031,13 @@ impl ArmPattern {
                 None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Unknown,
         )))
     }
 
     pub fn none() -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(None, InferredType::Unknown)))
+        ArmPattern::Literal(Box::new(Expr::Option(None, None, InferredType::Unknown)))
     }
 
     pub fn identifier(binding_variable: &str) -> ArmPattern {
@@ -1628,7 +1645,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Option(expr, _) => {
+                Expr::Option(expr, _, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
                         Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
                             expr: expr.map(|expr| Box::new((*expr).into())),

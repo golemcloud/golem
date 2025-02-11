@@ -143,12 +143,15 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 internal::handle_result_error(expr, current_inferred_type, &mut temp_stack);
             }
 
-            Expr::Option(Some(expr), current_inferred_type) => {
+            Expr::Option(Some(expr), _, current_inferred_type) => {
                 internal::handle_option_some(expr, current_inferred_type, &mut temp_stack);
             }
 
-            Expr::Option(None, current_inferred_type) => {
-                temp_stack.push_front((Expr::Option(None, current_inferred_type.clone()), false));
+            Expr::Option(None, type_name, current_inferred_type) => {
+                temp_stack.push_front((
+                    Expr::Option(None, type_name.clone(), current_inferred_type.clone()),
+                    false,
+                ));
             }
 
             Expr::Cond(pred, then, else_, current_inferred_type) => {
@@ -589,7 +592,11 @@ mod internal {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_some_expr.clone(), false));
-        let new_option = Expr::Option(Some(Box::new(expr.0.clone())), current_some_type.clone());
+        let new_option = Expr::Option(
+            Some(Box::new(expr.0.clone())),
+            None,
+            current_some_type.clone(),
+        );
         temp_stack.push_front((new_option, false));
     }
 

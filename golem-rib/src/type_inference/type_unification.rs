@@ -78,7 +78,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Option(Some(expr), inferred_type) => {
+            Expr::Option(Some(expr), _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -93,7 +93,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Option(None, inferred_type) => {
+            Expr::Option(None, _, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {

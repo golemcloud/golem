@@ -119,7 +119,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::PatternMatch(cond, arms, _) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
             }
-            Expr::Option(option, inferred_type) => {
+            Expr::Option(option, _, inferred_type) => {
                 if let Some(expr) = option {
                     queue.push_back(expr);
                 }

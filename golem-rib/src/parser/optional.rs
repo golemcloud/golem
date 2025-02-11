@@ -15,15 +15,17 @@
 use combine::parser::char::alpha_num;
 use combine::parser::char::spaces;
 use combine::{
-    attempt, choice, not_followed_by,
+    attempt, choice, not_followed_by, optional,
     parser::char::{char, string},
     ParseError, Parser,
 };
-
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
+use std::ops::Deref;
 
 use super::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::parser::type_name::parse_type_name;
+use combine::parser::char::char as char_;
 
 pub fn option<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -32,26 +34,49 @@ where
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    choice((
-        attempt(string("some").skip(char('('))).with(
-            rib_expr()
-                .skip(spaces())
-                .skip(char(')'))
-                .map(|expr| Expr::option(Some(expr))),
-        ),
-        (attempt(string("none").skip(not_followed_by(alpha_num().or(char('-')).or(char('_')))))
+    (
+        choice((
+            attempt(string("some").skip(char('('))).with(
+                rib_expr()
+                    .skip(spaces())
+                    .skip(char(')'))
+                    .map(|expr| Expr::option(Some(expr))),
+            ),
+            (attempt(
+                string("none").skip(not_followed_by(alpha_num().or(char('-')).or(char('_')))),
+            )
             .map(|_| Expr::option(None))),
-    ))
-    .message("Invalid syntax for Option type")
+        )),
+        optional(
+            char_(':')
+                .skip(spaces())
+                .with(parse_type_name())
+                .skip(spaces()),
+        ),
+    )
+        .and_then(|(expr, type_name)| match expr {
+            Expr::Option(expr, _, _) => {
+                if let Some(type_name) = type_name {
+                    Ok(Expr::option_with_type_annotation(
+                        expr.map(|x| x.deref().clone()),
+                        type_name,
+                    ))
+                } else {
+                    Ok(Expr::option(expr.map(|x| x.deref().clone())))
+                }
+            }
+            _ => Err(RibParseError::Message("Unable to parse option".to_string())),
+        })
+        .message("Invalid syntax for Option type")
 }
 
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use super::*;
+    use crate::TypeName;
+    use combine::EasyParser;
 
     #[test]
     fn test_some() {
@@ -64,10 +89,36 @@ mod tests {
     }
 
     #[test]
+    fn test_some_with_type_annotation() {
+        let input = "some(foo): option<string>";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::option_with_type_annotation(
+                Some(Expr::identifier("foo")),
+                TypeName::Option(Box::new(TypeName::Str))
+            ))
+        );
+    }
+
+    #[test]
     fn test_none() {
         let input = "none";
         let result = rib_expr().easy_parse(input);
         assert_eq!(result, Ok((Expr::option(None), "")));
+    }
+
+    #[test]
+    fn test_none_with_type_annotation() {
+        let input = "none: option<string>";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::option_with_type_annotation(
+                None,
+                TypeName::Option(Box::new(TypeName::Str))
+            ))
+        );
     }
 
     #[test]

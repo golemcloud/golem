@@ -1103,6 +1103,7 @@ mod let_tests {
                 Some(TypeName::Option(Box::new(TypeName::Str))),
                 Box::new(Expr::Option(
                     Some(Box::new(Expr::literal("foo"))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
@@ -1112,6 +1113,7 @@ mod let_tests {
                 Some(TypeName::Option(Box::new(TypeName::Str))),
                 Box::new(Expr::Option(
                     Some(Box::new(Expr::literal("bar"))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
