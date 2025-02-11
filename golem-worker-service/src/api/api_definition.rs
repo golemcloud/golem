@@ -845,16 +845,16 @@ mod test {
         response.assert_status(StatusCode::OK);
 
         let body_bytes = response.0.into_body().into_vec().await.expect("Failed to read body bytes");
-        let body = String::from_utf8(body_bytes).unwrap();
+        let exported_yaml: String = serde_json::from_slice(&body_bytes).expect("Failed to parse JSON string");
 
-        assert!(body.contains("x-golem-api-definition-id"));
-        assert!(body.contains("test_export"));
-        assert!(body.contains("x-golem-api-definition-version"));
-        assert!(body.contains("1.0"));
-        assert!(body.contains("security:"), "Exported YAML should contain 'security' field.");
-        assert!(body.contains("x-golem-cors-preflight:"), "Exported YAML should contain 'corsPreflight' field.");
+        assert!(exported_yaml.contains("x-golem-api-definition-id"));
+        assert!(exported_yaml.contains("test_export"));
+        assert!(exported_yaml.contains("x-golem-api-definition-version"));
+        assert!(exported_yaml.contains("1.0"));
+        assert!(exported_yaml.contains("security:"), "Exported YAML should contain 'security' field.");
+        assert!(exported_yaml.contains("x-golem-cors-preflight:"), "Exported YAML should contain 'corsPreflight' field.");
 
-        let openapi_spec: openapiv3::OpenAPI = serde_yaml::from_str(&body)
+        let openapi_spec: openapiv3::OpenAPI = serde_yaml::from_str(&exported_yaml)
             .expect("Exported YAML is not a valid OpenAPI v3 specification");
         assert!(openapi_spec.openapi.starts_with("3.0"), "OpenAPI version is not 3.0.x");
     }
@@ -1001,7 +1001,10 @@ mod test {
         let export_url = "/v1/api/definitions/complex_api/2.0.0/export";
         let export_response = client.get(export_url).send().await;
         export_response.assert_status_is_ok();
-        let yaml_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let body_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let exported_yaml: String = serde_json::from_slice(&body_bytes).expect("Failed to parse JSON string");
+        let yaml_bytes = exported_yaml.into_bytes();
+
         let is_wsl = std::fs::metadata("/proc/sys/fs/binfmt_misc/WSLInterop").is_ok();
         let temp_dir = if is_wsl {
             let base = std::env::var("TEMP").unwrap_or_else(|_| "/mnt/c/Temp".to_string());
@@ -1010,11 +1013,12 @@ mod test {
             }
             tempfile::tempdir_in(&base).expect(&format!("Failed to create temp dir in {}", &base))
         } else {
-            tempdir().expect("Failed to create temp dir")
+            tempfile::tempdir().expect("Failed to create temp dir")
         };
+
         let yaml_path = temp_dir.path().join("openapi.yaml");
         fs::write(&yaml_path, &yaml_bytes).expect("Failed to write YAML file");
-        
+
         let generated_client_dir = temp_dir.path().join("generated_client");
         fs::create_dir_all(&generated_client_dir).expect("Failed to create output directory");
 
