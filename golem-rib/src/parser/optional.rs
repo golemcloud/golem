@@ -135,6 +135,23 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_some_with_type_annotation() {
+        let input = "some(some(foo): option<string>): option<option<string>>";
+        let result = Expr::from_text(input);
+        assert_eq!(
+            result,
+            Ok(Expr::option_with_type_annotation(
+                Some(Expr::option_with_type_annotation(
+                    Some(Expr::identifier("foo")),
+                    TypeName::Option(Box::new(TypeName::Str))
+                )),
+                TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str)))
+                )
+            ))
+        );
+    }
+
+    #[test]
     fn test_some_of_sequence() {
         let input = "some([foo, bar])";
         let result = rib_expr().easy_parse(input);
