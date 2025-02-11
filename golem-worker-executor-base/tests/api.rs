@@ -2921,21 +2921,17 @@ async fn cancelling_pending_invocations(
         .await
         .unwrap();
 
-    let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
-    let promise_id_clone = promise_id.clone();
-    let fiber = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await(
-                worker_id_clone,
-                "rpc:counters-exports/api.{counter(\"counter1\").block-on-promise}",
-                vec![ValueAndType {
-                    value: promise_id_clone[0].clone(),
-                    typ: PromiseId::get_type(),
-                }],
-            )
-            .await
-    });
+    executor
+        .invoke(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").block-on-promise}",
+            vec![ValueAndType {
+                value: promise_id[0].clone(),
+                typ: PromiseId::get_type(),
+            }],
+        )
+        .await
+        .unwrap();
 
     executor
         .invoke_with_key(
@@ -2990,8 +2986,6 @@ async fn cancelling_pending_invocations(
         })
         .await
         .unwrap();
-
-    let _result = fiber.await.unwrap();
 
     let final_result = executor
         .invoke_and_await(
