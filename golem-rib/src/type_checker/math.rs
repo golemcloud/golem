@@ -2,15 +2,15 @@ use crate::Expr;
 use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 
-pub struct InvalidMathError {
-    error_type: ErrorType,
-    op_type: OpType,
+pub struct BinaryMathExprError {
+    error_type: BinaryMathExprErrorType,
+    op_type: BinaryOpType,
 }
 
-impl Display for InvalidMathError {
+impl Display for BinaryMathExprError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.error_type {
-            ErrorType::Left {
+            BinaryMathExprErrorType::Left {
                 math_expr,
                 left_expr,
                 left_error,
@@ -19,7 +19,7 @@ impl Display for InvalidMathError {
                 "`{}` is invalid. `{}` cannot be part of {}. {}",
                 math_expr, left_expr, self.op_type, left_error
             ),
-            ErrorType::Both {
+            BinaryMathExprErrorType::Both {
                 math_expr,
                 left_expr,
                 left_error,
@@ -39,7 +39,7 @@ impl Display for InvalidMathError {
                 )
             }
 
-            ErrorType::Right {
+            BinaryMathExprErrorType::Right {
                 math_expr,
                 right_expr,
                 right_error,
@@ -52,7 +52,7 @@ impl Display for InvalidMathError {
     }
 }
 
-pub enum ErrorType {
+pub enum BinaryMathExprErrorType {
     Both {
         math_expr: String,
         left_expr: Expr,
@@ -73,25 +73,25 @@ pub enum ErrorType {
     },
 }
 
-enum OpType {
+enum BinaryOpType {
     Addition,
     Multiplication,
     Subtraction,
     Division,
 }
 
-impl Display for OpType {
+impl Display for BinaryOpType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            OpType::Addition => write!(f, "addition"),
-            OpType::Multiplication => write!(f, "multiplication"),
-            OpType::Subtraction => write!(f, "subtraction"),
-            OpType::Division => write!(f, "division"),
+            BinaryOpType::Addition => write!(f, "addition"),
+            BinaryOpType::Multiplication => write!(f, "multiplication"),
+            BinaryOpType::Subtraction => write!(f, "subtraction"),
+            BinaryOpType::Division => write!(f, "division"),
         }
     }
 }
 
-pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError> {
+pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), BinaryMathExprError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -102,9 +102,9 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError>
                 if let Err(error_type) =
                     internal::check_math_expression_types(expr_str, left_expr, right_expr)
                 {
-                    return Err(InvalidMathError {
+                    return Err(BinaryMathExprError {
                         error_type,
-                        op_type: OpType::Addition,
+                        op_type: BinaryOpType::Addition,
                     });
                 }
             }
@@ -112,9 +112,9 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError>
                 if let Err(error_type) =
                     internal::check_math_expression_types(expr_str, left_expr, right_expr)
                 {
-                    return Err(InvalidMathError {
+                    return Err(BinaryMathExprError {
                         error_type,
-                        op_type: OpType::Subtraction,
+                        op_type: BinaryOpType::Subtraction,
                     });
                 }
             }
@@ -122,9 +122,9 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError>
                 if let Err(error_type) =
                     internal::check_math_expression_types(expr_str, left_expr, right_expr)
                 {
-                    return Err(InvalidMathError {
+                    return Err(BinaryMathExprError {
                         error_type,
-                        op_type: OpType::Multiplication,
+                        op_type: BinaryOpType::Multiplication,
                     });
                 }
             }
@@ -132,9 +132,9 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError>
                 if let Err(error_type) =
                     internal::check_math_expression_types(expr_str, left_expr, right_expr)
                 {
-                    return Err(InvalidMathError {
+                    return Err(BinaryMathExprError {
                         error_type,
-                        op_type: OpType::Division,
+                        op_type: BinaryOpType::Division,
                     });
                 }
             }
@@ -147,31 +147,31 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), InvalidMathError>
 }
 
 mod internal {
-    use crate::type_checker::math::ErrorType;
+    use crate::type_checker::math::BinaryMathExprErrorType;
     use crate::Expr;
 
     pub(crate) fn check_math_expression_types(
         original_expr: String,
         left_expr: &Expr,
         right_expr: &Expr,
-    ) -> Result<(), ErrorType> {
+    ) -> Result<(), BinaryMathExprErrorType> {
         let left_inferred_type = left_expr.inferred_type().as_number();
         let right_inferred_type = right_expr.inferred_type().as_number();
 
         match (left_inferred_type, right_inferred_type) {
-            (Err(left_error), Err(right_error)) => Err(ErrorType::Both {
+            (Err(left_error), Err(right_error)) => Err(BinaryMathExprErrorType::Both {
                 math_expr: original_expr.clone(),
                 left_expr: left_expr.clone(),
                 left_error,
                 right_expr: right_expr.clone(),
                 right_error,
             }),
-            (Err(left_error), _) => Err(ErrorType::Left {
+            (Err(left_error), _) => Err(BinaryMathExprErrorType::Left {
                 math_expr: original_expr.clone(),
                 left_expr: left_expr.clone(),
                 left_error,
             }),
-            (_, Err(right_error)) => Err(ErrorType::Right {
+            (_, Err(right_error)) => Err(BinaryMathExprErrorType::Right {
                 math_expr: original_expr.clone(),
                 right_expr: right_expr.clone(),
                 right_error,

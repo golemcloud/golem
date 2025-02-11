@@ -144,7 +144,7 @@ mod type_inference_tests {
         use test_r::test;
 
         #[test]
-        async fn test_inline_type_annotation_is_backward_compatible() {
+        fn test_inline_type_annotation_is_backward_compatible() {
             let mut old = Expr::from_text(r#"1u32"#).unwrap();
 
             let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
@@ -159,7 +159,7 @@ mod type_inference_tests {
         }
 
         #[test]
-        async fn test_inline_type_annotation_1() {
+        fn test_inline_type_annotation_1() {
             let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
             let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
@@ -174,7 +174,7 @@ mod type_inference_tests {
         }
 
         #[test]
-        async fn test_inline_type_annotation_2() {
+        fn test_inline_type_annotation_2() {
             let type_spec = GlobalVariableTypeSpec {
                 variable_id: VariableId::global("foo".to_string()),
                 path: Path::from_elems(vec!["bar"]),
@@ -199,7 +199,7 @@ mod type_inference_tests {
         }
 
         #[test]
-        async fn test_inline_type_annotation_3() {
+        fn test_inline_type_annotation_3() {
             let type_spec = GlobalVariableTypeSpec {
                 variable_id: VariableId::global("foo".to_string()),
                 path: Path::from_elems(vec![]),
@@ -221,6 +221,26 @@ mod type_inference_tests {
                 .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
 
             assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_4() {
+            // Even if 1 is not specified with a specific number type, it should be inferred as u64
+            let mut valid_rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_6() {
+            // Even if 1 is not specified with a specific number type, it should be inferred as u64
+            let mut valid_rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
         }
     }
 
