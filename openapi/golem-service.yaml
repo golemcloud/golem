@@ -1462,6 +1462,80 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/revert:
+    post:
+      tags:
+      - Worker
+      summary: Revert a worker
+      description: Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+      operationId: revert_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/RevertWorkerTarget'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RevertWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -5036,6 +5110,7 @@ components:
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5065,6 +5140,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5280,6 +5356,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ResourceParameters'
+    PublicOplogEntry_RevertParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revert
+            type: string
+            enum:
+            - Revert
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
       allOf:
       - type: object
@@ -5419,6 +5507,69 @@ components:
       - id
     ResumeResponse:
       type: object
+    RevertLastInvocations:
+      type: object
+      properties:
+        numberOfInvocations:
+          type: integer
+          format: uint64
+      required:
+      - numberOfInvocations
+    RevertParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        dropped_region:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - dropped_region
+    RevertToOplogIndex:
+      type: object
+      properties:
+        lastOplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - lastOplogIndex
+    RevertWorkerResponse:
+      type: object
+    RevertWorkerTarget:
+      discriminator:
+        propertyName: type
+        mapping:
+          revertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+          revertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+    RevertWorkerTarget_RevertLastInvocations:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertLastInvocations
+            type: string
+            enum:
+            - revertLastInvocations
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertLastInvocations'
+    RevertWorkerTarget_RevertToOplogIndex:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertToOplogIndex
+            type: string
+            enum:
+            - revertToOplogIndex
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertToOplogIndex'
     RibInputTypeInfo:
       type: object
       properties:

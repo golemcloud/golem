@@ -174,7 +174,7 @@ pub fn serializable_invoke_result() {
 pub fn worker_status_record_v11() {
     let wsr2 = WorkerStatusRecord {
         status: WorkerStatus::Running,
-        deleted_regions: Default::default(),
+        skipped_regions: Default::default(),
         overridden_retry_config: Some(RetryConfig::default()),
         pending_invocations: vec![TimestampedWorkerInvocation {
             timestamp: Timestamp::from(1724701938466),

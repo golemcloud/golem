@@ -19,14 +19,16 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     fork_worker_response, invoke_and_await_typed_response, invoke_response, resume_worker_response,
-    update_worker_response, worker_error, ForkWorkerRequest, InvokeAndAwaitRequest,
-    InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    revert_worker_response, update_worker_response, worker_error, ForkWorkerRequest,
+    InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
 use golem_common::client::GrpcClient;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
@@ -77,6 +79,12 @@ pub trait WorkerProxy {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
+    ) -> Result<(), WorkerProxyError>;
+
+    async fn revert(
+        &self,
+        worker_id: WorkerId,
+        target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
 }
 
@@ -345,6 +353,32 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+        debug!("Resuming remote worker");
+
+        let response: ResumeWorkerResponse = self
+            .client
+            .call("resume_worker", move |client| {
+                Box::pin(client.resume_worker(authorised_grpc_request(
+                    ResumeWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        force: Some(force),
+                    },
+                    &self.access_token,
+                )))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(resume_worker_response::Result::Success(_)) => Ok(()),
+            Some(resume_worker_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
+                "Empty response through the worker API".to_string(),
+            ))),
+        }
+    }
+
     async fn fork_worker(
         &self,
         source_worker_id: &WorkerId,
@@ -377,16 +411,18 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
-        debug!("Resuming remote worker");
-
-        let response: ResumeWorkerResponse = self
+    async fn revert(
+        &self,
+        worker_id: WorkerId,
+        target: RevertWorkerTarget,
+    ) -> Result<(), WorkerProxyError> {
+        let response: RevertWorkerResponse = self
             .client
-            .call("resume_worker", move |client| {
-                Box::pin(client.resume_worker(authorised_grpc_request(
-                    ResumeWorkerRequest {
+            .call("revert_worker", move |client| {
+                Box::pin(client.revert_worker(authorised_grpc_request(
+                    RevertWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
-                        force: Some(force),
+                        target: Some(target.clone().into()),
                     },
                     &self.access_token,
                 )))
@@ -395,8 +431,8 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(resume_worker_response::Result::Success(_)) => Ok(()),
-            Some(resume_worker_response::Result::Error(error)) => Err(error.into()),
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Failure(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(GolemError::unknown(
                 "Empty response through the worker API".to_string(),
             ))),

@@ -25,10 +25,11 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 
 anyhow = { workspace = true }
-async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
 async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
+async-recursion = { workspace = true }
+async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
 async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
@@ -72,6 +73,7 @@ ringbuf = "0.4.7"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 sysinfo = "0.33.0"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -90,7 +92,6 @@ wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.59.0"
 zstd = "0.13"
-sqlx = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
