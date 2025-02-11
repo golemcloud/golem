@@ -1249,7 +1249,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
                 let field = expr.field;
-                let type_name = expr.type_name.map(|x| TypeName::try_from(x)).transpose()?;
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr = *expr.expr.ok_or(
                     "Mi\
                 ssing expr",
@@ -1267,7 +1267,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
                 let expr = *expr;
-                let type_name = expr.type_name.map(|x| TypeName::try_from(x)).transpose()?;
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let index = expr.index as usize;
                 let expr = *expr.expr.ok_or("Missing expr")?;
 
