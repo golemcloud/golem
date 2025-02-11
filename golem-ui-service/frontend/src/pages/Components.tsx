@@ -89,7 +89,10 @@ export const Components = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
           {components?.map((component) => (
             <Link
-              key={component.versionedComponentId.componentId + component.versionedComponentId.version}
+              key={
+                component.versionedComponentId.componentId +
+                component.versionedComponentId.version
+              }
               to={`/components/${component.versionedComponentId.componentId}/${component.versionedComponentId.version}`}
               className="group block bg-card rounded-lg p-4 md:p-6 hover:bg-card/80 
                        transition-all duration-200 hover:shadow-xl shadow-lg"

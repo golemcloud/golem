@@ -44,14 +44,14 @@ export const getWorkers = async (
   componentId: string,
   filter?: WorkerFilter[],
   cursor?: string,
-  count?: number
+  count?: number,
 ) => {
   if (!componentId) return { workers: [] };
   const { data } = await apiClient.get<WorkerListResponse>(
     `/v1/components/${componentId}/workers`,
     {
       params: { filter, cursor, count },
-    }
+    },
   );
   return data;
 };
@@ -59,7 +59,7 @@ export const getWorkers = async (
 export const getWorker = async (componentId: string, workerName: string) => {
   console.log("called getWorker");
   const { data } = await apiClient.get<Worker>(
-    `/v1/components/${componentId}/workers/${workerName}`
+    `/v1/components/${componentId}/workers/${workerName}`,
   );
   return data;
 };
@@ -72,11 +72,11 @@ export interface CreateWorkerPayload {
 
 export const createWorker = async (
   componentId: string,
-  payload: CreateWorkerPayload
+  payload: CreateWorkerPayload,
 ) => {
   const { data } = await apiClient.post(
     `/v1/components/${componentId}/workers`,
-    payload
+    payload,
   );
   return data;
 };
@@ -85,11 +85,11 @@ export const invokeWorker = async (
   componentId: string,
   workerName: string,
   functionName: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
 ) => {
   const { data } = await apiClient.post(
     `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`,
-    params
+    params,
   );
   return data;
 };
@@ -117,7 +117,12 @@ interface InvokeWorkerVariables {
   params: Record<string, unknown>;
 }
 export const useInvokeWorker = (
-  options?: UseMutationOptions<void, GolemError, InvokeWorkerVariables, unknown>
+  options?: UseMutationOptions<
+    void,
+    GolemError,
+    InvokeWorkerVariables,
+    unknown
+  >,
 ): UseMutationResult<void, GolemError, InvokeWorkerVariables, unknown> => {
   console.log(options);
   return useMutation<void, GolemError, InvokeWorkerVariables, unknown>({
@@ -128,7 +133,7 @@ export const useInvokeWorker = (
 
 export const deleteWorker = async (componentId: string, workerName: string) => {
   const { data } = await apiClient.delete(
-    `/v1/components/${componentId}/workers/${workerName}`
+    `/v1/components/${componentId}/workers/${workerName}`,
   );
   return data;
 };
@@ -144,7 +149,7 @@ export const interruptWorker = async (workerId: {
     null,
     {
       params: { "recovery-immediately": recoverImmediately },
-    }
+    },
   );
   return data;
 };
@@ -155,7 +160,7 @@ export const resumeWorker = async (workerId: {
   recoverImmediately?: boolean;
 }) => {
   const { data } = await apiClient.post(
-    `/v1/components/${workerId.componentId}/workers/${workerId.workerName}/resume`
+    `/v1/components/${workerId.componentId}/workers/${workerId.workerName}/resume`,
   );
   return data;
 };
@@ -165,13 +170,13 @@ export const getWorkerLogs = async (
   workerName: string,
   count: number,
   cursor?: string,
-  query?: string
+  query?: string,
 ) => {
   const { data } = await apiClient.get(
     `/v1/components/${componentId}/workers/${workerName}/oplog`,
     {
       params: { cursor, count, query },
-    }
+    },
   );
   return data;
 };
@@ -181,7 +186,7 @@ export const useWorkers = (
   componentId: string,
   filter?: WorkerFilter[],
   cursor?: string,
-  count?: number
+  count?: number,
 ): {
   data: WorkerListResponse | undefined;
   isLoading: boolean;
@@ -197,7 +202,7 @@ export const useWorkers = (
 
 export const useWorker = (
   componentId: string,
-  workerName: string
+  workerName: string,
 ): {
   data: Worker | undefined;
   isLoading: boolean;
@@ -252,7 +257,7 @@ interface InterruptWorkerParams {
 }
 
 export const useInterruptWorker = (
-  options?: UseMutationOptions<void, GolemError, InterruptWorkerParams>
+  options?: UseMutationOptions<void, GolemError, InterruptWorkerParams>,
 ) => {
   const queryClient = useQueryClient();
 
@@ -260,7 +265,7 @@ export const useInterruptWorker = (
     mutationFn: interruptWorker,
     onSuccess: (
       _: void,
-      { componentId, workerName }: InterruptWorkerParams
+      { componentId, workerName }: InterruptWorkerParams,
     ) => {
       // Invalidate specific worker query
       queryClient.invalidateQueries({
@@ -281,7 +286,7 @@ export const useResumeWorker = (
     void,
     GolemError,
     { componentId: string; workerName: string }
-  >
+  >,
 ) => {
   const queryClient = useQueryClient();
 
@@ -295,7 +300,7 @@ export const useResumeWorker = (
       }: {
         componentId: string;
         workerName: string;
-      }
+      },
     ) => {
       // Invalidate specific worker query
       queryClient.invalidateQueries({
@@ -318,7 +323,7 @@ export const useWorkerLogs = (
   workerName: string,
   count: number,
   cursor?: string,
-  query?: string
+  query?: string,
 ) => {
   return useQuery({
     queryKey: ["workerLogs", componentId, workerName, count, cursor, query],
@@ -344,10 +349,10 @@ interface WorkerFilesResponse {
 
 export const getWorkerFiles = async (
   componentId: string,
-  workerName: string
+  workerName: string,
 ): Promise<WorkerFilesResponse> => {
   const { data } = await apiClient.get<WorkerFilesResponse>(
-    `/v1/components/${componentId}/workers/${workerName}/files`
+    `/v1/components/${componentId}/workers/${workerName}/files`,
   );
   return data;
 };
@@ -355,11 +360,11 @@ export const getWorkerFiles = async (
 export const downloadWorkerFile = async (
   componentId: string,
   workerName: string,
-  fileName: string
+  fileName: string,
 ): Promise<Blob> => {
   const { data } = await apiClient.get(
     `/v1/components/${componentId}/workers/${workerName}/file-contents/${fileName}`,
-    { responseType: "blob" }
+    { responseType: "blob" },
   );
   return data;
 };

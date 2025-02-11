@@ -34,13 +34,13 @@ interface FileItem {
   path?: string;
 }
 
-const FileDropzone = ({ 
-  onDrop, 
-  files, 
-  onRemove, 
+const FileDropzone = ({
+  onDrop,
+  files,
+  onRemove,
   isSubmitting,
   placeholder,
-  accept = "*"
+  accept = "*",
 }: {
   onDrop: (files: FileList) => void;
   files: FileItem[];
@@ -81,10 +81,11 @@ const FileDropzone = ({
               className="flex items-center justify-between bg-card/50 rounded-lg px-4 py-2"
             >
               <div className="flex items-center gap-2">
-                {file.type === 'folder' ? 
-                  <Folder size={16} className="text-primary" /> :
+                {file.type === "folder" ? (
+                  <Folder size={16} className="text-primary" />
+                ) : (
                   <FileIcon size={16} className="text-primary" />
-                }
+                )}
                 <span className="text-sm truncate">{file.name}</span>
               </div>
               {!isSubmitting && (
@@ -107,7 +108,9 @@ const FileDropzone = ({
           <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
           <div>
             <p className="text-sm text-foreground">{placeholder}</p>
-            <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              or click to browse
+            </p>
           </div>
         </div>
       )}
@@ -193,18 +196,18 @@ const CreateComponentModal = ({
   };
 
   const handleAdditionalFiles = (fileList: FileList) => {
-    const newFiles = Array.from(fileList).map(file => ({
+    const newFiles = Array.from(fileList).map((file) => ({
       id: Math.random().toString(36).substring(7),
       name: file.name,
-      type: 'file' as const,
+      type: "file" as const,
       parentId: null,
-      fileObject: file
+      fileObject: file,
     }));
-    setFiles(prev => [...prev, ...newFiles]);
+    setFiles((prev) => [...prev, ...newFiles]);
   };
 
   const removeFile = (id: string) => {
-    setFiles(prev => prev.filter(file => file.id !== id));
+    setFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
   const handleSubmit = async () => {
@@ -226,11 +229,11 @@ const CreateComponentModal = ({
         await addFilesToZip(zip, null);
         const blob = await zip.generateAsync({ type: "blob" });
         formData.append("files", blob, "files.zip");
-        
+
         // Add file permissions metadata
         formData.append(
           "filesPermissions",
-          JSON.stringify(captureFileMetadata(files))
+          JSON.stringify(captureFileMetadata(files)),
         );
       }
 
@@ -288,7 +291,9 @@ const CreateComponentModal = ({
 
         <div className="space-y-6">
           <div>
-            <label className="block text-sm font-medium mb-1.5">Component Name</label>
+            <label className="block text-sm font-medium mb-1.5">
+              Component Name
+            </label>
             <input
               type="text"
               value={name}
@@ -302,7 +307,9 @@ const CreateComponentModal = ({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1.5">Component Type</label>
+            <label className="block text-sm font-medium mb-1.5">
+              Component Type
+            </label>
             <div className="grid grid-cols-2 gap-4">
               {[
                 { value: "Durable", label: "Durable", icon: Server },
@@ -310,17 +317,23 @@ const CreateComponentModal = ({
               ].map((option) => (
                 <button
                   key={option.value}
-                  onClick={() => setComponentType(option.value as ComponentType)}
+                  onClick={() =>
+                    setComponentType(option.value as ComponentType)
+                  }
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                    ${componentType === option.value 
-                      ? "border-primary bg-primary/10" 
-                      : "border-input hover:border-muted"}`}
+                    ${
+                      componentType === option.value
+                        ? "border-primary bg-primary/10"
+                        : "border-input hover:border-muted"
+                    }`}
                   disabled={isSubmitting}
                 >
                   <option.icon
-                    className={componentType === option.value 
-                      ? "text-primary" 
-                      : "text-muted-foreground"}
+                    className={
+                      componentType === option.value
+                        ? "text-primary"
+                        : "text-muted-foreground"
+                    }
                     size={20}
                   />
                   <span>{option.label}</span>
@@ -331,16 +344,24 @@ const CreateComponentModal = ({
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5">WASM File</label>
+              <label className="block text-sm font-medium mb-1.5">
+                WASM File
+              </label>
               <FileDropzone
                 onDrop={handleMainFileDrop}
-                files={mainFile ? [{
-                  id: 'main',
-                  name: mainFile.name,
-                  type: 'file',
-                  parentId: null,
-                  fileObject: mainFile
-                }] : []}
+                files={
+                  mainFile
+                    ? [
+                        {
+                          id: "main",
+                          name: mainFile.name,
+                          type: "file",
+                          parentId: null,
+                          fileObject: mainFile,
+                        },
+                      ]
+                    : []
+                }
                 onRemove={() => setMainFile(null)}
                 isSubmitting={isSubmitting}
                 accept=".wasm"
@@ -349,7 +370,9 @@ const CreateComponentModal = ({
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1.5">Additional Files</label>
+              <label className="block text-sm font-medium mb-1.5">
+                Additional Files
+              </label>
               <FileDropzone
                 onDrop={handleAdditionalFiles}
                 files={files}
@@ -383,7 +406,9 @@ const CreateComponentModal = ({
               ) : (
                 <>
                   <Plus size={16} />
-                  <span>{isUpdateMode ? "Update Component" : "Create Component"}</span>
+                  <span>
+                    {isUpdateMode ? "Update Component" : "Create Component"}
+                  </span>
                 </>
               )}
             </button>

@@ -23,7 +23,11 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { getComponent, getComponentVersion, useComponent } from "../api/components";
+import {
+  getComponent,
+  getComponentVersion,
+  useComponent,
+} from "../api/components";
 import {
   getWorker,
   useDeleteWorker,
@@ -83,10 +87,11 @@ const TabButton = ({
 }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${active
-      ? "bg-primary text-primary-foreground"
-      : "text-muted-foreground hover:text-foreground hover:bg-card/60"
-      } ${className}`}
+    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+      active
+        ? "bg-primary text-primary-foreground"
+        : "text-muted-foreground hover:text-foreground hover:bg-card/60"
+    } ${className}`}
   >
     <Icon size={16} />
     {children}
@@ -126,11 +131,12 @@ export default function WorkerDetail() {
 
   useEffect(() => {
     if (worker) {
-      getComponentVersion(componentId!, worker.componentVersion)
-        .then(component => setComponent(component))
+      getComponentVersion(componentId!, worker.componentVersion).then(
+        (component) => setComponent(component),
+      );
     }
   }, [worker, componentId]);
-  
+
   const resumeWorker = useResumeWorker();
   const deleteWorker = useDeleteWorker();
 

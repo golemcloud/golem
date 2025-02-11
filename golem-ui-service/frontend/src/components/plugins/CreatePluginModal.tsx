@@ -224,7 +224,7 @@ export const CreatePluginModal = ({
                 <select
                   value={`${selectedComponentId}:${selectedVersion}`}
                   onChange={(e) => {
-                    const [componentId, version] = e.target.value.split(':');
+                    const [componentId, version] = e.target.value.split(":");
                     setSelectedComponentId(componentId);
                     setSelectedVersion(Number(version));
                   }}
@@ -238,7 +238,8 @@ export const CreatePluginModal = ({
                       key={`${component.versionedComponentId.componentId}:${component.versionedComponentId.version}`}
                       value={`${component.versionedComponentId.componentId}:${component.versionedComponentId.version}`}
                     >
-                      {component.componentName} (v{component.versionedComponentId.version})
+                      {component.componentName} (v
+                      {component.versionedComponentId.version})
                     </option>
                   ))}
                 </select>

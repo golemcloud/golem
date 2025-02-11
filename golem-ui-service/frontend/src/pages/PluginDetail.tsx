@@ -171,10 +171,11 @@ export const PluginDetailPage = () => {
           <div className="flex items-center gap-3">
             <span
               className={`px-3 py-1 rounded-full text-xs md:text-sm
-                      ${plugin.scope.type === "Global"
-                  ? "bg-primary/10 text-primary"
-                  : "bg-purple-500/10 text-purple-400"
-                }`}
+                      ${
+                        plugin.scope.type === "Global"
+                          ? "bg-primary/10 text-primary"
+                          : "bg-purple-500/10 text-purple-400"
+                      }`}
             >
               {plugin.scope.type}
             </span>

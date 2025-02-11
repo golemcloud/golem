@@ -174,7 +174,10 @@ export const Overview = () => {
                   ?.slice(0, 5)
                   .map((component) => (
                     <ListItem
-                      key={component.versionedComponentId.componentId + component.versionedComponentId.version}
+                      key={
+                        component.versionedComponentId.componentId +
+                        component.versionedComponentId.version
+                      }
                       title={component.componentName}
                       subtitle={`Version ${component.versionedComponentId.version}`}
                       status="active"

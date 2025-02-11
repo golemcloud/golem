@@ -119,7 +119,7 @@ export const ComponentDetail = () => {
     setActionModal({ isOpen: true, workerId, action, currentStatus });
   };
 
-  const workers = _workers?.workers
+  const workers = _workers?.workers;
 
   const activeWorkers =
     workers?.filter((w) => w.status != "Failed").length ?? 0;
@@ -260,14 +260,16 @@ export const ComponentDetail = () => {
           </h2>
           <div className="space-y-3 md:space-y-4">
             {workers?.map((worker) => {
-              const isCurrentVersion = worker.componentVersion === component.versionedComponentId.version;
+              const isCurrentVersion =
+                worker.componentVersion ===
+                component.versionedComponentId.version;
 
               return (
                 <div
                   key={worker.workerId.workerName}
                   className={`group flex flex-col md:flex-row md:items-center md:justify-between p-3 md:p-4 rounded-lg
                    hover:bg-card/80 transition-all duration-200 gap-3 
-                   ${isCurrentVersion ? 'bg-card/50' : 'bg-card/30 border border-yellow-500/20'}`}
+                   ${isCurrentVersion ? "bg-card/50" : "bg-card/30 border border-yellow-500/20"}`}
                 >
                   <div className="flex items-center gap-3 md:gap-4">
                     <div
@@ -319,7 +321,11 @@ export const ComponentDetail = () => {
                     </button>
                     <button
                       onClick={() =>
-                        handleAction(worker.workerId, "interrupt", worker.status)
+                        handleAction(
+                          worker.workerId,
+                          "interrupt",
+                          worker.status,
+                        )
                       }
                       className="p-2 text-muted-foreground hover:text-yellow-400 rounded-md hover:bg-gray-600
                        transition-colors"

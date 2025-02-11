@@ -1,8 +1,4 @@
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Component } from "../types/api";
 import { GolemError } from "../types/error";
@@ -31,7 +27,7 @@ export const getComponents = async (componentName?: string) => {
 
 export const getComponentVersions = async (componentId: string) => {
   const { data } = await apiClient.get<Component[]>(
-    `/v1/components/${componentId}`
+    `/v1/components/${componentId}`,
   );
   return data;
 };
@@ -43,10 +39,10 @@ export const deleteComponent = async (componentId: string) => {
 
 export const getComponentVersion = async (
   componentId: string,
-  version: string | number
+  version: string | number,
 ) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/versions/${version}`
+    `/v1/components/${componentId}/versions/${version}`,
   );
   return data;
 };
@@ -74,14 +70,14 @@ export const updateComponent = async ({
       headers: {
         "Content-Type": "multipart/form-data",
       },
-    }
+    },
   );
   return data;
 };
 
 // Hooks
 export const useComponents = (
-  componentName?: string
+  componentName?: string,
 ): {
   data: Component[];
   isLoading: boolean;
@@ -145,7 +141,7 @@ export const useDeleteComponent = () => {
 
 export const useComponent = (
   componentId: string,
-  version: string | number
+  version: string | number,
 ): {
   data: Component;
   isLoading: boolean;
@@ -162,7 +158,7 @@ export const useComponent = (
 
 export const getComponent = async (componentId: string) => {
   const { data } = await apiClient.get<Component>(
-    `/v1/components/${componentId}/latest`
+    `/v1/components/${componentId}/latest`,
   );
   return data;
 };

@@ -184,7 +184,7 @@ const RecursiveParameterInput = ({
           <input
             type={
               typeDef.type.toLowerCase().includes("32") ||
-                typeDef.type.toLowerCase().includes("64")
+              typeDef.type.toLowerCase().includes("64")
                 ? "number"
                 : "text"
             }
@@ -224,11 +224,11 @@ const FunctionInvoker = () => {
   } = useWorker(componentId!, workerName!);
   useEffect(() => {
     if (worker) {
-      getComponentVersion(componentId!, worker.componentVersion)
-        .then(component => setComponent(component))
+      getComponentVersion(componentId!, worker.componentVersion).then(
+        (component) => setComponent(component),
+      );
     }
   }, [worker, componentId]);
-
 
   useEffect(() => {
     if (functionName && worker) {
@@ -293,7 +293,10 @@ const FunctionInvoker = () => {
   const exportDef = component?.metadata?.exports.find(
     (e) => e.name === exportName,
   );
-  console.log(functionName?.split(".")[1].replace("{", "").replace("}", ""), exportDef?.functions)
+  console.log(
+    functionName?.split(".")[1].replace("{", "").replace("}", ""),
+    exportDef?.functions,
+  );
   const functionDef = exportDef?.functions.find(
     (f) =>
       f.name === functionName?.split(".")[1].replace("{", "").replace("}", ""),
@@ -427,8 +430,9 @@ const FunctionInvoker = () => {
       {/* Results */}
       {(result || error) && (
         <div
-          className={`bg-card/80 border rounded-lg p-6 ${error ? "border-destructive/20" : "border-border/10"
-            }`}
+          className={`bg-card/80 border rounded-lg p-6 ${
+            error ? "border-destructive/20" : "border-border/10"
+          }`}
         >
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
             <Code2
