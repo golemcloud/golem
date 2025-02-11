@@ -14,13 +14,14 @@
 
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbsConnections;
@@ -177,6 +178,16 @@ async fn rdbms_postgres_crud(
 ) {
     let db_addresses: Vec<String> = postgres.host_connection_strings();
 
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids1 =
+        start_workers::<PostgresType>(&executor, &component_id, db_addresses.clone(), 1).await;
+
+    let worker_ids3 =
+        start_workers::<PostgresType>(&executor, &component_id, db_addresses.clone(), 3).await;
+
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS test_users
             (
@@ -223,12 +234,10 @@ async fn rdbms_postgres_crud(
         expected_values.push((user_id, name, tags));
     }
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
-        1,
     )
     .await;
 
@@ -303,68 +312,69 @@ async fn rdbms_postgres_crud(
         Some(expected),
     );
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids3.clone(),
         RdbmsTest::new(
             vec![select_test1.clone(), select_test2],
             Some(TransactionEnd::Commit),
         ),
-        3,
     )
     .await;
 
     let delete = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
-        1,
     )
     .await;
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
-        1,
     )
     .await;
 
     let select_test = select_test1.with_action(StatementAction::Query);
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
-        3,
     )
     .await;
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
-        1,
     )
     .await;
 
     let select_test = select_test.with_expected(Some(query_empty_ok_response()));
 
-    rdbms_component_test::<PostgresType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
-        RdbmsTest::new(vec![select_test], Some(TransactionEnd::Commit)),
-        1,
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
     .await;
+
+    workers_resume_test(&executor, worker_ids1.clone()).await;
+
+    workers_resume_test(&executor, worker_ids3.clone()).await;
+
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids3.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    )
+    .await;
+
+    drop(executor);
 }
 
 #[test]
@@ -416,6 +426,16 @@ async fn rdbms_mysql_crud(
 ) {
     let db_addresses: Vec<String> = mysql.host_connection_strings();
 
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids1 =
+        start_workers::<MysqlType>(&executor, &component_id, db_addresses.clone(), 1).await;
+
+    let worker_ids3 =
+        start_workers::<MysqlType>(&executor, &component_id, db_addresses.clone(), 3).await;
+
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS test_users
             (
@@ -460,12 +480,10 @@ async fn rdbms_mysql_crud(
         expected_values.push((user_id, name));
     }
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
-        1,
     )
     .await;
 
@@ -527,68 +545,69 @@ async fn rdbms_mysql_crud(
         Some(expected),
     );
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids3.clone(),
         RdbmsTest::new(
             vec![select_test1.clone(), select_test2],
             Some(TransactionEnd::Commit),
         ),
-        3,
     )
     .await;
 
     let delete = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
-        1,
     )
     .await;
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
-        1,
     )
     .await;
 
     let select_test = select_test1.with_action(StatementAction::Query);
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
-        3,
     )
     .await;
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
-        1,
     )
     .await;
 
     let select_test = select_test.with_expected(Some(query_empty_ok_response()));
 
-    rdbms_component_test::<MysqlType>(
-        last_unique_id,
-        deps,
-        db_addresses.clone(),
-        RdbmsTest::new(vec![select_test], Some(TransactionEnd::Commit)),
-        1,
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
     .await;
+
+    workers_resume_test(&executor, worker_ids1.clone()).await;
+
+    workers_resume_test(&executor, worker_ids3.clone()).await;
+
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids3.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    )
+    .await;
+
+    drop(executor);
 }
 
 #[test]
@@ -788,6 +807,38 @@ async fn start_workers<T: RdbmsType>(
         }
     }
     worker_ids
+}
+
+async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<WorkerId>) {
+    let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
+
+    let mut fibers = JoinSet::new();
+
+    for worker_id in worker_ids {
+        let worker_id_clone = worker_id.clone();
+        let executor_clone = executor.clone();
+        let _ = fibers.spawn(async move {
+            executor_clone.interrupt(&worker_id_clone).await;
+            executor_clone.resume(&worker_id_clone, false).await;
+            let metadata = executor_clone
+                .wait_for_status(&worker_id_clone, WorkerStatus::Idle, Duration::from_secs(3))
+                .await;
+            let status = metadata.last_known_status.status;
+            (worker_id_clone, status)
+        });
+    }
+
+    while let Some(res) = fibers.join_next().await {
+        let (worker_id, status) = res.unwrap();
+        workers_results.insert(worker_id, status);
+    }
+
+    for (worker_id, status) in workers_results {
+        check!(
+            status == WorkerStatus::Idle,
+            "status for worker {worker_id} is Idle"
+        );
+    }
 }
 
 fn execute_ok_response(value: u64) -> serde_json::Value {
