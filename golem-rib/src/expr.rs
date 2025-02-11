@@ -1294,10 +1294,24 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     Expr::select_index(expr.try_into()?, index)
                 }
             }
-            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => match expr.expr {
-                Some(expr) => Expr::option(Some((*expr).try_into()?)),
-                None => Expr::option(None),
-            },
+            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
+                let type_name = expr.type_name;
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                match type_name {
+                    Some(type_name) => match expr.expr {
+                        Some(expr) => {
+                            Expr::option_with_type_annotation(Some((*expr).try_into()?), type_name)
+                        }
+                        None => Expr::option_with_type_annotation(None, type_name),
+                    },
+
+                    None => match expr.expr {
+                        Some(expr) => Expr::option(Some((*expr).try_into()?)),
+                        None => Expr::option(None),
+                    },
+                }
+            }
             golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
                 let result = expr.result.ok_or("Missing result")?;
                 match result {
@@ -1645,10 +1659,11 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Option(expr, _, _) => {
+                Expr::Option(expr, optional_type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
                         Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
                             expr: expr.map(|expr| Box::new((*expr).into())),
+                            type_name: optional_type_name.map(|t| t.into()),
                         }),
                     ))
                 }

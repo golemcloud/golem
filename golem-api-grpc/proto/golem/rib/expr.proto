@@ -195,6 +195,7 @@ message PatternMatchExpr {
 
 message OptionExpr {
   optional Expr expr = 1;
+  optional TypeName type_name = 2;
 }
 
 message ResultExpr {
