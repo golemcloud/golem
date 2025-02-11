@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback } from "react";
+import React, { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import {
   Box,
@@ -9,16 +9,16 @@ import {
   FormControlLabel,
   Radio,
   TextField,
-  IconButton,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
-import FolderIcon from "@mui/icons-material/Folder";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import { addNewcomponent } from "@/lib/hooks/use-component";
+import JSZip from "jszip";
 import { getFormErrorMessage } from "../../lib/utils";
 import { Button2 } from "@/components/ui/button";
-import { useDropzone } from "react-dropzone";
+import { FileOrganizer } from "./file-organizer";
+import { FileEntity } from "./types";
+
 
 type FormData = {
   name: string;
@@ -45,9 +45,6 @@ export default function ComponentForm({
   const {
     handleSubmit,
     control,
-    watch,
-    setValue,
-    getValues,
     formState: { errors },
   } = useForm<FormData>({
     defaultValues: {
@@ -59,17 +56,51 @@ export default function ComponentForm({
     },
   });
 
-  const files = watch("files");
   const [error, setError] = React.useState<string | null>(null);
+  const [fileSystem, setFileSystem] = useState<FileEntity[] | []>([]);
 
+  function constructFilePath(file: FileEntity, allFiles: FileEntity[]): string {
+    if (!file.parentId) {
+      return `/${file.name}`;
+    }
+    const parentFile = allFiles.find((f) => f.id === file.parentId);
+    return parentFile ? `${constructFilePath(parentFile, allFiles)}/${file.name}` : file.name;
+  }
+  
+  function gatherFileMetadata(allFiles: FileEntity[]): { values: { path: string; permissions: string }[] } {
+    const metadata = allFiles
+      .filter((file) => file.type !== "folder")
+      .map((file) => ({
+        path: constructFilePath(file, allFiles),
+        permissions: file.isLocked ? "read-only" : "read-write",
+      }));
+  
+    return { values: metadata };
+  }
+  
+  async function populateZip(zipInstance: JSZip, parentId: string | null, fileSystem: FileEntity[]) {
+    const childFiles = fileSystem.filter((file) => file.parentId === parentId);
+  
+    for (const file of childFiles) {
+      if (file.type === "folder") {
+        const newFolder = zipInstance.folder(file.name);
+        if (newFolder) {
+          await populateZip(newFolder, file.id, fileSystem);
+        }
+      } else if (file.type === "file" && file.fileObject) {
+        zipInstance.file(file.name, file.fileObject);
+      }
+    }
+  }
 
-  const handleFileDelete = (index: number) => {
-    const updatedFiles = files?.filter((_, i) => i !== index);
-    setValue("files", updatedFiles);
-  };
 
   const onSubmit = async (data: FormData) => {
     console.log("Form submitted:", data);
+
+    const zip = new JSZip();
+    await populateZip(zip, null,fileSystem);
+    const blob = await zip.generateAsync({ type: "blob" });
+
     try {
       const formData = new FormData();
       if (isCreateMode) {
@@ -82,11 +113,13 @@ export default function ComponentForm({
         formData.append("component", data.component);
       }
 
-      if (data.files && data.files.length > 0) {
-        data.files.forEach((file, index) => {
-          formData.append(`file_${index}`, file);
-        });
-      }
+      formData.append(
+        "filesPermissions",
+        JSON.stringify(gatherFileMetadata(fileSystem))
+      );
+
+      formData.append("files", blob, "temp.zip");
+
       const { error } = await addNewcomponent(formData, componentId, mode);
       setError(error || null);
       onSubmitSuccess?.();
@@ -95,18 +128,6 @@ export default function ComponentForm({
       setError("Something went wrong! Please try again.");
     }
   };
-  const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
-      setValue("files", [...getValues().files, ...acceptedFiles]);
-    },
-    [getValues, setValue]
-  );
-  
-  const { getRootProps, getInputProps } = useDropzone({
-    onDrop,
-    multiple: true,
-    maxSize: 50 * 1024 * 1024, // 50MB size limit
-  });
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -232,56 +253,7 @@ export default function ComponentForm({
           )}
         />
       </Box>
-
-      {/* Initial Files Upload */}
-
-      <Typography variant="body1">Initial Files</Typography>
-      <Typography variant="caption" mb={1} color="gray">
-        Files available to your workers at runtime.
-      </Typography>
-      <Box
-        {...getRootProps()}
-        textAlign="center"
-        className="cursor-pointer hover:border-[#888] border-dashed border-2 p-3 mb-3 rounded-md"
-      >
-        <input {...getInputProps()} />
-        <Typography variant="body2">Drag & Drop or Select files</Typography>
-      </Box>
-
-      {/* File List */}
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        className="cursor-pointer hover:border-[#888] border-dashed border-2 p-2 mb-3 rounded-md"
-      >
-        <Typography variant="caption" color="gray">
-          Total Files: {files.length}
-        </Typography>
-        <Button2 variant="primary" size="md" startIcon={<FolderIcon />}>
-          New Folder
-        </Button2>
-      </Box>
-
-      {/* Files */}
-      <Box>
-        {files.map((file, index) => (
-          <Box
-            key={index}
-            display="flex"
-            justifyContent="space-between"
-            alignItems="center"
-            p={1}
-            borderBottom="1px solid #444"
-          >
-            <Typography variant="body2">{file.name}</Typography>
-            <IconButton onClick={() => handleFileDelete(index)} color="error">
-              <DeleteOutlineIcon />
-            </IconButton>
-          </Box>
-        ))}
-      </Box>
-
+      <FileOrganizer files={fileSystem} setFiles={setFileSystem} />
       {error && <Typography className="text-red-500">{error}</Typography>}
 
       {/* Submit Button */}

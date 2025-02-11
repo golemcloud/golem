@@ -478,6 +478,7 @@ export function useWorkerFileContent(
   componentsId: string,
   fileName: string
 ) {
+  console.log("alfhaslhfal;sdhf no worker fioufa")
   const path = `${ROUTE_PATH}/${componentsId}/workers/${workersName}/files/${fileName}`;
   const { data, error, isLoading } = useSWR(path, fetcher);
 
