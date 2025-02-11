@@ -1,6 +1,8 @@
 mod bindings;
 
-use crate::bindings::exports::rpc::counters_exports::api::{Guest, GuestCounter, TimelineNode};
+use crate::bindings::exports::rpc::counters_exports::api::{
+    Guest, GuestCounter, PromiseId, TimelineNode,
+};
 use std::cell::RefCell;
 use std::env::{args, vars};
 
@@ -25,27 +27,27 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 impl Guest for Component {
     type Counter = crate::Counter;
 
-    fn get_all_dropped() -> Vec<(String, u64)> {
-        with_state(|state| state.dropped_counters.clone())
-    }
-
-    fn inc_global_by(value: u64) {
-        with_state(|state| {
-            state.global += value;
-        });
-    }
-
-    fn get_global_value() -> u64 {
-        with_state(|state| state.global)
+    fn bug_golem1265(s: String) -> Result<(), String> {
+        eprintln!("Got {s}");
+        Ok(())
     }
 
     fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode {
         in_
     }
 
-    fn bug_golem1265(s: String) -> Result<(), String> {
-        eprintln!("Got {s}");
-        Ok(())
+    fn get_all_dropped() -> Vec<(String, u64)> {
+        with_state(|state| state.dropped_counters.clone())
+    }
+
+    fn get_global_value() -> u64 {
+        with_state(|state| state.global)
+    }
+
+    fn inc_global_by(value: u64) {
+        with_state(|state| {
+            state.global += value;
+        });
     }
 }
 
@@ -71,6 +73,16 @@ impl GuestCounter for Counter {
     fn get_value(&self) -> u64 {
         println!("Getting value of counter {}", self.name);
         *self.value.borrow()
+    }
+
+    fn create_promise(&self) -> PromiseId {
+        bindings::golem::api::host::create_promise()
+    }
+
+    fn block_on_promise(&self, promise: PromiseId) {
+        println!("Awaiting promise ${promise:?}");
+        bindings::golem::api::host::await_promise(&promise);
+        println!("Promise ${promise:?} completed");
     }
 
     fn get_args(&self) -> Vec<String> {
