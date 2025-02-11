@@ -1043,7 +1043,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                         let mut skipped_regions =
                             metadata.last_known_status.skipped_regions.clone();
-                        let (pending_updates, temporary_skipped_regions) = worker.pending_updates().await;
+                        let (pending_updates, temporary_skipped_regions) =
+                            worker.pending_updates().await;
                         skipped_regions.set_override(temporary_skipped_regions);
                         metadata.last_known_status.pending_updates = pending_updates;
                         metadata.last_known_status.skipped_regions = skipped_regions;

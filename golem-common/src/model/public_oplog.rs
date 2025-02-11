@@ -853,7 +853,10 @@ pub struct CancelInvocationParameters {
 
 impl IntoValue for CancelInvocationParameters {
     fn into_value(self) -> Value {
-        Value::Record(vec![self.timestamp.into_value(), self.idempotency_key.into_value()])
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.idempotency_key.into_value(),
+        ])
     }
 
     fn get_type() -> AnalysedType {
@@ -943,7 +946,7 @@ pub enum PublicOplogEntry {
     /// Revert a worker to a previous state
     Revert(RevertParameters),
     /// Cancel a pending invocation
-    CancelInvocation(CancelInvocationParameters)
+    CancelInvocation(CancelInvocationParameters),
 }
 
 impl PublicOplogEntry {
@@ -1470,7 +1473,7 @@ impl IntoValue for PublicOplogEntry {
             PublicOplogEntry::CancelInvocation(params) => Value::Variant {
                 case_idx: 28,
                 case_value: Some(Box::new(params.into_value())),
-            }
+            },
         }
     }
 
@@ -1564,7 +1567,19 @@ impl Display for OplogCursor {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
-    use crate::model::public_oplog::{ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters, OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription, PublicDurableFunctionType, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters, SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters};
+    use crate::model::public_oplog::{
+        ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
+        CreateParameters, DeactivatePluginParameters, DescribeResourceParameters,
+        EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+        ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+        GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
+        ManualUpdateParameters, OplogCursor, PendingUpdateParameters,
+        PendingWorkerInvocationParameters, PluginInstallationDescription,
+        PublicDurableFunctionType, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription,
+        PublicWorkerInvocation, ResourceParameters, RevertParameters,
+        SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
+        WriteRemoteBatchedParameters,
+    };
     use crate::model::regions::OplogRegion;
     use crate::model::Empty;
     use golem_api_grpc::proto::golem::worker::{
@@ -1921,12 +1936,15 @@ mod protobuf {
                         },
                     }))
                 }
-                oplog_entry::Entry::CancelInvocation(cancel) => {
-                    Ok(PublicOplogEntry::CancelInvocation(CancelInvocationParameters {
+                oplog_entry::Entry::CancelInvocation(cancel) => Ok(
+                    PublicOplogEntry::CancelInvocation(CancelInvocationParameters {
                         timestamp: cancel.timestamp.ok_or("Missing timestamp field")?.into(),
-                        idempotency_key: cancel.idempotency_key.ok_or("Missing idempotency_key field")?.into(),
-                    }))
-                }
+                        idempotency_key: cancel
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                    }),
+                ),
             }
         }
     }

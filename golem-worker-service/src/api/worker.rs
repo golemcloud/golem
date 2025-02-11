@@ -858,11 +858,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .cancel_invocation(
-                &worker_id,
-                &idempotency_key.0,
-                empty_worker_metadata(),
-            )
+            .cancel_invocation(&worker_id, &idempotency_key.0, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

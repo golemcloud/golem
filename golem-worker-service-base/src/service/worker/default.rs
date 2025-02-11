@@ -25,7 +25,12 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
+    UpdateWorkerRequest,
+};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -1281,7 +1286,12 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey, metadata: WorkerRequestMetadata) -> WorkerResult<()> {
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         let idempotency_key = idempotency_key.clone();
         self.call_worker_executor(
