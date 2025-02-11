@@ -145,8 +145,7 @@ mod tests {
                     Some(Expr::identifier("foo")),
                     TypeName::Option(Box::new(TypeName::Str))
                 )),
-                TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str)))
-                )
+                TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str))))
             ))
         );
     }
