@@ -54,6 +54,16 @@ pub(crate) fn bind_type(expr: &mut Expr) {
                 }
             }
 
+            Expr::Option(expr, optional_type_name, inferred_type) => {
+                if let Some(type_name) = optional_type_name {
+                    *inferred_type = type_name.clone().into();
+                }
+
+                if let Some(expr) = expr {
+                    queue.push_back(expr);
+                }
+            }
+
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -135,6 +145,31 @@ mod type_binding_tests {
                 InferredType::U64,
             )),
             InferredType::Unknown,
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_in_option() {
+        let expr_str = r#"
+            some(1): option<u64>
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::Option(
+            Some(Box::new(Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::number(),
+            ))),
+            Some(TypeName::Option(Box::new(TypeName::U64))),
+            InferredType::Option(Box::new(InferredType::U64)),
         );
 
         assert_eq!(expr, expected);
