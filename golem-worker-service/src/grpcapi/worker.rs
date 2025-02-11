@@ -24,20 +24,21 @@ use golem_api_grpc::proto::golem::worker::v1::{
     delete_worker_response, fork_worker_response, get_oplog_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
     invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
-    launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_error, worker_execution_error, ActivatePluginRequest,
-    ActivatePluginResponse, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
-    DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest, DeleteWorkerResponse,
-    ForkWorkerRequest, ForkWorkerResponse, GetOplogRequest, GetOplogResponse,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response, worker_error, worker_execution_error,
+    ActivatePluginRequest, ActivatePluginResponse, CompletePromiseRequest, CompletePromiseResponse,
+    ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
+    DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
     InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse,
-    SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError as GrpcWorkerError, WorkerExecutionError,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::v1::{list_directory_response, GetFileContentsResponse};
 use golem_api_grpc::proto::golem::worker::{
@@ -683,6 +684,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn revert_worker(
+        &self,
+        request: Request<RevertWorkerRequest>,
+    ) -> Result<Response<RevertWorkerResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "revert_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .revert_worker(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(revert_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                revert_worker_response::Result::Failure(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(RevertWorkerResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -746,6 +774,21 @@ impl WorkerGrpcApi {
                 oplog_idx,
                 empty_worker_metadata(),
             )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn revert_worker(&self, request: RevertWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let target = request
+            .target
+            .ok_or(bad_request_error("Missing target"))?
+            .try_into()
+            .map_err(|err| bad_request_error(format!("Invalid target specification: {err}")))?;
+
+        self.worker_service
+            .revert_worker(&worker_id, target, empty_worker_metadata())
             .await?;
 
         Ok(())

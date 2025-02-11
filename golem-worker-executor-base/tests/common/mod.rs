@@ -448,9 +448,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, owned_worker_id)
-            .await
+        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
+            this,
+            owned_worker_id,
+            latest_worker_status,
+        )
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(

@@ -156,35 +156,38 @@ impl<
     /// Tries to get a cached value for the given key. If the value is missing or is pending, it returns None.
     #[allow(unused)]
     pub fn try_get(&self, key: &K) -> Option<V> {
-        match self.state.items.try_get(key) {
+        let result = match self.state.items.try_get(key) {
             Present(item) => match item.deref() {
                 Item::Pending { .. } => None,
-                Item::Cached { value, .. } => {
-                    self.update_last_access(key);
-                    Some(value.clone())
-                }
+                Item::Cached { value, .. } => Some(value.clone()),
             },
             Absent | Locked => None,
+        };
+        if result.is_some() {
+            self.update_last_access(key);
         }
+        result
     }
 
     /// Gets a cached value for the given key. If the value is pending, it awaits it.
     /// If the pending value fails, it returns None.
-    #[allow(unused)]
     pub async fn get(&self, key: &K) -> Option<V> {
-        match self.state.items.get(key) {
+        let result = match self.state.items.get(key) {
             Some(item) => match item.deref() {
                 Item::Pending { tx, .. } => {
                     let mut rx = tx.subscribe();
                     rx.recv().await.ok().and_then(|r| r.ok())
                 }
-                Item::Cached { value, .. } => {
-                    self.update_last_access(key);
-                    Some(value.clone())
-                }
+                Item::Cached { value, .. } => Some(value.clone()),
             },
             None => None,
+        };
+
+        if result.is_some() {
+            self.update_last_access(key);
         }
+
+        result
     }
 
     /// Gets a cached value for a given key, or inserts a new one with the given async function. If a value is pending,

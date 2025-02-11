@@ -56,6 +56,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
+pub mod revert;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
@@ -76,6 +77,7 @@ tag_suite!(guest_languages1, group2);
 
 tag_suite!(transactions, group3);
 tag_suite!(wasi, group3);
+tag_suite!(revert, group3);
 
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);
@@ -177,7 +179,7 @@ impl WorkerExecutorTestDependencies {
             Level::ERROR,
         ));
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+            SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
         );
         let component_directory = Path::new("../test-components").to_path_buf();
         let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
