@@ -49,6 +49,11 @@ name = "sharding"
 path = "tests/sharding.rs"
 harness = false
 
+[[test]]
+name = "api"
+path = "tests/api/lib.rs"
+harness = false
+
 [[bin]]
 name = "benchmark_simple_worker_echo"
 path = "src/benchmarks/simple_worker_echo.rs"

@@ -100,6 +100,14 @@ impl EnvBasedTestDependenciesConfig {
             self.golem_test_components = golem_test_components.into();
         }
 
+        if let Some(golem_client_protocol) = opt_env_var("GOLEM_CLIENT_PROTOCOL") {
+            match golem_client_protocol.to_lowercase().as_str() {
+                "grpc" => self.golem_client_protocol = GolemClientProtocol::Grpc,
+                "http" => self.golem_client_protocol = GolemClientProtocol::Http,
+                _ => panic!("Unknown GOLEM_CLIENT_PROTOCOL: {golem_client_protocol}, valid values: grpc, http"),
+            }
+        }
+
         self
     }
 
