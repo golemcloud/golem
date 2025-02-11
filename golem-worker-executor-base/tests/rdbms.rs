@@ -21,7 +21,7 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_common::model::{ComponentId, WorkerId, WorkerStatus};
+use golem_common::model::{ComponentId, IdempotencyKey, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbsConnections;
@@ -215,23 +215,16 @@ async fn rdbms_postgres_crud(
         None,
     ));
 
-    let mut expected_values: Vec<(Uuid, String, String)> = Vec::with_capacity(count);
+    let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
 
-    for i in 0..count {
-        let user_id = Uuid::new_v4();
-        let name = format!("name-{}", Uuid::new_v4());
-        let vs: Vec<String> = (0..5).map(|v| format!("tag-{}-{}", v, i)).collect();
-        let tags = format!("[{}]", vs.join(", "));
-
-        let params: Vec<String> = vec![user_id.clone().to_string(), name.clone(), tags.clone()];
+    for (user_id, name, tags) in expected_values.clone() {
+        let params: Vec<String> = vec![user_id.to_string(), name, tags];
 
         insert_tests.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
         ));
-
-        expected_values.push((user_id, name, tags));
     }
 
     rdbms_workers_test::<PostgresType>(
@@ -241,71 +234,14 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
-    fn get_row(columns: (Uuid, String, String)) -> serde_json::Value {
-        let user_id = columns.0.as_u64_pair();
-        json!(
-            {
-               "values":[
-                  {
-                        "uuid":  {
-                           "high-bits": user_id.0,
-                           "low-bits": user_id.1
-                        }
-
-                  },
-                  {
-                        "text": columns.1
-                  },
-                  {
-
-                        "text": columns.2
-                  }
-               ]
-            }
-        )
-    }
-
-    fn get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_json::Value {
-        let expected_rows: Vec<serde_json::Value> =
-            expected_values.into_iter().map(get_row).collect();
-
-        let expected_columns: Vec<serde_json::Value> = vec![
-            json!({
-               "db-type":{
-                  "uuid":null
-               },
-               "db-type-name":"UUID",
-               "name":"user_id",
-               "ordinal":0
-            }),
-            json!({
-               "db-type":{
-                  "text":null
-               },
-               "db-type-name":"TEXT",
-               "name":"name",
-               "ordinal":1
-            }),
-            json!({
-               "db-type":{
-                     "text":null
-               },
-               "db-type-name":"TEXT[]",
-               "name":"tags",
-               "ordinal":2
-            }),
-        ];
-        query_ok_response(expected_columns, expected_rows)
-    }
-
-    let expected = get_expected(expected_values.clone());
+    let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name, tags FROM test_users ORDER BY created_on ASC",
         vec![],
         Some(expected),
     );
 
-    let expected = get_expected(vec![expected_values[0].clone()]);
+    let expected = postgres_get_expected(vec![expected_values[0].clone()]);
     let select_test2 = StatementTest::query_test(
         "SELECT user_id, name, tags FROM test_users WHERE user_id = $1::uuid ORDER BY created_on ASC",
         vec![expected_values[0].0.to_string()],
@@ -375,6 +311,179 @@ async fn rdbms_postgres_crud(
     .await;
 
     drop(executor);
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_idempotency(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdbs,
+    _tracing: &Tracing,
+) {
+    let db_address = postgres.host_connection_strings()[0].clone();
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids =
+        start_workers::<PostgresType>(&executor, &component_id, vec![db_address.clone()], 1).await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users_idem
+            (
+                user_id             uuid    NOT NULL PRIMARY KEY,
+                name                text    NOT NULL,
+                tags                text[],
+                created_on          timestamp DEFAULT NOW()
+            );
+        "#;
+
+    let insert_statement = r#"
+            INSERT INTO test_users_idem
+            (user_id, name, tags)
+            VALUES
+            ($1::uuid, $2, $3)
+        "#;
+
+    let count = 10;
+
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(StatementTest::execute_test(
+        create_table_statement,
+        vec![],
+        None,
+    ));
+
+    let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
+
+    for (user_id, name, tags) in expected_values.clone() {
+        let params: Vec<String> = vec![user_id.to_string(), name, tags];
+
+        insert_tests.push(StatementTest::execute_test(
+            insert_statement,
+            params.clone(),
+            Some(1),
+        ));
+    }
+
+    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    check!(result2 == result1);
+
+    let expected = postgres_get_expected(expected_values.clone());
+    let select_test1 = StatementTest::query_stream_test(
+        "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
+        vec![],
+        Some(expected),
+    );
+
+    let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
+
+    let test = RdbmsTest::new(vec![select_test1, delete], Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    check!(result2 == result1);
+
+    drop(executor);
+}
+
+fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
+    let mut values: Vec<(Uuid, String, String)> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let user_id = Uuid::new_v4();
+        let name = format!("name-{}", Uuid::new_v4());
+        let vs: Vec<String> = (0..5).map(|v| format!("tag-{}-{}", v, i)).collect();
+        let tags = format!("[{}]", vs.join(", "));
+
+        values.push((user_id, name, tags));
+    }
+    values
+}
+
+fn postgres_get_row(columns: (Uuid, String, String)) -> serde_json::Value {
+    let user_id = columns.0.as_u64_pair();
+    json!(
+        {
+           "values":[
+              {
+                    "uuid":  {
+                       "high-bits": user_id.0,
+                       "low-bits": user_id.1
+                    }
+
+              },
+              {
+                    "text": columns.1
+              },
+              {
+
+                    "text": columns.2
+              }
+           ]
+        }
+    )
+}
+
+fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_json::Value {
+    let expected_rows: Vec<serde_json::Value> =
+        expected_values.into_iter().map(postgres_get_row).collect();
+
+    let expected_columns: Vec<serde_json::Value> = vec![
+        json!({
+           "db-type":{
+              "uuid":null
+           },
+           "db-type-name":"UUID",
+           "name":"user_id",
+           "ordinal":0
+        }),
+        json!({
+           "db-type":{
+              "text":null
+           },
+           "db-type-name":"TEXT",
+           "name":"name",
+           "ordinal":1
+        }),
+        json!({
+           "db-type":{
+                 "text":null
+           },
+           "db-type-name":"TEXT[]",
+           "name":"tags",
+           "ordinal":2
+        }),
+    ];
+    query_ok_response(expected_columns, expected_rows)
 }
 
 #[test]
@@ -463,21 +572,16 @@ async fn rdbms_mysql_crud(
         None,
     ));
 
-    let mut expected_values: Vec<(String, String)> = Vec::with_capacity(count);
+    let expected_values: Vec<(String, String)> = mysql_get_values(count);
 
-    for i in 0..count {
-        let user_id = format!("{:03}", i);
-        let name = format!("name-{}", Uuid::new_v4());
-
-        let params: Vec<String> = vec![user_id.clone(), name.clone()];
+    for (user_id, name) in expected_values.clone() {
+        let params: Vec<String> = vec![user_id, name];
 
         insert_tests.push(StatementTest::execute_test(
             insert_statement,
             params.clone(),
             Some(1),
         ));
-
-        expected_values.push((user_id, name));
     }
 
     rdbms_workers_test::<MysqlType>(
@@ -487,58 +591,14 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    fn get_row(columns: (String, String)) -> serde_json::Value {
-        json!(
-            {
-                "values":[
-                  {
-                      "varchar": columns.0
-
-                  },
-                  {
-
-                      "varchar": columns.1
-                  }
-               ]
-            }
-        )
-    }
-
-    fn get_expected(expected_values: Vec<(String, String)>) -> serde_json::Value {
-        let expected_rows: Vec<serde_json::Value> =
-            expected_values.into_iter().map(get_row).collect();
-
-        let expected_columns: Vec<serde_json::Value> = vec![
-            json!(
-            {
-               "db-type":{
-                  "varchar":null
-               },
-               "db-type-name":"VARCHAR",
-               "name":"user_id",
-               "ordinal":0
-            }),
-            json!(
-            {
-               "db-type":{
-                  "varchar":null
-               },
-               "db-type-name":"VARCHAR",
-               "name":"name",
-               "ordinal":1
-            }),
-        ];
-        query_ok_response(expected_columns, expected_rows)
-    }
-
-    let expected = get_expected(expected_values.clone());
+    let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
         vec![],
         Some(expected),
     );
 
-    let expected = get_expected(vec![expected_values[0].clone()]);
+    let expected = mysql_get_expected(vec![expected_values[0].clone()]);
     let select_test2 = StatementTest::query_test(
         "SELECT user_id, name FROM test_users WHERE user_id = ? ORDER BY user_id ASC",
         vec![expected_values[0].clone().0],
@@ -612,6 +672,164 @@ async fn rdbms_mysql_crud(
 
 #[test]
 #[tracing::instrument]
+async fn rdbms_mysql_idempotency(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdbs,
+    _tracing: &Tracing,
+) {
+    let db_address = mysql.host_connection_strings()[0].clone();
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component_id, vec![db_address.clone()], 1).await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users_idem
+            (
+                user_id             varchar(25)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                created_on          timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id)
+            );
+        "#;
+
+    let insert_statement = r#"
+            INSERT INTO test_users_idem
+            (user_id, name)
+            VALUES
+            (?, ?)
+        "#;
+
+    let count = 10;
+
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(StatementTest::execute_test(
+        create_table_statement,
+        vec![],
+        None,
+    ));
+
+    let expected_values: Vec<(String, String)> = mysql_get_values(count);
+
+    for (user_id, name) in expected_values.clone() {
+        let params: Vec<String> = vec![user_id, name];
+
+        insert_tests.push(StatementTest::execute_test(
+            insert_statement,
+            params.clone(),
+            Some(1),
+        ));
+    }
+
+    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    check!(result2 == result1);
+
+    let expected = mysql_get_expected(expected_values.clone());
+    let select_test1 = StatementTest::query_stream_test(
+        "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
+        vec![],
+        Some(expected),
+    );
+
+    let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
+
+    let test = RdbmsTest::new(vec![select_test1, delete], Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    check!(result2 == result1);
+
+    drop(executor);
+}
+
+fn mysql_get_values(count: usize) -> Vec<(String, String)> {
+    let mut values: Vec<(String, String)> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let user_id = format!("{:03}", i);
+        let name = format!("name-{}", Uuid::new_v4());
+
+        values.push((user_id, name));
+    }
+    values
+}
+
+fn mysql_get_row(columns: (String, String)) -> serde_json::Value {
+    json!(
+        {
+            "values":[
+              {
+                  "varchar": columns.0
+
+              },
+              {
+
+                  "varchar": columns.1
+              }
+           ]
+        }
+    )
+}
+
+fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Value {
+    let expected_rows: Vec<serde_json::Value> =
+        expected_values.into_iter().map(mysql_get_row).collect();
+
+    let expected_columns: Vec<serde_json::Value> = vec![
+        json!(
+        {
+           "db-type":{
+              "varchar":null
+           },
+           "db-type-name":"VARCHAR",
+           "name":"user_id",
+           "ordinal":0
+        }),
+        json!(
+        {
+           "db-type":{
+              "varchar":null
+           },
+           "db-type-name":"VARCHAR",
+           "name":"name",
+           "ordinal":1
+        }),
+    ];
+    query_ok_response(expected_columns, expected_rows)
+}
+
+#[test]
+#[tracing::instrument]
 async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -672,7 +890,6 @@ async fn rdbms_workers_test<T: RdbmsType>(
     worker_ids: Vec<WorkerId>,
     test: RdbmsTest,
 ) {
-    let db_type = T::default().to_string();
     let mut workers_results: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, results>
 
     let mut fibers = JoinSet::new();
@@ -681,47 +898,14 @@ async fn rdbms_workers_test<T: RdbmsType>(
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
         let test_clone = test.clone();
-        let db_type_clone = db_type.clone();
         let _ = fibers.spawn(async move {
-            let fn_name = test_clone.fn_name();
-            let component_fn_name = format!("golem:it/api.{{{db_type_clone}-{fn_name}}}");
-
-            let mut statements: Vec<Value> = Vec::with_capacity(test_clone.statements.len());
-
-            for s in test_clone.statements {
-                let params = Value::List(s.params.into_iter().map(Value::String).collect());
-                statements.push(Value::Record(vec![
-                    Value::String(s.statement.to_string()),
-                    params,
-                    Value::Enum(s.action as u32),
-                ]));
-            }
-
-            let statements = ValueAndType::new(
-                Value::List(statements),
-                analysed_type::list(analysed_type::record(vec![
-                    analysed_type::field("statement", analysed_type::str()),
-                    analysed_type::field("params", analysed_type::list(analysed_type::str())),
-                    analysed_type::field(
-                        "action",
-                        analysed_type::r#enum(&["execute", "query", "query-stream"]),
-                    ),
-                ])),
-            );
-
-            let mut fn_params: Vec<ValueAndType> = vec![statements];
-
-            if let Some(te) = test_clone.transaction_end {
-                fn_params.push(ValueAndType::new(
-                    Value::Enum(te as u32),
-                    analysed_type::r#enum(&["commit", "rollback", "none"]),
-                ));
-            }
-
-            let result = executor_clone
-                .invoke_and_await_typed(&worker_id_clone, component_fn_name.as_str(), fn_params)
-                .await;
-
+            let result = execute_worker_test::<T>(
+                &executor_clone,
+                &worker_id_clone,
+                &IdempotencyKey::fresh(),
+                test_clone,
+            )
+            .await;
             (worker_id_clone, result)
         });
     }
@@ -732,51 +916,111 @@ async fn rdbms_workers_test<T: RdbmsType>(
     }
 
     for (worker_id, result) in workers_results {
-        let query_test = test.clone();
-        let fn_name = test.fn_name();
+        check_test_result(&worker_id, result, test.clone());
+    }
+}
 
-        check!(
-            result.is_ok(),
-            "result {fn_name} for worker {worker_id} is ok"
-        );
+async fn execute_worker_test<T: RdbmsType>(
+    executor: &TestWorkerExecutor,
+    worker_id: &WorkerId,
+    idempotency_key: &IdempotencyKey,
+    test: RdbmsTest,
+) -> Result<TypeAnnotatedValue, Error> {
+    let db_type = T::default().to_string();
 
-        let response = result.clone().unwrap().to_json_value();
+    let fn_name = test.fn_name();
+    let component_fn_name = format!("golem:it/api.{{{db_type}-{fn_name}}}");
 
-        let response = response
-            .as_array()
-            .and_then(|v| v.first())
-            .and_then(|v| v.as_object())
-            .cloned();
+    let mut statements: Vec<Value> = Vec::with_capacity(test.statements.len());
 
-        if query_test.has_expected() {
-            let ok_response = response
-                .and_then(|v| v.get("ok").cloned())
-                .and_then(|v| v.as_array().cloned());
+    for s in test.statements {
+        let params = Value::List(s.params.into_iter().map(Value::String).collect());
+        statements.push(Value::Record(vec![
+            Value::String(s.statement.to_string()),
+            params,
+            Value::Enum(s.action as u32),
+        ]));
+    }
 
-            if let Some(response_values) = ok_response {
-                for (index, test_statement) in query_test.statements.into_iter().enumerate() {
-                    let action = test_statement.action;
-                    if let Some(expected) = test_statement.expected {
-                        match response_values.get(index).cloned() {
-                            Some(response) => {
-                                // println!("{}", response);
-                                check!(
+    let statements = ValueAndType::new(
+        Value::List(statements),
+        analysed_type::list(analysed_type::record(vec![
+            analysed_type::field("statement", analysed_type::str()),
+            analysed_type::field("params", analysed_type::list(analysed_type::str())),
+            analysed_type::field(
+                "action",
+                analysed_type::r#enum(&["execute", "query", "query-stream"]),
+            ),
+        ])),
+    );
+
+    let mut fn_params: Vec<ValueAndType> = vec![statements];
+
+    if let Some(te) = test.transaction_end {
+        fn_params.push(ValueAndType::new(
+            Value::Enum(te as u32),
+            analysed_type::r#enum(&["commit", "rollback", "none"]),
+        ));
+    }
+
+    executor
+        .invoke_and_await_typed_with_key(
+            worker_id,
+            idempotency_key,
+            component_fn_name.as_str(),
+            fn_params,
+        )
+        .await
+}
+
+fn check_test_result(
+    worker_id: &WorkerId,
+    result: Result<TypeAnnotatedValue, Error>,
+    test: RdbmsTest,
+) {
+    let fn_name = test.fn_name();
+
+    check!(
+        result.is_ok(),
+        "result {fn_name} for worker {worker_id} is ok"
+    );
+
+    let response = result.clone().unwrap().to_json_value();
+
+    let response = response
+        .as_array()
+        .and_then(|v| v.first())
+        .and_then(|v| v.as_object())
+        .cloned();
+
+    if test.has_expected() {
+        let ok_response = response
+            .and_then(|v| v.get("ok").cloned())
+            .and_then(|v| v.as_array().cloned());
+
+        if let Some(response_values) = ok_response {
+            for (index, test_statement) in test.statements.into_iter().enumerate() {
+                let action = test_statement.action;
+                if let Some(expected) = test_statement.expected {
+                    match response_values.get(index).cloned() {
+                        Some(response) => {
+                            // println!("{}", response);
+                            check!(
                                     response == expected,
                                     "result {fn_name} {action} with index {index} for worker {worker_id} match"
                                 );
-                            }
-                            None => {
-                                check!(
+                        }
+                        None => {
+                            check!(
                                     false,
                                     "result {fn_name} {action} with index {index} for worker {worker_id} is not found"
                                 );
-                            }
                         }
                     }
                 }
-            } else {
-                check!(false, "result {fn_name} for worker {worker_id} is not ok");
             }
+        } else {
+            check!(false, "result {fn_name} for worker {worker_id} is not ok");
         }
     }
 }
