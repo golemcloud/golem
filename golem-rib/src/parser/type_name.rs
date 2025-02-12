@@ -26,13 +26,14 @@ use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 use crate::parser::errors::RibParseError;
 use crate::{InferredNumber, InferredType};
 
-// Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types,
-// and sticks on to the  Display instance that aligns with what we see in WIT. 
+// Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
+// and sticks on to the  Display instance that aligns with what we see in WIT.
 // Usage of TypeName, InferredType and AnalysedType:
 // The Rib compiler uses `InferredType` - the output of type inference. The `TypeName` used in type annotations may help with this type inference.
 // The Rib-IR which is close to running Rib code uses `AnalysedType`, that there won't be either `TypeName` or `InferredType` in the Rib-IR.
 // Any compilation or interpreter error messages will also be using `TypeName` to show the type of the expression
-// (for which we convert AnalysedType or InferredType back to TypeName).
+// for which we convert AnalysedType or InferredType back to TypeName. If `InferredType` cannot be converted to `TypeName`, we explain the error displaying
+// the original expression, and there is no point displaying `InferredType` to the user.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
     Bool,
