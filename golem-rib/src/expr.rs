@@ -33,7 +33,8 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::type_parameter::TypeParameter;
+use crate::generic_type_parameter::GenericTypeParameter;
+use crate::type_parameter::InstanceType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -251,7 +252,7 @@ impl Expr {
         cond
     }
 
-    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, _type_parameter: Option<TypeParameter>, args: Vec<Expr>) -> Self {
+    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, generic_type_parameter: Option<GenericTypeParameter>, args: Vec<Expr>) -> Self {
         Expr::Call(
             CallType::Function(dynamic_parsed_fn_name),
             args,

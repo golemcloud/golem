@@ -2,18 +2,18 @@ use std::fmt;
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeParameter {
+pub enum InstanceType {
     Interface(InterfaceName),
     PackageName(PackageName),
     FullyQualifiedInterface(FullyQualifiedInterfaceName)
 }
 
-impl Display for TypeParameter {
+impl Display for InstanceType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeParameter::Interface(interface) => write!(f, "{}", interface),
-            TypeParameter::PackageName(package) => write!(f, "{}", package),
-            TypeParameter::FullyQualifiedInterface(qualified) => write!(f, "{}", qualified),
+            InstanceType::Interface(interface) => write!(f, "{}", interface),
+            InstanceType::PackageName(package) => write!(f, "{}", package),
+            InstanceType::FullyQualifiedInterface(qualified) => write!(f, "{}", qualified),
         }
     }
 }

@@ -38,4 +38,4 @@ mod select_index;
 mod sequence;
 mod tuple;
 pub(crate) mod type_name;
-mod type_parameter;
+mod instance_type;

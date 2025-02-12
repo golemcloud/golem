@@ -38,6 +38,8 @@ mod type_refinement;
 mod type_registry;
 mod variable_id;
 mod type_parameter;
+mod instance_type;
+mod generic_type_parameter;
 
 #[cfg(test)]
 test_r::enable!();
