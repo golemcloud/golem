@@ -105,10 +105,13 @@ mod tests {
             Expr::list_reduce(
                 VariableId::list_reduce_identifier("z"),
                 VariableId::list_comprehension_identifier("p"),
-                Expr::sequence(vec![
-                    Expr::untyped_number(BigDecimal::from(1)),
-                    Expr::untyped_number(BigDecimal::from(2))
-                ]),
+                Expr::sequence(
+                    vec![
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2))
+                    ],
+                    None
+                ),
                 Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
                     Expr::identifier("z"),
@@ -133,11 +136,14 @@ mod tests {
                 Expr::let_binding_with_type(
                     "ages",
                     TypeName::List(Box::new(TypeName::U16)),
-                    Expr::sequence(vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2)),
-                        Expr::untyped_number(BigDecimal::from(3))
-                    ])
+                    Expr::sequence(
+                        vec![
+                            Expr::untyped_number(BigDecimal::from(1)),
+                            Expr::untyped_number(BigDecimal::from(2)),
+                            Expr::untyped_number(BigDecimal::from(3))
+                        ],
+                        None
+                    )
                 ),
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),

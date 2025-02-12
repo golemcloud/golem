@@ -282,8 +282,8 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
             Expr::Let(variable_id, typ, expr, inferred_type) => {
                 internal::handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
             }
-            Expr::Sequence(exprs, current_inferred_type) => {
-                internal::handle_sequence(exprs, current_inferred_type, &mut temp_stack);
+            Expr::Sequence(exprs, type_name, current_inferred_type) => {
+                internal::handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
             }
             Expr::Record(expr, inferred_type) => {
                 internal::handle_record(expr, inferred_type, &mut temp_stack);
@@ -918,6 +918,7 @@ mod internal {
         current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let mut new_exprs = vec![];
 
@@ -928,7 +929,7 @@ mod internal {
 
         new_exprs.reverse();
 
-        let expr = Expr::Sequence(new_exprs, current_inferred_type.clone());
+        let expr = Expr::Sequence(new_exprs, type_name.clone(), current_inferred_type.clone());
 
         temp_stack.push_front((expr, false));
     }

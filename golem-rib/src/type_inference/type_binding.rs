@@ -75,6 +75,16 @@ pub(crate) fn bind_type(expr: &mut Expr) {
                 }
             }
 
+            Expr::Sequence(exprs, optional_type_name, inferred_type) => {
+                if let Some(type_name) = optional_type_name {
+                    *inferred_type = type_name.clone().into();
+                }
+
+                for expr in exprs {
+                    queue.push_back(expr);
+                }
+            }
+
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -89,7 +99,7 @@ mod internal {
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)

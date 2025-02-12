@@ -288,6 +288,20 @@ mod type_inference_tests {
             // Cannot infer 1
             assert!(result.is_err());
         }
+
+        #[test]
+        fn test_inline_type_annotation_11() {
+            let mut invalid_rib_expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
     }
 
     mod let_binding_tests {
@@ -1087,6 +1101,7 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1152,6 +1167,7 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1856,6 +1872,7 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -2301,6 +2318,7 @@ mod type_inference_tests {
                                 Expr::number(BigDecimal::from(2), InferredType::U64),
                                 Expr::number(BigDecimal::from(3), InferredType::U64),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -2383,6 +2401,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Sequence(
                             vec![Expr::literal("foo"), Expr::literal("bar")],
+                            None,
                             InferredType::List(Box::new(InferredType::Str)),
                         )),
                         InferredType::Unknown,

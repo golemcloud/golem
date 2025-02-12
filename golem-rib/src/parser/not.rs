@@ -57,10 +57,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::not(Expr::sequence(vec![
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ])),
+                Expr::not(Expr::sequence(
+                    vec![Expr::identifier("foo"), Expr::identifier("bar")],
+                    None
+                )),
                 ""
             ))
         );

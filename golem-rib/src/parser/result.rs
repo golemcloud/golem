@@ -88,7 +88,7 @@ mod tests {
             result,
             Ok((
                 Expr::ok(
-                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")], None),
                     None
                 ),
                 ""
@@ -104,7 +104,7 @@ mod tests {
             result,
             Ok((
                 Expr::err(
-                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")], None),
                     None
                 ),
                 ""

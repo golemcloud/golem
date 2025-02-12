@@ -24,7 +24,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr).at_index(*index));
                 }
             }
-            Expr::Sequence(exprs, inferred_type) => {
+            Expr::Sequence(exprs, _, inferred_type) => {
                 internal::unresolved_types_in_list(exprs)?;
 
                 if inferred_type.un_resolved() {

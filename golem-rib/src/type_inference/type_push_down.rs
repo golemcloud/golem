@@ -83,7 +83,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             Expr::Tuple(exprs, inferred_type) => {
                 internal::handle_tuple(exprs, inferred_type, &mut queue)?;
             }
-            Expr::Sequence(expressions, inferred_type) => {
+            Expr::Sequence(expressions, _, inferred_type) => {
                 internal::handle_sequence(expressions, inferred_type, &mut queue)?;
             }
 
@@ -567,6 +567,7 @@ mod type_push_down_tests {
     fn test_push_down_for_sequence() {
         let mut expr = Expr::Sequence(
             vec![Expr::identifier("x"), Expr::identifier("y")],
+            None,
             InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),
                 InferredType::List(Box::new(InferredType::U64)),
@@ -587,6 +588,7 @@ mod type_push_down_tests {
                     InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
                 ),
             ],
+            None,
             InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),
                 InferredType::List(Box::new(InferredType::U64)),

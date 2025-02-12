@@ -149,13 +149,16 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![
-                    Expr::greater_than_or_equal_to(
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    ),
-                    Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar"))
-                ]),
+                Expr::sequence(
+                    vec![
+                        Expr::greater_than_or_equal_to(
+                            Expr::identifier("foo"),
+                            Expr::identifier("bar")
+                        ),
+                        Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar"))
+                    ],
+                    None
+                ),
                 ""
             ))
         );
@@ -191,14 +194,20 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::sequence(vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2))
-                    ]),
-                    Expr::sequence(vec![
-                        Expr::untyped_number(BigDecimal::from(3)),
-                        Expr::untyped_number(BigDecimal::from(4))
-                    ]),
+                    Expr::sequence(
+                        vec![
+                            Expr::untyped_number(BigDecimal::from(1)),
+                            Expr::untyped_number(BigDecimal::from(2))
+                        ],
+                        None
+                    ),
+                    Expr::sequence(
+                        vec![
+                            Expr::untyped_number(BigDecimal::from(3)),
+                            Expr::untyped_number(BigDecimal::from(4))
+                        ],
+                        None
+                    ),
                 ),
                 ""
             ))

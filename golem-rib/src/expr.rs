@@ -39,7 +39,7 @@ pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
     SelectIndex(Box<Expr>, usize, Option<TypeName>, InferredType),
-    Sequence(Vec<Expr>, InferredType),
+    Sequence(Vec<Expr>, Option<TypeName>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
     Literal(String, InferredType),
@@ -146,7 +146,7 @@ impl Expr {
     }
 
     pub fn is_list(&self) -> bool {
-        matches!(self, Expr::Sequence(_, _))
+        matches!(self, Expr::Sequence(_, _, _))
     }
 
     pub fn is_flags(&self) -> bool {
@@ -551,14 +551,14 @@ impl Expr {
         Expr::Tuple(expressions, inferred_type)
     }
 
-    pub fn sequence(expressions: Vec<Expr>) -> Self {
+    pub fn sequence(expressions: Vec<Expr>, type_name: Option<TypeName>) -> Self {
         let inferred_type = InferredType::List(Box::new(
             expressions
                 .first()
                 .map_or(InferredType::Unknown, |x| x.inferred_type()),
         ));
 
-        Expr::Sequence(expressions, inferred_type)
+        Expr::Sequence(expressions, type_name, inferred_type)
     }
 
     pub fn inferred_type(&self) -> InferredType {
@@ -566,7 +566,7 @@ impl Expr {
             Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
@@ -720,7 +720,7 @@ impl Expr {
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
@@ -768,7 +768,7 @@ impl Expr {
             | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, _, inferred_type)
             | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
@@ -1175,7 +1175,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs)
+                Expr::sequence(exprs, None)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
@@ -1497,7 +1497,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Sequence(exprs, _) => {
+                Expr::Sequence(exprs, _, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                         golem_api_grpc::proto::golem::rib::SequenceExpr {
                             exprs: exprs.into_iter().map(|expr| expr.into()).collect(),

@@ -243,7 +243,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     &mut inferred_type_stack,
                 );
             }
-            Expr::Sequence(exprs, current_inferred_type) => {
+            Expr::Sequence(exprs, _, current_inferred_type) => {
                 internal::handle_sequence(exprs, current_inferred_type, &mut inferred_type_stack);
             }
             Expr::Record(expr, inferred_type) => {
@@ -876,12 +876,13 @@ mod internal {
             if let Some(first_expr) = new_exprs.clone().first() {
                 Expr::Sequence(
                     new_exprs,
+                    None,
                     current_inferred_type
                         .clone()
                         .merge(InferredType::List(Box::new(first_expr.inferred_type()))),
                 )
             } else {
-                Expr::Sequence(new_exprs, current_inferred_type.clone())
+                Expr::Sequence(new_exprs, None, current_inferred_type.clone())
             }
         };
 
@@ -1004,12 +1005,12 @@ mod type_pull_up_tests {
             ),
         ];
 
-        let expr = Expr::Sequence(elems.clone(), InferredType::Unknown);
+        let expr = Expr::Sequence(elems.clone(), None, InferredType::Unknown);
         let new_expr = expr.pull_types_up().unwrap();
 
         assert_eq!(
             new_expr,
-            Expr::Sequence(elems, InferredType::List(Box::new(InferredType::U64)))
+            Expr::Sequence(elems, None, InferredType::List(Box::new(InferredType::U64)))
         );
     }
 

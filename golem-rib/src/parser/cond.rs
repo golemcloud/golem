@@ -78,8 +78,8 @@ mod tests {
             Ok((
                 Expr::cond(
                     Expr::identifier("foo"),
-                    Expr::sequence(vec![Expr::identifier("bar")]),
-                    Expr::sequence(vec![Expr::identifier("baz")])
+                    Expr::sequence(vec![Expr::identifier("bar")], None),
+                    Expr::sequence(vec![Expr::identifier("baz")], None)
                 ),
                 ""
             ))

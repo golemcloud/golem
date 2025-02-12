@@ -64,7 +64,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Sequence(vec, inferred_type) => {
+            Expr::Sequence(vec, _, inferred_type) => {
                 queue.extend(vec.iter_mut());
                 let unified_inferred_type = inferred_type.unify();
 

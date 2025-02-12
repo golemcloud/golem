@@ -157,10 +157,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::option(Some(Expr::sequence(vec![
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ]))),
+                Expr::option(Some(Expr::sequence(
+                    vec![Expr::identifier("foo"), Expr::identifier("bar")],
+                    None
+                ))),
                 ""
             ))
         );

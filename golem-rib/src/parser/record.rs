@@ -193,7 +193,7 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")], None)
                 )]),
                 ""
             ))

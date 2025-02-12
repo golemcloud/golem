@@ -98,7 +98,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")], None)
                 ),
                 ""
             ))
@@ -435,7 +435,11 @@ mod tests {
                 Expr::let_binding_with_type(
                     "foo",
                     TypeName::List(Box::new(TypeName::U8)),
-                    Expr::Sequence(vec![], InferredType::List(Box::new(InferredType::Unknown)))
+                    Expr::Sequence(
+                        vec![],
+                        None,
+                        InferredType::List(Box::new(InferredType::Unknown))
+                    )
                 ),
                 ""
             ))

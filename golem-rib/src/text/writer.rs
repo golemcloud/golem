@@ -123,7 +123,7 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
-            Expr::Sequence(sequence, _) => {
+            Expr::Sequence(sequence, type_name, _) => {
                 self.write_display("[")?;
                 for (idx, expr) in sequence.iter().enumerate() {
                     if idx != 0 {
@@ -132,7 +132,13 @@ impl<W: Write> Writer<W> {
                     }
                     self.write_expr(expr)?;
                 }
-                self.write_display("]")
+                self.write_display("]")?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
             Expr::Record(record, _) => {
                 self.write_display("{")?;

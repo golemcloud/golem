@@ -88,8 +88,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
-                    Expr::sequence(vec![Expr::identifier("baz"), Expr::identifier("qux")])
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")], None),
+                    Expr::sequence(vec![Expr::identifier("baz"), Expr::identifier("qux")], None)
                 ]),
                 ""
             ))

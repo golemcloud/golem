@@ -232,7 +232,7 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::CreateAndPushRecord(analysed_type?));
             }
-            Expr::Sequence(exprs, inferred_type) => {
+            Expr::Sequence(exprs, _, inferred_type) => {
                 // Push all expressions in reverse order
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
@@ -1193,6 +1193,7 @@ mod compiler_tests {
                 Expr::Literal("foo".to_string(), InferredType::Str),
                 Expr::Literal("bar".to_string(), InferredType::Str),
             ],
+            None,
             InferredType::List(Box::new(InferredType::Str)),
         );
 
