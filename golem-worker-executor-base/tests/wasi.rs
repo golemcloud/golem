@@ -233,13 +233,13 @@ async fn initial_file_read_write(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -304,13 +304,13 @@ async fn initial_file_listing_through_api(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -403,13 +403,13 @@ async fn initial_file_reading_through_api(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 

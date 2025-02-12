@@ -1457,13 +1457,13 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1515,13 +1515,13 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1601,13 +1601,13 @@ async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1661,13 +1661,13 @@ async fn worker_initial_files_after_automatic_worker_update(
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 

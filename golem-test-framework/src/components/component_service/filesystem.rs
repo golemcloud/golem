@@ -113,7 +113,7 @@ impl FileSystemComponentService {
         Ok(Component {
             versioned_component_id: Some(VersionedComponentId {
                 component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
-                    value: Some(component_id.0.clone().into()),
+                    value: Some(component_id.0.into()),
                 }),
                 version: component_version,
             }),

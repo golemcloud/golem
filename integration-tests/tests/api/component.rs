@@ -214,7 +214,7 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
     // Create component
-    let (component_id, component_name) = deps
+    let (component_id, _) = deps
         .component("counters")
         .unique()
         .store_and_get_name()
@@ -255,13 +255,13 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     let file1_key = deps
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/foo.txt"),
+            Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &account_id,
-            &Path::new("initial-file-read-write/files/baz.txt"),
+            Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
