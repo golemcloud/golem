@@ -1169,13 +1169,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs },
+                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs , type_name},
             ) => {
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
                 let exprs: Vec<Expr> = exprs
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs, None)
+                Expr::sequence(exprs, type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
@@ -1497,10 +1499,11 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Sequence(exprs, _, _) => {
+                Expr::Sequence(exprs, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                         golem_api_grpc::proto::golem::rib::SequenceExpr {
                             exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                            type_name: type_name.map(|t| t.into()),
                         },
                     ))
                 }

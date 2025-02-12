@@ -65,6 +65,7 @@ message SelectIndexExpr {
 
 message SequenceExpr {
   repeated Expr exprs = 1;
+  optional TypeName type_name = 2;
 }
 
 message RecordExpr {
