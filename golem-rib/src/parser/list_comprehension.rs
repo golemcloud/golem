@@ -90,7 +90,8 @@ mod tests {
             Expr::expr_block(vec![
                 Expr::let_binding(
                     "x",
-                    Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
+                    Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None),
+                    None
                 ),
                 Expr::list_comprehension(
                     VariableId::list_comprehension_identifier("p"),

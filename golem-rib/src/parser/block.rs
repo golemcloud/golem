@@ -50,8 +50,8 @@ mod tests {
         let expr = block().easy_parse(input).unwrap().0;
 
         let expected = Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
-            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::plus(Expr::identifier("x", None), Expr::identifier("y", None)),
         ]);
         assert_eq!(expr, expected);

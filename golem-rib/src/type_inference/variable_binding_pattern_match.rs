@@ -304,7 +304,8 @@ mod pattern_match_bindings {
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
-            let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)));
+            let let_binding =
+                Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
             let identifier_expr = Expr::Identifier(
                 VariableId::Global("x".to_string()),
                 None,

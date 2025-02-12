@@ -133,9 +133,8 @@ mod tests {
         assert_eq!(
             result,
             Expr::expr_block(vec![
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "ages",
-                    TypeName::List(Box::new(TypeName::U16)),
                     Expr::sequence(
                         vec![
                             Expr::untyped_number(BigDecimal::from(1)),
@@ -143,7 +142,8 @@ mod tests {
                             Expr::untyped_number(BigDecimal::from(3))
                         ],
                         None
-                    )
+                    ),
+                    Some(TypeName::List(Box::new(TypeName::U16)))
                 ),
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),

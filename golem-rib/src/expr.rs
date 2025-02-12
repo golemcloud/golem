@@ -316,19 +316,14 @@ impl Expr {
         Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
-    pub fn let_binding(name: impl AsRef<str>, expr: Expr) -> Self {
+    pub fn let_binding(
+        name: impl AsRef<str>,
+        expr: Expr,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::Let(
             VariableId::global(name.as_ref().to_string()),
-            None,
-            Box::new(expr),
-            InferredType::Unknown,
-        )
-    }
-
-    pub fn let_binding_with_type(name: impl AsRef<str>, type_name: TypeName, expr: Expr) -> Self {
-        Expr::Let(
-            VariableId::global(name.as_ref().to_string()),
-            Some(type_name),
+            type_annotation,
             Box::new(expr),
             InferredType::Unknown,
         )
@@ -451,7 +446,7 @@ impl Expr {
         )
     }
 
-    pub fn option_with_type_annotation(expr: Option<Expr>, type_name: TypeName) -> Self {
+    pub fn option_with_type_annotation(expr: Option<Expr>, type_annotation: TypeName) -> Self {
         let inferred_type = match &expr {
             Some(expr) => expr.inferred_type(),
             None => InferredType::Unknown,
@@ -459,7 +454,7 @@ impl Expr {
 
         Expr::Option(
             expr.map(Box::new),
-            Some(type_name),
+            Some(type_annotation),
             InferredType::Option(Box::new(inferred_type)),
         )
     }
@@ -501,12 +496,12 @@ impl Expr {
     pub fn select_field_with_type_annotation(
         expr: Expr,
         field: impl AsRef<str>,
-        type_name: TypeName,
+        type_annotation: TypeName,
     ) -> Self {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),
-            Some(type_name),
+            Some(type_annotation),
             InferredType::Unknown,
         )
     }
@@ -518,12 +513,12 @@ impl Expr {
     pub fn select_index_with_type_annotation(
         expr: Expr,
         index: usize,
-        type_name: TypeName,
+        type_annotation: TypeName,
     ) -> Self {
         Expr::SelectIndex(
             Box::new(expr),
             index,
-            Some(type_name),
+            Some(type_annotation),
             InferredType::Unknown,
         )
     }
@@ -543,14 +538,14 @@ impl Expr {
         Expr::Tuple(expressions, inferred_type)
     }
 
-    pub fn sequence(expressions: Vec<Expr>, type_name: Option<TypeName>) -> Self {
+    pub fn sequence(expressions: Vec<Expr>, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = InferredType::List(Box::new(
             expressions
                 .first()
                 .map_or(InferredType::Unknown, |x| x.inferred_type()),
         ));
 
-        Expr::Sequence(expressions, type_name, inferred_type)
+        Expr::Sequence(expressions, type_annotation, inferred_type)
     }
 
     pub fn inferred_type(&self) -> InferredType {
@@ -824,12 +819,12 @@ impl Expr {
 
     pub fn number_with_type_annotation(
         big_decimal: BigDecimal,
-        type_name: TypeName,
+        type_annotation: TypeName,
         inferred_type: InferredType,
     ) -> Expr {
         Expr::Number(
             Number { value: big_decimal },
-            Some(type_name),
+            Some(type_annotation),
             inferred_type,
         )
     }
@@ -1063,11 +1058,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let expr_: golem_api_grpc::proto::golem::rib::Expr =
                     *expr.expr.ok_or("Missing expr")?;
                 let expr: Expr = expr_.try_into()?;
-                if let Some(type_name) = type_name {
-                    Expr::let_binding_with_type(name, type_name, expr)
-                } else {
-                    Expr::let_binding(name, expr)
-                }
+                Expr::let_binding(name, expr, type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
@@ -1992,14 +1983,23 @@ mod tests {
 
     fn expected() -> Expr {
         Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
-            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::let_binding(
                 "result",
                 Expr::greater_than(Expr::identifier("x", None), Expr::identifier("y", None)),
+                None,
             ),
-            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result", None)))),
-            Expr::let_binding("bar", Expr::ok(Expr::identifier("result", None), None)),
+            Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::identifier("result", None))),
+                None,
+            ),
+            Expr::let_binding(
+                "bar",
+                Expr::ok(Expr::identifier("result", None), None),
+                None,
+            ),
             Expr::let_binding(
                 "baz",
                 Expr::pattern_match(
@@ -2018,6 +2018,7 @@ mod tests {
                         ),
                     ],
                 ),
+                None,
             ),
             Expr::let_binding(
                 "qux",
@@ -2040,6 +2041,7 @@ mod tests {
                         ),
                     ],
                 ),
+                None,
             ),
             Expr::let_binding(
                 "result",
@@ -2058,6 +2060,7 @@ mod tests {
                     },
                     vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
                 ),
+                None,
             ),
             Expr::identifier("result", None),
         ])

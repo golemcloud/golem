@@ -361,8 +361,8 @@ mod tests {
         let left_identifier = Expr::identifier("x", None);
         let right_identifier = Expr::identifier("x", None);
 
-        let left = Expr::let_binding("x", left_identifier);
-        let right = Expr::let_binding("x", right_identifier);
+        let left = Expr::let_binding("x", left_identifier, None);
+        let right = Expr::let_binding("x", right_identifier, None);
 
         assert!(equivalent_exprs(&left, &right));
     }

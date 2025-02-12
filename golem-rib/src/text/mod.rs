@@ -1081,8 +1081,8 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let() {
         let input_expr = Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::literal("hello")),
-            Expr::let_binding("y", Expr::literal("bar")),
+            Expr::let_binding("x", Expr::literal("hello"), None),
+            Expr::let_binding("y", Expr::literal("bar"), None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "let x = \"hello\";\nlet y = \"bar\"".to_string();
