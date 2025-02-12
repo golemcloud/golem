@@ -22,6 +22,11 @@ pub enum CallType {
     EnumConstructor(String),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum InbuiltFunction {
+    Instance
+}
+
 impl CallType {
     pub fn is_resource_method(&self) -> bool {
         match self {
