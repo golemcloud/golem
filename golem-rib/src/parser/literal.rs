@@ -146,7 +146,7 @@ mod literal_parse_tests {
             result,
             Expr::concat(vec![
                 Expr::literal("foo-"),
-                Expr::identifier("bar"),
+                Expr::identifier("bar", None),
                 Expr::literal("-baz"),
             ])
         );
@@ -160,8 +160,8 @@ mod literal_parse_tests {
             result,
             Expr::cond(
                 Expr::equal_to(
-                    Expr::identifier("foo"),
-                    Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
+                    Expr::identifier("foo", None),
+                    Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id", None)])
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
                 Expr::literal("baz"),
@@ -177,9 +177,9 @@ mod literal_parse_tests {
             result,
             Expr::concat(vec![
                 Expr::literal("\n\t<>/!@#%&^&*()_+[]; ',."),
-                Expr::identifier("bar"),
+                Expr::identifier("bar", None),
                 Expr::literal("-ba!z-"),
-                Expr::identifier("qux"),
+                Expr::identifier("qux", None),
             ])
         );
     }

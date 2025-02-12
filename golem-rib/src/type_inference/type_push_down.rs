@@ -538,7 +538,7 @@ mod type_push_down_tests {
     #[test]
     fn test_push_down_for_record() {
         let mut expr = Expr::Record(
-            vec![("titles".to_string(), Box::new(Expr::identifier("x")))],
+            vec![("titles".to_string(), Box::new(Expr::identifier("x", None)))],
             InferredType::AllOf(vec![
                 InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
                 InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
@@ -566,7 +566,7 @@ mod type_push_down_tests {
     #[test]
     fn test_push_down_for_sequence() {
         let mut expr = Expr::Sequence(
-            vec![Expr::identifier("x"), Expr::identifier("y")],
+            vec![Expr::identifier("x", None), Expr::identifier("y", None)],
             None,
             InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),

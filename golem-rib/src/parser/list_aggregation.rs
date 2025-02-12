@@ -114,8 +114,8 @@ mod tests {
                 ),
                 Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
-                    Expr::identifier("z"),
-                    Expr::identifier("p")
+                    Expr::identifier("z", None),
+                    Expr::identifier("p", None)
                 )]),
             )
         );
@@ -148,11 +148,11 @@ mod tests {
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),
                     VariableId::list_comprehension_identifier("a"),
-                    Expr::identifier("ages"),
+                    Expr::identifier("ages", None),
                     Expr::untyped_number(BigDecimal::from(0)),
                     Expr::expr_block(vec![Expr::plus(
-                        Expr::identifier("z"),
-                        Expr::identifier("a")
+                        Expr::identifier("z", None),
+                        Expr::identifier("a", None)
                     )]),
                 )
             ])

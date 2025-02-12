@@ -85,7 +85,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::let_binding("foo", Expr::identifier("bar")), ""))
+            Ok((Expr::let_binding("foo", Expr::identifier("bar", None)), ""))
         );
     }
 
@@ -98,7 +98,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")], None)
+                    Expr::sequence(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)], None)
                 ),
                 ""
             ))
@@ -114,7 +114,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("baz"))
+                    Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("baz", None))
                 ),
                 ""
             ))
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::option(Some(Expr::identifier("bar")))),
+                Expr::let_binding("foo", Expr::option(Some(Expr::identifier("bar", None)))),
                 ""
             ))
         );
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"), None)),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar", None), None)),
                 ""
             ))
         );
@@ -166,7 +166,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))])
                 ),
                 ""
             ))

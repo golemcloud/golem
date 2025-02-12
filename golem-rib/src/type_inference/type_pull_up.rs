@@ -966,7 +966,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_select_field() {
         let record_identifier =
-            Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+            Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![(
                 "foo".to_string(),
                 InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
             )]));
@@ -979,7 +979,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_select_index() {
         let identifier =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
         let expr = Expr::select_index(identifier.clone(), 0);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::select_index(identifier, 0).add_infer_type(InferredType::U64);
@@ -1105,13 +1105,13 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_if_else() {
         let inner1 =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner1.clone(), 0);
         let select_index2 = Expr::select_index(inner1, 1);
 
         let inner2 =
-            Expr::identifier("bar").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+            Expr::identifier("bar", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index3 = Expr::select_index(inner2.clone(), 0);
         let select_index4 = Expr::select_index(inner2, 1);
@@ -1174,7 +1174,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_greater_than() {
-        let inner = Expr::identifier("foo").add_infer_type(InferredType::Record(vec![
+        let inner = Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![
             ("bar".to_string(), InferredType::Str),
             ("baz".to_string(), InferredType::U64),
         ]));
@@ -1196,7 +1196,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
         let inner =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner.clone(), 0);
         let select_index2 = Expr::select_index(inner, 1);
@@ -1219,7 +1219,7 @@ mod type_pull_up_tests {
             ("baz".to_string(), InferredType::U64),
         ]);
 
-        let inner = Expr::identifier("foo")
+        let inner = Expr::identifier("foo", None)
             .add_infer_type(InferredType::List(Box::new(record_type.clone())));
 
         let select_field_from_first =
@@ -1383,7 +1383,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_pattern_match() {
         let expr = Expr::pattern_match(
             Expr::select_field(
-                Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+                Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![(
                     "bar".to_string(),
                     InferredType::Str,
                 )])),
@@ -1394,7 +1394,7 @@ mod type_pull_up_tests {
                     arm_pattern: ArmPattern::Constructor(
                         "cons1".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::SelectField(
-                            Box::new(Expr::identifier("foo").add_infer_type(InferredType::Record(
+                            Box::new(Expr::identifier("foo", None).add_infer_type(InferredType::Record(
                                 vec![("bar".to_string(), InferredType::Str)],
                             ))),
                             "bar".to_string(),
@@ -1403,7 +1403,7 @@ mod type_pull_up_tests {
                         )))],
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
-                        Box::new(Expr::identifier("baz").add_infer_type(InferredType::Record(
+                        Box::new(Expr::identifier("baz", None).add_infer_type(InferredType::Record(
                             vec![("qux".to_string(), InferredType::Str)],
                         ))),
                         "qux".to_string(),
@@ -1415,7 +1415,7 @@ mod type_pull_up_tests {
                     arm_pattern: ArmPattern::Constructor(
                         "cons2".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::SelectField(
-                            Box::new(Expr::identifier("quux").add_infer_type(
+                            Box::new(Expr::identifier("quux", None).add_infer_type(
                                 InferredType::Record(vec![(
                                     "corge".to_string(),
                                     InferredType::Str,
@@ -1428,7 +1428,7 @@ mod type_pull_up_tests {
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
                         Box::new(
-                            Expr::identifier("grault").add_infer_type(InferredType::Record(vec![
+                            Expr::identifier("grault", None).add_infer_type(InferredType::Record(vec![
                                 ("garply".to_string(), InferredType::Str),
                             ])),
                         ),

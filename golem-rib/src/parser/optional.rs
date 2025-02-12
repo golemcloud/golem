@@ -84,7 +84,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::option(Some(Expr::identifier("foo"))), ""))
+            Ok((Expr::option(Some(Expr::identifier("foo", None))), ""))
         );
     }
 
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::option_with_type_annotation(
-                Some(Expr::identifier("foo")),
+                Some(Expr::identifier("foo", None)),
                 TypeName::Option(Box::new(TypeName::Str))
             ))
         );
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::option(Some(Expr::option(Some(Expr::identifier("foo"))))),
+                Expr::option(Some(Expr::option(Some(Expr::identifier("foo", None))))),
                 ""
             ))
         );
@@ -142,7 +142,7 @@ mod tests {
             result,
             Ok(Expr::option_with_type_annotation(
                 Some(Expr::option_with_type_annotation(
-                    Some(Expr::identifier("foo")),
+                    Some(Expr::identifier("foo", None)),
                     TypeName::Option(Box::new(TypeName::Str))
                 )),
                 TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str))))
@@ -158,7 +158,7 @@ mod tests {
             result,
             Ok((
                 Expr::option(Some(Expr::sequence(
-                    vec![Expr::identifier("foo"), Expr::identifier("bar")],
+                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
                     None
                 ))),
                 ""

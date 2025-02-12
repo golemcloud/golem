@@ -42,11 +42,7 @@ where
         ),
     )
         .map(|(variable, typ)| {
-            if let Some(typ) = typ {
-                Expr::identifier_with_type_annotation(variable, typ)
-            } else {
-                Expr::identifier(variable)
-            }
+            Expr::identifier(variable, typ)
         })
         .message("Invalid identifier")
 }
@@ -86,7 +82,7 @@ mod tests {
     fn test_identifier() {
         let input = "foo";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::identifier("foo")));
+        assert_eq!(result, Ok(Expr::identifier("foo", None)));
     }
 
     #[test]

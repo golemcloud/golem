@@ -60,9 +60,9 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar"),
-                    Expr::identifier("baz")
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None),
+                    Expr::identifier("baz", None)
                 ),
                 ""
             ))
@@ -77,9 +77,9 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo"),
-                    Expr::sequence(vec![Expr::identifier("bar")], None),
-                    Expr::sequence(vec![Expr::identifier("baz")], None)
+                    Expr::identifier("foo", None),
+                    Expr::sequence(vec![Expr::identifier("bar", None)], None),
+                    Expr::sequence(vec![Expr::identifier("baz", None)], None)
                 ),
                 ""
             ))
@@ -94,12 +94,12 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar"),
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None),
                     Expr::cond(
-                        Expr::identifier("baz"),
-                        Expr::identifier("qux"),
-                        Expr::identifier("quux")
+                        Expr::identifier("baz", None),
+                        Expr::identifier("qux", None),
+                        Expr::identifier("quux", None)
                     )
                 ),
                 ""
@@ -115,13 +115,13 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo"),
+                    Expr::identifier("foo", None),
                     Expr::cond(
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz"),
-                        Expr::identifier("qux")
+                        Expr::identifier("bar", None),
+                        Expr::identifier("baz", None),
+                        Expr::identifier("qux", None)
                     ),
-                    Expr::identifier("quux")
+                    Expr::identifier("quux", None)
                 ),
                 ""
             ))

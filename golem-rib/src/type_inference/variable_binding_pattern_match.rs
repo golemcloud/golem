@@ -313,7 +313,7 @@ mod pattern_match_bindings {
             let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
 
             Expr::PatternMatch(
-                Box::new(Expr::option(Some(Expr::identifier("x")))), // x is still global
+                Box::new(Expr::option(Some(Expr::identifier("x", None)))), // x is still global
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(

@@ -64,7 +64,7 @@ mod tests {
         let result = rib_expr()
             .easy_parse(position::Stream::new(input))
             .map(|x| x.0);
-        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier("foo")])));
+        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier("foo", None)])));
     }
 
     #[test]
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                Expr::tuple(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]),
                 ""
             ))
         );
@@ -88,8 +88,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")], None),
-                    Expr::sequence(vec![Expr::identifier("baz"), Expr::identifier("qux")], None)
+                    Expr::sequence(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)], None),
+                    Expr::sequence(vec![Expr::identifier("baz", None), Expr::identifier("qux", None)], None)
                 ]),
                 ""
             ))
@@ -104,8 +104,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
-                    Expr::record(vec![("baz".to_string(), Expr::identifier("qux"))])
+                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
+                    Expr::record(vec![("baz".to_string(), Expr::identifier("qux", None))])
                 ]),
                 ""
             ))
@@ -133,8 +133,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
-                    Expr::tuple(vec![Expr::identifier("baz"), Expr::identifier("qux")])
+                    Expr::tuple(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]),
+                    Expr::tuple(vec![Expr::identifier("baz", None), Expr::identifier("qux", None)])
                 ]),
                 ""
             ))
@@ -149,8 +149,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::ok(Expr::identifier("foo"), None),
-                    Expr::err(Expr::identifier("bar"), None)
+                    Expr::ok(Expr::identifier("foo", None), None),
+                    Expr::err(Expr::identifier("bar", None), None)
                 ]),
                 ""
             ))
@@ -165,7 +165,7 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::option(Some(Expr::identifier("foo"))),
+                    Expr::option(Some(Expr::identifier("foo", None))),
                     Expr::option(None)
                 ]),
                 ""
@@ -182,14 +182,14 @@ mod tests {
             Ok((
                 Expr::tuple(vec![
                     Expr::cond(
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz")
+                        Expr::identifier("foo", None),
+                        Expr::identifier("bar", None),
+                        Expr::identifier("baz", None)
                     ),
                     Expr::cond(
-                        Expr::identifier("qux"),
-                        Expr::identifier("quux"),
-                        Expr::identifier("quuz")
+                        Expr::identifier("qux", None),
+                        Expr::identifier("quux", None),
+                        Expr::identifier("quuz", None)
                     )
                 ]),
                 ""

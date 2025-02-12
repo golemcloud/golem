@@ -300,18 +300,10 @@ impl Expr {
     }
 
     // An identifier by default is global until name-binding phase is run
-    pub fn identifier(name: impl AsRef<str>) -> Self {
+    pub fn identifier(name: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
         Expr::Identifier(
             VariableId::global(name.as_ref().to_string()),
-            None,
-            InferredType::Unknown,
-        )
-    }
-
-    pub fn identifier_with_type_annotation(name: impl AsRef<str>, type_name: TypeName) -> Self {
-        Expr::Identifier(
-            VariableId::global(name.as_ref().to_string()),
-            Some(type_name),
+            type_annotation,
             InferredType::Unknown,
         )
     }
@@ -1215,11 +1207,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => {
                 let type_name = type_name.map(TypeName::try_from).transpose()?;
 
-                if let Some(type_name) = type_name {
-                    Expr::identifier_with_type_annotation(name.as_str(), type_name)
-                } else {
-                    Expr::identifier(name.as_str())
-                }
+                Expr::identifier(name.as_str(), type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
@@ -1979,7 +1967,7 @@ mod tests {
     fn test_single_expr_in_interpolation_wrapped_in_quotes() {
         let input = r#""${foo}""#;
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::concat(vec![Expr::identifier("foo")])));
+        assert_eq!(result, Ok(Expr::concat(vec![Expr::identifier("foo", None)])));
 
         let input = r#""${{foo}}""#;
         let result = Expr::from_text(input);
@@ -2005,21 +1993,21 @@ mod tests {
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
             Expr::let_binding(
                 "result",
-                Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),
+                Expr::greater_than(Expr::identifier("x", None), Expr::identifier("y", None)),
             ),
-            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result")))),
-            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"), None)),
+            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result", None)))),
+            Expr::let_binding("bar", Expr::ok(Expr::identifier("result", None), None)),
             Expr::let_binding(
                 "baz",
                 Expr::pattern_match(
-                    Expr::identifier("foo"),
+                    Expr::identifier("foo", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
                             ),
-                            Expr::identifier("x"),
+                            Expr::identifier("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor("none", vec![]),
@@ -2031,19 +2019,19 @@ mod tests {
             Expr::let_binding(
                 "qux",
                 Expr::pattern_match(
-                    Expr::identifier("bar"),
+                    Expr::identifier("bar", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
                             ),
-                            Expr::identifier("x"),
+                            Expr::identifier("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg", None)))],
                             ),
                             Expr::boolean(false),
                         ),
@@ -2065,10 +2053,10 @@ mod tests {
                             method: "do-something-static".to_string(),
                         },
                     },
-                    vec![Expr::identifier("baz"), Expr::identifier("qux")],
+                    vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
                 ),
             ),
-            Expr::identifier("result"),
+            Expr::identifier("result", None),
         ])
     }
 
