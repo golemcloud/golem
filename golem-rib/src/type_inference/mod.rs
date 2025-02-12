@@ -2314,9 +2314,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::number(BigDecimal::from(1), InferredType::U64),
-                                Expr::number(BigDecimal::from(2), InferredType::U64),
-                                Expr::number(BigDecimal::from(3), InferredType::U64),
+                                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                                Expr::number(BigDecimal::from(2), None, InferredType::U64),
+                                Expr::number(BigDecimal::from(3), None, InferredType::U64),
                             ],
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
@@ -2331,9 +2331,9 @@ mod type_inference_tests {
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
-                        Expr::number_with_type_annotation(
+                        Expr::number(
                             BigDecimal::from(0),
-                            TypeName::U64,
+                            Some(TypeName::U64),
                             InferredType::U64,
                         ),
                         Expr::ExprBlock(
