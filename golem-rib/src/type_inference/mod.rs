@@ -226,9 +226,9 @@ mod type_inference_tests {
         #[test]
         fn test_inline_type_annotation_4() {
             // Even if 1 is not specified with a specific number type, it should be inferred as u64
-            let mut valid_rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+            let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
-            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+            let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
             assert!(result.is_ok());
         }
@@ -236,10 +236,56 @@ mod type_inference_tests {
         #[test]
         fn test_inline_type_annotation_6() {
             // Even if 1 is not specified with a specific number type, it should be inferred as u64
-            let mut valid_rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+            let mut rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
 
+            let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_7() {
+            // ok(1) isn't automatically inferred since no further hints are given
+            let mut invalid_rib_expr = Expr::from_text(r#"ok(1)"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
             let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_8() {
+            let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_9() {
+            let mut invalid_rib_expr = Expr::from_text(r#"err(1)"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_10() {
+            let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            // Cannot infer 1
             assert!(result.is_err());
         }
     }
