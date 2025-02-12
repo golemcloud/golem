@@ -946,10 +946,10 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor cancel-invocation call"
             )),
-            Some(workerexecutor::v1::cancel_invocation_response::Result::Success(empty)) => {
+            Some(workerexecutor::v1::cancel_invocation_response::Result::Success(canceled)) => {
                 Ok(CancelInvocationResponse {
                     result: Some(worker::v1::cancel_invocation_response::Result::Success(
-                        empty,
+                        canceled,
                     )),
                 })
             }

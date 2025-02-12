@@ -878,10 +878,16 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
-        self.client
+        if self
+            .client
             .cancel_invocation(worker_urn, idempotency_key)
-            .await?;
-
-        Ok(GolemResult::Str("Cancelled".to_string()))
+            .await?
+        {
+            Ok(GolemResult::Str("Cancelled".to_string()))
+        } else {
+            Err(GolemError(
+                "Could not cancel invocation, it has been already performed".to_string(),
+            ))
+        }
     }
 }

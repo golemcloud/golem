@@ -2998,8 +2998,8 @@ async fn cancelling_pending_invocations(
 
     drop(executor);
 
-    check!(cancel1.is_err()); // cannot cancel a completed invocation
-    check!(cancel2.is_ok());
+    check!(cancel1 == Ok(false)); // cannot cancel a completed invocation
+    check!(cancel2 == Ok(true));
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
     check!(final_result == vec![Value::U64(12)]);
 }

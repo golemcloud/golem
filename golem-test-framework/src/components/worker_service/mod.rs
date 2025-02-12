@@ -816,8 +816,10 @@ pub trait WorkerService {
                     )
                     .await
                 {
-                    Ok(_) => Ok(CancelInvocationResponse {
-                        result: Some(cancel_invocation_response::Result::Success(Empty {})),
+                    Ok(response) => Ok(CancelInvocationResponse {
+                        result: Some(cancel_invocation_response::Result::Success(
+                            response.canceled,
+                        )),
                     }),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }

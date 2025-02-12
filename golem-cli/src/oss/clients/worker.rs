@@ -601,10 +601,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         &self,
         worker_urn: WorkerUrn,
         idempotency_key: IdempotencyKey,
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         info!("Cancelling enqueued invocation {idempotency_key} for {worker_urn}");
 
-        let _ = self
+        let response = self
             .client
             .cancel_invocation(
                 &worker_urn.id.component_id.0,
@@ -612,7 +612,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                 &idempotency_key.0,
             )
             .await?;
-        Ok(())
+        Ok(response.canceled)
     }
 }
 

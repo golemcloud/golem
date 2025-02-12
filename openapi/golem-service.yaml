@@ -3913,6 +3913,11 @@ components:
       - idempotency_key
     CancelInvocationResponse:
       type: object
+      properties:
+        canceled:
+          type: boolean
+      required:
+      - canceled
     ChangeRetryPolicyParameters:
       type: object
       properties:

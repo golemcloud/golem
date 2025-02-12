@@ -278,7 +278,7 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()>;
+    ) -> WorkerResult<bool>;
 }
 
 pub struct TypedResult {
@@ -1291,10 +1291,10 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<bool> {
         let worker_id = worker_id.clone();
         let idempotency_key = idempotency_key.clone();
-        self.call_worker_executor(
+        let canceled = self.call_worker_executor(
             worker_id.clone(),
             "cancel_invocation",
             move |worker_executor_client| {
@@ -1308,8 +1308,8 @@ impl WorkerService for WorkerServiceDefault {
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::CancelInvocationResponse {
-                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Success(_)),
-                } => Ok(()),
+                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Success(canceled)),
+                } => Ok(canceled),
                 workerexecutor::v1::CancelInvocationResponse {
                     result: Some(workerexecutor::v1::cancel_invocation_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -1318,7 +1318,7 @@ impl WorkerService for WorkerServiceDefault {
             WorkerServiceError::InternalCallError,
         )
         .await?;
-        Ok(())
+        Ok(canceled)
     }
 }
 

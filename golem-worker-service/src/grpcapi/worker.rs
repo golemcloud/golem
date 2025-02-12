@@ -729,7 +729,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             .instrument(record.span.clone())
             .await
         {
-            Ok(_) => record.succeed(cancel_invocation_response::Result::Success(Empty {})),
+            Ok(canceled) => record.succeed(cancel_invocation_response::Result::Success(canceled)),
             Err(error) => record.fail(
                 cancel_invocation_response::Result::Error(error.clone()),
                 &WorkerTraceErrorKind(&error),
@@ -826,17 +826,18 @@ impl WorkerGrpcApi {
     async fn cancel_invocation(
         &self,
         request: CancelInvocationRequest,
-    ) -> Result<(), GrpcWorkerError> {
+    ) -> Result<bool, GrpcWorkerError> {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let idempotency_key = request
             .idempotency_key
             .ok_or(bad_request_error("Missing idempotency key"))?
             .into();
 
-        self.worker_service
+        let canceled = self
+            .worker_service
             .cancel_invocation(&worker_id, &idempotency_key, empty_worker_metadata())
             .await?;
-        Ok(())
+        Ok(canceled)
     }
 
     async fn complete_promise(

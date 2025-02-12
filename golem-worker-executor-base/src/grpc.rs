@@ -475,7 +475,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn cancel_invocation_internal(
         &self,
         request: CancelInvocationRequest,
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
@@ -507,13 +507,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )
                     .await?;
                     worker.cancel_invocation(idempotency_key).await?;
-                    Ok(())
+                    Ok(true)
                 } else if metadata
                     .last_known_status
                     .invocation_results
                     .contains_key(&idempotency_key)
                 {
-                    Err(GolemError::invalid_request("Invocation already completed"))
+                    Ok(false)
                 } else {
                     Err(GolemError::invalid_request("Invocation not found"))
                 }
@@ -2376,10 +2376,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
 
         match result {
-            Ok(_) => record.succeed(Ok(Response::new(CancelInvocationResponse {
+            Ok(canceled) => record.succeed(Ok(Response::new(CancelInvocationResponse {
                 result: Some(
                     golem::workerexecutor::v1::cancel_invocation_response::Result::Success(
-                        golem::common::Empty {},
+                        canceled,
                     ),
                 ),
             }))),

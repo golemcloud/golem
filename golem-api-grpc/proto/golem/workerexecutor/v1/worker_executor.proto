@@ -420,7 +420,7 @@ message CancelInvocationRequest {
 
 message CancelInvocationResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    bool success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

@@ -862,7 +862,7 @@ impl WorkerApi {
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
-            .map(|_| Json(CancelInvocationResponse {}));
+            .map(|canceled| Json(CancelInvocationResponse { canceled }));
 
         record.result(response)
     }

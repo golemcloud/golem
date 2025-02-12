@@ -368,7 +368,7 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-    ) -> crate::Result<()>;
+    ) -> crate::Result<bool>;
 }
 
 #[async_trait]
@@ -1280,7 +1280,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<bool> {
         let response = self
             .worker_service()
             .cancel_invocation(CancelInvocationRequest {
@@ -1290,7 +1290,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await?;
 
         match response.result {
-            Some(cancel_invocation_response::Result::Success(_)) => Ok(()),
+            Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
             Some(cancel_invocation_response::Result::Error(error)) => {
                 Err(anyhow!("Failed to cancel invocation: {error:?}"))
             }
@@ -1782,7 +1782,7 @@ pub trait TestDslUnsafe {
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-    ) -> crate::Result<()>;
+    ) -> crate::Result<bool>;
 }
 
 #[async_trait]
@@ -2128,14 +2128,14 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
     async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey) {
         <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key)
             .await
-            .expect("Failed to cancel invocation")
+            .expect("Failed to cancel invocation");
     }
 
     async fn try_cancel_invocation(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<bool> {
         <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
     }
 }

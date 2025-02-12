@@ -366,7 +366,7 @@ message CancelInvocationRequest {
 
 message CancelInvocationResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    bool success = 1;
     WorkerError error = 2;
   }
 }
