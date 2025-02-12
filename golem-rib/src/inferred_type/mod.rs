@@ -20,8 +20,9 @@ use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use crate::instance_type::InstanceType;
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum InferredType {
     Bool,
     S8,
@@ -50,6 +51,9 @@ pub enum InferredType {
     Resource {
         resource_id: u64,
         resource_mode: u8,
+    },
+    InstanceType {
+        instance_type: InstanceType,
     },
     OneOf(Vec<InferredType>),
     AllOf(Vec<InferredType>),
@@ -188,6 +192,9 @@ impl InferredType {
                 InferredType::Resource { .. } => {
                     Err(format!("Expected a number type. Found {}", "resource"))
                 }
+                _ => {
+                    Err(format!("Expected a number type. Found {}", "instance type"))
+                }
             }
         }
 
@@ -230,7 +237,7 @@ impl InferredType {
             unique_types.into_iter().next()
         } else {
             let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
-            unique_all_of_types.sort();
+            unique_all_of_types.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b))); // Step 2: Sort
             Some(InferredType::AllOf(unique_all_of_types))
         }
     }
@@ -251,7 +258,7 @@ impl InferredType {
             types.into_iter().next()
         } else {
             let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect(); // Step 1: Col
-            unique_one_of_types.sort();
+            unique_one_of_types.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b))); // Step 2: Sort
             Some(InferredType::OneOf(unique_one_of_types))
         }
     }

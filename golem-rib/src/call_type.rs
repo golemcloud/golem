@@ -22,10 +22,6 @@ pub enum CallType {
     EnumConstructor(String),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum InbuiltFunction {
-    Instance,
-}
 
 impl CallType {
     pub fn is_resource_method(&self) -> bool {
@@ -46,6 +42,9 @@ impl Display for CallType {
             CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
+            CallType::Invoke {
+                function_name, ..
+            } => write!(f, "{}", function_name), // TODO; what does it mean to print an invocation?
         }
     }
 }

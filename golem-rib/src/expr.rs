@@ -16,7 +16,6 @@ use crate::call_type::CallType;
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
-use crate::type_parameter::InstanceType;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
@@ -67,7 +66,15 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
-    Call(CallType, Vec<Expr>, InferredType),
+    // instance["foo"]("my-worker") will begin with Expr::Call(.., Some(ns:pkg), vec!["my-worker"])
+    // The type of this is InstanceType (InferredType::InstanceType)
+    Call(CallType, Option<GenericTypeParameter>, Vec<Expr>, InferredType),
+    Invoke {
+        lhs: Box<Expr>, // This should be of the type InferredType::InstanceType
+        function_name: String, // This will be always a simple string rather than complicated parsed-function-name
+        args: Vec<Expr>,
+        inferred_type: InferredType, // This will be the return type of the function similar to Call
+    },
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),

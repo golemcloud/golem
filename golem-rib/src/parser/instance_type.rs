@@ -1,12 +1,12 @@
 use crate::parser::errors::RibParseError;
-use crate::type_parameter::InstanceType;
+use crate::type_parameter::TypeParameter;
 use combine::error::StreamError;
 use combine::parser::char::char;
 use combine::stream::Stream;
 use combine::{attempt, choice, ParseError, Parser};
 use internal::*;
 // Parser for TypeParameter
-pub fn instance_type<Input>() -> impl Parser<Input, Output = InstanceType>
+pub fn instance_type<Input>() -> impl Parser<Input, Output =TypeParameter>
 where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
@@ -15,9 +15,9 @@ where
     >,
 {
     choice((
-        attempt(fully_qualified_interface_name().map(InstanceType::FullyQualifiedInterface)),
-        attempt(interface_name().map(InstanceType::Interface)),
-        attempt(package_name().map(InstanceType::PackageName)),
+        attempt(fully_qualified_interface_name().map(TypeParameter::FullyQualifiedInterface)),
+        attempt(interface_name().map(TypeParameter::Interface)),
+        attempt(package_name().map(TypeParameter::PackageName)),
     ))
 }
 

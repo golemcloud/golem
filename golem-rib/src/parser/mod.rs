@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use instance_type::*;
 mod binary_op;
 pub(crate) mod block;
 mod block_without_return;

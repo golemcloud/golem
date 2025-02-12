@@ -30,7 +30,7 @@ use std::fmt::{Display, Formatter};
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
 // RegistryKey is more aligned to the component metadata, and possess all the complexities that the component metadata
 // may have.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }
@@ -288,7 +288,7 @@ impl RegistryKey {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
     Variant {
