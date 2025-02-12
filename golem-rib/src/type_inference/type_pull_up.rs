@@ -1278,6 +1278,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_call() {
         let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
+            None,
             vec![Expr::untyped_number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();

@@ -251,7 +251,7 @@ impl Expr {
         cond
     }
 
-    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, type_parameter: Option<TypeParameter>, args: Vec<Expr>) -> Self {
+    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, _type_parameter: Option<TypeParameter>, args: Vec<Expr>) -> Self {
         Expr::Call(
             CallType::Function(dynamic_parsed_fn_name),
             args,
@@ -1361,28 +1361,28 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
                                 Expr::call(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
-                                )?, params)
+                                )?, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, params),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, params),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call(name.try_into()?, params)
+                                Expr::call(name.try_into()?, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, params),
                         }
                     }
                     (_, _) => Err("Missing both call type (and legacy invocation type)")?,
@@ -2051,6 +2051,7 @@ mod tests {
                             method: "do-something-static".to_string(),
                         },
                     },
+                    None,
                     vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
                 ),
                 None,

@@ -91,10 +91,12 @@ mod tests {
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
+                None,
                 vec![Expr::identifier("x", None)],
             ),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
+                None,
                 vec![Expr::identifier("y", None)],
             ),
         ]);
@@ -122,10 +124,12 @@ mod tests {
                 Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
+                    None,
                     vec![Expr::identifier("x", None)],
                 ),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
+                    None,
                     vec![Expr::identifier("y", None)],
                 ),
             ]),
@@ -162,10 +166,12 @@ mod tests {
                     Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
+                        None,
                         vec![Expr::identifier("x", None)],
                     ),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
+                        None,
                         vec![Expr::identifier("y", None)],
                     ),
                 ]),
@@ -209,10 +215,12 @@ mod tests {
                         Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
+                            None,
                             vec![Expr::identifier("x", None)],
                         ),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
+                            None,
                             vec![Expr::identifier("y", None)],
                         ),
                     ]),
