@@ -50,7 +50,7 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
-use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -153,6 +153,12 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
 
     /// Stores the component
     pub async fn store(self) -> ComponentId {
+        self.store_and_get_name().await.0
+    }
+
+    /// Stores the component and returns the final component name too which is useful when used
+    /// together with unique
+    pub async fn store_and_get_name(self) -> (ComponentId, ComponentName) {
         self.dsl
             .store_component_with(
                 &self.name,
@@ -178,7 +184,7 @@ pub trait TestDsl {
         unverified: bool,
         files: &[InitialComponentFile],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
+    ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
@@ -385,7 +391,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         unverified: bool,
         files: &[InitialComponentFile],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
+    ) -> (ComponentId, ComponentName) {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let component_name = if unique {
             let uuid = Uuid::new_v4();
@@ -402,30 +408,43 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .map(|(k, v)| (k.to_string(), v.clone())),
         );
 
-        if unique {
-            self.component_service()
-                .add_component(
-                    &source_path,
-                    &component_name,
-                    component_type,
-                    files,
-                    &dynamic_linking,
-                    unverified,
-                )
-                .await
-                .expect("Failed to add component")
-        } else {
-            self.component_service()
-                .get_or_add_component(
-                    &source_path,
-                    &component_name,
-                    component_type,
-                    files,
-                    &dynamic_linking,
-                    unverified,
-                )
-                .await
-        }
+        let component = {
+            if unique {
+                self.component_service()
+                    .add_component(
+                        &source_path,
+                        &component_name,
+                        component_type,
+                        files,
+                        &dynamic_linking,
+                        unverified,
+                    )
+                    .await
+                    .expect("Failed to add component")
+            } else {
+                self.component_service()
+                    .get_or_add_component(
+                        &source_path,
+                        &component_name,
+                        component_type,
+                        files,
+                        &dynamic_linking,
+                        unverified,
+                    )
+                    .await
+            }
+        };
+
+        (
+            component
+                .versioned_component_id
+                .unwrap()
+                .component_id
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            ComponentName(component_name),
+        )
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
@@ -1621,7 +1640,7 @@ pub trait TestDslUnsafe {
         unverified: bool,
         files: &[InitialComponentFile],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId;
+    ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
@@ -1801,7 +1820,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         unverified: bool,
         files: &[InitialComponentFile],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    ) -> ComponentId {
+    ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
             name,
