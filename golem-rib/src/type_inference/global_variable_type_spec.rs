@@ -149,7 +149,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
             }
 
             Expr::Option(Some(expr), type_name, current_inferred_type) => {
-                internal::handle_option_some(expr, current_inferred_type, &mut temp_stack);
+                internal::handle_option_some(expr, current_inferred_type, &mut temp_stack, type_name);
             }
 
             Expr::Option(None, type_name, current_inferred_type) => {
