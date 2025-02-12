@@ -41,13 +41,13 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
+    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
@@ -55,6 +55,7 @@ use golem_common::model::{
     WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
+use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, result, result_err, str, tuple, u16, u32, u64, u8,
     unit_case, variant,
@@ -720,6 +721,22 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                     },
                 ))
             }
+            OplogEntry::Revert {
+                timestamp,
+                dropped_region,
+            } => Ok(PublicOplogEntry::Revert(RevertParameters {
+                timestamp,
+                dropped_region,
+            })),
+            OplogEntry::CancelPendingInvocation {
+                timestamp,
+                idempotency_key,
+            } => Ok(PublicOplogEntry::CancelInvocation(
+                CancelInvocationParameters {
+                    timestamp,
+                    idempotency_key,
+                },
+            )),
         }
     }
 }
@@ -880,6 +897,31 @@ fn encode_host_function_request_as_value(
                     field("worker_id", WorkerId::get_type()),
                     field("component_version", u64()),
                     field("update_mode", str()),
+                ]),
+            ))
+        }
+        "golem::api::fork-worker" => {
+            let payload: (WorkerId, WorkerId, OplogIndex) = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(
+                Value::Record(vec![
+                    payload.0.into_value(),
+                    payload.1.into_value(),
+                    payload.2.into_value(),
+                ]),
+                record(vec![
+                    field("source_worker_id", WorkerId::get_type()),
+                    field("target_worker_id", WorkerId::get_type()),
+                    field("oplog_idx_cut_off", u64()),
+                ]),
+            ))
+        }
+        "golem::api::revert-worker" => {
+            let payload: (WorkerId, RevertWorkerTarget) = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(
+                Value::Record(vec![payload.0.into_value(), payload.1.into_value()]),
+                record(vec![
+                    field("worker_id", WorkerId::get_type()),
+                    field("target", RevertWorkerTarget::get_type()),
                 ]),
             ))
         }
@@ -1168,6 +1210,14 @@ fn encode_host_function_response_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem::api::update-worker" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::fork-worker" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::revert-worker" => {
             let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }

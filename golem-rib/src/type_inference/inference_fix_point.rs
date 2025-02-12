@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_1() {
-        let left = Expr::identifier("x");
-        let right = Expr::identifier("x");
+        let left = Expr::identifier("x", None);
+        let right = Expr::identifier("x", None);
 
         assert!(equivalent_exprs(&left, &right));
     }
@@ -335,8 +335,8 @@ mod tests {
         ]);
         let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
 
-        let left = Expr::identifier("x").add_infer_type(left);
-        let right = Expr::identifier("x").add_infer_type(right);
+        let left = Expr::identifier("x", None).add_infer_type(left);
+        let right = Expr::identifier("x", None).add_infer_type(right);
 
         assert!(equivalent_exprs(&left, &right));
     }
@@ -350,30 +350,30 @@ mod tests {
             InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
         ]);
 
-        let left = Expr::identifier("x").add_infer_type(left);
-        let right = Expr::identifier("x").add_infer_type(right);
+        let left = Expr::identifier("x", None).add_infer_type(left);
+        let right = Expr::identifier("x", None).add_infer_type(right);
 
         assert!(!equivalent_exprs(&left, &right));
     }
 
     #[test]
     fn test_expr_comparison_4() {
-        let left_identifier = Expr::identifier("x");
-        let right_identifier = Expr::identifier("x");
+        let left_identifier = Expr::identifier("x", None);
+        let right_identifier = Expr::identifier("x", None);
 
-        let left = Expr::let_binding("x", left_identifier);
-        let right = Expr::let_binding("x", right_identifier);
+        let left = Expr::let_binding("x", left_identifier, None);
+        let right = Expr::let_binding("x", right_identifier, None);
 
         assert!(equivalent_exprs(&left, &right));
     }
 
     #[test]
     fn test_expr_comparison_5() {
-        let left_identifier = Expr::identifier("x");
-        let right_identifier = Expr::identifier("x");
+        let left_identifier = Expr::identifier("x", None);
+        let right_identifier = Expr::identifier("x", None);
         let cond = Expr::greater_than(left_identifier, right_identifier);
-        let then_ = Expr::identifier("x");
-        let else_ = Expr::identifier("x");
+        let then_ = Expr::identifier("x", None);
+        let else_ = Expr::identifier("x", None);
 
         let left = Expr::cond(cond.clone(), then_.clone(), else_.clone());
         let right = Expr::cond(cond, then_, else_);
@@ -409,20 +409,24 @@ mod tests {
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     )),
                     Box::new(Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::U64,
                     )),
                     Box::new(Expr::Identifier(
                         VariableId::global("y".to_string()),
+                        None,
                         InferredType::U64,
                     )),
                     InferredType::U64,

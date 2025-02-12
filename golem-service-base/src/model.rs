@@ -25,7 +25,10 @@ use golem_common::model::{
     Timestamp, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
+use golem_wasm_ast::analysis::analysed_type::{case, field, record, variant};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -1073,6 +1076,14 @@ pub struct ActivatePluginResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeactivatePluginResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct RevertWorkerResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct CancelInvocationResponse {
+    pub canceled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -1901,5 +1912,158 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union)]
+#[serde(rename_all = "camelCase")]
+#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
+pub enum RevertWorkerTarget {
+    RevertToOplogIndex(RevertToOplogIndex),
+    RevertLastInvocations(RevertLastInvocations),
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+    ) -> Result<Self, Self::Error> {
+        match value.target {
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
+                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
+            }
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
+                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
+            }
+            None => Err("Missing field: target".to_string()),
+        }
+    }
+}
+
+impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
+    fn from(value: RevertWorkerTarget) -> Self {
+        match value {
+            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
+            },
+            RevertWorkerTarget::RevertLastInvocations(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
+            },
+        }
+    }
+}
+
+impl IntoValue for RevertWorkerTarget {
+    fn into_value(self) -> Value {
+        match self {
+            RevertWorkerTarget::RevertToOplogIndex(target) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(target.into_value())),
+            },
+            RevertWorkerTarget::RevertLastInvocations(target) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(target.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("revert-to-oplog-index", RevertToOplogIndex::get_type()),
+            case("revert-last-invocations", RevertLastInvocations::get_type()),
+        ])
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    Object,
+)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct RevertToOplogIndex {
+    pub last_oplog_index: OplogIndex,
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
+        }
+    }
+}
+
+impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
+    fn from(value: RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: u64::from(value.last_oplog_index) as i64,
+        }
+    }
+}
+
+impl IntoValue for RevertToOplogIndex {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.last_oplog_index.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("last-oplog-index", OplogIndex::get_type())])
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    Object,
+)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct RevertLastInvocations {
+    pub number_of_invocations: u64,
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as u64,
+        }
+    }
+}
+
+impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
+    fn from(value: RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as i64,
+        }
+    }
+}
+
+impl IntoValue for RevertLastInvocations {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.number_of_invocations.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("number-of-invocations", u64::get_type())])
     }
 }

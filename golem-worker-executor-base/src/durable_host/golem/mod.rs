@@ -256,7 +256,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
         } else if self
             .state
             .replay_state
-            .is_in_deleted_region(jump_target)
+            .is_in_skipped_region(jump_target)
             .await
         {
             Err(anyhow!(
@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
             // Write an oplog entry with the new jump and then restart the worker
             self.state
                 .replay_state
-                .add_deleted_region(jump.clone())
+                .add_skipped_region(jump.clone())
                 .await;
             self.state
                 .oplog
@@ -351,7 +351,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
                     };
                     self.state
                         .replay_state
-                        .add_deleted_region(deleted_region.clone())
+                        .add_skipped_region(deleted_region.clone())
                         .await;
                     self.state
                         .oplog
@@ -506,7 +506,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
         self.observe_function_call("golem::api", "get_self_metadata");
-        let metadata = self.public_state.worker().get_metadata().await?;
+        let metadata = self.public_state.worker().get_metadata()?;
         Ok(metadata.into())
     }
 
@@ -521,12 +521,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
 
         match metadata {
             Some(metadata) => {
-                let last_known_status = Ctx::compute_latest_worker_status(
-                    &self.state,
-                    &owned_worker_id,
-                    &Some(metadata.clone()),
-                )
-                .await?;
+                let last_known_status = self.get_worker_status_record();
                 let updated_metadata = golem_common::model::WorkerMetadata {
                     last_known_status,
                     ..metadata

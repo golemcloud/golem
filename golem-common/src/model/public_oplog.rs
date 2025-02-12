@@ -819,6 +819,54 @@ impl IntoValue for DeactivatePluginParameters {
     }
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct RevertParameters {
+    pub timestamp: Timestamp,
+    pub dropped_region: OplogRegion,
+}
+
+impl IntoValue for RevertParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.dropped_region.start.into_value(),
+            self.dropped_region.end.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("start", OplogIndex::get_type()),
+            field("end", OplogIndex::get_type()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct CancelInvocationParameters {
+    pub timestamp: Timestamp,
+    pub idempotency_key: IdempotencyKey,
+}
+
+impl IntoValue for CancelInvocationParameters {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.timestamp.into_value(),
+            self.idempotency_key.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("timestamp", Timestamp::get_type()),
+            field("idempotency-key", IdempotencyKey::get_type()),
+        ])
+    }
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -895,6 +943,10 @@ pub enum PublicOplogEntry {
     ActivatePlugin(ActivatePluginParameters),
     /// Deactivates a plugin
     DeactivatePlugin(DeactivatePluginParameters),
+    /// Revert a worker to a previous state
+    Revert(RevertParameters),
+    /// Cancel a pending invocation
+    CancelInvocation(CancelInvocationParameters),
 }
 
 impl PublicOplogEntry {
@@ -1115,6 +1167,14 @@ impl PublicOplogEntry {
             PublicOplogEntry::DeactivatePlugin(_params) => {
                 Self::string_match("deactivateplugin", &[], query_path, query)
                     || Self::string_match("deactivate-plugin", &[], query_path, query)
+            }
+            PublicOplogEntry::Revert(_params) => {
+                Self::string_match("revert", &[], query_path, query)
+            }
+            PublicOplogEntry::CancelInvocation(params) => {
+                Self::string_match("cancel", &[], query_path, query)
+                    || Self::string_match("cancel-invocation", &[], query_path, query)
+                    || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
             }
         }
     }
@@ -1406,6 +1466,14 @@ impl IntoValue for PublicOplogEntry {
                 case_idx: 26,
                 case_value: Some(Box::new(params.into_value())),
             },
+            PublicOplogEntry::Revert(params) => Value::Variant {
+                case_idx: 27,
+                case_value: Some(Box::new(params.into_value())),
+            },
+            PublicOplogEntry::CancelInvocation(params) => Value::Variant {
+                case_idx: 28,
+                case_value: Some(Box::new(params.into_value())),
+            },
         }
     }
 
@@ -1453,6 +1521,8 @@ impl IntoValue for PublicOplogEntry {
             case("restart", Timestamp::get_type()),
             case("activate-plugin", ActivatePluginParameters::get_type()),
             case("deactivate-plugin", DeactivatePluginParameters::get_type()),
+            case("revert", RevertParameters::get_type()),
+            case("cancel-invocation", CancelInvocationParameters::get_type()),
         ])
     }
 }
@@ -1498,14 +1568,15 @@ impl Display for OplogCursor {
 mod protobuf {
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::public_oplog::{
-        ActivatePluginParameters, ChangeRetryPolicyParameters, CreateParameters,
-        DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
-        ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-        ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
-        ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-        OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
-        PluginInstallationDescription, PublicDurableFunctionType, PublicOplogEntry,
-        PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+        ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
+        CreateParameters, DeactivatePluginParameters, DescribeResourceParameters,
+        EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+        ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+        GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
+        ManualUpdateParameters, OplogCursor, PendingUpdateParameters,
+        PendingWorkerInvocationParameters, PluginInstallationDescription,
+        PublicDurableFunctionType, PublicOplogEntry, PublicRetryConfig, PublicUpdateDescription,
+        PublicWorkerInvocation, ResourceParameters, RevertParameters,
         SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
         WriteRemoteBatchedParameters,
     };
@@ -1856,6 +1927,24 @@ mod protobuf {
                             .try_into()?,
                     }),
                 ),
+                oplog_entry::Entry::Revert(revert) => {
+                    Ok(PublicOplogEntry::Revert(RevertParameters {
+                        timestamp: revert.timestamp.ok_or("Missing timestamp field")?.into(),
+                        dropped_region: OplogRegion {
+                            start: OplogIndex::from_u64(revert.start),
+                            end: OplogIndex::from_u64(revert.end),
+                        },
+                    }))
+                }
+                oplog_entry::Entry::CancelInvocation(cancel) => Ok(
+                    PublicOplogEntry::CancelInvocation(CancelInvocationParameters {
+                        timestamp: cancel.timestamp.ok_or("Missing timestamp field")?.into(),
+                        idempotency_key: cancel
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                    }),
+                ),
             }
         }
     }
@@ -2177,6 +2266,27 @@ mod protobuf {
                             golem_api_grpc::proto::golem::worker::DeactivatePluginParameters {
                                 timestamp: Some(deactivate.timestamp.into()),
                                 plugin: Some(deactivate.plugin.into()),
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::Revert(revert) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::Revert(
+                            golem_api_grpc::proto::golem::worker::RevertParameters {
+                                timestamp: Some(revert.timestamp.into()),
+                                start: revert.dropped_region.start.0,
+                                end: revert.dropped_region.end.0,
+                            },
+                        )),
+                    }
+                }
+                PublicOplogEntry::CancelInvocation(cancel) => {
+                    golem_api_grpc::proto::golem::worker::OplogEntry {
+                        entry: Some(oplog_entry::Entry::CancelInvocation(
+                            golem_api_grpc::proto::golem::worker::CancelInvocationParameters {
+                                timestamp: Some(cancel.timestamp.into()),
+                                idempotency_key: Some(cancel.idempotency_key.into()),
                             },
                         )),
                     }

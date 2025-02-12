@@ -21,16 +21,17 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    fork_worker_response, get_oplog_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response,
-    list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
-    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
+    cancel_invocation_response, fork_worker_response, get_oplog_response,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, list_directory_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response, worker_execution_error,
+    CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest,
-    ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -49,7 +50,7 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -360,6 +361,14 @@ pub trait TestDsl {
         target_worker_id: &WorkerId,
         oplog_index: OplogIndex,
     ) -> crate::Result<()>;
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+    ) -> crate::Result<bool>;
 }
 
 #[async_trait]
@@ -1248,6 +1257,46 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             _ => Err(anyhow!("Failed to fork worker: unknown error")),
         }
     }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
+        let response = self
+            .worker_service()
+            .revert_worker(RevertWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                target: Some(target.into()),
+            })
+            .await?;
+
+        match response.result {
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Error(error)) => {
+                Err(anyhow!("Failed to fork worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to revert worker: unknown error")),
+        }
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+    ) -> crate::Result<bool> {
+        let response = self
+            .worker_service()
+            .cancel_invocation(CancelInvocationRequest {
+                worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+            })
+            .await?;
+
+        match response.result {
+            Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
+            Some(cancel_invocation_response::Result::Error(error)) => {
+                Err(anyhow!("Failed to cancel invocation: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to cancel invocation: unknown error")),
+        }
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1468,7 +1517,7 @@ pub fn to_worker_metadata(
                 oplog_idx: OplogIndex::default(),
                 status: metadata.status.try_into().expect("invalid status"),
                 overridden_retry_config: None, // not passed through gRPC
-                deleted_regions: DeletedRegions::new(),
+                skipped_regions: DeletedRegions::new(),
                 pending_invocations: vec![],
                 pending_updates: metadata
                     .updates
@@ -1541,7 +1590,7 @@ pub fn to_worker_metadata(
                         )
                     })
                     .collect(),
-                extensions: WorkerStatusRecordExtensions::Extension1 {
+                extensions: WorkerStatusRecordExtensions::Extension2 {
                     active_plugins: HashSet::from_iter(
                         metadata
                             .active_plugins
@@ -1549,6 +1598,7 @@ pub fn to_worker_metadata(
                             .cloned()
                             .map(|id| id.try_into().expect("invalid plugin installation id")),
                     ),
+                    deleted_regions: DeletedRegions::new(),
                 },
             },
             parent: None,
@@ -1724,6 +1774,15 @@ pub trait TestDslUnsafe {
         target_worker_id: &WorkerId,
         oplog_index: OplogIndex,
     );
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget);
+
+    async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey);
+    async fn try_cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+    ) -> crate::Result<bool>;
 }
 
 #[async_trait]
@@ -2058,5 +2117,25 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
             .await
             .expect("Failed to fork worker")
+    }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) {
+        <T as TestDsl>::revert(self, worker_id, target)
+            .await
+            .expect("Failed to revert worker")
+    }
+
+    async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey) {
+        <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key)
+            .await
+            .expect("Failed to cancel invocation");
+    }
+
+    async fn try_cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+    ) -> crate::Result<bool> {
+        <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
     }
 }

@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem_openapi::Object;
-use std::fmt::{Display, Formatter};
-
-use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, VersionedComponentId};
-use serde::{Deserialize, Serialize};
-
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
+use crate::gateway_api_definition::ApiDefinitionId;
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
+use golem_common::SafeDisplay;
+use golem_service_base::model::{Component, VersionedComponentId};
+use poem_openapi::Object;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -75,6 +75,14 @@ impl ApiDefinitionValidatorService<HttpApiDefinition> for HttpApiDefinitionValid
                 errors: errors_string,
             })
         }
+    }
+    fn validate_name(&self, name: &ApiDefinitionId) -> Result<(), ValidationErrors> {
+        let valid_name_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]*$").unwrap();
+        valid_name_regex.is_match(name.to_string().as_str()).then_some(()).ok_or_else(|| {
+            ValidationErrors {
+                errors: vec![format!("Invalid name '{}'. Names must start with a letter and contain only letters, numbers, underscores, and hyphens", name)],
+            }
+        })
     }
 }
 
@@ -132,7 +140,7 @@ mod tests {
                         component_id: ComponentId::new_v4(),
                         version: 1,
                     },
-                    worker_name: Some(Expr::identifier("request")),
+                    worker_name: Some(Expr::identifier("request", None)),
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
                 }),

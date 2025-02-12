@@ -18,14 +18,21 @@ use std::ops::Deref;
 use bincode::{Decode, Encode};
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
-use combine::parser::choice::choice;
-use combine::{attempt, between, sep_by, Parser};
+use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use crate::parser::errors::RibParseError;
-use crate::InferredType;
+use crate::{InferredNumber, InferredType};
 
+// Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
+// and sticks on to the  Display instance that aligns with what we see in WIT.
+// Usage of TypeName, InferredType and AnalysedType:
+// The Rib compiler uses `InferredType` - the output of type inference. The `TypeName` used in type annotations may help with this type inference.
+// The Rib-IR which is close to running Rib code uses `AnalysedType`, that there won't be either `TypeName` or `InferredType` in the Rib-IR.
+// Any compilation or interpreter error messages will also be using `TypeName` to show the type of the expression
+// for which we convert AnalysedType or InferredType back to TypeName. If `InferredType` cannot be converted to `TypeName`, we explain the error displaying
+// the original expression, and there is no point displaying `InferredType` to the user.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
     Bool,
@@ -142,6 +149,23 @@ impl Display for TypeName {
                 }
                 write!(f, ">")
             }
+        }
+    }
+}
+
+impl From<&InferredNumber> for TypeName {
+    fn from(value: &InferredNumber) -> Self {
+        match value {
+            InferredNumber::S8 => TypeName::S8,
+            InferredNumber::U8 => TypeName::U8,
+            InferredNumber::S16 => TypeName::S16,
+            InferredNumber::U16 => TypeName::U16,
+            InferredNumber::S32 => TypeName::S32,
+            InferredNumber::U32 => TypeName::U32,
+            InferredNumber::S64 => TypeName::S64,
+            InferredNumber::U64 => TypeName::U64,
+            InferredNumber::F32 => TypeName::F32,
+            InferredNumber::F64 => TypeName::F64,
         }
     }
 }
@@ -420,6 +444,12 @@ where
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
 }
 
+enum ResultSuccess {
+    NoType,
+    WithType(TypeName),
+}
+
+// https://component-model.bytecodealliance.org/design/wit.html#results
 pub fn parse_result_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
@@ -429,18 +459,44 @@ where
 {
     string("result")
         .skip(spaces())
-        .with(between(
+        .with(optional(between(
             char('<').skip(spaces()),
             char('>').skip(spaces()),
             (
-                parse_type_name().skip(spaces()),
-                char(',').skip(spaces()),
-                parse_type_name().skip(spaces()),
+                choice!(
+                    string("_").skip(spaces()).map(|_| ResultSuccess::NoType),
+                    parse_type_name()
+                        .skip(spaces())
+                        .map(ResultSuccess::WithType)
+                ),
+                optional(
+                    char(',')
+                        .skip(spaces())
+                        .with(parse_type_name().skip(spaces())),
+                ),
             ),
-        ))
-        .map(|(ok, _, error)| TypeName::Result {
-            ok: Some(Box::new(ok)),
-            error: Some(Box::new(error)),
+        )))
+        .map(|result| match result {
+            None => TypeName::Result {
+                ok: None,
+                error: None,
+            },
+            Some((ResultSuccess::NoType, None)) => TypeName::Result {
+                ok: None,
+                error: None,
+            },
+            Some((ResultSuccess::NoType, Some(error))) => TypeName::Result {
+                ok: None,
+                error: Some(Box::new(error)),
+            },
+            Some((ResultSuccess::WithType(ok), None)) => TypeName::Result {
+                ok: Some(Box::new(ok)),
+                error: None,
+            },
+            Some((ResultSuccess::WithType(ok), Some(error))) => TypeName::Result {
+                ok: Some(Box::new(ok)),
+                error: Some(Box::new(error)),
+            },
         })
 }
 

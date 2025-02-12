@@ -6,6 +6,9 @@ edition = "2021"
 [package.metadata.component.target]
 path = "wit-generated"
 
+[package.metadata.component.target.dependencies."golem:api"]
+path = "wit-generated/deps/golem-1.x"
+
 [package.metadata.component.target.dependencies."golem:rpc"]
 path = "wit-generated/deps/wasm-rpc"
 
@@ -20,6 +23,9 @@ path = "wit-generated/deps/rpc_counters-exports"
 
 [package.metadata.component.target.dependencies."rpc:ephemeral-client"]
 path = "wit-generated/deps/rpc_ephemeral-client"
+
+[package.metadata.component.target.dependencies."wasi:clocks"]
+path = "wit-generated/deps/clocks"
 
 [package.metadata.component.target.dependencies."wasi:io"]
 path = "wit-generated/deps/io"

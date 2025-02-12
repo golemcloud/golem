@@ -116,7 +116,7 @@ mod internal {
             Expr::Throw(msg, _) => {
                 instructions.push(RibIR::Throw(msg.to_string()));
             }
-            Expr::Identifier(variable_id, _) => {
+            Expr::Identifier(variable_id, _, _) => {
                 instructions.push(RibIR::LoadVar(variable_id.clone()));
             }
             Expr::Literal(str, _) => {
@@ -232,7 +232,7 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::CreateAndPushRecord(analysed_type?));
             }
-            Expr::Sequence(exprs, inferred_type) => {
+            Expr::Sequence(exprs, _, inferred_type) => {
                 // Push all expressions in reverse order
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
@@ -267,15 +267,15 @@ mod internal {
                 );
             }
 
-            Expr::SelectField(record_expr, field_name, _) => {
+            Expr::SelectField(record_expr, field_name, _, _) => {
                 stack.push(ExprState::from_expr(record_expr.deref()));
                 instructions.push(RibIR::SelectField(field_name.clone()));
             }
-            Expr::SelectIndex(sequence_expr, index, _) => {
+            Expr::SelectIndex(sequence_expr, index, _, _) => {
                 stack.push(ExprState::from_expr(sequence_expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));
             }
-            Expr::Option(Some(inner_expr), inferred_type) => {
+            Expr::Option(Some(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushSome(convert_to_analysed_type(
                     expr,
@@ -283,12 +283,12 @@ mod internal {
                 )?));
             }
 
-            Expr::Option(None, inferred_type) => {
+            Expr::Option(None, _, inferred_type) => {
                 let optional = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::PushNone(optional.ok()));
             }
 
-            Expr::Result(Ok(inner_expr), inferred_type) => {
+            Expr::Result(Ok(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushOkResult(convert_to_analysed_type(
                     expr,
@@ -296,7 +296,7 @@ mod internal {
                 )?));
             }
 
-            Expr::Result(Err(inner_expr), inferred_type) => {
+            Expr::Result(Err(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushErrResult(convert_to_analysed_type(
                     expr,
@@ -724,7 +724,7 @@ mod compiler_tests {
         let inferred_input_type = InferredType::Str;
         let variable_id = VariableId::local("request", 0);
         let empty_registry = FunctionTypeRegistry::empty();
-        let expr = Expr::Identifier(variable_id.clone(), inferred_input_type);
+        let expr = Expr::Identifier(variable_id.clone(), None, inferred_input_type);
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
@@ -1144,7 +1144,12 @@ mod compiler_tests {
             ]),
         );
 
-        let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
+        let expr = Expr::SelectField(
+            Box::new(record),
+            "bar_key".to_string(),
+            None,
+            InferredType::Str,
+        );
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1188,10 +1193,11 @@ mod compiler_tests {
                 Expr::Literal("foo".to_string(), InferredType::Str),
                 Expr::Literal("bar".to_string(), InferredType::Str),
             ],
+            None,
             InferredType::List(Box::new(InferredType::Str)),
         );
 
-        let expr = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
+        let expr = Expr::SelectIndex(Box::new(sequence), 1, None, InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();

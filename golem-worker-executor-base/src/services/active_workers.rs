@@ -87,6 +87,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .await
     }
 
+    pub async fn try_get(&self, owned_worker_id: &OwnedWorkerId) -> Option<Arc<Worker<Ctx>>> {
+        let worker_id = owned_worker_id.worker_id();
+        self.workers.get(&worker_id).await
+    }
+
     pub fn remove(&self, worker_id: &WorkerId) {
         self.workers.remove(worker_id);
     }
@@ -132,7 +137,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         // We cannot use acquire_many() to wait for the permits because it eagerly preallocates
                         // the available permits, and by that causing deadlocks. So we sleep and retry.
 
-                        tokio::time::sleep(self.acquire_retry_delay).await; // TODO: config
+                        tokio::time::sleep(self.acquire_retry_delay).await;
                     }
                 }
             }
@@ -185,9 +190,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             debug!("Collecting possibilities");
             // Collecting the workers which are currently idle but loaded into memory
             for (worker_id, worker) in self.workers.iter() {
-                if worker.is_currently_idle_but_running() {
-                    if let Ok(mem) = worker.memory_requirement().await {
-                        let last_changed = worker.last_execution_state_change().await;
+                if worker.is_currently_idle_but_running().await {
+                    if let Ok(mem) = worker.memory_requirement() {
+                        let last_changed = worker.last_execution_state_change();
                         possibilities.push((worker_id, worker, mem, last_changed));
                     }
                 }

@@ -64,7 +64,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Sequence(vec, inferred_type) => {
+            Expr::Sequence(vec, _, inferred_type) => {
                 queue.extend(vec.iter_mut());
                 let unified_inferred_type = inferred_type.unify();
 
@@ -78,7 +78,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Option(Some(expr), inferred_type) => {
+            Expr::Option(Some(expr), _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -93,7 +93,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Option(None, inferred_type) => {
+            Expr::Option(None, _, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -107,7 +107,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Result(Ok(expr), inferred_type) => {
+            Expr::Result(Ok(expr), _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -121,7 +121,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Result(Err(expr), inferred_type) => {
+            Expr::Result(Err(expr), _, inferred_type) => {
                 queue.push(expr);
 
                 let unified_inferred_type = inferred_type.unify();
@@ -235,7 +235,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::SelectField(expr, _, inferred_type) => {
+            Expr::SelectField(expr, _, _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -249,7 +249,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::SelectIndex(expr, _, inferred_type) => {
+            Expr::SelectIndex(expr, _, _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -290,7 +290,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Identifier(_, inferred_type) => {
+            Expr::Identifier(_, _, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {

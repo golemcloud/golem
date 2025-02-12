@@ -803,6 +803,69 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Revert a worker
+    ///
+    /// Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/revert",
+        method = "post",
+        operation_id = "revert_worker"
+    )]
+    async fn revert_worker(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        target: Json<RevertWorkerTarget>,
+    ) -> Result<Json<RevertWorkerResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
+
+        let response = self
+            .worker_service
+            .revert_worker(&worker_id, target.0, empty_worker_metadata())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(RevertWorkerResponse {}));
+
+        record.result(response)
+    }
+
+    /// Cancels a pending invocation if it has not started yet
+    ///
+    /// The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/invocations/:idempotency_key",
+        method = "delete",
+        operation_id = "cancel_invocation"
+    )]
+    async fn cancel_invocation(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        idempotency_key: Path<IdempotencyKey>,
+    ) -> Result<Json<CancelInvocationResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "cancel_invocation",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.to_string(),
+        );
+
+        let response = self
+            .worker_service
+            .cancel_invocation(&worker_id, &idempotency_key.0, empty_worker_metadata())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|canceled| Json(CancelInvocationResponse { canceled }));
+
+        record.result(response)
+    }
 }
 
 fn make_worker_id(

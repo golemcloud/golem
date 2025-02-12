@@ -4,6 +4,7 @@ package golem.worker.v1;
 
 import public "golem/common/empty.proto";
 import public "golem/common/plugin_installation_id.proto";
+import public "golem/common/revert_worker_response.proto";
 import public "golem/worker/complete_parameters.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
@@ -52,6 +53,8 @@ service WorkerService {
 
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
 
+  rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
+  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 }
 
 
@@ -339,6 +342,31 @@ message DeactivatePluginRequest {
 message DeactivatePluginResponse {
   oneof result {
     golem.common.Empty success = 1;
+    WorkerError error = 2;
+  }
+}
+
+
+message RevertWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.RevertWorkerTarget target = 2;
+}
+
+message RevertWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message CancelInvocationRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+}
+
+message CancelInvocationResponse {
+  oneof result {
+    bool success = 1;
     WorkerError error = 2;
   }
 }

@@ -128,7 +128,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::select_index(Expr::identifier("foo"), 0), ""))
+            Ok((Expr::select_index(Expr::identifier("foo", None), 0), ""))
         );
     }
 
@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::select_index(Expr::select_index(Expr::identifier("foo"), 0), 1),
+                Expr::select_index(Expr::select_index(Expr::identifier("foo", None), 0), 1),
                 ""
             ))
         );

@@ -14,12 +14,12 @@
 
 use bigdecimal::BigDecimal;
 use combine::parser::char::{char, digit, spaces};
-use combine::{many1, optional, ParseError, Parser};
+use combine::{attempt, choice, many1, optional, ParseError, Parser};
 use std::str::FromStr;
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-use crate::parser::type_name::{parse_basic_type, TypeName};
+use crate::parser::type_name::{parse_basic_type, parse_type_name, TypeName};
 
 pub fn number<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -33,7 +33,18 @@ where
         .with(
             (
                 many1(digit().or(char('-')).or(char('.'))),
-                optional(parse_basic_type()),
+                optional(
+                    // To keep backward compatibility
+                    choice!(
+                        attempt(parse_basic_type()),
+                        attempt(
+                            char(':')
+                                .skip(spaces())
+                                .with(parse_type_name())
+                                .skip(spaces()),
+                        )
+                    ),
+                ),
             )
                 .and_then(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
                     let primitive = s.into_iter().collect::<String>();
