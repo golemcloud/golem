@@ -17,16 +17,17 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::preview2::golem;
-use crate::preview2::golem::api0_2_0::host::GetWorkers;
-use crate::preview2::golem::api1_1_1::host::{
+use crate::preview2::golem_api_0_2_x;
+use crate::preview2::golem_api_0_2_x::host::GetWorkers;
+use crate::preview2::golem_api_1_x;
+use crate::preview2::golem_api_1_x::host::{
     ComponentId, ComponentVersion, FilterComparator, Host, HostGetWorkers, OplogIndex,
-    PersistenceLevel, PromiseId, RetryPolicy, StringFilterComparator, UpdateMode, Uuid,
-    WorkerAllFilter, WorkerAnyFilter, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerId,
-    WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter,
+    PersistenceLevel, PromiseId, RetryPolicy, RevertWorkerTarget, StringFilterComparator,
+    UpdateMode, Uuid, WorkerAllFilter, WorkerAnyFilter, WorkerCreatedAtFilter, WorkerEnvFilter,
+    WorkerId, WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus,
+    WorkerStatusFilter, WorkerVersionFilter,
 };
-use crate::preview2::golem::api1_1_1::oplog::{
+use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
 };
 use crate::services::{HasOplogService, HasPlugins};
@@ -48,7 +49,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         filter: Option<WorkerAnyFilter>,
         precise: bool,
     ) -> anyhow::Result<Resource<GetWorkers>> {
-        golem::api0_2_0::host::HostGetWorkers::new(
+        golem_api_0_2_x::host::HostGetWorkers::new(
             self,
             component_id.into(),
             filter.map(|x| x.into()),
@@ -61,26 +62,26 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<GetWorkers>,
     ) -> anyhow::Result<Option<Vec<WorkerMetadata>>> {
-        golem::api0_2_0::host::HostGetWorkers::get_next(self, self_)
+        golem_api_0_2_x::host::HostGetWorkers::get_next(self, self_)
             .await
             .map(|x| x.map(|x| x.into_iter().map(|x| x.into()).collect()))
     }
 
     async fn drop(&mut self, rep: Resource<GetWorkers>) -> anyhow::Result<()> {
-        golem::api0_2_0::host::HostGetWorkers::drop(self, rep).await
+        golem_api_0_2_x::host::HostGetWorkers::drop(self, rep).await
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<PromiseId> {
-        golem::api0_2_0::host::Host::create_promise(self)
+        golem_api_0_2_x::host::Host::create_promise(self)
             .await
             .map(|x| x.into())
     }
 
     async fn await_promise(&mut self, promise_id: PromiseId) -> anyhow::Result<Vec<u8>> {
-        golem::api0_2_0::host::Host::await_promise(self, promise_id.into()).await
+        golem_api_0_2_x::host::Host::await_promise(self, promise_id.into()).await
     }
 
     async fn complete_promise(
@@ -88,45 +89,45 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> anyhow::Result<bool> {
-        golem::api0_2_0::host::Host::complete_promise(self, promise_id.into(), data).await
+        golem_api_0_2_x::host::Host::complete_promise(self, promise_id.into(), data).await
     }
 
     async fn delete_promise(&mut self, promise_id: PromiseId) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::delete_promise(self, promise_id.into()).await
+        golem_api_0_2_x::host::Host::delete_promise(self, promise_id.into()).await
     }
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
-        golem::api0_2_0::host::Host::get_oplog_index(self).await
+        golem_api_0_2_x::host::Host::get_oplog_index(self).await
     }
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::set_oplog_index(self, oplog_idx).await
+        golem_api_0_2_x::host::Host::set_oplog_index(self, oplog_idx).await
     }
 
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::oplog_commit(self, replicas).await
+        golem_api_0_2_x::host::Host::oplog_commit(self, replicas).await
     }
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
-        golem::api0_2_0::host::Host::mark_begin_operation(self).await
+        golem_api_0_2_x::host::Host::mark_begin_operation(self).await
     }
 
     async fn mark_end_operation(&mut self, begin: OplogIndex) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::mark_end_operation(self, begin).await
+        golem_api_0_2_x::host::Host::mark_end_operation(self, begin).await
     }
 
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        golem::api0_2_0::host::Host::get_retry_policy(self)
+        golem_api_0_2_x::host::Host::get_retry_policy(self)
             .await
             .map(|x| x.into())
     }
 
     async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::set_retry_policy(self, new_retry_policy.into()).await
+        golem_api_0_2_x::host::Host::set_retry_policy(self, new_retry_policy.into()).await
     }
 
     async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
-        golem::api0_2_0::host::Host::get_oplog_persistence_level(self)
+        golem_api_0_2_x::host::Host::get_oplog_persistence_level(self)
             .await
             .map(|x| x.into())
     }
@@ -135,20 +136,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         new_persistence_level: PersistenceLevel,
     ) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::set_oplog_persistence_level(self, new_persistence_level.into())
+        golem_api_0_2_x::host::Host::set_oplog_persistence_level(self, new_persistence_level.into())
             .await
     }
 
     async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        golem::api0_2_0::host::Host::get_idempotence_mode(self).await
+        golem_api_0_2_x::host::Host::get_idempotence_mode(self).await
     }
 
     async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::set_idempotence_mode(self, idempotent).await
+        golem_api_0_2_x::host::Host::set_idempotence_mode(self, idempotent).await
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<Uuid> {
-        golem::api0_2_0::host::Host::generate_idempotency_key(self)
+        golem_api_0_2_x::host::Host::generate_idempotency_key(self)
             .await
             .map(|x| x.into())
     }
@@ -159,7 +160,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_version: ComponentVersion,
         mode: UpdateMode,
     ) -> anyhow::Result<()> {
-        golem::api0_2_0::host::Host::update_worker(
+        golem_api_0_2_x::host::Host::update_worker(
             self,
             worker_id.into(),
             target_version,
@@ -169,7 +170,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
-        golem::api0_2_0::host::Host::get_self_metadata(self)
+        golem_api_0_2_x::host::Host::get_self_metadata(self)
             .await
             .map(|x| x.into())
     }
@@ -178,7 +179,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: WorkerId,
     ) -> anyhow::Result<Option<WorkerMetadata>> {
-        golem::api0_2_0::host::Host::get_worker_metadata(self, worker_id.into())
+        golem_api_0_2_x::host::Host::get_worker_metadata(self, worker_id.into())
             .await
             .map(|x| x.map(|x| x.into()))
     }
@@ -223,14 +224,45 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+
+    async fn revert_worker(
+        &mut self,
+        worker_id: WorkerId,
+        revert_target: RevertWorkerTarget,
+    ) -> anyhow::Result<()> {
+        let durability = Durability::<(), SerializableError>::new(
+            self,
+            "golem::api",
+            "revert_worker",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            let worker_id: golem_common::model::WorkerId = worker_id.into();
+            let revert_target: golem_service_base::model::RevertWorkerTarget = revert_target.into();
+
+            let result = self
+                .worker_proxy()
+                .revert(worker_id.clone(), revert_target.clone())
+                .await;
+            durability
+                .persist(self, (worker_id, revert_target), result)
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: crate::preview2::golem::api1_1_1::oplog::WorkerId,
-        start: crate::preview2::golem::api1_1_1::oplog::OplogIndex,
+        worker_id: golem_api_1_x::oplog::WorkerId,
+        start: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
         self.observe_function_call("golem::api::get-oplog", "new");
 
@@ -303,7 +335,7 @@ pub struct GetOplogEntry {
     pub page_size: usize,
 }
 
-impl crate::durable_host::golem::v11::GetOplogEntry {
+impl crate::durable_host::golem::v1x::GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: golem_common::model::oplog::OplogIndex,
@@ -332,7 +364,7 @@ impl crate::durable_host::golem::v11::GetOplogEntry {
 impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: golem::api1_1_1::oplog::WorkerId,
+        worker_id: golem_api_1_x::oplog::WorkerId,
         text: String,
     ) -> anyhow::Result<Resource<SearchOplog>> {
         self.observe_function_call("golem::api::search-oplog", "new");
@@ -354,7 +386,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<SearchOplog>,
-    ) -> anyhow::Result<Option<Vec<(golem::api1_1_1::oplog::OplogIndex, OplogEntry)>>> {
+    ) -> anyhow::Result<Option<Vec<(golem_api_1_x::oplog::OplogIndex, OplogEntry)>>> {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
@@ -386,7 +418,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                     .entries
                     .into_iter()
                     .map(|(idx, entry)| {
-                        let idx: golem::api1_1_1::oplog::OplogIndex = idx.into();
+                        let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
                         let entry: OplogEntry = entry.into();
                         (idx, entry)
                     })
@@ -443,17 +475,17 @@ impl SearchOplogEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
 
-impl From<Uuid> for golem::api0_2_0::host::Uuid {
+impl From<Uuid> for golem_api_0_2_x::host::Uuid {
     fn from(value: Uuid) -> Self {
-        golem::api0_2_0::host::Uuid {
+        golem_api_0_2_x::host::Uuid {
             high_bits: value.high_bits,
             low_bits: value.low_bits,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::Uuid> for Uuid {
-    fn from(value: golem::api0_2_0::host::Uuid) -> Self {
+impl From<golem_api_0_2_x::host::Uuid> for Uuid {
+    fn from(value: golem_api_0_2_x::host::Uuid) -> Self {
         Uuid {
             high_bits: value.high_bits,
             low_bits: value.low_bits,
@@ -461,33 +493,33 @@ impl From<golem::api0_2_0::host::Uuid> for Uuid {
     }
 }
 
-impl From<ComponentId> for golem::api0_2_0::host::ComponentId {
+impl From<ComponentId> for golem_api_0_2_x::host::ComponentId {
     fn from(value: ComponentId) -> Self {
-        golem::api0_2_0::host::ComponentId {
+        golem_api_0_2_x::host::ComponentId {
             uuid: value.uuid.into(),
         }
     }
 }
 
-impl From<golem::api0_2_0::host::ComponentId> for ComponentId {
-    fn from(value: golem::api0_2_0::host::ComponentId) -> Self {
+impl From<golem_api_0_2_x::host::ComponentId> for ComponentId {
+    fn from(value: golem_api_0_2_x::host::ComponentId) -> Self {
         ComponentId {
             uuid: value.uuid.into(),
         }
     }
 }
 
-impl From<WorkerId> for golem::api0_2_0::host::WorkerId {
+impl From<WorkerId> for golem_api_0_2_x::host::WorkerId {
     fn from(value: WorkerId) -> Self {
-        golem::api0_2_0::host::WorkerId {
+        golem_api_0_2_x::host::WorkerId {
             component_id: value.component_id.into(),
             worker_name: value.worker_name,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::WorkerId> for WorkerId {
-    fn from(value: golem::api0_2_0::host::WorkerId) -> Self {
+impl From<golem_api_0_2_x::host::WorkerId> for WorkerId {
+    fn from(value: golem_api_0_2_x::host::WorkerId) -> Self {
         WorkerId {
             component_id: value.component_id.into(),
             worker_name: value.worker_name,
@@ -495,17 +527,17 @@ impl From<golem::api0_2_0::host::WorkerId> for WorkerId {
     }
 }
 
-impl From<PromiseId> for golem::api0_2_0::host::PromiseId {
+impl From<PromiseId> for golem_api_0_2_x::host::PromiseId {
     fn from(value: PromiseId) -> Self {
-        golem::api0_2_0::host::PromiseId {
+        golem_api_0_2_x::host::PromiseId {
             worker_id: value.worker_id.into(),
             oplog_idx: value.oplog_idx,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::PromiseId> for PromiseId {
-    fn from(value: golem::api0_2_0::host::PromiseId) -> Self {
+impl From<golem_api_0_2_x::host::PromiseId> for PromiseId {
+    fn from(value: golem_api_0_2_x::host::PromiseId) -> Self {
         PromiseId {
             worker_id: value.worker_id.into(),
             oplog_idx: value.oplog_idx,
@@ -513,9 +545,9 @@ impl From<golem::api0_2_0::host::PromiseId> for PromiseId {
     }
 }
 
-impl From<RetryPolicy> for golem::api0_2_0::host::RetryPolicy {
+impl From<RetryPolicy> for golem_api_0_2_x::host::RetryPolicy {
     fn from(value: RetryPolicy) -> Self {
-        golem::api0_2_0::host::RetryPolicy {
+        golem_api_0_2_x::host::RetryPolicy {
             max_attempts: value.max_attempts,
             min_delay: value.min_delay,
             max_delay: value.max_delay,
@@ -524,8 +556,8 @@ impl From<RetryPolicy> for golem::api0_2_0::host::RetryPolicy {
     }
 }
 
-impl From<golem::api0_2_0::host::RetryPolicy> for RetryPolicy {
-    fn from(value: golem::api0_2_0::host::RetryPolicy) -> Self {
+impl From<golem_api_0_2_x::host::RetryPolicy> for RetryPolicy {
+    fn from(value: golem_api_0_2_x::host::RetryPolicy) -> Self {
         RetryPolicy {
             max_attempts: value.max_attempts,
             min_delay: value.min_delay,
@@ -536,83 +568,83 @@ impl From<golem::api0_2_0::host::RetryPolicy> for RetryPolicy {
     }
 }
 
-impl From<PersistenceLevel> for golem::api0_2_0::host::PersistenceLevel {
+impl From<PersistenceLevel> for golem_api_0_2_x::host::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
         match value {
             PersistenceLevel::PersistNothing => {
-                golem::api0_2_0::host::PersistenceLevel::PersistNothing
+                golem_api_0_2_x::host::PersistenceLevel::PersistNothing
             }
             PersistenceLevel::PersistRemoteSideEffects => {
-                golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects
+                golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects
             }
-            PersistenceLevel::Smart => golem::api0_2_0::host::PersistenceLevel::Smart,
+            PersistenceLevel::Smart => golem_api_0_2_x::host::PersistenceLevel::Smart,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::PersistenceLevel> for PersistenceLevel {
-    fn from(value: golem::api0_2_0::host::PersistenceLevel) -> Self {
+impl From<golem_api_0_2_x::host::PersistenceLevel> for PersistenceLevel {
+    fn from(value: golem_api_0_2_x::host::PersistenceLevel) -> Self {
         match value {
-            golem::api0_2_0::host::PersistenceLevel::PersistNothing => {
+            golem_api_0_2_x::host::PersistenceLevel::PersistNothing => {
                 PersistenceLevel::PersistNothing
             }
-            golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects => {
+            golem_api_0_2_x::host::PersistenceLevel::PersistRemoteSideEffects => {
                 PersistenceLevel::PersistRemoteSideEffects
             }
-            golem::api0_2_0::host::PersistenceLevel::Smart => PersistenceLevel::Smart,
+            golem_api_0_2_x::host::PersistenceLevel::Smart => PersistenceLevel::Smart,
         }
     }
 }
 
-impl From<UpdateMode> for golem::api0_2_0::host::UpdateMode {
+impl From<UpdateMode> for golem_api_0_2_x::host::UpdateMode {
     fn from(value: UpdateMode) -> Self {
         match value {
-            UpdateMode::Automatic => golem::api0_2_0::host::UpdateMode::Automatic,
-            UpdateMode::SnapshotBased => golem::api0_2_0::host::UpdateMode::SnapshotBased,
+            UpdateMode::Automatic => golem_api_0_2_x::host::UpdateMode::Automatic,
+            UpdateMode::SnapshotBased => golem_api_0_2_x::host::UpdateMode::SnapshotBased,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::UpdateMode> for UpdateMode {
-    fn from(value: golem::api0_2_0::host::UpdateMode) -> Self {
+impl From<golem_api_0_2_x::host::UpdateMode> for UpdateMode {
+    fn from(value: golem_api_0_2_x::host::UpdateMode) -> Self {
         match value {
-            golem::api0_2_0::host::UpdateMode::Automatic => UpdateMode::Automatic,
-            golem::api0_2_0::host::UpdateMode::SnapshotBased => UpdateMode::SnapshotBased,
+            golem_api_0_2_x::host::UpdateMode::Automatic => UpdateMode::Automatic,
+            golem_api_0_2_x::host::UpdateMode::SnapshotBased => UpdateMode::SnapshotBased,
         }
     }
 }
 
-impl From<WorkerStatus> for golem::api0_2_0::host::WorkerStatus {
+impl From<WorkerStatus> for golem_api_0_2_x::host::WorkerStatus {
     fn from(value: WorkerStatus) -> Self {
         match value {
-            WorkerStatus::Running => golem::api0_2_0::host::WorkerStatus::Running,
-            WorkerStatus::Idle => golem::api0_2_0::host::WorkerStatus::Idle,
-            WorkerStatus::Suspended => golem::api0_2_0::host::WorkerStatus::Suspended,
-            WorkerStatus::Interrupted => golem::api0_2_0::host::WorkerStatus::Interrupted,
-            WorkerStatus::Retrying => golem::api0_2_0::host::WorkerStatus::Retrying,
-            WorkerStatus::Failed => golem::api0_2_0::host::WorkerStatus::Failed,
-            WorkerStatus::Exited => golem::api0_2_0::host::WorkerStatus::Exited,
+            WorkerStatus::Running => golem_api_0_2_x::host::WorkerStatus::Running,
+            WorkerStatus::Idle => golem_api_0_2_x::host::WorkerStatus::Idle,
+            WorkerStatus::Suspended => golem_api_0_2_x::host::WorkerStatus::Suspended,
+            WorkerStatus::Interrupted => golem_api_0_2_x::host::WorkerStatus::Interrupted,
+            WorkerStatus::Retrying => golem_api_0_2_x::host::WorkerStatus::Retrying,
+            WorkerStatus::Failed => golem_api_0_2_x::host::WorkerStatus::Failed,
+            WorkerStatus::Exited => golem_api_0_2_x::host::WorkerStatus::Exited,
         }
     }
 }
 
-impl From<golem::api0_2_0::host::WorkerStatus> for WorkerStatus {
-    fn from(value: golem::api0_2_0::host::WorkerStatus) -> Self {
+impl From<golem_api_0_2_x::host::WorkerStatus> for WorkerStatus {
+    fn from(value: golem_api_0_2_x::host::WorkerStatus) -> Self {
         match value {
-            golem::api0_2_0::host::WorkerStatus::Running => WorkerStatus::Running,
-            golem::api0_2_0::host::WorkerStatus::Idle => WorkerStatus::Idle,
-            golem::api0_2_0::host::WorkerStatus::Suspended => WorkerStatus::Suspended,
-            golem::api0_2_0::host::WorkerStatus::Interrupted => WorkerStatus::Interrupted,
-            golem::api0_2_0::host::WorkerStatus::Retrying => WorkerStatus::Retrying,
-            golem::api0_2_0::host::WorkerStatus::Failed => WorkerStatus::Failed,
-            golem::api0_2_0::host::WorkerStatus::Exited => WorkerStatus::Exited,
+            golem_api_0_2_x::host::WorkerStatus::Running => WorkerStatus::Running,
+            golem_api_0_2_x::host::WorkerStatus::Idle => WorkerStatus::Idle,
+            golem_api_0_2_x::host::WorkerStatus::Suspended => WorkerStatus::Suspended,
+            golem_api_0_2_x::host::WorkerStatus::Interrupted => WorkerStatus::Interrupted,
+            golem_api_0_2_x::host::WorkerStatus::Retrying => WorkerStatus::Retrying,
+            golem_api_0_2_x::host::WorkerStatus::Failed => WorkerStatus::Failed,
+            golem_api_0_2_x::host::WorkerStatus::Exited => WorkerStatus::Exited,
         }
     }
 }
 
-impl From<WorkerMetadata> for golem::api0_2_0::host::WorkerMetadata {
+impl From<WorkerMetadata> for golem_api_0_2_x::host::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
-        golem::api0_2_0::host::WorkerMetadata {
+        golem_api_0_2_x::host::WorkerMetadata {
             worker_id: value.worker_id.into(),
             args: value.args,
             env: value.env,
@@ -623,8 +655,8 @@ impl From<WorkerMetadata> for golem::api0_2_0::host::WorkerMetadata {
     }
 }
 
-impl From<golem::api0_2_0::host::WorkerMetadata> for WorkerMetadata {
-    fn from(value: golem::api0_2_0::host::WorkerMetadata) -> Self {
+impl From<golem_api_0_2_x::host::WorkerMetadata> for WorkerMetadata {
+    fn from(value: golem_api_0_2_x::host::WorkerMetadata) -> Self {
         WorkerMetadata {
             worker_id: value.worker_id.into(),
             args: value.args,
@@ -636,73 +668,73 @@ impl From<golem::api0_2_0::host::WorkerMetadata> for WorkerMetadata {
     }
 }
 
-impl From<StringFilterComparator> for golem::api0_2_0::host::StringFilterComparator {
+impl From<StringFilterComparator> for golem_api_0_2_x::host::StringFilterComparator {
     fn from(value: StringFilterComparator) -> Self {
         match value {
-            StringFilterComparator::Equal => golem::api0_2_0::host::StringFilterComparator::Equal,
+            StringFilterComparator::Equal => golem_api_0_2_x::host::StringFilterComparator::Equal,
             StringFilterComparator::NotEqual => {
-                golem::api0_2_0::host::StringFilterComparator::NotEqual
+                golem_api_0_2_x::host::StringFilterComparator::NotEqual
             }
-            StringFilterComparator::Like => golem::api0_2_0::host::StringFilterComparator::Like,
+            StringFilterComparator::Like => golem_api_0_2_x::host::StringFilterComparator::Like,
             StringFilterComparator::NotLike => {
-                golem::api0_2_0::host::StringFilterComparator::NotLike
+                golem_api_0_2_x::host::StringFilterComparator::NotLike
             }
         }
     }
 }
 
-impl From<FilterComparator> for golem::api0_2_0::host::FilterComparator {
+impl From<FilterComparator> for golem_api_0_2_x::host::FilterComparator {
     fn from(value: FilterComparator) -> Self {
         match value {
-            FilterComparator::Equal => golem::api0_2_0::host::FilterComparator::Equal,
-            FilterComparator::NotEqual => golem::api0_2_0::host::FilterComparator::NotEqual,
-            FilterComparator::GreaterEqual => golem::api0_2_0::host::FilterComparator::GreaterEqual,
-            FilterComparator::Greater => golem::api0_2_0::host::FilterComparator::Greater,
-            FilterComparator::LessEqual => golem::api0_2_0::host::FilterComparator::LessEqual,
-            FilterComparator::Less => golem::api0_2_0::host::FilterComparator::Less,
+            FilterComparator::Equal => golem_api_0_2_x::host::FilterComparator::Equal,
+            FilterComparator::NotEqual => golem_api_0_2_x::host::FilterComparator::NotEqual,
+            FilterComparator::GreaterEqual => golem_api_0_2_x::host::FilterComparator::GreaterEqual,
+            FilterComparator::Greater => golem_api_0_2_x::host::FilterComparator::Greater,
+            FilterComparator::LessEqual => golem_api_0_2_x::host::FilterComparator::LessEqual,
+            FilterComparator::Less => golem_api_0_2_x::host::FilterComparator::Less,
         }
     }
 }
 
-impl From<WorkerNameFilter> for golem::api0_2_0::host::WorkerNameFilter {
+impl From<WorkerNameFilter> for golem_api_0_2_x::host::WorkerNameFilter {
     fn from(value: WorkerNameFilter) -> Self {
-        golem::api0_2_0::host::WorkerNameFilter {
+        golem_api_0_2_x::host::WorkerNameFilter {
             comparator: value.comparator.into(),
             value: value.value,
         }
     }
 }
 
-impl From<WorkerStatusFilter> for golem::api0_2_0::host::WorkerStatusFilter {
+impl From<WorkerStatusFilter> for golem_api_0_2_x::host::WorkerStatusFilter {
     fn from(value: WorkerStatusFilter) -> Self {
-        golem::api0_2_0::host::WorkerStatusFilter {
+        golem_api_0_2_x::host::WorkerStatusFilter {
             comparator: value.comparator.into(),
             value: value.value.into(),
         }
     }
 }
 
-impl From<WorkerVersionFilter> for golem::api0_2_0::host::WorkerVersionFilter {
+impl From<WorkerVersionFilter> for golem_api_0_2_x::host::WorkerVersionFilter {
     fn from(value: WorkerVersionFilter) -> Self {
-        golem::api0_2_0::host::WorkerVersionFilter {
+        golem_api_0_2_x::host::WorkerVersionFilter {
             comparator: value.comparator.into(),
             value: value.value,
         }
     }
 }
 
-impl From<WorkerCreatedAtFilter> for golem::api0_2_0::host::WorkerCreatedAtFilter {
+impl From<WorkerCreatedAtFilter> for golem_api_0_2_x::host::WorkerCreatedAtFilter {
     fn from(value: WorkerCreatedAtFilter) -> Self {
-        golem::api0_2_0::host::WorkerCreatedAtFilter {
+        golem_api_0_2_x::host::WorkerCreatedAtFilter {
             comparator: value.comparator.into(),
             value: value.value,
         }
     }
 }
 
-impl From<WorkerEnvFilter> for golem::api0_2_0::host::WorkerEnvFilter {
+impl From<WorkerEnvFilter> for golem_api_0_2_x::host::WorkerEnvFilter {
     fn from(value: WorkerEnvFilter) -> Self {
-        golem::api0_2_0::host::WorkerEnvFilter {
+        golem_api_0_2_x::host::WorkerEnvFilter {
             comparator: value.comparator.into(),
             name: value.name,
             value: value.value,
@@ -710,55 +742,55 @@ impl From<WorkerEnvFilter> for golem::api0_2_0::host::WorkerEnvFilter {
     }
 }
 
-impl From<WorkerPropertyFilter> for golem::api0_2_0::host::WorkerPropertyFilter {
+impl From<WorkerPropertyFilter> for golem_api_0_2_x::host::WorkerPropertyFilter {
     fn from(value: WorkerPropertyFilter) -> Self {
         match value {
             WorkerPropertyFilter::Name(filter) => {
-                golem::api0_2_0::host::WorkerPropertyFilter::Name(filter.into())
+                golem_api_0_2_x::host::WorkerPropertyFilter::Name(filter.into())
             }
             WorkerPropertyFilter::Status(filter) => {
-                golem::api0_2_0::host::WorkerPropertyFilter::Status(filter.into())
+                golem_api_0_2_x::host::WorkerPropertyFilter::Status(filter.into())
             }
             WorkerPropertyFilter::Version(filter) => {
-                golem::api0_2_0::host::WorkerPropertyFilter::Version(filter.into())
+                golem_api_0_2_x::host::WorkerPropertyFilter::Version(filter.into())
             }
             WorkerPropertyFilter::CreatedAt(filter) => {
-                golem::api0_2_0::host::WorkerPropertyFilter::CreatedAt(filter.into())
+                golem_api_0_2_x::host::WorkerPropertyFilter::CreatedAt(filter.into())
             }
             WorkerPropertyFilter::Env(filter) => {
-                golem::api0_2_0::host::WorkerPropertyFilter::Env(filter.into())
+                golem_api_0_2_x::host::WorkerPropertyFilter::Env(filter.into())
             }
         }
     }
 }
 
-impl From<WorkerAllFilter> for golem::api0_2_0::host::WorkerAllFilter {
+impl From<WorkerAllFilter> for golem_api_0_2_x::host::WorkerAllFilter {
     fn from(value: WorkerAllFilter) -> Self {
-        golem::api0_2_0::host::WorkerAllFilter {
+        golem_api_0_2_x::host::WorkerAllFilter {
             filters: value.filters.into_iter().map(|x| x.into()).collect(),
         }
     }
 }
 
-impl From<WorkerAnyFilter> for golem::api0_2_0::host::WorkerAnyFilter {
+impl From<WorkerAnyFilter> for golem_api_0_2_x::host::WorkerAnyFilter {
     fn from(value: WorkerAnyFilter) -> Self {
-        golem::api0_2_0::host::WorkerAnyFilter {
+        golem_api_0_2_x::host::WorkerAnyFilter {
             filters: value.filters.into_iter().map(|x| x.into()).collect(),
         }
     }
 }
 
-impl From<golem_common::model::WorkerId> for golem::api1_1_1::host::WorkerId {
+impl From<golem_common::model::WorkerId> for golem_api_1_x::host::WorkerId {
     fn from(worker_id: golem_common::model::WorkerId) -> Self {
-        golem::api1_1_1::host::WorkerId {
+        golem_api_1_x::host::WorkerId {
             component_id: worker_id.component_id.into(),
             worker_name: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem::api1_1_1::host::WorkerId> for golem_common::model::WorkerId {
-    fn from(host: golem::api1_1_1::host::WorkerId) -> Self {
+impl From<golem_api_1_x::host::WorkerId> for golem_common::model::WorkerId {
+    fn from(host: golem_api_1_x::host::WorkerId) -> Self {
         Self {
             component_id: host.component_id.into(),
             worker_name: host.worker_name,
@@ -766,8 +798,8 @@ impl From<golem::api1_1_1::host::WorkerId> for golem_common::model::WorkerId {
     }
 }
 
-impl From<golem::api1_1_1::host::ComponentId> for golem_common::model::ComponentId {
-    fn from(host: golem::api1_1_1::host::ComponentId) -> Self {
+impl From<golem_api_1_x::host::ComponentId> for golem_common::model::ComponentId {
+    fn from(host: golem_api_1_x::host::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -775,12 +807,12 @@ impl From<golem::api1_1_1::host::ComponentId> for golem_common::model::Component
     }
 }
 
-impl From<golem_common::model::ComponentId> for golem::api1_1_1::host::ComponentId {
+impl From<golem_common::model::ComponentId> for golem_api_1_x::host::ComponentId {
     fn from(component_id: golem_common::model::ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem::api1_1_1::host::ComponentId {
-            uuid: golem::api1_1_1::host::Uuid {
+        golem_api_1_x::host::ComponentId {
+            uuid: golem_api_1_x::host::Uuid {
                 high_bits,
                 low_bits,
             },
@@ -788,17 +820,17 @@ impl From<golem_common::model::ComponentId> for golem::api1_1_1::host::Component
     }
 }
 
-impl From<golem_common::model::PromiseId> for golem::api1_1_1::host::PromiseId {
+impl From<golem_common::model::PromiseId> for golem_api_1_x::host::PromiseId {
     fn from(promise_id: golem_common::model::PromiseId) -> Self {
-        golem::api1_1_1::host::PromiseId {
+        golem_api_1_x::host::PromiseId {
             worker_id: promise_id.worker_id.into(),
             oplog_idx: promise_id.oplog_idx.into(),
         }
     }
 }
 
-impl From<golem::api1_1_1::host::PromiseId> for golem_common::model::PromiseId {
-    fn from(host: golem::api1_1_1::host::PromiseId) -> Self {
+impl From<golem_api_1_x::host::PromiseId> for golem_common::model::PromiseId {
+    fn from(host: golem_api_1_x::host::PromiseId) -> Self {
         Self {
             worker_id: host.worker_id.into(),
             oplog_idx: golem_common::model::oplog::OplogIndex::from_u64(host.oplog_idx),
@@ -806,7 +838,7 @@ impl From<golem::api1_1_1::host::PromiseId> for golem_common::model::PromiseId {
     }
 }
 
-impl From<&RetryConfig> for crate::preview2::golem::api1_1_1::host::RetryPolicy {
+impl From<&RetryConfig> for golem_api_1_x::host::RetryPolicy {
     fn from(value: &RetryConfig) -> Self {
         Self {
             max_attempts: value.max_attempts,
@@ -836,6 +868,27 @@ impl From<uuid::Uuid> for Uuid {
         Uuid {
             high_bits,
             low_bits,
+        }
+    }
+}
+
+impl From<RevertWorkerTarget> for golem_service_base::model::RevertWorkerTarget {
+    fn from(value: RevertWorkerTarget) -> Self {
+        match value {
+            RevertWorkerTarget::RevertToOplogIndex(index) => {
+                golem_service_base::model::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_service_base::model::RevertToOplogIndex {
+                        last_oplog_index: golem_common::model::OplogIndex::from_u64(index),
+                    },
+                )
+            }
+            RevertWorkerTarget::RevertLastInvocations(n) => {
+                golem_service_base::model::RevertWorkerTarget::RevertLastInvocations(
+                    golem_service_base::model::RevertLastInvocations {
+                        number_of_invocations: n,
+                    },
+                )
+            }
         }
     }
 }

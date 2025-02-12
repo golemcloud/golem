@@ -63,7 +63,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            expr @ Expr::Identifier(_, _) => {
+            expr @ Expr::Identifier(_, _, _) => {
                 inferred_type_stack.push_front(expr.clone());
             }
 
@@ -71,7 +71,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::SelectField(expr, field, current_inferred_type) => {
+            Expr::SelectField(expr, field, _, current_inferred_type) => {
                 internal::handle_select_field(
                     expr,
                     field,
@@ -80,7 +80,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 )?;
             }
 
-            Expr::SelectIndex(expr, index, current_inferred_type) => {
+            Expr::SelectIndex(expr, index, _, current_inferred_type) => {
                 internal::handle_select_index(
                     expr,
                     index,
@@ -89,11 +89,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 )?;
             }
 
-            Expr::Result(Ok(_), current_inferred_type) => {
+            Expr::Result(Ok(_), _, current_inferred_type) => {
                 internal::handle_result_ok(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
-            Expr::Result(Err(_), current_inferred_type) => {
+            Expr::Result(Err(_), _, current_inferred_type) => {
                 internal::handle_result_error(
                     expr,
                     current_inferred_type,
@@ -101,12 +101,16 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Option(Some(expr), current_inferred_type) => {
+            Expr::Option(Some(expr), _, current_inferred_type) => {
                 internal::handle_option_some(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
-            Expr::Option(None, current_inferred_type) => {
-                inferred_type_stack.push_front(Expr::Option(None, current_inferred_type.clone()));
+            Expr::Option(None, type_name, current_inferred_type) => {
+                inferred_type_stack.push_front(Expr::Option(
+                    None,
+                    type_name.clone(),
+                    current_inferred_type.clone(),
+                ));
             }
 
             Expr::Cond(pred, then, else_, current_inferred_type) => {
@@ -239,7 +243,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     &mut inferred_type_stack,
                 );
             }
-            Expr::Sequence(exprs, current_inferred_type) => {
+            Expr::Sequence(exprs, _, current_inferred_type) => {
                 internal::handle_sequence(exprs, current_inferred_type, &mut inferred_type_stack);
             }
             Expr::Record(expr, inferred_type) => {
@@ -446,6 +450,7 @@ mod internal {
         let new_select_field = Expr::SelectField(
             Box::new(expr.clone()),
             field.to_string(),
+            None,
             current_field_type.merge(selection_field_type),
         );
 
@@ -469,6 +474,7 @@ mod internal {
         let new_select_index = Expr::SelectIndex(
             Box::new(expr.clone()),
             *index,
+            None,
             current_index_type.merge(list_type),
         );
         inferred_type_stack.push_front(new_select_index);
@@ -491,6 +497,7 @@ mod internal {
         };
         let new_result = Expr::Result(
             Ok(Box::new(ok_expr.clone())),
+            None,
             current_ok_type.merge(result_type),
         );
         inferred_type_stack.push_front(new_result);
@@ -511,6 +518,7 @@ mod internal {
         };
         let new_result = Expr::Result(
             Err(Box::new(expr.clone())),
+            None,
             current_error_type.merge(result_type),
         );
         inferred_type_stack.push_front(new_result);
@@ -528,6 +536,7 @@ mod internal {
         let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
         let new_option = Expr::Option(
             Some(Box::new(expr.clone())),
+            None,
             current_some_type.merge(option_type),
         );
         inferred_type_stack.push_front(new_option);
@@ -867,12 +876,13 @@ mod internal {
             if let Some(first_expr) = new_exprs.clone().first() {
                 Expr::Sequence(
                     new_exprs,
+                    None,
                     current_inferred_type
                         .clone()
                         .merge(InferredType::List(Box::new(first_expr.inferred_type()))),
                 )
             } else {
-                Expr::Sequence(new_exprs, current_inferred_type.clone())
+                Expr::Sequence(new_exprs, None, current_inferred_type.clone())
             }
         };
 
@@ -956,20 +966,20 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_select_field() {
         let record_identifier =
-            Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+            Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![(
                 "foo".to_string(),
                 InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
             )]));
-        let select_expr = Expr::select_field(record_identifier, "foo");
-        let expr = Expr::select_field(select_expr, "bar");
+        let select_expr = Expr::select_field(record_identifier, "foo", None);
+        let expr = Expr::select_field(select_expr, "bar", None);
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
     #[test]
     pub fn test_pull_up_for_select_index() {
-        let identifier =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let identifier = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
         let expr = Expr::select_index(identifier.clone(), 0);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::select_index(identifier, 0).add_infer_type(InferredType::U64);
@@ -995,12 +1005,12 @@ mod type_pull_up_tests {
             ),
         ];
 
-        let expr = Expr::Sequence(elems.clone(), InferredType::Unknown);
+        let expr = Expr::Sequence(elems.clone(), None, InferredType::Unknown);
         let new_expr = expr.pull_types_up().unwrap();
 
         assert_eq!(
             new_expr,
-            Expr::Sequence(elems, InferredType::List(Box::new(InferredType::U64)))
+            Expr::Sequence(elems, None, InferredType::List(Box::new(InferredType::U64)))
         );
     }
 
@@ -1094,14 +1104,14 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_if_else() {
-        let inner1 =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner1 = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner1.clone(), 0);
         let select_index2 = Expr::select_index(inner1, 1);
 
-        let inner2 =
-            Expr::identifier("bar").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner2 = Expr::identifier("bar", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index3 = Expr::select_index(inner2.clone(), 0);
         let select_index4 = Expr::select_index(inner2, 1);
@@ -1118,17 +1128,21 @@ mod type_pull_up_tests {
                 Box::new(Expr::SelectIndex(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     0,
+                    None,
                     InferredType::U64,
                 )),
                 Box::new(Expr::SelectIndex(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::List(Box::new(InferredType::U64)),
                     )),
                     1,
+                    None,
                     InferredType::U64,
                 )),
                 InferredType::Bool,
@@ -1136,17 +1150,21 @@ mod type_pull_up_tests {
             Box::new(Expr::SelectIndex(
                 Box::new(Expr::Identifier(
                     VariableId::global("bar".to_string()),
+                    None,
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 0,
+                None,
                 InferredType::U64,
             )),
             Box::new(Expr::SelectIndex(
                 Box::new(Expr::Identifier(
                     VariableId::global("bar".to_string()),
+                    None,
                     InferredType::List(Box::new(InferredType::U64)),
                 )),
                 1,
+                None,
                 InferredType::U64,
             )),
             InferredType::U64,
@@ -1156,13 +1174,13 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_greater_than() {
-        let inner = Expr::identifier("foo").add_infer_type(InferredType::Record(vec![
+        let inner = Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![
             ("bar".to_string(), InferredType::Str),
             ("baz".to_string(), InferredType::U64),
         ]));
 
-        let select_field1 = Expr::select_field(inner.clone(), "bar");
-        let select_field2 = Expr::select_field(inner, "baz");
+        let select_field1 = Expr::select_field(inner.clone(), "bar", None);
+        let select_field2 = Expr::select_field(inner, "baz", None);
         let expr = Expr::greater_than(select_field1.clone(), select_field2.clone());
 
         let new_expr = expr.pull_types_up().unwrap();
@@ -1177,8 +1195,8 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
-        let inner =
-            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner.clone(), 0);
         let select_index2 = Expr::select_index(inner, 1);
@@ -1201,13 +1219,13 @@ mod type_pull_up_tests {
             ("baz".to_string(), InferredType::U64),
         ]);
 
-        let inner = Expr::identifier("foo")
+        let inner = Expr::identifier("foo", None)
             .add_infer_type(InferredType::List(Box::new(record_type.clone())));
 
         let select_field_from_first =
-            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar");
+            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar", None);
         let select_field_from_second =
-            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz");
+            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz", None);
         let expr = Expr::less_than_or_equal_to(
             select_field_from_first.clone(),
             select_field_from_second.clone(),
@@ -1218,12 +1236,14 @@ mod type_pull_up_tests {
         let new_select_field_from_first = Expr::select_field(
             Expr::select_index(inner.clone(), 0).add_infer_type(record_type.clone()),
             "bar",
+            None,
         )
         .add_infer_type(InferredType::Str);
 
         let new_select_field_from_second = Expr::select_field(
             Expr::select_index(inner.clone(), 1).add_infer_type(record_type),
             "baz",
+            None,
         )
         .add_infer_type(InferredType::U64);
 
@@ -1273,7 +1293,8 @@ mod type_pull_up_tests {
 
         let mut expr = Expr::from_text(rib).unwrap();
         let function_registry = FunctionTypeRegistry::empty();
-        expr.infer_types_initial_phase(&function_registry).unwrap();
+        expr.infer_types_initial_phase(&function_registry, &vec![])
+            .unwrap();
         expr.infer_all_identifiers().unwrap();
         let new_expr = expr.pull_types_up().unwrap();
 
@@ -1313,12 +1334,14 @@ mod type_pull_up_tests {
                             resource_params: vec![Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::local("input", 0),
+                                    None,
                                     InferredType::Record(vec![
                                         ("foo".to_string(), InferredType::Str),
                                         ("bar".to_string(), InferredType::Str),
                                     ]),
                                 )),
                                 "foo".to_string(),
+                                None,
                                 InferredType::Str,
                             )],
                             method: "checkout".to_string(),
@@ -1362,29 +1385,32 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_pattern_match() {
         let expr = Expr::pattern_match(
             Expr::select_field(
-                Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+                Expr::identifier("foo", None).add_infer_type(InferredType::Record(vec![(
                     "bar".to_string(),
                     InferredType::Str,
                 )])),
                 "bar",
+                None,
             ),
             vec![
                 MatchArm {
                     arm_pattern: ArmPattern::Constructor(
                         "cons1".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::SelectField(
-                            Box::new(Expr::identifier("foo").add_infer_type(InferredType::Record(
-                                vec![("bar".to_string(), InferredType::Str)],
-                            ))),
+                            Box::new(Expr::identifier("foo", None).add_infer_type(
+                                InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
+                            )),
                             "bar".to_string(),
+                            None,
                             InferredType::Unknown,
                         )))],
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
-                        Box::new(Expr::identifier("baz").add_infer_type(InferredType::Record(
-                            vec![("qux".to_string(), InferredType::Str)],
-                        ))),
+                        Box::new(Expr::identifier("baz", None).add_infer_type(
+                            InferredType::Record(vec![("qux".to_string(), InferredType::Str)]),
+                        )),
                         "qux".to_string(),
+                        None,
                         InferredType::Unknown,
                     )),
                 },
@@ -1392,23 +1418,23 @@ mod type_pull_up_tests {
                     arm_pattern: ArmPattern::Constructor(
                         "cons2".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::SelectField(
-                            Box::new(Expr::identifier("quux").add_infer_type(
+                            Box::new(Expr::identifier("quux", None).add_infer_type(
                                 InferredType::Record(vec![(
                                     "corge".to_string(),
                                     InferredType::Str,
                                 )]),
                             )),
                             "corge".to_string(),
+                            None,
                             InferredType::Unknown,
                         )))],
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
-                        Box::new(
-                            Expr::identifier("grault").add_infer_type(InferredType::Record(vec![
-                                ("garply".to_string(), InferredType::Str),
-                            ])),
-                        ),
+                        Box::new(Expr::identifier("grault", None).add_infer_type(
+                            InferredType::Record(vec![("garply".to_string(), InferredType::Str)]),
+                        )),
                         "garply".to_string(),
+                        None,
                         InferredType::Unknown,
                     )),
                 },
@@ -1427,9 +1453,11 @@ mod type_pull_up_tests {
                 Box::new(Expr::SelectField(
                     Box::new(Expr::Identifier(
                         VariableId::global("foo".to_string()),
+                        None,
                         InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
                     )),
                     "bar".to_string(),
+                    None,
                     InferredType::Str,
                 )),
                 vec![
@@ -1439,21 +1467,25 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::global("foo".to_string()),
+                                    None,
                                     InferredType::Record(vec![(
                                         "bar".to_string(),
                                         InferredType::Str,
                                     )]),
                                 )),
                                 "bar".to_string(),
+                                None,
                                 InferredType::Str,
                             )))],
                         ),
                         arm_resolution_expr: Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::global("baz".to_string()),
+                                None,
                                 InferredType::Record(vec![("qux".to_string(), InferredType::Str)]),
                             )),
                             "qux".to_string(),
+                            None,
                             InferredType::Str,
                         )),
                     },
@@ -1463,24 +1495,28 @@ mod type_pull_up_tests {
                             vec![ArmPattern::Literal(Box::new(Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::global("quux".to_string()),
+                                    None,
                                     InferredType::Record(vec![(
                                         "corge".to_string(),
                                         InferredType::Str,
                                     )]),
                                 )),
                                 "corge".to_string(),
+                                None,
                                 InferredType::Str,
                             )))],
                         ),
                         arm_resolution_expr: Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::global("grault".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "garply".to_string(),
                                     InferredType::Str,
                                 )]),
                             )),
                             "garply".to_string(),
+                            None,
                             InferredType::Str,
                         )),
                     },

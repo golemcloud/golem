@@ -49,7 +49,7 @@ pub mod plugin;
 mod primary;
 
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
 /// A top-level service for managing worker oplogs
 ///

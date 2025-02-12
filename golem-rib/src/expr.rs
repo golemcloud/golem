@@ -17,8 +17,8 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
-    ParsedFunctionName, VariableId,
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
+    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -37,15 +37,15 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
-    SelectField(Box<Expr>, String, InferredType),
-    SelectIndex(Box<Expr>, usize, InferredType),
-    Sequence(Vec<Expr>, InferredType),
+    SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
+    SelectIndex(Box<Expr>, usize, Option<TypeName>, InferredType),
+    Sequence(Vec<Expr>, Option<TypeName>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
     Literal(String, InferredType),
     Number(Number, Option<TypeName>, InferredType),
     Flags(Vec<String>, InferredType),
-    Identifier(VariableId, InferredType),
+    Identifier(VariableId, Option<TypeName>, InferredType),
     Boolean(bool, InferredType),
     Concat(Vec<Expr>, InferredType),
     ExprBlock(Vec<Expr>, InferredType),
@@ -63,8 +63,8 @@ pub enum Expr {
     LessThan(Box<Expr>, Box<Expr>, InferredType),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
-    Option(Option<Box<Expr>>, InferredType),
-    Result(Result<Box<Expr>, Box<Expr>>, InferredType),
+    Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
+    Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
     Call(CallType, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
@@ -134,11 +134,11 @@ impl Expr {
     }
 
     pub fn is_result(&self) -> bool {
-        matches!(self, Expr::Result(_, _))
+        matches!(self, Expr::Result(_, _, _))
     }
 
     pub fn is_option(&self) -> bool {
-        matches!(self, Expr::Option(_, _))
+        matches!(self, Expr::Option(_, _, _))
     }
 
     pub fn is_tuple(&self) -> bool {
@@ -146,7 +146,7 @@ impl Expr {
     }
 
     pub fn is_list(&self) -> bool {
-        matches!(self, Expr::Sequence(_, _))
+        matches!(self, Expr::Sequence(_, _, _))
     }
 
     pub fn is_flags(&self) -> bool {
@@ -154,11 +154,11 @@ impl Expr {
     }
 
     pub fn is_identifier(&self) -> bool {
-        matches!(self, Expr::Identifier(_, _))
+        matches!(self, Expr::Identifier(_, _, _))
     }
 
     pub fn is_select_field(&self) -> bool {
-        matches!(self, Expr::SelectField(_, _, _))
+        matches!(self, Expr::SelectField(_, _, _, _))
     }
 
     pub fn is_if_else(&self) -> bool {
@@ -174,7 +174,7 @@ impl Expr {
     }
 
     pub fn is_select_index(&self) -> bool {
-        matches!(self, Expr::SelectIndex(_, _, _))
+        matches!(self, Expr::SelectIndex(_, _, _, _))
     }
 
     pub fn is_boolean(&self) -> bool {
@@ -202,10 +202,12 @@ impl Expr {
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
         match self {
-            Expr::Option(Some(expr), _) => Some(("some".to_string(), Some(expr.deref().clone()))),
-            Expr::Option(None, _) => Some(("some".to_string(), None)),
-            Expr::Result(Ok(expr), _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
-            Expr::Result(Err(expr), _) => Some(("err".to_string(), Some(expr.deref().clone()))),
+            Expr::Option(Some(expr), _, _) => {
+                Some(("some".to_string(), Some(expr.deref().clone())))
+            }
+            Expr::Option(None, _, _) => Some(("some".to_string(), None)),
+            Expr::Result(Ok(expr), _, _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
+            Expr::Result(Err(expr), _, _) => Some(("err".to_string(), Some(expr.deref().clone()))),
             _ => None,
         }
     }
@@ -273,10 +275,11 @@ impl Expr {
         Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
-    pub fn err(expr: Expr) -> Self {
+    pub fn err(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
         Expr::Result(
             Err(Box::new(expr)),
+            type_annotation,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(inferred_type)),
@@ -297,9 +300,10 @@ impl Expr {
     }
 
     // An identifier by default is global until name-binding phase is run
-    pub fn identifier(name: impl AsRef<str>) -> Self {
+    pub fn identifier(name: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
         Expr::Identifier(
             VariableId::global(name.as_ref().to_string()),
+            type_annotation,
             InferredType::Unknown,
         )
     }
@@ -312,19 +316,14 @@ impl Expr {
         Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
-    pub fn let_binding(name: impl AsRef<str>, expr: Expr) -> Self {
+    pub fn let_binding(
+        name: impl AsRef<str>,
+        expr: Expr,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::Let(
             VariableId::global(name.as_ref().to_string()),
-            None,
-            Box::new(expr),
-            InferredType::Unknown,
-        )
-    }
-
-    pub fn let_binding_with_type(name: impl AsRef<str>, type_name: TypeName, expr: Expr) -> Self {
-        Expr::Let(
-            VariableId::global(name.as_ref().to_string()),
-            Some(type_name),
+            type_annotation,
             Box::new(expr),
             InferredType::Unknown,
         )
@@ -392,6 +391,14 @@ impl Expr {
         )
     }
 
+    pub fn bind_global_variables_type(
+        &self,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
+    ) -> Result<Self, String> {
+        let result_expr = type_inference::bind_global_variables_type(self, type_spec)?;
+        Ok(result_expr)
+    }
+
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
@@ -413,10 +420,12 @@ impl Expr {
         Expr::Not(Box::new(expr), InferredType::Bool)
     }
 
-    pub fn ok(expr: Expr) -> Self {
+    pub fn ok(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
+
         Expr::Result(
             Ok(Box::new(expr)),
+            type_annotation,
             InferredType::Result {
                 ok: Some(Box::new(inferred_type)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -432,6 +441,20 @@ impl Expr {
 
         Expr::Option(
             expr.map(Box::new),
+            None,
+            InferredType::Option(Box::new(inferred_type)),
+        )
+    }
+
+    pub fn option_with_type_annotation(expr: Option<Expr>, type_annotation: TypeName) -> Self {
+        let inferred_type = match &expr {
+            Some(expr) => expr.inferred_type(),
+            None => InferredType::Unknown,
+        };
+
+        Expr::Option(
+            expr.map(Box::new),
+            Some(type_annotation),
             InferredType::Option(Box::new(inferred_type)),
         )
     }
@@ -461,16 +484,47 @@ impl Expr {
         )
     }
 
-    pub fn select_field(expr: Expr, field: impl AsRef<str>) -> Self {
+    pub fn select_field(
+        expr: Expr,
+        field: impl AsRef<str>,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),
+            type_annotation,
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn select_field_with_type_annotation(
+        expr: Expr,
+        field: impl AsRef<str>,
+        type_annotation: TypeName,
+    ) -> Self {
+        Expr::SelectField(
+            Box::new(expr),
+            field.as_ref().to_string(),
+            Some(type_annotation),
             InferredType::Unknown,
         )
     }
 
     pub fn select_index(expr: Expr, index: usize) -> Self {
-        Expr::SelectIndex(Box::new(expr), index, InferredType::Unknown)
+        Expr::SelectIndex(Box::new(expr), index, None, InferredType::Unknown)
+    }
+
+    pub fn select_index_with_type_annotation(
+        expr: Expr,
+        index: usize,
+        type_annotation: TypeName,
+    ) -> Self {
+        Expr::SelectIndex(
+            Box::new(expr),
+            index,
+            Some(type_annotation),
+            InferredType::Unknown,
+        )
     }
 
     pub fn get_tag(expr: Expr) -> Self {
@@ -488,28 +542,28 @@ impl Expr {
         Expr::Tuple(expressions, inferred_type)
     }
 
-    pub fn sequence(expressions: Vec<Expr>) -> Self {
+    pub fn sequence(expressions: Vec<Expr>, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = InferredType::List(Box::new(
             expressions
                 .first()
                 .map_or(InferredType::Unknown, |x| x.inferred_type()),
         ));
 
-        Expr::Sequence(expressions, inferred_type)
+        Expr::Sequence(expressions, type_annotation, inferred_type)
     }
 
     pub fn inferred_type(&self) -> InferredType {
         match self {
             Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
             | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
-            | Expr::Identifier(_, inferred_type)
+            | Expr::Identifier(_, _, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
             | Expr::ExprBlock(_, inferred_type)
@@ -525,8 +579,8 @@ impl Expr {
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
@@ -541,13 +595,13 @@ impl Expr {
     pub fn infer_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        self.infer_types_initial_phase(function_type_registry)?;
+        self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
-
         self.check_types(function_type_registry)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
@@ -557,7 +611,11 @@ impl Expr {
     pub fn infer_types_initial_phase(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
+        type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
+        *self = self
+            .bind_global_variables_type(type_spec)
+            .map_err(|x| vec![x])?;
         self.bind_types();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
@@ -649,11 +707,11 @@ impl Expr {
 
     pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier(_, inferred_type)
+            Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
@@ -674,8 +732,8 @@ impl Expr {
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
@@ -697,11 +755,11 @@ impl Expr {
 
     pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier(_, inferred_type)
+            Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, inferred_type)
-            | Expr::SelectIndex(_, _, inferred_type)
-            | Expr::Sequence(_, inferred_type)
+            | Expr::SelectField(_, _, _, inferred_type)
+            | Expr::SelectIndex(_, _, _, inferred_type)
+            | Expr::Sequence(_, _, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
@@ -722,8 +780,8 @@ impl Expr {
             | Expr::Multiply(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Option(_, _, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::And(_, _, inferred_type)
@@ -759,29 +817,25 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    pub fn number(big_decimal: BigDecimal, inferred_type: InferredType) -> Expr {
-        Expr::Number(Number { value: big_decimal }, None, inferred_type)
-    }
-
-    pub fn number_with_type_name(
+    pub fn number(
         big_decimal: BigDecimal,
-        type_name: TypeName,
+        type_annotation: Option<TypeName>,
         inferred_type: InferredType,
     ) -> Expr {
         Expr::Number(
             Number { value: big_decimal },
-            Some(type_name),
+            type_annotation,
             inferred_type,
         )
     }
 
     pub fn untyped_number(big_decimal: BigDecimal) -> Expr {
-        Expr::number(big_decimal, InferredType::number())
+        Expr::number(big_decimal, None, InferredType::number())
     }
 
     // TODO; introduced to minimise the number of changes in tests.
     pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
-        Expr::number_with_type_name(big_decimal, type_name, InferredType::number())
+        Expr::number(big_decimal, Some(type_name), InferredType::number())
     }
 }
 
@@ -802,9 +856,9 @@ impl Number {
             AnalysedType::S32(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
             AnalysedType::S64(_) => self.value.to_i64().map(|v| v.into_value_and_type()),
             AnalysedType::U8(_) => self.value.to_u8().map(|v| v.into_value_and_type()),
-            AnalysedType::S8(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
+            AnalysedType::S8(_) => self.value.to_i8().map(|v| v.into_value_and_type()),
             AnalysedType::U16(_) => self.value.to_u16().map(|v| v.into_value_and_type()),
-            AnalysedType::S16(_) => self.value.to_i32().map(|v| v.into_value_and_type()),
+            AnalysedType::S16(_) => self.value.to_i16().map(|v| v.into_value_and_type()),
             _ => None,
         }
     }
@@ -834,7 +888,7 @@ impl MatchArm {
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
-    Constructor(String, Vec<ArmPattern>), // Can handle enums, variants, option, result etc
+    Constructor(String, Vec<ArmPattern>),
     TupleConstructor(Vec<ArmPattern>),
     RecordConstructor(Vec<(String, ArmPattern)>),
     ListConstructor(Vec<ArmPattern>),
@@ -934,8 +988,10 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Ok(Box::new(Expr::Identifier(
                 VariableId::global(binding_variable.to_string()),
+                None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -948,8 +1004,10 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Err(Box::new(Expr::Identifier(
                 VariableId::global(binding_variable.to_string()),
+                None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -962,19 +1020,22 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Option(
             Some(Box::new(Expr::Identifier(
                 VariableId::local_with_no_id(binding_variable),
+                None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Unknown,
         )))
     }
 
     pub fn none() -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(None, InferredType::Unknown)))
+        ArmPattern::Literal(Box::new(Expr::Option(None, None, InferredType::Unknown)))
     }
 
     pub fn identifier(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Identifier(
             VariableId::global(binding_variable.to_string()),
+            None,
             InferredType::Unknown,
         )))
     }
@@ -997,11 +1058,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let expr_: golem_api_grpc::proto::golem::rib::Expr =
                     *expr.expr.ok_or("Missing expr")?;
                 let expr: Expr = expr_.try_into()?;
-                if let Some(type_name) = type_name {
-                    Expr::let_binding_with_type(name, type_name, expr)
-                } else {
-                    Expr::let_binding(name, expr)
-                }
+                Expr::let_binding(name, expr, type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
@@ -1095,13 +1152,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs },
+                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
             ) => {
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
                 let exprs: Vec<Expr> = exprs
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs)
+                Expr::sequence(exprs, type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
@@ -1135,8 +1194,12 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => Expr::literal(value),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
-                golem_api_grpc::proto::golem::rib::IdentifierExpr { name },
-            ) => Expr::identifier(name.as_str()),
+                golem_api_grpc::proto::golem::rib::IdentifierExpr { name, type_name },
+            ) => {
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                Expr::identifier(name.as_str(), type_name)
+            }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
@@ -1189,30 +1252,54 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
                 let field = expr.field;
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr = *expr.expr.ok_or(
                     "Mi\
                 ssing expr",
                 )?;
-                Expr::select_field(expr.try_into()?, field.as_str())
+
+                Expr::select_field(expr.try_into()?, field.as_str(), type_name)
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
                 let expr = *expr;
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let index = expr.index as usize;
                 let expr = *expr.expr.ok_or("Missing expr")?;
-                Expr::select_index(expr.try_into()?, index)
+
+                if let Some(type_name) = type_name {
+                    Expr::select_index_with_type_annotation(expr.try_into()?, index, type_name)
+                } else {
+                    Expr::select_index(expr.try_into()?, index)
+                }
             }
-            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => match expr.expr {
-                Some(expr) => Expr::option(Some((*expr).try_into()?)),
-                None => Expr::option(None),
-            },
+            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
+                let type_name = expr.type_name;
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                match type_name {
+                    Some(type_name) => match expr.expr {
+                        Some(expr) => {
+                            Expr::option_with_type_annotation(Some((*expr).try_into()?), type_name)
+                        }
+                        None => Expr::option_with_type_annotation(None, type_name),
+                    },
+
+                    None => match expr.expr {
+                        Some(expr) => Expr::option(Some((*expr).try_into()?)),
+                        None => Expr::option(None),
+                    },
+                }
+            }
             golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
+                let type_name = expr.type_name;
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
                 let result = expr.result.ok_or("Missing result")?;
                 match result {
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
-                        Expr::ok((*expr).try_into()?)
+                        Expr::ok((*expr).try_into()?, type_name)
                     }
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
-                        Expr::err((*expr).try_into()?)
+                        Expr::err((*expr).try_into()?, type_name)
                     }
                 }
             }
@@ -1365,26 +1452,29 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::SelectField(expr, field, _) => {
+                Expr::SelectField(expr, field, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
                             expr: Some(Box::new((*expr).into())),
                             field,
+                            type_name: type_name.map(|t| t.into()),
                         }),
                     ))
                 }
-                Expr::SelectIndex(expr, index, _) => {
+                Expr::SelectIndex(expr, index, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
                         Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
                             expr: Some(Box::new((*expr).into())),
                             index: index as u64,
+                            type_name: type_name.map(|t| t.into()),
                         }),
                     ))
                 }
-                Expr::Sequence(exprs, _) => {
+                Expr::Sequence(exprs, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                         golem_api_grpc::proto::golem::rib::SequenceExpr {
                             exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                            type_name: type_name.map(|t| t.into()),
                         },
                     ))
                 }
@@ -1429,10 +1519,11 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::FlagsExpr { values },
                     ))
                 }
-                Expr::Identifier(variable_id, _) => {
+                Expr::Identifier(variable_id, type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
                         golem_api_grpc::proto::golem::rib::IdentifierExpr {
                             name: variable_id.name(),
+                            type_name: type_name.map(|t| t.into()),
                         },
                     ))
                 }
@@ -1549,14 +1640,17 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Option(expr, _) => {
+                Expr::Option(expr, optional_type_name, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
                         Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
                             expr: expr.map(|expr| Box::new((*expr).into())),
+                            type_name: optional_type_name.map(|t| t.into()),
                         }),
                     ))
                 }
-                Expr::Result(expr, _) => {
+                Expr::Result(expr, type_name, _) => {
+                    let type_name = type_name.map(|t| t.into());
+
                     let result = match expr {
                         Ok(expr) => golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(
                             Box::new((*expr).into()),
@@ -1569,6 +1663,7 @@ mod protobuf {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Result(
                         Box::new(golem_api_grpc::proto::golem::rib::ResultExpr {
                             result: Some(result),
+                            type_name,
                         }),
                     ))
                 }
@@ -1855,7 +1950,10 @@ mod tests {
     fn test_single_expr_in_interpolation_wrapped_in_quotes() {
         let input = r#""${foo}""#;
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::concat(vec![Expr::identifier("foo")])));
+        assert_eq!(
+            result,
+            Ok(Expr::concat(vec![Expr::identifier("foo", None)]))
+        );
 
         let input = r#""${{foo}}""#;
         let result = Expr::from_text(input);
@@ -1877,25 +1975,34 @@ mod tests {
 
     fn expected() -> Expr {
         Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1))),
-            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2))),
+            Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
+            Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::let_binding(
                 "result",
-                Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),
+                Expr::greater_than(Expr::identifier("x", None), Expr::identifier("y", None)),
+                None,
             ),
-            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result")))),
-            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"))),
+            Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::identifier("result", None))),
+                None,
+            ),
+            Expr::let_binding(
+                "bar",
+                Expr::ok(Expr::identifier("result", None), None),
+                None,
+            ),
             Expr::let_binding(
                 "baz",
                 Expr::pattern_match(
-                    Expr::identifier("foo"),
+                    Expr::identifier("foo", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
                             ),
-                            Expr::identifier("x"),
+                            Expr::identifier("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor("none", vec![]),
@@ -1903,28 +2010,30 @@ mod tests {
                         ),
                     ],
                 ),
+                None,
             ),
             Expr::let_binding(
                 "qux",
                 Expr::pattern_match(
-                    Expr::identifier("bar"),
+                    Expr::identifier("bar", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
                             ),
-                            Expr::identifier("x"),
+                            Expr::identifier("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg")))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg", None)))],
                             ),
                             Expr::boolean(false),
                         ),
                     ],
                 ),
+                None,
             ),
             Expr::let_binding(
                 "result",
@@ -1941,10 +2050,11 @@ mod tests {
                             method: "do-something-static".to_string(),
                         },
                     },
-                    vec![Expr::identifier("baz"), Expr::identifier("qux")],
+                    vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
                 ),
+                None,
             ),
-            Expr::identifier("result"),
+            Expr::identifier("result", None),
         ])
     }
 

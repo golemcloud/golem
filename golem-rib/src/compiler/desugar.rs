@@ -157,7 +157,7 @@ mod internal {
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
-            Expr::Identifier(identifier, inferred_type) => {
+            Expr::Identifier(identifier, _, inferred_type) => {
                 let assign_var = Expr::Let(
                     identifier.clone(),
                     None,
@@ -226,7 +226,7 @@ mod internal {
                 // However, there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (field, arm_pattern) in bind_patterns.iter() {
-                    let new_pred = Expr::select_field(pred_expr.clone(), field);
+                    let new_pred = Expr::select_field(pred_expr.clone(), field, None);
                     let new_pred_type = field_and_types
                         .iter()
                         .find(|(f, _)| f == field)
@@ -574,7 +574,7 @@ mod desugar_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry).unwrap();
+        expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
         let desugared_expr = match internal::last_expr(&expr) {
             Expr::PatternMatch(predicate, match_arms, _) => {
@@ -605,6 +605,7 @@ mod desugar_tests {
                     Box::new(Expr::GetTag(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -620,6 +621,7 @@ mod desugar_tests {
                             Box::new(Expr::Unwrap(
                                 Box::new(Expr::Identifier(
                                     VariableId::local("x", 0),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::U64)),
                                 )),
                                 InferredType::Unknown,
@@ -628,6 +630,7 @@ mod desugar_tests {
                         ),
                         Expr::Identifier(
                             VariableId::match_identifier("x".to_string(), 1),
+                            None,
                             InferredType::U64,
                         ),
                     ],
@@ -638,6 +641,7 @@ mod desugar_tests {
                         Box::new(Expr::GetTag(
                             Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Option(Box::new(InferredType::U64)),
                             )),
                             InferredType::Unknown,

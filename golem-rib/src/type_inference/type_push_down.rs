@@ -24,7 +24,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectField(expr, field, inferred_type) => {
+            Expr::SelectField(expr, field, _, inferred_type) => {
                 let field_type = inferred_type.clone();
                 let record_type = vec![(field.to_string(), field_type)];
                 let inferred_record_type = InferredType::Record(record_type);
@@ -33,7 +33,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex(expr, _, inferred_type) => {
+            Expr::SelectIndex(expr, _, _, inferred_type) => {
                 let field_type = inferred_type.clone();
                 let inferred_record_type = InferredType::List(Box::new(field_type));
                 expr.add_infer_type_mut(inferred_record_type);
@@ -52,17 +52,17 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 expr.add_infer_type_mut(inferred_type.clone());
                 queue.push_back(expr);
             }
-            Expr::Option(Some(expr), inferred_type) => {
+            Expr::Option(Some(expr), _, inferred_type) => {
                 internal::handle_option(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::Result(Ok(expr), inferred_type) => {
+            Expr::Result(Ok(expr), _, inferred_type) => {
                 internal::handle_ok(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::Result(Err(expr), inferred_type) => {
+            Expr::Result(Err(expr), _, inferred_type) => {
                 internal::handle_err(expr, inferred_type)?;
                 queue.push_back(expr);
             }
@@ -83,7 +83,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             Expr::Tuple(exprs, inferred_type) => {
                 internal::handle_tuple(exprs, inferred_type, &mut queue)?;
             }
-            Expr::Sequence(expressions, inferred_type) => {
+            Expr::Sequence(expressions, _, inferred_type) => {
                 internal::handle_sequence(expressions, inferred_type, &mut queue)?;
             }
 
@@ -210,7 +210,7 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, existing_inferred_type) => {
+                    Expr::Identifier(v, _, existing_inferred_type) => {
                         if let VariableId::ListComprehension(l) = v {
                             if l.name == variable_id.name() {
                                 *existing_inferred_type =
@@ -245,7 +245,7 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, existing_inferred_type) => {
+                    Expr::Identifier(v, _, existing_inferred_type) => {
                         if let VariableId::ListComprehension(l) = v {
                             if l.name == iterated_variable.name() {
                                 *existing_inferred_type =
@@ -538,7 +538,7 @@ mod type_push_down_tests {
     #[test]
     fn test_push_down_for_record() {
         let mut expr = Expr::Record(
-            vec![("titles".to_string(), Box::new(Expr::identifier("x")))],
+            vec![("titles".to_string(), Box::new(Expr::identifier("x", None)))],
             InferredType::AllOf(vec![
                 InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
                 InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
@@ -551,6 +551,7 @@ mod type_push_down_tests {
                 "titles".to_string(),
                 Box::new(Expr::Identifier(
                     VariableId::global("x".to_string()),
+                    None,
                     InferredType::U64,
                 )),
             )],
@@ -565,7 +566,8 @@ mod type_push_down_tests {
     #[test]
     fn test_push_down_for_sequence() {
         let mut expr = Expr::Sequence(
-            vec![Expr::identifier("x"), Expr::identifier("y")],
+            vec![Expr::identifier("x", None), Expr::identifier("y", None)],
+            None,
             InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),
                 InferredType::List(Box::new(InferredType::U64)),
@@ -577,13 +579,16 @@ mod type_push_down_tests {
             vec![
                 Expr::Identifier(
                     VariableId::global("x".to_string()),
+                    None,
                     InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
                 ),
                 Expr::Identifier(
                     VariableId::global("y".to_string()),
+                    None,
                     InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
                 ),
             ],
+            None,
             InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),
                 InferredType::List(Box::new(InferredType::U64)),

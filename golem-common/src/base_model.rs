@@ -157,6 +157,12 @@ impl Display for WorkerId {
     }
 }
 
+impl AsRef<WorkerId> for &WorkerId {
+    fn as_ref(&self) -> &WorkerId {
+        self
+    }
+}
+
 #[cfg(feature = "model")]
 impl golem_wasm_rpc::IntoValue for WorkerId {
     fn into_value(self) -> golem_wasm_rpc::Value {

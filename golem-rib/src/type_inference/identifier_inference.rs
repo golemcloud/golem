@@ -15,7 +15,7 @@
 use crate::Expr;
 
 pub fn infer_all_identifiers(expr: &mut Expr) -> Result<(), String> {
-    // We scan top-down and bottom-up to inform the type info between the identifiers
+    // We scan top-down and bottom-up to inform the type between the identifiers
     // It doesn't matter which order we do it in (i.e, which identifier expression has the right type isn't a problem),
     // as we accumulate all the types in both directions
     internal::infer_all_identifiers_bottom_up(expr)?;
@@ -37,7 +37,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, existing_type) => {
+                Expr::Identifier(variable_id, _, existing_type) => {
                     if let Some(new_inferred_type) = identifier_lookup.lookup(variable_id) {
                         *existing_type = existing_type.merge(new_inferred_type)
                     }
@@ -73,7 +73,7 @@ mod internal {
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
                     queue.push_front(expr)
                 }
-                Expr::Identifier(variable_id, existing_type) => {
+                Expr::Identifier(variable_id, _, existing_type) => {
                     if let Some(new_inferred_type) = identifier_lookup.lookup(variable_id) {
                         *existing_type = existing_type.merge(new_inferred_type)
                     }
@@ -169,7 +169,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     if !inferred_type.is_unknown() {
                         state.update(variable_id.clone(), inferred_type.clone())
                     }
@@ -189,7 +189,9 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) if variable_id.is_match_binding() => {
+                Expr::Identifier(variable_id, _, inferred_type)
+                    if variable_id.is_match_binding() =>
+                {
                     if let Some(new_inferred_type) = state.lookup(variable_id) {
                         *inferred_type = inferred_type.merge(new_inferred_type)
                     }

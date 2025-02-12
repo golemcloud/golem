@@ -22,8 +22,9 @@ mod internal {
     use crate::{Expr, InferredType};
     use std::collections::{HashMap, VecDeque};
 
-    // Unlike inferring all identifiers, inputs don't have an associated let binding,
-    // and yet we need to propagate this type info all over
+    // request.path.user is used as a string in one place
+    // request.path.id is used an integer in some other
+    // request -> AllOf(path -> user, path -> id)
     pub(crate) fn infer_global_inputs(expr: &mut Expr) {
         let global_variables_dictionary = collect_all_global_variables_type(expr);
         // Updating the collected types in all positions of input
@@ -31,7 +32,7 @@ mod internal {
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     // We are only interested in global variables
                     if variable_id.is_global() {
                         if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
@@ -53,13 +54,20 @@ mod internal {
         let mut all_types_of_global_variables = HashMap::new();
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
-                    // We are only interested in global variables
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     if variable_id.is_global() {
-                        all_types_of_global_variables
-                            .entry(variable_id.name().clone())
-                            .or_insert(Vec::new())
-                            .push(inferred_type.clone());
+                        match all_types_of_global_variables.get_mut(&variable_id.name().clone()) {
+                            None => {
+                                all_types_of_global_variables
+                                    .insert(variable_id.name(), vec![inferred_type.clone()]);
+                            }
+
+                            Some(v) => {
+                                if !v.contains(inferred_type) {
+                                    v.push(inferred_type.clone())
+                                }
+                            }
+                        }
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),

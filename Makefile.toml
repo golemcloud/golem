@@ -68,6 +68,7 @@ script = """
 rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
 cp wit/deps/io wasm-rpc/wit/deps
+cp wit/deps/clocks wasm-rpc/wit/deps
 cp wit/deps/wasm-rpc wasm-rpc/wit/deps
 """
 
@@ -203,6 +204,7 @@ description = "Runs unit tests only"
 script = '''
 cargo test --workspace --lib --all-features --exclude wasm-rpc-stubgen-tests-integration -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test -p golem-wasm-rpc-stubgen --tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]

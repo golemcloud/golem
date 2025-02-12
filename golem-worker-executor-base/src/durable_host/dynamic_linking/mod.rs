@@ -18,7 +18,7 @@ use crate::services::component::ComponentMetadata;
 use crate::workerctx::{DynamicLinking, WorkerCtx};
 use async_trait::async_trait;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_wasm_rpc::golem::rpc0_1_1::types::HostFutureInvokeResult;
+use golem_wasm_rpc::golem_rpc_0_1_x::types::HostFutureInvokeResult;
 use golem_wasm_rpc::HostWasmRpc;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};

@@ -37,7 +37,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     if enum_cases.cases.contains(&variable_id.name()) {
                         *expr = Expr::Call(
                             CallType::EnumConstructor(variable_id.name()),
@@ -61,7 +61,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     // Retrieve the possible no-arg variant from the registry
                     let key = RegistryKey::FunctionName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =

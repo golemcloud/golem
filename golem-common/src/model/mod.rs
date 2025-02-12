@@ -23,7 +23,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 
 use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValue, Value};
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::de::Unexpected;
@@ -225,8 +225,14 @@ impl Display for OwnedWorkerId {
     }
 }
 
+impl AsRef<WorkerId> for OwnedWorkerId {
+    fn as_ref(&self) -> &WorkerId {
+        &self.worker_id
+    }
+}
+
 /// Actions that can be scheduled to be executed at a given point in time
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
@@ -241,6 +247,14 @@ pub enum ScheduledAction {
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
+    /// Invoke the given action on the worker. The invocation will only
+    /// be persisted in the oplog when it's actually getting scheduled.
+    Invoke {
+        owned_worker_id: OwnedWorkerId,
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+    },
 }
 
 impl ScheduledAction {
@@ -251,6 +265,9 @@ impl ScheduledAction {
                 promise_id,
             } => OwnedWorkerId::new(account_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
+                owned_worker_id, ..
+            } => owned_worker_id.clone(),
+            ScheduledAction::Invoke {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
         }
@@ -268,6 +285,9 @@ impl Display for ScheduledAction {
             } => {
                 write!(f, "archive[{}]", owned_worker_id)
             }
+            ScheduledAction::Invoke {
+                owned_worker_id, ..
+            } => write!(f, "invoke[{}]", owned_worker_id),
         }
     }
 }
@@ -546,7 +566,7 @@ pub struct RetryConfig {
 #[derive(Clone, Debug, PartialEq, Encode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
-    pub deleted_regions: DeletedRegions,
+    pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<TimestampedWorkerInvocation>,
     pub pending_updates: VecDeque<TimestampedUpdateDescription>,
@@ -567,13 +587,17 @@ pub enum WorkerStatusRecordExtensions {
     Extension1 {
         active_plugins: HashSet<PluginInstallationId>,
     },
+    Extension2 {
+        active_plugins: HashSet<PluginInstallationId>,
+        deleted_regions: DeletedRegions,
+    },
 }
 
 impl ::bincode::Decode for WorkerStatusRecord {
     fn decode<__D: Decoder>(decoder: &mut __D) -> Result<Self, DecodeError> {
         Ok(Self {
             status: Decode::decode(decoder)?,
-            deleted_regions: Decode::decode(decoder)?,
+            skipped_regions: Decode::decode(decoder)?,
             overridden_retry_config: Decode::decode(decoder)?,
             pending_invocations: Decode::decode(decoder)?,
             pending_updates: Decode::decode(decoder)?,
@@ -586,15 +610,7 @@ impl ::bincode::Decode for WorkerStatusRecord {
             total_linear_memory_size: Decode::decode(decoder)?,
             owned_resources: Decode::decode(decoder)?,
             oplog_idx: Decode::decode(decoder)?,
-            extensions: Decode::decode(decoder).or_else(|err| {
-                if let DecodeError::UnexpectedEnd { .. } = &err {
-                    Ok(WorkerStatusRecordExtensions::Extension1 {
-                        active_plugins: HashSet::new(),
-                    })
-                } else {
-                    Err(err)
-                }
-            })?,
+            extensions: WorkerStatusRecord::handle_decoded_extensions(Decode::decode(decoder))?,
         })
     }
 }
@@ -602,7 +618,7 @@ impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
     fn borrow_decode<__D: BorrowDecoder<'__de>>(decoder: &mut __D) -> Result<Self, DecodeError> {
         Ok(Self {
             status: BorrowDecode::borrow_decode(decoder)?,
-            deleted_regions: BorrowDecode::borrow_decode(decoder)?,
+            skipped_regions: BorrowDecode::borrow_decode(decoder)?,
             overridden_retry_config: BorrowDecode::borrow_decode(decoder)?,
             pending_invocations: BorrowDecode::borrow_decode(decoder)?,
             pending_updates: BorrowDecode::borrow_decode(decoder)?,
@@ -615,15 +631,9 @@ impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
             total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
             owned_resources: BorrowDecode::borrow_decode(decoder)?,
             oplog_idx: BorrowDecode::borrow_decode(decoder)?,
-            extensions: BorrowDecode::borrow_decode(decoder).or_else(|err| {
-                if let DecodeError::UnexpectedEnd { .. } = &err {
-                    Ok(WorkerStatusRecordExtensions::Extension1 {
-                        active_plugins: HashSet::new(),
-                    })
-                } else {
-                    Err(err)
-                }
-            })?,
+            extensions: WorkerStatusRecord::handle_decoded_extensions(
+                BorrowDecode::borrow_decode(decoder),
+            )?,
         })
     }
 }
@@ -632,12 +642,53 @@ impl WorkerStatusRecord {
     pub fn active_plugins(&self) -> &HashSet<PluginInstallationId> {
         match &self.extensions {
             WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
+            WorkerStatusRecordExtensions::Extension2 { active_plugins, .. } => active_plugins,
         }
     }
 
     pub fn active_plugins_mut(&mut self) -> &mut HashSet<PluginInstallationId> {
         match &mut self.extensions {
             WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
+            WorkerStatusRecordExtensions::Extension2 { active_plugins, .. } => active_plugins,
+        }
+    }
+
+    pub fn deleted_regions(&self) -> &DeletedRegions {
+        match &self.extensions {
+            WorkerStatusRecordExtensions::Extension1 { .. } => unreachable!(),
+            WorkerStatusRecordExtensions::Extension2 {
+                deleted_regions, ..
+            } => deleted_regions,
+        }
+    }
+
+    pub fn deleted_regions_mut(&mut self) -> &mut DeletedRegions {
+        match &mut self.extensions {
+            WorkerStatusRecordExtensions::Extension1 { .. } => unreachable!(),
+            WorkerStatusRecordExtensions::Extension2 {
+                deleted_regions, ..
+            } => deleted_regions,
+        }
+    }
+
+    fn handle_decoded_extensions(
+        result: Result<WorkerStatusRecordExtensions, DecodeError>,
+    ) -> Result<WorkerStatusRecordExtensions, DecodeError> {
+        match result {
+            Ok(WorkerStatusRecordExtensions::Extension1 { active_plugins }) => {
+                Ok(WorkerStatusRecordExtensions::Extension2 {
+                    active_plugins,
+                    deleted_regions: DeletedRegions::new(),
+                })
+            }
+            Ok(ex @ WorkerStatusRecordExtensions::Extension2 { .. }) => Ok(ex),
+            Err(DecodeError::UnexpectedEnd { .. }) => {
+                Ok(WorkerStatusRecordExtensions::Extension2 {
+                    active_plugins: HashSet::new(),
+                    deleted_regions: DeletedRegions::new(),
+                })
+            }
+            Err(err) => Err(err),
         }
     }
 }
@@ -646,7 +697,7 @@ impl Default for WorkerStatusRecord {
     fn default() -> Self {
         WorkerStatusRecord {
             status: WorkerStatus::Idle,
-            deleted_regions: DeletedRegions::new(),
+            skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
             pending_updates: VecDeque::new(),
@@ -659,8 +710,9 @@ impl Default for WorkerStatusRecord {
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
-            extensions: WorkerStatusRecordExtensions::Extension1 {
+            extensions: WorkerStatusRecordExtensions::Extension2 {
                 active_plugins: HashSet::new(),
+                deleted_regions: DeletedRegions::new(),
             },
         }
     }

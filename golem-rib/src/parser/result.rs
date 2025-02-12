@@ -14,7 +14,7 @@
 
 use combine::parser::char::spaces;
 use combine::{
-    attempt, choice,
+    attempt, choice, optional,
     parser::char::{char, string},
     ParseError, Parser,
 };
@@ -23,6 +23,8 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
+use crate::parser::type_name::parse_type_name;
+use combine::parser::char::char as char_;
 
 pub fn result<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -31,13 +33,29 @@ where
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    choice((
-        attempt(string("ok").skip(char('(')))
-            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::ok(expr))),
-        attempt(string("err").skip(char('(')))
-            .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::err(expr))),
-    ))
-    .message("Invalid syntax for Result type")
+    (
+        choice((
+            attempt(string("ok").skip(char('(')))
+                .with((rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::ok(expr, None))),
+            attempt(string("err").skip(char('('))).with(
+                (rib_expr().skip(spaces()), char(')')).map(|(expr, _)| Expr::err(expr, None)),
+            ),
+        )),
+        optional(
+            char_(':')
+                .skip(spaces())
+                .with(parse_type_name())
+                .skip(spaces()),
+        ),
+    )
+        .and_then(|(expr, type_name)| match expr {
+            Expr::Result(Ok(expr), _, _) => Ok(Expr::ok(*expr, type_name)),
+            Expr::Result(Err(expr), _, _) => Ok(Expr::err(*expr, type_name)),
+            _ => Err(RibParseError::Message(
+                "Invalid syntax for Result type".to_string(),
+            )),
+        })
+        .message("Invalid syntax for Result type")
 }
 
 #[cfg(test)]
@@ -52,14 +70,20 @@ mod tests {
     fn test_result() {
         let input = "ok(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::ok(Expr::identifier("foo")), "")));
+        assert_eq!(
+            result,
+            Ok((Expr::ok(Expr::identifier("foo", None), None), ""))
+        );
     }
 
     #[test]
     fn test_result_err() {
         let input = "err(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::err(Expr::identifier("foo")), "")));
+        assert_eq!(
+            result,
+            Ok((Expr::err(Expr::identifier("foo", None), None), ""))
+        );
     }
 
     #[test]
@@ -69,10 +93,13 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::ok(Expr::sequence(vec![
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ])),
+                Expr::ok(
+                    Expr::sequence(
+                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        None
+                    ),
+                    None
+                ),
                 ""
             ))
         );
@@ -85,10 +112,13 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::err(Expr::sequence(vec![
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ])),
+                Expr::err(
+                    Expr::sequence(
+                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        None
+                    ),
+                    None
+                ),
                 ""
             ))
         );
@@ -100,7 +130,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::err(Expr::identifier("foo"))), ""))
+            Ok((
+                Expr::ok(Expr::err(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 
@@ -110,7 +143,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::ok(Expr::identifier("foo"))), ""))
+            Ok((
+                Expr::err(Expr::ok(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 
@@ -120,7 +156,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::ok(Expr::identifier("foo"))), ""))
+            Ok((
+                Expr::ok(Expr::ok(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 
@@ -130,7 +169,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::err(Expr::identifier("foo"))), ""))
+            Ok((
+                Expr::err(Expr::err(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 }

@@ -19,8 +19,8 @@ use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
 use std::ops::Deref;
 
-// A result of a function can be unit, which is not representable using type_annotated_value
-// A result can be a type_annotated_value
+// A result of a function can be unit, which is not representable using value_and_type
+// A result can be a value_and_type
 // A result can be a sink where it collects only the required elements from a possible iterable
 // A result can also be stored as an iterator, that its easy to stream through any iterables, given a sink is following it.
 pub enum RibInterpreterStackValue {
@@ -205,7 +205,7 @@ mod internal {
     #[cfg(feature = "json_in_errors")]
     pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
         format!(
-            "Unable to complete math operation for {}, {}",
+            "Unable to complete math operation for operands {}, {}",
             serde_json::to_string(left).unwrap_or_default(),
             serde_json::to_string(right).unwrap_or_default()
         )
