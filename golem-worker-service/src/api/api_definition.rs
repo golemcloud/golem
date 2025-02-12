@@ -16,19 +16,95 @@ use poem_openapi::*;
 use std::result::Result;
 use std::sync::Arc;
 use tracing::{error, Instrument};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api::RouteResponseData;
+use golem_worker_service_base::gateway_api_definition::HasGolemBindings;
+use golem_worker_service_base::service::component::ComponentService;
+use async_trait::async_trait;
+use futures::future::try_join_all;
+
+/// Local trait for converting HttpApiDefinition to HttpApiDefinitionResponseData
+#[async_trait]
+pub trait ToHttpApiDefinitionResponseData {
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String>;
+}
+
+#[async_trait]
+impl ToHttpApiDefinitionResponseData for HttpApiDefinition {
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String> {
+        let components = self.get_bindings()
+            .iter()
+            .filter_map(|binding| binding.get_component_id())
+            .map(|versioned_id| async move {
+                let component = component_service
+                    .get_by_version(&versioned_id.component_id, versioned_id.version, &EmptyAuthCtx::default())
+                    .await
+                    .map_err(|e| format!("Failed to get component metadata: {:?}", e))?;
+
+                Ok(golem_service_base::model::Component {
+                    versioned_component_id: golem_service_base::model::VersionedComponentId {
+                        component_id: versioned_id.component_id.clone(),
+                        version: versioned_id.version,
+                    },
+                    component_name: component.component_name,
+                    component_size: component.component_size,
+                    metadata: component.metadata,
+                    created_at: component.created_at,
+                    component_type: component.component_type,
+                    files: component.files,
+                    installed_plugins: component.installed_plugins,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let components = try_join_all(components)
+            .await
+            .map_err(|e: Box<dyn std::error::Error + Send + Sync>| format!("Failed to get components: {}", e))?;
+
+        let metadata_dictionary = golem_worker_service_base::gateway_api_definition::http::ComponentMetadataDictionary::from_components(&components);
+
+        let routes = self.routes
+            .iter()
+            .filter(|route| !route.binding.is_security_binding())  // Filter out security bindings
+            .map(|route| {
+                let compiled_route = golem_worker_service_base::gateway_api_definition::http::CompiledRoute::from_route(
+                    route,
+                    &metadata_dictionary,
+                ).map_err(|e| format!("Failed to compile route: {:?}", e))?;
+                RouteResponseData::try_from(compiled_route)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(HttpApiDefinitionResponseData {
+            id: self.id.clone(),
+            version: self.version.clone(),
+            routes,
+            draft: self.draft,
+            created_at: Some(self.created_at),
+        })
+    }
+}
+
+#[async_trait]
+impl<N: Clone + Send + Sync> ToHttpApiDefinitionResponseData for CompiledHttpApiDefinition<N> {
+    async fn to_response_data(&self, component_service: &Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>) -> Result<HttpApiDefinitionResponseData, String> {
+        let http_api_def: HttpApiDefinition = (*self).clone().into();
+        http_api_def.to_response_data(component_service).await
+    }
+}
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+    component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
     pub fn new(
-        definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
-        >,
+        definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+        component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Send + Sync>,
     ) -> Self {
-        Self { definition_service }
+        Self { definition_service, component_service }
     }
 
     /// Upload an OpenAPI definition
@@ -53,12 +129,12 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result = HttpApiDefinitionResponseData::try_from(result).map_err(|e| {
+            let result = result.to_response_data(&self.component_service).await.map_err(|e| {
                 error!("Failed to convert to response data {}", e);
                 ApiEndpointError::internal(safe(e))
-            });
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -91,13 +167,12 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
+            let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -149,13 +224,12 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                let result =
-                    HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                        error!("Failed to convert to response data {}", e);
-                        ApiEndpointError::internal(safe(e))
-                    });
+                let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
+                    error!("Failed to convert to response data {}", e);
+                    ApiEndpointError::internal(safe(e))
+                })?;
 
-                result.map(Json)
+                Ok(Json(result))
             }
         };
 
@@ -201,13 +275,12 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result =
-                HttpApiDefinitionResponseData::try_from(compiled_definition).map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                });
+            let result = compiled_definition.to_response_data(&self.component_service).await.map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            })?;
 
-            result.map(Json)
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -278,18 +351,62 @@ impl RegisterApiDefinitionApi {
                     .await?
             };
 
-            let values = data
-                .into_iter()
-                .map(HttpApiDefinitionResponseData::try_from)
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|e| {
-                    error!("Failed to convert to response data {}", e);
-                    ApiEndpointError::internal(safe(e))
-                })?;
+            let values = futures::future::try_join_all(
+                data.into_iter()
+                    .map(|http_api_def| {
+                        let component_service = self.component_service.clone();
+                        async move {
+                            http_api_def.to_response_data(&component_service).await
+                        }
+                    })
+            )
+            .await
+            .map_err(|e| {
+                error!("Failed to convert to response data {}", e);
+                ApiEndpointError::internal(safe(e))
+            })?;
 
             Ok(Json(values))
         };
         record.result(response)
+    }
+
+    /// Export the OpenAPI specification for the API definition.
+    ///
+    /// Returns the OpenAPI spec (in YAML) for the API definition with the given id and version.
+    #[oai(path = "/:id/:version/export", method = "get", operation_id = "export_definition")]
+    async fn export(
+        &self,
+        id: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiDefinitionId>,
+        version: poem_openapi::param::Path<golem_worker_service_base::gateway_api_definition::ApiVersion>,
+    ) -> Result<poem_openapi::payload::Json<String>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "export_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
+        );
+
+        let data = self.definition_service
+            .get(&id.0, &version.0, &DefaultNamespace::default(), &EmptyAuthCtx::default())
+            .instrument(record.span.clone())
+            .await?;
+        
+        let compiled_definition = data.ok_or(
+            ApiEndpointError::not_found(safe(format!(
+                "Can't find API definition with id {} and version {}",
+                id.0, version.0
+            )))
+        )?;
+        
+        let http_api_def: HttpApiDefinition = compiled_definition.into();
+        let api_def_request: golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest = http_api_def.into();
+        let openapi_def = golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest::from_http_api_definition_request(&api_def_request)
+            .map_err(|e| ApiEndpointError::internal(safe(e)))?;
+        
+        let yaml = serde_yaml::to_string(&openapi_def.0)
+            .map_err(|e| ApiEndpointError::internal(safe(e.to_string())))?;
+        
+        Ok(poem_openapi::payload::Json(yaml))
     }
 }
 
@@ -322,8 +439,9 @@ impl RegisterApiDefinitionApi {
 mod test {
     use golem_service_base::migration::{Migrations, MigrationsDir};
     use test_r::test;
-
     use super::*;
+    use golem_worker_service_base::api::{RouteRequestData, GatewayBindingData};
+    use golem_worker_service_base::gateway_api_definition::http::MethodPattern;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
@@ -437,14 +555,14 @@ mod test {
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
-            component_service,
+            component_service.clone(),
             api_definition_repo,
             api_deployment_repo,
             security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
         );
 
-        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));
+        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service), component_service);
 
         (
             poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0")),
@@ -463,6 +581,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -493,6 +612,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -515,6 +635,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -537,6 +658,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
 
         let response = client
@@ -562,6 +684,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -576,6 +699,7 @@ mod test {
             routes: vec![],
             draft: false,
             security: None,
+            metadata: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -693,5 +817,256 @@ mod test {
             .await;
 
         response.assert_status_is_ok();
+    }
+
+    #[test]
+    async fn export_endpoint_preserves_custom_extensions() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test_export".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![],
+            draft: false,
+            security: None,
+            metadata: None,
+        };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status(StatusCode::OK);
+
+        let url = format!("/v1/api/definitions/{}/{}/export", definition.id.0, definition.version.0);
+        let response = client.get(&url).send().await;
+        response.assert_status(StatusCode::OK);
+
+        let body_bytes = response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let exported_yaml: String = serde_json::from_slice(&body_bytes).expect("Failed to parse JSON string");
+
+        assert!(exported_yaml.contains("x-golem-api-definition-id"));
+        assert!(exported_yaml.contains("test_export"));
+        assert!(exported_yaml.contains("x-golem-api-definition-version"));
+        assert!(exported_yaml.contains("1.0"));
+        assert!(exported_yaml.contains("security:"), "Exported YAML should contain 'security' field.");
+        assert!(exported_yaml.contains("x-golem-cors-preflight:"), "Exported YAML should contain 'corsPreflight' field.");
+
+        let openapi_spec: openapiv3::OpenAPI = serde_yaml::from_str(&exported_yaml)
+            .expect("Exported YAML is not a valid OpenAPI v3 specification");
+        assert!(openapi_spec.openapi.starts_with("3.0"), "OpenAPI version is not 3.0.x");
+    }
+
+    #[test]
+    async fn swagger_ui_binding_test() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("swagger_test".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![
+                RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/swagger-ui".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                },
+            ],
+            draft: false,
+            security: None,
+            metadata: None,
+        };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let url = format!("/v1/api/definitions/{}/{}", definition.id.0, definition.version.0);
+        let response = client.get(&url).send().await;
+        response.assert_status_is_ok();
+        
+        let body = response.json().await;
+        let value = serde_json::to_value(body).unwrap();
+        let body_value: HttpApiDefinitionResponseData = serde_json::from_value(value).unwrap();
+        assert_eq!(body_value.routes.len(), 1);
+        
+        let swagger_route = &body_value.routes[0];
+        assert_eq!(swagger_route.path, "/swagger-ui");
+        assert_eq!(swagger_route.binding.binding_type, Some(golem_common::model::GatewayBindingType::SwaggerUi));
+        
+        let export_url = format!("/v1/api/definitions/{}/{}/export", definition.id.0, definition.version.0);
+        let response = client.get(&export_url).send().await;
+        response.assert_status_is_ok();
+
+        let body_bytes = response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let body = String::from_utf8(body_bytes).unwrap();
+        
+        assert!(body.contains("swagger-ui"), "Exported YAML should contain 'swagger-ui' binding type");
+        assert!(body.contains("x-golem-api-gateway-binding"), "Exported YAML should contain gateway binding extension");
+        assert!(body.contains("swagger_test"), "Exported YAML should contain our API definition id 'swagger_test'.");
+
+        let authority = "mytesthost";
+        let api_service = poem_openapi::OpenApiService::new((), "API", "1.0")
+            .server(format!("https://{}", authority));
+        let spec_url = format!("https://{}/openapi.json", authority);
+        let swagger_ui_html = api_service.swagger_ui_html().replace("\"./openapi.json\"", &format!("\"{}\"", spec_url));
+
+        assert!(swagger_ui_html.contains("swagger-ui.css"), "Swagger UI HTML should reference its CSS file.");
+        assert!(swagger_ui_html.contains("swagger-ui-bundle.js"), "Swagger UI HTML should reference its JS bundle.");
+        assert!(swagger_ui_html.contains("<html"), "Swagger UI HTML should contain an <html> tag.");
+    }
+
+    #[ignore] // This test really should be tried in local, rather than github actions build. It needs openapi generator installed, alongside with java, and versioning of it set.
+    #[test]
+    async fn export_and_generate_client_integration() {
+        use std::process::Command;
+        use tempfile::tempdir;
+        use std::fs;
+        
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("complex_api".to_string()),
+            version: ApiVersion("2.0.0".to_string()),
+            routes: vec![
+                RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/foo".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                },
+                RouteRequestData {
+                    method: MethodPattern::Post,
+                    path: "/bar/{id}".to_string(),
+                    binding: GatewayBindingData {
+                        binding_type: Some(golem_common::model::GatewayBindingType::SwaggerUi),
+                        response: None,
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key: None,
+                        allow_origin: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        expose_headers: None,
+                        max_age: None,
+                        allow_credentials: None,
+                    },
+                    security: None,
+                    cors: None,
+                },
+            ],
+            draft: false,
+            security: None,
+            metadata: None,
+        };
+
+        let response = client.post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let export_url = "/v1/api/definitions/complex_api/2.0.0/export";
+        let export_response = client.get(export_url).send().await;
+        export_response.assert_status_is_ok();
+        let body_bytes = export_response.0.into_body().into_vec().await.expect("Failed to read body bytes");
+        let exported_yaml: String = serde_json::from_slice(&body_bytes).expect("Failed to parse JSON string");
+        let yaml_bytes = exported_yaml.into_bytes();
+
+        let is_wsl = std::fs::metadata("/proc/sys/fs/binfmt_misc/WSLInterop").is_ok();
+        let temp_dir = if is_wsl {
+            let base = std::env::var("TEMP").unwrap_or_else(|_| "/mnt/c/Temp".to_string());
+            if !std::path::Path::new(&base).exists() {
+                std::fs::create_dir_all(&base).expect(&format!("Failed to create {} directory", &base));
+            }
+            tempfile::tempdir_in(&base).expect(&format!("Failed to create temp dir in {}", &base))
+        } else {
+            tempfile::tempdir().expect("Failed to create temp dir")
+        };
+
+        let yaml_path = temp_dir.path().join("openapi.yaml");
+        fs::write(&yaml_path, &yaml_bytes).expect("Failed to write YAML file");
+
+        let generated_client_dir = temp_dir.path().join("generated_client");
+        fs::create_dir_all(&generated_client_dir).expect("Failed to create output directory");
+
+        let is_windows = cfg!(windows);
+        let mut install_cmd = if is_windows {
+            let mut cmd = Command::new("npm");
+            cmd.args(&["install", "-g", "@openapitools/openapi-generator-cli"]);
+            cmd
+        } else {
+            let mut cmd = Command::new("npm");
+            cmd.args(&["install", "@openapitools/openapi-generator-cli", "--prefix", temp_dir.path().to_str().unwrap()]);
+            cmd
+        };
+
+        let install_output = install_cmd
+            .output()
+            .expect("Failed to install openapi-generator-cli");
+
+        assert!(install_output.status.success(),
+            "Failed to install openapi-generator-cli. Stdout: {}\nStderr: {}",
+            String::from_utf8_lossy(&install_output.stdout),
+            String::from_utf8_lossy(&install_output.stderr));
+
+        let mut generate_cmd = if is_windows {
+            let mut cmd = Command::new("npx");
+            cmd.args(&["openapi-generator-cli", "generate", "-g", "rust",
+                       "-i", yaml_path.to_str().unwrap(),
+                       "-o", generated_client_dir.to_str().unwrap()]);
+            cmd
+        } else {
+            let mut cmd = Command::new("npx");
+            cmd.args(&["--prefix", temp_dir.path().to_str().unwrap(), "openapi-generator-cli", "generate", "-g", "rust",
+                       "-i", yaml_path.to_str().unwrap(),
+                       "-o", generated_client_dir.to_str().unwrap()]);
+            cmd
+        };
+
+        let generate_output = generate_cmd
+            .output()
+            .expect("Failed to execute openapi-generator-cli command");
+
+        assert!(generate_output.status.success(),
+            "openapi-generator-cli command failed. Stdout: {}\nStderr: {}",
+            String::from_utf8_lossy(&generate_output.stdout),
+            String::from_utf8_lossy(&generate_output.stderr));
+
+        let cargo_toml = generated_client_dir.join("Cargo.toml");
+        assert!(cargo_toml.exists(), "Generated client does not contain Cargo.toml file");
     }
 }

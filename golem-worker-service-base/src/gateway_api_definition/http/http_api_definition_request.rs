@@ -17,6 +17,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::GatewayBinding;
 use crate::gateway_middleware::HttpCors;
 use crate::gateway_security::SecuritySchemeReference;
+use golem_common::model::component_metadata::ComponentMetadata;
 
 // HttpApiDefinitionRequest corresponds to the user facing http api definition.
 // It has security at the global level, which is following OpenAPI style of defining security at the root level.
@@ -28,6 +29,7 @@ pub struct HttpApiDefinitionRequest {
     pub version: ApiVersion,
     pub routes: Vec<RouteRequest>,
     pub draft: bool,
+    pub metadata: Option<ComponentMetadata>,
 }
 
 // In a RouteRequest, security is defined at the outer level

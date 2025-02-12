@@ -21,9 +21,10 @@ use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 // Example of a static binding is a pre-flight request which can be handled by CorsPreflight
 // Example: browser requests for preflights need only what's contained in a pre-flight CORS middleware and
 // don't need to pass through to the backend.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum StaticBinding {
     HttpCorsPreflight(Box<HttpCors>),
+    #[serde(skip_serializing)]
     HttpAuthCallBack(Box<HttpAuthenticationMiddleware>),
 }
 

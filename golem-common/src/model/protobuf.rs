@@ -730,21 +730,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
 impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for GatewayBindingType {
     fn from(value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType) -> Self {
         match value {
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
-                GatewayBindingType::Default
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
-                GatewayBindingType::FileServer
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
-                GatewayBindingType::HttpHandler
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
-                GatewayBindingType::CorsPreflight
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
-                GatewayBindingType::CorsPreflight
-            }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => GatewayBindingType::Default,
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => GatewayBindingType::FileServer,
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => GatewayBindingType::HttpHandler,
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => GatewayBindingType::CorsPreflight,
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => GatewayBindingType::CorsPreflight,
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
         }
     }
 }
@@ -752,18 +743,11 @@ impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for G
 impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
     fn from(value: GatewayBindingType) -> Self {
         match value {
-            GatewayBindingType::Default => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default
-            }
-            GatewayBindingType::FileServer => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer
-            }
-            GatewayBindingType::HttpHandler => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler
-            }
-            GatewayBindingType::CorsPreflight => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight
-            }
+            GatewayBindingType::Default => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default,
+            GatewayBindingType::FileServer => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer,
+            GatewayBindingType::HttpHandler => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler,
+            GatewayBindingType::CorsPreflight => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight,
+            GatewayBindingType::SwaggerUi => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::SwaggerUi,
         }
     }
 }

@@ -74,6 +74,7 @@ pub struct HttpApiDefinitionRequest {
     pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
+    pub metadata: Option<String>,
 }
 
 // Mostly this data structures that represents the actual incoming request
@@ -599,7 +600,19 @@ impl TryFrom<GatewayBindingCompiled> for GatewayBindingResponseData {
                     cors_preflight: static_binding.get_cors_preflight(),
                     response_mapping_output: None,
                 })
-            }
+            },
+            GatewayBindingCompiled::SwaggerUi => Ok(GatewayBindingResponseData {
+                component_id: None,
+                worker_name: None,
+                idempotency_key: None,
+                response: None,
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: None,
+                response_mapping_output: None,
+            })
         }
     }
 }
@@ -666,6 +679,12 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             routes.push(v);
         }
 
+        let metadata = if let Some(metadata_str) = self.metadata {
+            Some(serde_json::from_str(&metadata_str).map_err(|e| format!("Failed to parse metadata: {}", e))?)
+        } else {
+            None
+        };
+
         Ok(
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
@@ -675,6 +694,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
                     .map(|x| x.into_iter().map(SecuritySchemeReference::new).collect()),
                 routes,
                 draft: self.draft,
+                metadata,
             },
         )
     }
@@ -720,6 +740,20 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     Err("Auth call back static binding not to be exposed to users".to_string())
                 }
             },
+
+            GatewayBinding::SwaggerUi => Ok(GatewayBindingData {
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                component_id: None,
+                worker_name: None,
+                idempotency_key: None,
+                response: None,
+                allow_origin: None,
+                allow_methods: None,
+                allow_headers: None,
+                expose_headers: None,
+                max_age: None,
+                allow_credentials: None,
+            }),
         }
     }
 }
@@ -814,6 +848,8 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     }
                 }
             }
+
+            Some(GatewayBindingType::SwaggerUi) => Ok(GatewayBinding::SwaggerUi)
         }
     }
 }
@@ -888,6 +924,7 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
             version: ApiVersion(value.version),
             routes: route_requests,
             draft: value.draft,
+            metadata: None,
             security,
         };
 

@@ -41,6 +41,7 @@ pub enum GatewayBinding {
     FileServer(WorkerBinding),
     Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
+    SwaggerUi,
 }
 
 impl GatewayBinding {
@@ -53,6 +54,7 @@ impl GatewayBinding {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
             },
+            Self::SwaggerUi => false,
         }
     }
 
@@ -65,6 +67,7 @@ impl GatewayBinding {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
             },
+            Self::SwaggerUi => false,
         }
     }
 
@@ -80,6 +83,7 @@ impl GatewayBinding {
                 Some(http_handler_binding.component_id.clone())
             }
             Self::Static(_) => None,
+            Self::SwaggerUi => None,
         }
     }
 }
@@ -142,6 +146,16 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: None,
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
+                    static_binding: None,
+                },
+            ),
+            GatewayBinding::SwaggerUi => Ok(
+                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
+                    binding_type: Some(GatewayBindingType::SwaggerUi.into()),
+                    component: None,
+                    worker_name: None,
+                    response: None,
+                    idempotency_key: None,
                     static_binding: None,
                 },
             ),
@@ -221,6 +235,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 Ok(GatewayBinding::static_binding(StaticBinding::try_from(
                     static_binding,
                 )?))
+            }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::SwaggerUi => {
+                Ok(GatewayBinding::SwaggerUi)
             }
         }
     }

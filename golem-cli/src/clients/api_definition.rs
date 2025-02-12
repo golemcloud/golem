@@ -57,4 +57,10 @@ pub trait ApiDefinitionClient {
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
     ) -> Result<String, GolemError>;
+    async fn export(
+        &self,
+        id: ApiDefinitionId,
+        version: ApiDefinitionVersion,
+        project: &Self::ProjectContext,
+    ) -> Result<String, GolemError>;
 }

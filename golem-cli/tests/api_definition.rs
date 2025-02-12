@@ -50,6 +50,42 @@ fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
 fn generated(r: &mut DynamicTestRegistration) {
     make(r, "_short", "CLI_short", true);
     make(r, "_long", "CLI_long", false);
+    
+    add_test!(
+        r,
+        format!("api_definition_export_short"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_export((deps, "CLI_short".to_string(), cli.with_args(true)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_export_long"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_export((deps, "CLI_long".to_string(), cli.with_args(false)))
+        }
+    );
+
+    // Add todo worker test
+    add_test!(
+        r,
+        "api_definition_todo_worker",
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_todo_worker_test((deps, "".to_string(), cli.with_args(true)))
+        }
+    );
 }
 
 fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
@@ -218,6 +254,17 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         },
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_delete((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_swagger{suffix}"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_swagger((deps, name.to_string(), cli.with_args(short)))
         }
     );
 }
@@ -1050,6 +1097,456 @@ fn api_definition_delete(
     ])?;
 
     assert!(res_list.is_empty());
+
+    Ok(())
+}
+
+fn api_definition_export(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_export{}", name);
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let path = "/{user-id}/get-cart-contents";
+
+    let def = native_api_definition_request(&component_name, &component_id, None, path);
+
+    let file_path = make_json_file(&def.id, &def)?;
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    let cfg = &cli.config;
+    let exported: String = cli.run_string(&[
+        "api-definition",
+        "export",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+    ])?;
+
+    let yaml_start = exported.find("openapi: 3.0.0").unwrap_or(0);
+    let yaml_content = &exported[yaml_start..];
+
+    println!("Raw response:\n{}", exported); // Keep for debugging
+
+    let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}\nContent: {}", e, yaml_content))?;
+
+    assert_eq!(yaml["openapi"], "3.0.0");
+    assert_eq!(yaml["x-golem-api-definition-id"], component_name);
+    assert_eq!(yaml["x-golem-api-definition-version"], "0.1.0");
+    
+    let path_key = "/{user-id}/get-cart-contents";
+    assert!(
+        yaml["paths"][path_key]["get"]["x-golem-api-gateway-binding"].is_mapping(),
+        "Missing gateway binding in paths"
+    );
+
+    let binding = &yaml["paths"][path_key]["get"]["x-golem-api-gateway-binding"];
+    assert_eq!(
+        binding["component-id"]["componentId"],
+        component_id
+    );
+
+    Ok(())
+}
+
+fn api_definition_swagger(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_swagger{}", name);
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+
+    let mut def = HttpApiDefinitionRequest {
+        id: component_name.clone(),
+        version: "0.1.0".to_string(),
+        draft: true,
+        security: None,
+        routes: vec![
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/api".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"foo\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("let x: u64 = 1u64;\n{headers: {ContentType: \"json\"}, body: \"test\", status: x}".to_string()),
+                    allow_origin: Some("*".to_string()),
+                    allow_methods: Some("GET, OPTIONS".to_string()),
+                    allow_headers: Some("Content-Type".to_string()),
+                    expose_headers: Some("Content-Type".to_string()),
+                    binding_type: Some(GatewayBindingType::SwaggerUi),
+                    max_age: Some(86400),
+                    allow_credentials: Some(true),
+                },
+            },
+        ],
+    };
+
+    let file_path = make_json_file(&def.id, &def)?;
+    let response: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    assert_eq!(response.id, component_name);
+    assert_eq!(response.version, "0.1.0");
+    assert_eq!(response.routes.len(), 1);
+
+    let swagger_route = response.routes.first().expect("Route should exist");
+    assert_eq!(swagger_route.path, "/api");
+    assert_eq!(swagger_route.method, MethodPattern::Get);
+    assert_eq!(swagger_route.binding.binding_type, Some(GatewayBindingType::SwaggerUi));
+
+    let cfg = &cli.config;
+
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("Opening Swagger UI for API definition"));
+    assert!(result.contains(&component_name));
+    assert!(result.contains("0.1.0"));
+    assert!(result.contains("localhost:8080/api/swaggerui"));
+
+    def.id = format!("{}_no_swagger", component_name);
+    def.routes[0].binding.binding_type = Some(GatewayBindingType::Default);
+    
+    let file_path = make_json_file(&def.id, &def)?;
+    let _: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &def.id,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("does not have Swagger UI configured"));
+    assert!(result.contains(&def.id));
+
+    Ok(())
+}
+
+pub fn make_todo_worker_component(
+    deps: &(impl TestDependencies + Send + Sync + 'static),
+    component_name: &str,
+    cli: &CliLive,
+) -> anyhow::Result<ComponentView> {
+    add_component_from_file(deps, component_name, cli, "todo_worker.wasm")
+}
+
+fn api_definition_todo_worker_test(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    let component_name = format!("api_definition_todo_worker{}", name);
+    let component = make_todo_worker_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
+
+    let def = HttpApiDefinitionRequest {
+        id: component_name.clone(),
+        version: "0.1.0".to_string(),
+        draft: true,
+        security: None,
+        routes: vec![
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/profile".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-profile-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/profile@0.1.0.{get}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Put,
+                path: "/profile".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"update-profile-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/profile@0.1.0.{update}(request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-all-tasks-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{get-all}()".to_string()),
+                    allow_origin: Some("*".to_string()),
+                    allow_methods: Some("GET, POST, OPTIONS".to_string()),
+                    allow_headers: Some("Content-Type".to_string()),
+                    expose_headers: Some("Content-Type".to_string()),
+                    binding_type: Some(GatewayBindingType::SwaggerUi),
+                    max_age: Some(86400),
+                    allow_credentials: Some(true),
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Post,
+                path: "/tasks".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"create-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{create}(request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{get}(request.path.id)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Put,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"update-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{update}(request.path.id, request.body)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Delete,
+                path: "/tasks/{id}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"delete-task-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{delete}(request.path.id)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/incomplete".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-tasks-incomplete-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-incomplete}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/completed".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"get-completed-tasks-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-completed}()".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+            RouteRequestData {
+                method: MethodPattern::Get,
+                path: "/tasks/due-before/{timestamp}".to_string(),
+                cors: None,
+                security: None,
+                binding: GatewayBindingData {
+                    component_id: Some(VersionedComponentId {
+                        component_id: Uuid::parse_str(&component_id).unwrap(),
+                        version: 0,
+                    }),
+                    worker_name: Some("\"tasks-due-before-worker\"".to_string()),
+                    idempotency_key: None,
+                    response: Some("todo:personal/tasks@0.1.0.{list-due-before}(request.path.timestamp)".to_string()),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    binding_type: Some(GatewayBindingType::Default),
+                    max_age: None,
+                    allow_credentials: None,
+                },
+            },
+        ],
+    };
+
+    let file_path = make_json_file(&def.id, &def)?;
+    let response: HttpApiDefinitionResponseData = cli.run(&["api-definition", "add", file_path.to_str().unwrap()])?;
+
+    assert_eq!(response.id, component_name);
+    assert_eq!(response.version, "0.1.0");
+    assert_eq!(response.routes.len(), 10);
+
+    let cfg = &cli.config;
+    let exported: String = cli.run_string(&[
+        "api-definition",
+        "export",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+    ])?;
+
+    let yaml_start = exported.find("openapi: 3.0.0").unwrap_or(0);
+    let yaml_content = &exported[yaml_start..];
+    
+    let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse YAML: {}\nContent: {}", e, yaml_content))?;
+
+    assert_eq!(yaml["openapi"], "3.0.0");
+    assert_eq!(yaml["x-golem-api-definition-id"], component_name);
+    assert_eq!(yaml["x-golem-api-definition-version"], "0.1.0");
+    
+    assert!(yaml["paths"]["/profile"].is_mapping());
+    assert!(yaml["paths"]["/tasks"].is_mapping());
+    assert!(yaml["paths"]["/tasks/{id}"].is_mapping());
+    assert!(yaml["paths"]["/tasks/incomplete"].is_mapping());
+    assert!(yaml["paths"]["/tasks/completed"].is_mapping());
+    assert!(yaml["paths"]["/tasks/due-before/{timestamp}"].is_mapping());
+
+    let result: String = cli.run_string(&[
+        "api-definition",
+        "swagger",
+        &cfg.arg('i', "id"),
+        &component_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+        &cfg.arg('H', "host"),
+        "localhost:8080",
+    ])?;
+
+    assert!(result.contains("Opening Swagger UI for API definition"));
+    assert!(result.contains(&component_name));
+    assert!(result.contains("0.1.0"));
+    assert!(result.contains("localhost:8080/tasks/swaggerui"));
 
     Ok(())
 }

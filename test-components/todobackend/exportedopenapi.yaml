@@ -1,0 +1,209 @@
+openapi: 3.0.0
+info:
+  title: OpenAPI Definition
+  description: API definition exported from Golem
+  contact:
+    name: Golem Cloud
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  version: 0.1.0
+paths:
+  /profile:
+    get:
+      operationId: get__profile
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/profile@0.1.0.{get}()
+        worker-name: '"get-profile-worker"'
+    put:
+      operationId: put__profile
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/profile@0.1.0.{update}(request.body)
+        worker-name: '"update-profile-worker"'
+  /tasks:
+    get:
+      operationId: get__tasks
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: swagger-ui
+    post:
+      operationId: post__tasks
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{create}(request.body)
+        worker-name: '"create-task-worker"'
+  /tasks/completed:
+    get:
+      operationId: get__tasks_completed
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{list-completed}()
+        worker-name: '"get-completed-tasks-worker"'
+  /tasks/due-before/{timestamp}:
+    get:
+      operationId: get__tasks_due-before_timestamp
+      parameters:
+        - in: path
+          name: timestamp
+          description: 'Path parameter: timestamp'
+          required: true
+          schema:
+            type: string
+          explode: false
+          style: simple
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{list-due-before}(request.path.timestamp)
+        worker-name: '"tasks-due-before-worker"'
+  /tasks/incomplete:
+    get:
+      operationId: get__tasks_incomplete
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{list-incomplete}()
+        worker-name: '"get-tasks-incomplete-worker"'
+  /tasks/{id}:
+    get:
+      operationId: get__tasks_id
+      parameters:
+        - in: path
+          name: id
+          description: 'Path parameter: id'
+          required: true
+          schema:
+            type: string
+          explode: false
+          style: simple
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{get}(request.path.id)
+        worker-name: '"get-task-worker"'
+    put:
+      operationId: put__tasks_id
+      parameters:
+        - in: path
+          name: id
+          description: 'Path parameter: id'
+          required: true
+          schema:
+            type: string
+          explode: false
+          style: simple
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{update}(request.path.id, request.body)
+        worker-name: '"update-task-worker"'
+    delete:
+      operationId: delete__tasks_id
+      parameters:
+        - in: path
+          name: id
+          description: 'Path parameter: id'
+          required: true
+          schema:
+            type: string
+          explode: false
+          style: simple
+      responses:
+        '204':
+          description: No Content
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-id:
+          componentId: 659b124e-e976-4d98-84eb-3e21eb12318d
+          version: 0
+        response: todo:personal/tasks@0.1.0.{delete}(request.path.id)
+        worker-name: '"delete-task-worker"'
+components: {}
+security: []
+x-golem-api-definition-id: api_definition_todo_worker
+x-golem-api-definition-version: 0.1.0
+x-golem-cors-preflight: false
