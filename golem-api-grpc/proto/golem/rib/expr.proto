@@ -203,6 +203,7 @@ message ResultExpr {
     Expr ok = 1;
     Expr err = 2;
   }
+  optional TypeName type_name = 3;
 }
 
 message CallExpr {

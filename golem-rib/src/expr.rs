@@ -1318,13 +1318,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
+                let type_name = expr.type_name;
+                let type_name = type_name.map(TypeName::try_from).transpose()?;
                 let result = expr.result.ok_or("Missing result")?;
                 match result {
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
-                        Expr::ok((*expr).try_into()?, None)
+                        Expr::ok((*expr).try_into()?, type_name)
                     }
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
-                        Expr::err((*expr).try_into()?, None)
+                        Expr::err((*expr).try_into()?, type_name)
                     }
                 }
             }
@@ -1672,7 +1674,9 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Result(expr, _, _) => {
+                Expr::Result(expr, type_name, _) => {
+                    let type_name = type_name.map(|t| t.into());
+
                     let result = match expr {
                         Ok(expr) => golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(
                             Box::new((*expr).into()),
@@ -1685,6 +1689,7 @@ mod protobuf {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Result(
                         Box::new(golem_api_grpc::proto::golem::rib::ResultExpr {
                             result: Some(result),
+                            type_name,
                         }),
                     ))
                 }
