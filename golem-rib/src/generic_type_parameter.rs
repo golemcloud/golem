@@ -1,3 +1,3 @@
 pub struct GenericTypeParameter {
-    pub value: String
+    pub value: String,
 }

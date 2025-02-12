@@ -1,5 +1,6 @@
-use crate::FunctionTypeRegistry;
+use crate::generic_type_parameter::GenericTypeParameter;
 use crate::type_parameter::InstanceType;
+use crate::FunctionTypeRegistry;
 
 // InstanceType is more or less a subset of FunctionTypeRegistry
 // FunctionTypeRegistry is a collection of all the functions across all the interfaces and packages
@@ -9,4 +10,27 @@ use crate::type_parameter::InstanceType;
 pub struct InstanceModule {
     pub instance_type: InstanceType,
     pub registry: FunctionTypeRegistry,
+}
+
+pub enum Instance {
+    Durable {
+        worker_name: String,
+        instance_type: InstanceType,
+        registry: FunctionTypeRegistry,
+    },
+
+    Ephemeral {
+        instance_type: InstanceType,
+        registry: FunctionTypeRegistry,
+    },
+}
+
+impl Instance {
+    // From a generic type parameter, we can
+    pub fn from_generic_type_parameter(
+        generic_type_parameter: &GenericTypeParameter,
+        component_metadata: &Vec<FunctionTypeRegistry>,
+        worker_name: Option<String>,
+    ) {
+    }
 }

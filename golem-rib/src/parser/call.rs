@@ -14,7 +14,9 @@
 
 use crate::expr::Expr;
 use crate::function_name::{ParsedFunctionSite, SemVer};
+use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::errors::RibParseError;
+use crate::parser::instance_type::instance_type;
 use crate::parser::rib_expr::rib_expr;
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 use combine::error::Commit;
@@ -24,8 +26,6 @@ use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
 use poem_openapi::__private::poem::EndpointExt;
-use crate::generic_type_parameter::GenericTypeParameter;
-use crate::parser::instance_type::instance_type;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -59,18 +59,18 @@ where
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    many1(alpha_num() // Alphanumeric characters
-        .or(char('.')) // Period
-        .or(char('-')) // Hyphen
-        .or(char('@')) // At symbol
-        .or(char(':')) // Colon
-        .or(char('/'))) .map(|chars: Vec<char>| {
-        GenericTypeParameter {
-            value: chars.into_iter().collect()
-        }
+    many1(
+        alpha_num() // Alphanumeric characters
+            .or(char('.')) // Period
+            .or(char('-')) // Hyphen
+            .or(char('@')) // At symbol
+            .or(char(':')) // Colon
+            .or(char('/')),
+    )
+    .map(|chars: Vec<char>| GenericTypeParameter {
+        value: chars.into_iter().collect(),
     })
 }
-
 
 pub fn function_name<Input>() -> impl Parser<Input, Output = DynamicParsedFunctionName>
 where

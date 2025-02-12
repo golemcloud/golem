@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
+use crate::type_parameter::InstanceType;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
@@ -33,8 +35,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::generic_type_parameter::GenericTypeParameter;
-use crate::type_parameter::InstanceType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -252,7 +252,11 @@ impl Expr {
         cond
     }
 
-    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, generic_type_parameter: Option<GenericTypeParameter>, args: Vec<Expr>) -> Self {
+    pub fn call(
+        dynamic_parsed_fn_name: DynamicParsedFunctionName,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+    ) -> Self {
         Expr::Call(
             CallType::Function(dynamic_parsed_fn_name),
             args,

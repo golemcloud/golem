@@ -24,7 +24,7 @@ pub enum CallType {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum InbuiltFunction {
-    Instance
+    Instance,
 }
 
 impl CallType {

@@ -5,7 +5,7 @@ use std::fmt::Display;
 pub enum InstanceType {
     Interface(InterfaceName),
     PackageName(PackageName),
-    FullyQualifiedInterface(FullyQualifiedInterfaceName)
+    FullyQualifiedInterface(FullyQualifiedInterfaceName),
 }
 
 impl Display for InstanceType {
@@ -18,12 +18,11 @@ impl Display for InstanceType {
     }
 }
 
-
 // foo@1.0.0
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterfaceName {
     pub name: String,
-    pub version: Option<String>
+    pub version: Option<String>,
 }
 
 impl Display for InterfaceName {
@@ -41,7 +40,7 @@ impl Display for InterfaceName {
 pub struct PackageName {
     pub namespace: String,
     pub package_name: String,
-    pub version: Option<String>
+    pub version: Option<String>,
 }
 
 impl Display for PackageName {
@@ -58,7 +57,7 @@ impl Display for PackageName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FullyQualifiedInterfaceName {
     pub package_name: PackageName,
-    pub interface_name: InterfaceName
+    pub interface_name: InterfaceName,
 }
 
 impl Display for FullyQualifiedInterfaceName {

@@ -28,18 +28,18 @@ mod call_type;
 mod compiler;
 mod expr;
 mod function_name;
+mod generic_type_parameter;
 mod inferred_type;
+mod instance_type;
 mod interpreter;
 mod parser;
 mod text;
 mod type_checker;
 mod type_inference;
+mod type_parameter;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
-mod type_parameter;
-mod instance_type;
-mod generic_type_parameter;
 
 #[cfg(test)]
 test_r::enable!();
