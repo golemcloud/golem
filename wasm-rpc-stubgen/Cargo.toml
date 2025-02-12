@@ -62,7 +62,7 @@ wac-graph = "0.6.1"
 walkdir = "2.5.0"
 wit-bindgen-rust = "=0.26.0"
 wit-encoder = "=0.221.2"
-wit-parser = "=0.221.2"
+wit-parser = "=0.221.3"
 
 
 [dev-dependencies]

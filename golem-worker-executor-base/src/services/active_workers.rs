@@ -190,9 +190,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             debug!("Collecting possibilities");
             // Collecting the workers which are currently idle but loaded into memory
             for (worker_id, worker) in self.workers.iter() {
-                if worker.is_currently_idle_but_running() {
-                    if let Ok(mem) = worker.memory_requirement().await {
-                        let last_changed = worker.last_execution_state_change().await;
+                if worker.is_currently_idle_but_running().await {
+                    if let Ok(mem) = worker.memory_requirement() {
+                        let last_changed = worker.last_execution_state_change();
                         possibilities.push((worker_id, worker, mem, last_changed));
                     }
                 }

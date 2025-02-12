@@ -23,13 +23,14 @@ use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, fs, naming};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
+use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
     Ident, Interface, InterfaceItem, Package, PackageItem, Params, ResourceFunc, ResourceFuncKind,
     Results, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
 };
-use wit_parser::PackageId;
+use wit_parser::{PackageId, PackageName};
 
 pub fn generate_client_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -223,13 +224,29 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
 
     let _indent = LogIndent::new();
 
+    let partial_stub_dep_packages = HashSet::from([
+        PackageName {
+            namespace: "wasi".to_string(),
+            name: "io".to_string(),
+            version: Some(Version::new(0, 0, 0)),
+        },
+        PackageName {
+            namespace: "wasi".to_string(),
+            name: "clocks".to_string(),
+            version: Some(Version::new(0, 2, 0)),
+        },
+    ]);
+
     let stub_dep_packages = def.stub_dep_package_ids();
 
     let target_wit_root = def.client_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
     for (package_id, package, package_sources) in def.packages_with_wit_sources() {
-        if !stub_dep_packages.contains(&package_id) || package_id == def.source_package_id {
+        if (!stub_dep_packages.contains(&package_id)
+            && !partial_stub_dep_packages.contains(&package.name))
+            || package_id == def.source_package_id
+        {
             log_warn_action(
                 "Skipping",
                 format!(

@@ -20,7 +20,7 @@ wasmparser = { version = "0.221.2", optional = true }
 wasm-encoder = { version = "0.221.2", optional = true }
 wasm-metadata = { version = "0.221.2", optional = true }
 wasm-wave = { workspace = true, optional = true }
-wit-parser = { version = "=0.221.2", optional = true }
+wit-parser = { version = "=0.221.3", optional = true }
 
 [dev-dependencies]
 colored-diff = "0.2.3"
