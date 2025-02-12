@@ -69,8 +69,8 @@ mod tests {
             result,
             Expr::list_comprehension(
                 VariableId::list_comprehension_identifier("x"),
-                Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")]),
-                Expr::expr_block(vec![Expr::identifier("x")]),
+                Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None),
+                Expr::expr_block(vec![Expr::identifier("x", None)]),
             )
         );
     }
@@ -90,12 +90,13 @@ mod tests {
             Expr::expr_block(vec![
                 Expr::let_binding(
                     "x",
-                    Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")])
+                    Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None),
+                    None
                 ),
                 Expr::list_comprehension(
                     VariableId::list_comprehension_identifier("p"),
-                    Expr::identifier("x"),
-                    Expr::expr_block(vec![Expr::identifier("p")]),
+                    Expr::identifier("x", None),
+                    Expr::expr_block(vec![Expr::identifier("p", None)]),
                 )
             ])
         );

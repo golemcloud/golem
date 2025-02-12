@@ -63,7 +63,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier(variable_in_yield, _) => {
+                Expr::Identifier(variable_in_yield, _, _) => {
                     if iterated_variable_id.name() == variable_in_yield.name() {
                         *variable_in_yield = iterated_variable_id.clone();
                     } else if reduce_variable.name() == variable_in_yield.name() {

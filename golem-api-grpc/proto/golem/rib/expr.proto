@@ -54,15 +54,18 @@ message LetExpr {
 message SelectFieldExpr {
   string field = 1;
   Expr expr = 2;
+  optional TypeName type_name = 3;
 }
 
 message SelectIndexExpr {
   uint64 index = 1;
   Expr expr = 2;
+  optional TypeName type_name = 3;
 }
 
 message SequenceExpr {
   repeated Expr exprs = 1;
+  optional TypeName type_name = 2;
 }
 
 message RecordExpr {
@@ -98,6 +101,7 @@ message FlagsExpr {
 
 message IdentifierExpr {
   string name = 1;
+  optional TypeName type_name = 2;
 }
 
 message BooleanExpr {
@@ -192,6 +196,7 @@ message PatternMatchExpr {
 
 message OptionExpr {
   optional Expr expr = 1;
+  optional TypeName type_name = 2;
 }
 
 message ResultExpr {
@@ -199,6 +204,7 @@ message ResultExpr {
     Expr ok = 1;
     Expr err = 2;
   }
+  optional TypeName type_name = 3;
 }
 
 message CallExpr {

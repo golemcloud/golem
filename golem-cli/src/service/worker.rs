@@ -26,7 +26,9 @@ use crate::model::{
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
-use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor};
+use golem_client::model::{
+    AnalysedType, InvokeParameters, InvokeResult, RevertWorkerTarget, ScanCursor,
+};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
@@ -202,6 +204,13 @@ pub trait WorkerService {
         &self,
         worker_uri: WorkerUri,
         query: String,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn revert(
+        &self,
+        worker_uri: WorkerUri,
+        target: RevertWorkerTarget,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
 }
@@ -842,5 +851,16 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
         let entries = self.client.search_oplog(worker_urn, query).await?;
         Ok(GolemResult::Ok(Box::new(entries)))
+    }
+
+    async fn revert(
+        &self,
+        worker_uri: WorkerUri,
+        target: RevertWorkerTarget,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        self.client.revert(worker_urn, target).await?;
+        Ok(GolemResult::Str("Reverted".to_string()))
     }
 }

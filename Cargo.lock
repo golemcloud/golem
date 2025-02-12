@@ -4256,6 +4256,7 @@ dependencies = [
  "async-fs",
  "async-lock",
  "async-mutex",
+ "async-recursion",
  "async-scoped",
  "async-stream",
  "async-trait",

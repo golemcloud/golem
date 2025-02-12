@@ -20,15 +20,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
-    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    revert_worker_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
+    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
     ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey, InvocationContext, InvokeResult, LogEvent, TargetWorkerId, WorkerId,
@@ -872,6 +873,47 @@ impl WorkerService for ForwardingWorkerService {
                             error: Some(worker::v1::worker_error::Error::InternalError(error)),
                         },
                     )),
+                })
+            }
+        }
+    }
+
+    async fn revert_worker(
+        &self,
+        request: RevertWorkerRequest,
+    ) -> crate::Result<RevertWorkerResponse> {
+        let result = self
+            .worker_executor
+            .client()
+            .await?
+            .revert_worker(workerexecutor::v1::RevertWorkerRequest {
+                worker_id: request.worker_id.clone(),
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+                target: request.target,
+            })
+            .await;
+
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor revert-worker call"
+            )),
+            Some(workerexecutor::v1::revert_worker_response::Result::Success(empty)) => {
+                Ok(RevertWorkerResponse {
+                    result: Some(revert_worker_response::Result::Success(empty)),
+                })
+            }
+            Some(workerexecutor::v1::revert_worker_response::Result::Failure(error)) => {
+                Ok(RevertWorkerResponse {
+                    result: Some(revert_worker_response::Result::Failure(WorkerError {
+                        error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                    })),
                 })
             }
         }
