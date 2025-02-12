@@ -484,7 +484,11 @@ impl Expr {
         )
     }
 
-    pub fn select_field(expr: Expr, field: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
+    pub fn select_field(
+        expr: Expr,
+        field: impl AsRef<str>,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),

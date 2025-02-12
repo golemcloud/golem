@@ -1007,7 +1007,11 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo", None), "bar", None)),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
             None,
             InferredType::Str,
@@ -1034,7 +1038,11 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo", None), "bar", None)),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
             None,
             InferredType::Str,
@@ -1061,7 +1069,11 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo", None), "bar", None)),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
             None,
             InferredType::Str,

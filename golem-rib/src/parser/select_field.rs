@@ -174,7 +174,11 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_field(Expr::identifier("foo", None), "bar", None))
+            Ok(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None
+            ))
         );
     }
 
@@ -262,7 +266,11 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_index(
-                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar", None),
+                Expr::select_field(
+                    Expr::select_index(Expr::identifier("foo", None), 0),
+                    "bar",
+                    None
+                ),
                 1
             ))
         );
@@ -275,7 +283,11 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_index_with_type_annotation(
-                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar", None),
+                Expr::select_field(
+                    Expr::select_index(Expr::identifier("foo", None), 0),
+                    "bar",
+                    None
+                ),
                 1,
                 TypeName::U32
             ))
@@ -289,7 +301,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_index(Expr::select_field(Expr::identifier("foo", None), "bar", None), 0),
+                Expr::select_index(
+                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                    0
+                ),
                 "baz",
                 None
             ))

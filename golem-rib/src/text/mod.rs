@@ -1304,7 +1304,7 @@ mod selection_tests {
                 Expr::identifier("request", None),
             )]),
             "field",
-            None
+            None,
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request}.field".to_string();

@@ -1236,14 +1236,14 @@ mod type_pull_up_tests {
         let new_select_field_from_first = Expr::select_field(
             Expr::select_index(inner.clone(), 0).add_infer_type(record_type.clone()),
             "bar",
-            None
+            None,
         )
         .add_infer_type(InferredType::Str);
 
         let new_select_field_from_second = Expr::select_field(
             Expr::select_index(inner.clone(), 1).add_infer_type(record_type),
             "baz",
-            None
+            None,
         )
         .add_infer_type(InferredType::U64);
 
@@ -1390,7 +1390,7 @@ mod type_pull_up_tests {
                     InferredType::Str,
                 )])),
                 "bar",
-                None
+                None,
             ),
             vec![
                 MatchArm {
