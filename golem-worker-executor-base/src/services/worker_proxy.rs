@@ -432,7 +432,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         match response.result {
             Some(revert_worker_response::Result::Success(_)) => Ok(()),
-            Some(revert_worker_response::Result::Failure(error)) => Err(error.into()),
+            Some(revert_worker_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(GolemError::unknown(
                 "Empty response through the worker API".to_string(),
             ))),

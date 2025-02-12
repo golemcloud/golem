@@ -48,6 +48,7 @@ service WorkerExecutor {
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
+  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
@@ -407,6 +408,19 @@ message RevertWorkerRequest {
 message RevertWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CancelInvocationRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.AccountId account_id = 3;
+}
+
+message CancelInvocationResponse {
+  oneof result {
+    bool success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

@@ -288,6 +288,13 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             dropped_region,
         },
+        OplogEntry::CancelPendingInvocation {
+            timestamp,
+            idempotency_key,
+        } => OplogEntry::CancelPendingInvocation {
+            timestamp: rounded_ts(timestamp),
+            idempotency_key,
+        },
     }
 }
 
