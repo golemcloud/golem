@@ -23,6 +23,7 @@ use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
+use crate::parser::type_parameter::type_parameter;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -34,13 +35,18 @@ where
 {
     (
         function_name().skip(spaces()),
+        optional(between(
+            char('[').skip(spaces()),
+            char(']').skip(spaces()),
+            type_parameter().skip(spaces()),
+        )),
         between(
             char('(').skip(spaces()),
             char(')').skip(spaces()),
             sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
         ),
     )
-        .map(|(name, args)| Expr::call(name, args))
+        .map(|(name, type_parameter, args)| Expr::call(name, args))
         .message("Invalid function call")
 }
 
