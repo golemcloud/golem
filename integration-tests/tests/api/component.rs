@@ -1,12 +1,18 @@
 use crate::Tracing;
 use assert2::{assert, check};
-use golem_api_grpc::proto::golem::component::v1::{GetComponentRequest, GetComponentsRequest};
+use golem_api_grpc::proto::golem::component::v1::{
+    GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
+};
 use golem_api_grpc::proto::golem::component::Component;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{
+    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType,
+    InitialComponentFile,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
+use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use tokio::join;
 use uuid::Uuid;
@@ -157,8 +163,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
             })
     );
     check!(ephemeral_meta.dynamic_linking.len() == 0);
-
-    // TODO: files, producers, memories
 }
 
 #[test]
@@ -208,7 +212,7 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
+async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
     // Create component
     let (component_id, component_name) = deps
         .component("counters")
@@ -224,42 +228,19 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     // Get all versions
     let result = deps
         .component_service()
-        .get_component_metadata_all_versions(GetComponentRequest {
+        .get_latest_component_metadata(GetLatestComponentRequest {
             component_id: Some(component_id.clone().into()),
         })
         .await
         .unwrap();
 
-    // Check metadata
-    check!(result.len() == 4);
-
-    let component_id_str = common_component_id_to_str(&component_id);
-    for (idx, component) in result.iter().enumerate() {
-        println!("{:?}", component);
-
-        check!(
-            component.versioned_component_id.unwrap().version == idx as u64,
-            "{idx}"
-        );
-
-        check!(
-            grpc_component_id_to_str(
-                &component
-                    .versioned_component_id
-                    .unwrap()
-                    .component_id
-                    .unwrap()
-            ) == component_id_str,
-            "{idx}"
-        );
-
-        check!(component.component_name == component_name.0, "{idx}");
-    }
+    // Check metadata version
+    check!(result.versioned_component_id.unwrap().version == 4);
 }
 
 #[test]
 #[tracing::instrument]
-async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
+async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     // Create component
     let (component_id, component_name) = deps
         .component("counters")
@@ -267,16 +248,53 @@ async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
         .store_and_get_name()
         .await;
 
-    // Update component a few times
+    // Update component a few times while change type, ifs, dynamic link
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+    let file1_key = deps
+        .add_initial_component_file(
+            &account_id,
+            &Path::new("initial-file-read-write/files/foo.txt"),
+        )
+        .await;
+    let file2_key = deps
+        .add_initial_component_file(
+            &account_id,
+            &Path::new("initial-file-read-write/files/baz.txt"),
+        )
+        .await;
+
+    let file_1 = InitialComponentFile {
+        key: file1_key,
+        path: ComponentFilePath::from_abs_str("/dummy-readonly").unwrap(),
+        permissions: ComponentFilePermissions::ReadOnly,
+    };
+
+    let file_2 = InitialComponentFile {
+        key: file2_key,
+        path: ComponentFilePath::from_abs_str("/dummy-readonly").unwrap(),
+        permissions: ComponentFilePermissions::ReadOnly,
+    };
+    let link = (
+        "dummy:dummy/dummy".to_string(),
+        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+            target_interface_name: HashMap::from_iter(vec![(
+                "dummy".to_string(),
+                "dummy:dummy/dummy-x".to_string(),
+            )]),
+        }),
+    );
     deps.component_service()
         .update_component(
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
-            None,
+            Some(&[file_1.clone(), file_2.clone()]),
             None,
         )
         .await;
+
     deps.component_service()
         .update_component(
             &component_id,
@@ -286,21 +304,14 @@ async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
             None,
         )
         .await;
+
     deps.component_service()
         .update_component(
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
             None,
-            Some(&HashMap::from([(
-                "dummy:dummy/dummy".to_string(),
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    target_interface_name: HashMap::from_iter(vec![(
-                        "dummy".to_string(),
-                        "dummy:dummy/dummy".to_string(),
-                    )]),
-                }),
-            )])),
+            Some(&HashMap::from([link.clone()])),
         )
         .await;
 
@@ -335,6 +346,24 @@ async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
         );
 
         check!(component.component_name == component_name.0, "{idx}");
+
+        match idx {
+            1 => {
+                assert!(component.files.len() == 2, "{idx}");
+
+                check!(
+                    InitialComponentFile::try_from(component.files[0].clone()).unwrap() == file_1,
+                    "{idx}"
+                );
+                check!(
+                    InitialComponentFile::try_from(component.files[1].clone()).unwrap() == file_2,
+                    "{idx}"
+                );
+            }
+            _ => {
+                check!(component.files.is_empty(), "{idx}");
+            }
+        }
 
         match idx {
             2 => {
@@ -353,10 +382,15 @@ async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
 
         match idx {
             3 => {
-                check!(
-                    component.metadata.as_ref().unwrap().dynamic_linking.len() == 1,
-                    "{idx}"
-                );
+                let dynamic_linking = component
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .dynamic_linking
+                    .get(&link.0)
+                    .unwrap();
+
+                check!(link.1 == DynamicLinkedInstance::try_from(dynamic_linking.clone()).unwrap());
             }
             _ => {
                 check!(
@@ -371,8 +405,6 @@ async fn get_latest_component_metadata(deps: &EnvBasedTestDependencies) {
             }
         }
     }
-
-    // TODO: files
 }
 
 fn common_component_id_to_str(component_id: &ComponentId) -> String {
