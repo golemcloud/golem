@@ -813,8 +813,16 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    pub fn number(big_decimal: BigDecimal, type_annotation: Option<TypeName>, inferred_type: InferredType) -> Expr {
-        Expr::Number(Number { value: big_decimal }, type_annotation, inferred_type)
+    pub fn number(
+        big_decimal: BigDecimal,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    ) -> Expr {
+        Expr::Number(
+            Number { value: big_decimal },
+            type_annotation,
+            inferred_type,
+        )
     }
 
     pub fn untyped_number(big_decimal: BigDecimal) -> Expr {

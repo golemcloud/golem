@@ -2331,11 +2331,7 @@ mod type_inference_tests {
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
-                        Expr::number(
-                            BigDecimal::from(0),
-                            Some(TypeName::U64),
-                            InferredType::U64,
-                        ),
+                        Expr::number(BigDecimal::from(0), Some(TypeName::U64), InferredType::U64),
                         Expr::ExprBlock(
                             vec![
                                 Expr::Let(
