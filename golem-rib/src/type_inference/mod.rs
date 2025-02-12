@@ -67,6 +67,30 @@ mod type_inference_tests {
         #[test]
         fn test_global_variable_inference_1() {
             let rib_expr = r#"
+             let res = foo;
+             res
+            "#;
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("foo".to_string()),
+                path: Path::from_elems(vec![]),
+                inferred_type: InferredType::Str,
+            };
+
+            let with_type_spec = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec]);
+
+            assert!(with_type_spec.is_ok());
+
+            let mut new_expr = Expr::from_text(rib_expr).unwrap();
+            let without_type_spec = new_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(without_type_spec.is_err())
+        }
+
+        #[test]
+        fn test_global_variable_inference_2() {
+            let rib_expr = r#"
              let res = request.path.user-id;
              let hello: u64 = request.path.number;
              hello
@@ -85,7 +109,7 @@ mod type_inference_tests {
         }
 
         #[test]
-        fn test_global_variable_inference_2() {
+        fn test_global_variable_inference_3() {
             let rib_expr = r#"
              let res1 = request.path.user-id;
              let res2 = request.headers.name;
@@ -110,6 +134,173 @@ mod type_inference_tests {
             assert!(expr
                 .infer_types(&FunctionTypeRegistry::empty(), &type_spec)
                 .is_ok());
+        }
+    }
+
+    mod inline_type_annotations {
+        use crate::type_checker::Path;
+        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
+        use test_r::test;
+
+        #[test]
+        fn test_inline_type_annotation_is_backward_compatible() {
+            let mut old = Expr::from_text(r#"1u32"#).unwrap();
+
+            let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+
+            // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
+            let mut new = Expr::from_text(r#"1: u32"#).unwrap();
+            let result = new.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_1() {
+            let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
+            let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_2() {
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("foo".to_string()),
+                path: Path::from_elems(vec!["bar"]),
+                inferred_type: InferredType::Str,
+            };
+
+            // by default foo.bar.* will be inferred to be a string (given the above type spec) and
+            // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
+            let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_err());
+
+            // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
+            let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
+            let result = valid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_3() {
+            let type_spec = GlobalVariableTypeSpec {
+                variable_id: VariableId::global("foo".to_string()),
+                path: Path::from_elems(vec![]),
+                inferred_type: InferredType::Str,
+            };
+
+            // by default foo will be inferred to be a string (given the above type spec) and
+            // foo + 1u32 should fail compilation since we are adding string with a u32.
+            let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
+
+            let result = invalid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_err());
+
+            // We inline the type of foo identifier with u32 (over-riding what's given in the type spec)
+            let mut valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
+            let result = valid_rib_expr
+                .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_4() {
+            // Even if 1 is not specified with a specific number type, it should be inferred as u64
+            let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+
+            let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_6() {
+            // Even if 1 is not specified with a specific number type, it should be inferred as u64
+            let mut rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+
+            let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_7() {
+            // ok(1) isn't automatically inferred since no further hints are given
+            let mut invalid_rib_expr = Expr::from_text(r#"ok(1)"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_8() {
+            let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_9() {
+            let mut invalid_rib_expr = Expr::from_text(r#"err(1)"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_10() {
+            let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            // Cannot infer 1
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_inline_type_annotation_11() {
+            let mut invalid_rib_expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+
+            let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_err());
+
+            let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
+            let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+            assert!(result.is_ok());
         }
     }
 
@@ -157,6 +348,7 @@ mod type_inference_tests {
                 }),
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
+                    None,
                     InferredType::U64, // Variable identified to be a U64
                 )],
                 InferredType::Sequence(vec![]),
@@ -218,6 +410,7 @@ mod type_inference_tests {
                 }),
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
+                    None,
                     InferredType::U64,
                 )],
                 InferredType::Sequence(vec![]),
@@ -232,6 +425,7 @@ mod type_inference_tests {
                 }),
                 vec![Expr::Identifier(
                     VariableId::local("y", 0),
+                    None,
                     InferredType::U32,
                 )],
                 InferredType::Sequence(vec![]),
@@ -279,7 +473,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), InferredType::U64),
+                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::U64),
                 ],
                 InferredType::U64,
             );
@@ -307,7 +501,7 @@ mod type_inference_tests {
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), InferredType::Str),
+                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::Str),
                 ],
                 InferredType::Str,
             );
@@ -368,10 +562,12 @@ mod type_inference_tests {
                     Expr::GreaterThan(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
@@ -379,10 +575,12 @@ mod type_inference_tests {
                     Expr::GreaterThanOrEqualTo(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
@@ -390,10 +588,12 @@ mod type_inference_tests {
                     Expr::LessThan(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
@@ -401,10 +601,12 @@ mod type_inference_tests {
                     Expr::LessThanOrEqualTo(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
@@ -412,10 +614,12 @@ mod type_inference_tests {
                     Expr::EqualTo(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
@@ -606,8 +810,8 @@ mod type_inference_tests {
                     ),
                     Expr::Concat(
                         vec![
-                            Expr::Identifier(VariableId::local("x", 0), InferredType::Str),
-                            Expr::Identifier(VariableId::local("y", 0), InferredType::Str),
+                            Expr::Identifier(VariableId::local("x", 0), None, InferredType::Str),
+                            Expr::Identifier(VariableId::local("y", 0), None, InferredType::Str),
                         ],
                         InferredType::Str,
                     ),
@@ -644,7 +848,7 @@ mod type_inference_tests {
                         Box::new(Expr::boolean(true)),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), InferredType::Bool),
+                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::Bool),
                 ],
                 InferredType::Bool,
             );
@@ -716,20 +920,24 @@ mod type_inference_tests {
                         Box::new(Expr::GreaterThan(
                             Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::U64,
                             )),
                             Box::new(Expr::Identifier(
                                 VariableId::local("y", 0),
+                                None,
                                 InferredType::U64,
                             )),
                             InferredType::Bool,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("res1", 0),
+                            None,
                             InferredType::Str,
                         )),
                         Box::new(Expr::Identifier(
                             VariableId::local("res2", 0),
+                            None,
                             InferredType::Str,
                         )),
                         InferredType::Str,
@@ -775,11 +983,12 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::Str,
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("y", 0), InferredType::Str),
+                    Expr::Identifier(VariableId::local("y", 0), None, InferredType::Str),
                 ],
                 InferredType::Str,
             );
@@ -820,6 +1029,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Unknown,
@@ -829,11 +1039,12 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
+                            None,
                             InferredType::U64,
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("z", 0), InferredType::U64),
+                    Expr::Identifier(VariableId::local("z", 0), None, InferredType::U64),
                 ],
                 InferredType::U64,
             );
@@ -890,12 +1101,14 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
                     ),
                     Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::List(Box::new(InferredType::U64)),
                     ),
                 ],
@@ -954,6 +1167,7 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -961,9 +1175,11 @@ mod type_inference_tests {
                     Expr::SelectIndex(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         0,
+                        None,
                         InferredType::U64,
                     ),
                 ],
@@ -1016,6 +1232,7 @@ mod type_inference_tests {
                                 "foo".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("n", 0),
+                                    None,
                                     InferredType::U64,
                                 )),
                             )],
@@ -1026,9 +1243,11 @@ mod type_inference_tests {
                     Expr::SelectField(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                         )),
                         "foo".to_string(),
+                        None,
                         InferredType::U64,
                     ),
                 ],
@@ -1080,6 +1299,7 @@ mod type_inference_tests {
                     ),
                     Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::Tuple(vec![InferredType::U64, InferredType::Str]),
                     ),
                 ],
@@ -1135,8 +1355,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("y", 0),
+                                None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1144,6 +1366,7 @@ mod type_inference_tests {
                     Expr::PatternMatch(
                         Box::new(Expr::Identifier(
                             VariableId::local("z", 0),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         vec![
@@ -1152,10 +1375,15 @@ mod type_inference_tests {
                                     "some",
                                     vec![ArmPattern::literal(Expr::Identifier(
                                         VariableId::match_identifier("z".to_string(), 1),
+                                        None,
                                         InferredType::U64,
                                     ))],
                                 ),
-                                Expr::Identifier(VariableId::local("y", 0), InferredType::U64),
+                                Expr::Identifier(
+                                    VariableId::local("y", 0),
+                                    None,
+                                    InferredType::U64,
+                                ),
                             ),
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
@@ -1234,6 +1462,7 @@ mod type_inference_tests {
             let match_expr_expected = Expr::PatternMatch(
                 Box::new(Expr::Identifier(
                     VariableId::local("x", 0),
+                    None,
                     InferredType::U64,
                 )),
                 vec![
@@ -1254,6 +1483,7 @@ mod type_inference_tests {
                             }),
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::U64,
                             )],
                             InferredType::Sequence(vec![]),
@@ -1276,6 +1506,7 @@ mod type_inference_tests {
                             }),
                             vec![Expr::Identifier(
                                 VariableId::local("y", 0),
+                                None,
                                 InferredType::U32,
                             )],
                             InferredType::Sequence(vec![]),
@@ -1358,8 +1589,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         vec![
@@ -1368,6 +1601,7 @@ mod type_inference_tests {
                                     "some".to_string(),
                                     vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::U64,
                                     )))],
                                 ),
@@ -1375,10 +1609,13 @@ mod type_inference_tests {
                                     Some(Box::new(Expr::Option(
                                         Some(Box::new(Expr::Identifier(
                                             VariableId::match_identifier("x".to_string(), 1),
+                                            None,
                                             InferredType::U64,
                                         ))),
+                                        None,
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     ))),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::Option(Box::new(
                                         InferredType::U64,
                                     )))),
@@ -1390,10 +1627,13 @@ mod type_inference_tests {
                                     Some(Box::new(Expr::Option(
                                         Some(Box::new(Expr::Identifier(
                                             VariableId::local("y", 0),
+                                            None,
                                             InferredType::U64,
                                         ))),
+                                        None,
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     ))),
+                                    None,
                                     InferredType::Option(Box::new(InferredType::Option(Box::new(
                                         InferredType::U64,
                                     )))),
@@ -1441,8 +1681,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1454,6 +1696,7 @@ mod type_inference_tests {
                                     "some".to_string(),
                                     vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::Record(vec![(
                                             "foo".to_string(),
                                             InferredType::Str,
@@ -1462,6 +1705,7 @@ mod type_inference_tests {
                                 ),
                                 Expr::Identifier(
                                     VariableId::match_identifier("x".to_string(), 1),
+                                    None,
                                     InferredType::Record(vec![(
                                         "foo".to_string(),
                                         InferredType::Str,
@@ -1518,8 +1762,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1531,6 +1777,7 @@ mod type_inference_tests {
                                     "some",
                                     vec![ArmPattern::literal(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::Record(vec![(
                                             "foo".to_string(),
                                             InferredType::Str,
@@ -1540,12 +1787,14 @@ mod type_inference_tests {
                                 Expr::SelectField(
                                     Box::new(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::Record(vec![(
                                             "foo".to_string(),
                                             InferredType::Str,
                                         )]),
                                     )),
                                     "foo".to_string(),
+                                    None,
                                     InferredType::Str,
                                 ),
                             ),
@@ -1623,6 +1872,7 @@ mod type_inference_tests {
                                     InferredType::U64,
                                 ),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1631,8 +1881,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Record(vec![(
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1644,6 +1896,7 @@ mod type_inference_tests {
                                     "some".to_string(),
                                     vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::Record(vec![(
                                             "foo".to_string(),
                                             InferredType::Str,
@@ -1653,12 +1906,14 @@ mod type_inference_tests {
                                 Expr::SelectField(
                                     Box::new(Expr::Identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
+                                        None,
                                         InferredType::Record(vec![(
                                             "foo".to_string(),
                                             InferredType::Str,
                                         )]),
                                     )),
                                     "foo".to_string(),
+                                    None,
                                     InferredType::Str,
                                 ),
                             ),
@@ -1673,8 +1928,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("y", 0),
+                                None,
                                 InferredType::List(Box::new(InferredType::U64)),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::List(Box::new(
                                 InferredType::U64,
                             )))),
@@ -1685,15 +1942,18 @@ mod type_inference_tests {
                                     "some".to_string(),
                                     vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                         VariableId::match_identifier("y".to_string(), 3),
+                                        None,
                                         InferredType::List(Box::new(InferredType::U64)),
                                     )))],
                                 ),
                                 Expr::SelectIndex(
                                     Box::new(Expr::Identifier(
                                         VariableId::match_identifier("y".to_string(), 3),
+                                        None,
                                         InferredType::List(Box::new(InferredType::U64)),
                                     )),
                                     0,
+                                    None,
                                     InferredType::U64,
                                 ),
                             ),
@@ -1750,12 +2010,14 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
                     ),
                     Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::Option(Box::new(InferredType::U64)),
                     ),
                 ],
@@ -1791,6 +2053,7 @@ mod type_inference_tests {
                                 None,
                                 InferredType::U64,
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -1801,8 +2064,10 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Option(Box::new(InferredType::U64)),
                             ))),
+                            None,
                             InferredType::Option(Box::new(InferredType::Option(Box::new(
                                 InferredType::U64,
                             )))),
@@ -1811,6 +2076,7 @@ mod type_inference_tests {
                     ),
                     Expr::Identifier(
                         VariableId::local("y", 0),
+                        None,
                         InferredType::Option(Box::new(InferredType::Option(Box::new(
                             InferredType::U64,
                         )))),
@@ -1866,6 +2132,7 @@ mod type_inference_tests {
                                 "foo".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("number", 0),
+                                    None,
                                     InferredType::U64,
                                 )),
                             )],
@@ -1875,6 +2142,7 @@ mod type_inference_tests {
                     ),
                     Expr::Identifier(
                         VariableId::local("x", 0),
+                        None,
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                     ),
                 ],
@@ -1937,6 +2205,7 @@ mod type_inference_tests {
                                             "x".to_string(),
                                             Box::new(Expr::Identifier(
                                                 VariableId::local("x", 0),
+                                                None,
                                                 InferredType::U64,
                                             )),
                                         )],
@@ -1949,6 +2218,7 @@ mod type_inference_tests {
                                 ),
                                 Expr::Identifier(
                                     VariableId::local("z", 0),
+                                    None,
                                     InferredType::Record(vec![(
                                         "x".to_string(),
                                         InferredType::U64,
@@ -1961,6 +2231,7 @@ mod type_inference_tests {
                     ),
                     Expr::Identifier(
                         VariableId::local("y", 0),
+                        None,
                         InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
                     ),
                 ],
@@ -2043,10 +2314,11 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::number(BigDecimal::from(1), InferredType::U64),
-                                Expr::number(BigDecimal::from(2), InferredType::U64),
-                                Expr::number(BigDecimal::from(3), InferredType::U64),
+                                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                                Expr::number(BigDecimal::from(2), None, InferredType::U64),
+                                Expr::number(BigDecimal::from(3), None, InferredType::U64),
                             ],
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
                         InferredType::Unknown,
@@ -2056,13 +2328,10 @@ mod type_inference_tests {
                         VariableId::list_comprehension_identifier("a"),
                         Expr::Identifier(
                             VariableId::local("ages", 0),
+                            None,
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
-                        Expr::number_with_type_name(
-                            BigDecimal::from(0),
-                            TypeName::U64,
-                            InferredType::U64,
-                        ),
+                        Expr::number(BigDecimal::from(0), Some(TypeName::U64), InferredType::U64),
                         Expr::ExprBlock(
                             vec![
                                 Expr::Let(
@@ -2071,17 +2340,23 @@ mod type_inference_tests {
                                     Box::new(Expr::Plus(
                                         Box::new(Expr::Identifier(
                                             VariableId::list_reduce_identifier("z"),
+                                            None,
                                             InferredType::U64,
                                         )),
                                         Box::new(Expr::Identifier(
                                             VariableId::list_comprehension_identifier("a"),
+                                            None,
                                             InferredType::U64,
                                         )),
                                         InferredType::U64,
                                     )),
                                     InferredType::Unknown,
                                 ),
-                                Expr::Identifier(VariableId::local("result", 0), InferredType::U64),
+                                Expr::Identifier(
+                                    VariableId::local("result", 0),
+                                    None,
+                                    InferredType::U64,
+                                ),
                             ],
                             InferredType::U64,
                         ),
@@ -2122,6 +2397,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Sequence(
                             vec![Expr::literal("foo"), Expr::literal("bar")],
+                            None,
                             InferredType::List(Box::new(InferredType::Str)),
                         )),
                         InferredType::Unknown,
@@ -2130,11 +2406,13 @@ mod type_inference_tests {
                         VariableId::list_comprehension_identifier("i"),
                         Expr::Identifier(
                             VariableId::local("x", 0),
+                            None,
                             InferredType::List(Box::new(InferredType::Str)),
                         ),
                         Expr::ExprBlock(
                             vec![Expr::Identifier(
                                 VariableId::list_comprehension_identifier("i"),
+                                None,
                                 InferredType::Str,
                             )],
                             InferredType::Str,
@@ -2174,6 +2452,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Result(
                             Err(Box::new(Expr::literal("foo"))),
+                            None,
                             InferredType::Result {
                                 ok: Some(Box::new(InferredType::Unknown)),
                                 error: Some(Box::new(InferredType::Str)),
@@ -2186,6 +2465,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Result(
                             Ok(Box::new(Expr::literal("bar"))),
+                            None,
                             InferredType::Result {
                                 ok: Some(Box::new(InferredType::Str)),
                                 error: Some(Box::new(InferredType::Unknown)),
@@ -2199,6 +2479,7 @@ mod type_inference_tests {
                                 "a".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("p", 0),
+                                    None,
                                     InferredType::Result {
                                         ok: Some(Box::new(InferredType::Unknown)),
                                         error: Some(Box::new(InferredType::Str)),
@@ -2209,6 +2490,7 @@ mod type_inference_tests {
                                 "b".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("q", 0),
+                                    None,
                                     InferredType::Result {
                                         ok: Some(Box::new(InferredType::Str)),
                                         error: Some(Box::new(InferredType::Unknown)),
@@ -2368,6 +2650,7 @@ mod type_inference_tests {
                             Box::new(Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::global("request".to_string()),
+                                    None,
                                     InferredType::Record(vec![(
                                         "body".to_string(),
                                         InferredType::Record(vec![(
@@ -2377,12 +2660,14 @@ mod type_inference_tests {
                                     )]),
                                 )),
                                 "body".to_string(),
+                                None,
                                 InferredType::Record(vec![(
                                     "user-id".to_string(),
                                     InferredType::Str,
                                 )]),
                             )),
                             "user-id".to_string(),
+                            None,
                             InferredType::Str,
                         )),
                         InferredType::Unknown,
@@ -2442,6 +2727,7 @@ mod type_inference_tests {
                             vec![
                                 Expr::Identifier(
                                     VariableId::local("query1", 0),
+                                    None,
                                     InferredType::Enum(vec![
                                         "foo".to_string(),
                                         "bar".to_string(),
@@ -2450,6 +2736,7 @@ mod type_inference_tests {
                                 ),
                                 Expr::Identifier(
                                     VariableId::local("query2", 0),
+                                    None,
                                     InferredType::Enum(vec![
                                         "foo".to_string(),
                                         "bar".to_string(),
@@ -2458,13 +2745,18 @@ mod type_inference_tests {
                                 ),
                                 Expr::Identifier(
                                     VariableId::local("query3", 0),
+                                    None,
                                     InferredType::Enum(vec![
                                         "foo".to_string(),
                                         "bar".to_string(),
                                         "foo-bar".to_string(),
                                     ]),
                                 ),
-                                Expr::Identifier(VariableId::local("user", 0), InferredType::Str),
+                                Expr::Identifier(
+                                    VariableId::local("user", 0),
+                                    None,
+                                    InferredType::Str,
+                                ),
                             ],
                             InferredType::Enum(vec![
                                 "success".to_string(),
@@ -2480,6 +2772,7 @@ mod type_inference_tests {
                         Box::new(Expr::PatternMatch(
                             Box::new(Expr::Identifier(
                                 VariableId::local("result", 0),
+                                None,
                                 InferredType::Enum(vec![
                                     "success".to_string(),
                                     "failure".to_string(),
@@ -2505,6 +2798,7 @@ mod type_inference_tests {
                                             ),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2526,6 +2820,7 @@ mod type_inference_tests {
                                             Expr::Literal("failed ".to_string(), InferredType::Str),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2558,6 +2853,7 @@ mod type_inference_tests {
                         Box::new(Expr::PatternMatch(
                             Box::new(Expr::Identifier(
                                 VariableId::local("query2", 0),
+                                None,
                                 InferredType::Enum(vec![
                                     "foo".to_string(),
                                     "bar".to_string(),
@@ -2580,6 +2876,7 @@ mod type_inference_tests {
                                             Expr::Literal("y foo ".to_string(), InferredType::Str),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2601,6 +2898,7 @@ mod type_inference_tests {
                                             Expr::Literal("y bar ".to_string(), InferredType::Str),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2633,6 +2931,7 @@ mod type_inference_tests {
                         Box::new(Expr::PatternMatch(
                             Box::new(Expr::Identifier(
                                 VariableId::local("query3", 0),
+                                None,
                                 InferredType::Enum(vec![
                                     "foo".to_string(),
                                     "bar".to_string(),
@@ -2655,6 +2954,7 @@ mod type_inference_tests {
                                             Expr::Literal("z foo ".to_string(), InferredType::Str),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2676,6 +2976,7 @@ mod type_inference_tests {
                                             Expr::Literal("z bar ".to_string(), InferredType::Str),
                                             Expr::Identifier(
                                                 VariableId::local("user", 0),
+                                                None,
                                                 InferredType::Str,
                                             ),
                                         ],
@@ -2708,6 +3009,7 @@ mod type_inference_tests {
                                 "x".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("x", 0),
+                                    None,
                                     InferredType::Str,
                                 )),
                             ),
@@ -2715,6 +3017,7 @@ mod type_inference_tests {
                                 "y".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("y", 0),
+                                    None,
                                     InferredType::Str,
                                 )),
                             ),
@@ -2722,6 +3025,7 @@ mod type_inference_tests {
                                 "z".to_string(),
                                 Box::new(Expr::Identifier(
                                     VariableId::local("z", 0),
+                                    None,
                                     InferredType::Str,
                                 )),
                             ),
@@ -2760,6 +3064,7 @@ mod type_inference_tests {
                                                 Box::new(Expr::SelectField(
                                                     Box::new(Expr::Identifier(
                                                         VariableId::global("request".to_string()),
+                                                        None,
                                                         InferredType::Record(vec![(
                                                             "body".to_string(),
                                                             InferredType::Record(vec![
@@ -2786,6 +3091,7 @@ mod type_inference_tests {
                                                         )]),
                                                     )),
                                                     "body".to_string(),
+                                                    None,
                                                     InferredType::Record(vec![
                                                         (
                                                             "address".to_string(),
@@ -2809,6 +3115,7 @@ mod type_inference_tests {
                                                     ]),
                                                 )),
                                                 "titles".to_string(),
+                                                None,
                                                 InferredType::List(Box::new(InferredType::Str)),
                                             )),
                                         ),
@@ -2818,6 +3125,7 @@ mod type_inference_tests {
                                                 Box::new(Expr::SelectField(
                                                     Box::new(Expr::Identifier(
                                                         VariableId::global("request".to_string()),
+                                                        None,
                                                         InferredType::Record(vec![(
                                                             "body".to_string(),
                                                             InferredType::Record(vec![
@@ -2844,6 +3152,7 @@ mod type_inference_tests {
                                                         )]),
                                                     )),
                                                     "body".to_string(),
+                                                    None,
                                                     InferredType::Record(vec![
                                                         (
                                                             "address".to_string(),
@@ -2867,6 +3176,7 @@ mod type_inference_tests {
                                                     ]),
                                                 )),
                                                 "address".to_string(),
+                                                None,
                                                 InferredType::Record(vec![
                                                     ("street".to_string(), InferredType::Str),
                                                     ("city".to_string(), InferredType::Str),
@@ -2924,6 +3234,7 @@ mod type_inference_tests {
                             }),
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
+                                None,
                                 InferredType::Record(vec![(
                                     "body".to_string(),
                                     InferredType::Record(vec![
@@ -2952,6 +3263,7 @@ mod type_inference_tests {
                     Expr::PatternMatch(
                         Box::new(Expr::Identifier(
                             VariableId::local("result", 0),
+                            None,
                             InferredType::Option(Box::new(InferredType::Option(Box::new(
                                 InferredType::Str,
                             )))),
@@ -2965,6 +3277,7 @@ mod type_inference_tests {
                                             "value".to_string(),
                                             1,
                                         )),
+                                        None,
                                         InferredType::Option(Box::new(InferredType::Str)),
                                     ))],
                                 ),
@@ -2977,6 +3290,7 @@ mod type_inference_tests {
                                         Box::new(Expr::SelectField(
                                             Box::new(Expr::Identifier(
                                                 VariableId::local("x", 0),
+                                                None,
                                                 InferredType::Record(vec![(
                                                     "body".to_string(),
                                                     InferredType::Record(vec![
@@ -3005,6 +3319,7 @@ mod type_inference_tests {
                                                 )]),
                                             )),
                                             "body".to_string(),
+                                            None,
                                             InferredType::Record(vec![
                                                 (
                                                     "address".to_string(),
@@ -3022,9 +3337,11 @@ mod type_inference_tests {
                                             ]),
                                         )),
                                         "titles".to_string(),
+                                        None,
                                         InferredType::List(Box::new(InferredType::Str)),
                                     )),
                                     1,
+                                    None,
                                     InferredType::Str,
                                 )),
                             },

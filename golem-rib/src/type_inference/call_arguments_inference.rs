@@ -519,7 +519,7 @@ mod function_parameters_inference_tests {
         expr.infer_call_arguments_type(&function_type_registry)
             .unwrap();
 
-        let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)));
+        let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
         let call_expr = Expr::Call(
             CallType::Function(DynamicParsedFunctionName {
@@ -530,6 +530,7 @@ mod function_parameters_inference_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::global("x".to_string()),
+                None,
                 InferredType::U64, // Call argument's types are updated
             )],
             InferredType::Sequence(vec![]), // Call Expressions return type is updated

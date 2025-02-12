@@ -80,7 +80,15 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display("\"")
             }
-            Expr::Identifier(identifier, _) => self.write_str(identifier.name()),
+            Expr::Identifier(identifier, type_name, _) => {
+                self.write_str(identifier.name())?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
+            }
 
             Expr::Let(variable_id, type_name, expr, _) => {
                 self.write_str("let ")?;
@@ -92,18 +100,30 @@ impl<W: Write> Writer<W> {
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField(expr, field_name, _) => {
+            Expr::SelectField(expr, field_name, type_name, _) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
-                self.write_str(field_name)
+                self.write_str(field_name)?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
-            Expr::SelectIndex(expr, index, _) => {
+            Expr::SelectIndex(expr, index, type_name, _) => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;
-                self.write_display("]")
+                self.write_display("]")?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
-            Expr::Sequence(sequence, _) => {
+            Expr::Sequence(sequence, type_name, _) => {
                 self.write_display("[")?;
                 for (idx, expr) in sequence.iter().enumerate() {
                     if idx != 0 {
@@ -112,7 +132,13 @@ impl<W: Write> Writer<W> {
                     }
                     self.write_expr(expr)?;
                 }
-                self.write_display("]")
+                self.write_display("]")?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
             }
             Expr::Record(record, _) => {
                 self.write_display("{")?;
@@ -249,15 +275,24 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::Option(constructor, _) => match constructor {
-                Some(expr) => {
-                    self.write_str("some(")?;
-                    self.write_expr(expr)?;
-                    self.write_str(")")
+            Expr::Option(constructor, type_name, _) => {
+                match constructor {
+                    Some(expr) => {
+                        self.write_str("some(")?;
+                        self.write_expr(expr)?;
+                        self.write_str(")")?;
+                    }
+                    None => self.write_str("none")?,
                 }
-                None => self.write_str("none"),
-            },
-            Expr::Result(constructor, _) => match constructor {
+
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)
+                } else {
+                    Ok(())
+                }
+            }
+            Expr::Result(constructor, _, _) => match constructor {
                 Ok(expr) => {
                     self.write_str("ok(")?;
                     self.write_expr(expr)?;
@@ -513,7 +548,7 @@ mod internal {
             }
 
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Identifier(s, _) => writer.write_str(s.name()),
+                Expr::Identifier(s, _, _) => writer.write_str(s.name()),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

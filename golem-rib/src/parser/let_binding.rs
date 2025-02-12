@@ -47,13 +47,7 @@ where
             char_('=').skip(spaces()),
             rib_expr(),
         )
-            .map(|(var, optional_type, _, expr)| {
-                if let Some(type_name) = optional_type {
-                    Expr::let_binding_with_type(var, type_name, expr)
-                } else {
-                    Expr::let_binding(var.as_str(), expr)
-                }
-            }),
+            .map(|(var, optional_type, _, expr)| Expr::let_binding(var, expr, optional_type)),
     )
 }
 
@@ -85,7 +79,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::let_binding("foo", Expr::identifier("bar")), ""))
+            Ok((
+                Expr::let_binding("foo", Expr::identifier("bar", None), None),
+                ""
+            ))
         );
     }
 
@@ -98,7 +95,11 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
+                    Expr::sequence(
+                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        None
+                    ),
+                    None
                 ),
                 ""
             ))
@@ -114,7 +115,8 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("baz"))
+                    Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("baz", None)),
+                    None
                 ),
                 ""
             ))
@@ -128,7 +130,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::option(Some(Expr::identifier("bar")))),
+                Expr::let_binding(
+                    "foo",
+                    Expr::option(Some(Expr::identifier("bar", None))),
+                    None
+                ),
                 ""
             ))
         );
@@ -141,7 +147,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"))),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar", None), None), None),
                 ""
             ))
         );
@@ -153,7 +159,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::let_binding("foo", Expr::literal("bar")), ""))
+            Ok((Expr::let_binding("foo", Expr::literal("bar"), None), ""))
         );
     }
 
@@ -166,7 +172,8 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
+                    None
                 ),
                 ""
             ))
@@ -180,10 +187,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::U8,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::U8)
                 ),
                 ""
             ))
@@ -197,10 +208,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::U16,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::U16)
                 ),
                 ""
             ))
@@ -214,10 +229,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::U32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::U32)
                 ),
                 ""
             ))
@@ -231,10 +250,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::U64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::U64)
                 ),
                 ""
             ))
@@ -248,10 +271,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::S8,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::S8,)
                 ),
                 ""
             ))
@@ -265,10 +292,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::S16,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::S16)
                 ),
                 ""
             ))
@@ -282,10 +313,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::S32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::S32)
                 ),
                 ""
             ))
@@ -299,10 +334,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::S64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::S64,)
                 ),
                 ""
             ))
@@ -316,10 +355,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::F32,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::F32)
                 ),
                 ""
             ))
@@ -333,10 +376,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::F64,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::F64)
                 ),
                 ""
             ))
@@ -350,10 +397,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::Chr,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::Chr)
                 ),
                 ""
             ))
@@ -367,10 +418,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::Str,
-                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Unknown)
+                    Expr::Identifier(
+                        VariableId::global("bar".to_string()),
+                        None,
+                        InferredType::Unknown
+                    ),
+                    Some(TypeName::Str)
                 ),
                 ""
             ))
@@ -384,10 +439,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding_with_type(
+                Expr::let_binding(
                     "foo",
-                    TypeName::List(Box::new(TypeName::U8)),
-                    Expr::Sequence(vec![], InferredType::List(Box::new(InferredType::Unknown)))
+                    Expr::Sequence(
+                        vec![],
+                        None,
+                        InferredType::List(Box::new(InferredType::Unknown))
+                    ),
+                    Some(TypeName::List(Box::new(TypeName::U8)))
                 ),
                 ""
             ))

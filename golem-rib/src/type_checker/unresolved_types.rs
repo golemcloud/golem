@@ -12,19 +12,19 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Let(_, _, expr, _) => {
                 queue.push_back(expr);
             }
-            Expr::SelectField(expr, field, inferred_type) => {
+            Expr::SelectField(expr, field, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_field(field.clone()));
                 }
             }
-            Expr::SelectIndex(expr, index, inferred_type) => {
+            Expr::SelectIndex(expr, index, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_index(*index));
                 }
             }
-            Expr::Sequence(exprs, inferred_type) => {
+            Expr::Sequence(exprs, _, inferred_type) => {
                 internal::unresolved_types_in_list(exprs)?;
 
                 if inferred_type.un_resolved() {
@@ -63,7 +63,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Identifier(_, inferred_type) => {
+            Expr::Identifier(_, _, inferred_type) => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).with_additional_message(
                         format!("`{}` is unknown identifier", expr).as_str(),
@@ -119,7 +119,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::PatternMatch(cond, arms, _) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
             }
-            Expr::Option(option, inferred_type) => {
+            Expr::Option(option, _, inferred_type) => {
                 if let Some(expr) = option {
                     queue.push_back(expr);
                 }
@@ -128,7 +128,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            expr @ Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err, expr)?,
+            expr @ Expr::Result(ok_err, _, _) => {
+                internal::unresolved_type_for_result(ok_err, expr)?
+            }
             Expr::Call(_, args, _) => {
                 for arg in args {
                     queue.push_back(arg);

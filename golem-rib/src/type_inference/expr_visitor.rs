@@ -7,9 +7,9 @@ use std::ops::Deref;
 pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_back(&mut *expr),
-        Expr::SelectField(expr, _, _) => queue.push_back(&mut *expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_back(&mut *expr),
-        Expr::Sequence(exprs, _) => queue.extend(exprs.iter_mut()),
+        Expr::SelectField(expr, _, _, _) => queue.push_back(&mut *expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_back(&mut *expr),
+        Expr::Sequence(exprs, _, _) => queue.extend(exprs.iter_mut()),
         Expr::Record(exprs, _) => queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr)),
         Expr::Tuple(exprs, _) => queue.extend(exprs.iter_mut()),
         Expr::Concat(exprs, _) => queue.extend(exprs.iter_mut()),
@@ -64,9 +64,9 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_back(&mut *expr),
-        Expr::Result(Ok(expr), _) => queue.push_back(&mut *expr),
-        Expr::Result(Err(expr), _) => queue.push_back(&mut *expr),
+        Expr::Option(Some(expr), _, _) => queue.push_back(&mut *expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_back(&mut *expr),
+        Expr::Result(Err(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
             if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
                 queue.extend(exprs.iter_mut())
@@ -112,9 +112,9 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }
@@ -122,9 +122,9 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
 pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_back(expr),
-        Expr::SelectField(expr, _, _) => queue.push_back(expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_back(expr),
-        Expr::Sequence(exprs, _) => queue.extend(exprs.iter()),
+        Expr::SelectField(expr, _, _, _) => queue.push_back(expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_back(expr),
+        Expr::Sequence(exprs, _, _) => queue.extend(exprs.iter()),
         Expr::Record(exprs, _) => queue.extend(exprs.iter().map(|(_, expr)| expr.deref())),
         Expr::Tuple(exprs, _) => queue.extend(exprs.iter()),
         Expr::Concat(exprs, _) => queue.extend(exprs.iter()),
@@ -179,9 +179,9 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
                 queue.push_back(&*arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_back(expr),
-        Expr::Result(Ok(expr), _) => queue.push_back(expr),
-        Expr::Result(Err(expr), _) => queue.push_back(expr),
+        Expr::Option(Some(expr), _, _) => queue.push_back(expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_back(expr),
+        Expr::Result(Err(expr), _, _) => queue.push_back(expr),
         Expr::Call(call_type, arguments, _) => {
             if let CallType::Function(dynamic) = call_type {
                 if let Some(params) = dynamic.function.raw_resource_params() {
@@ -224,9 +224,9 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }
@@ -234,9 +234,9 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
 pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let(_, _, expr, _) => queue.push_front(&mut *expr),
-        Expr::SelectField(expr, _, _) => queue.push_front(&mut *expr),
-        Expr::SelectIndex(expr, _, _) => queue.push_front(&mut *expr),
-        Expr::Sequence(exprs, _) => {
+        Expr::SelectField(expr, _, _, _) => queue.push_front(&mut *expr),
+        Expr::SelectIndex(expr, _, _, _) => queue.push_front(&mut *expr),
+        Expr::Sequence(exprs, _, _) => {
             for expr in exprs.iter_mut() {
                 queue.push_front(expr);
             }
@@ -320,9 +320,9 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _) => queue.push_front(&mut *expr),
-        Expr::Result(Ok(expr), _) => queue.push_front(&mut *expr),
-        Expr::Result(Err(expr), _) => queue.push_front(&mut *expr),
+        Expr::Option(Some(expr), _, _) => queue.push_front(&mut *expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_front(&mut *expr),
+        Expr::Result(Err(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
             if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
                 for expr in exprs.iter_mut() {
@@ -360,9 +360,9 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
+        Expr::Identifier(_, _, _) => {}
         Expr::Boolean(_, _) => {}
-        Expr::Option(None, _) => {}
+        Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
     }
 }
