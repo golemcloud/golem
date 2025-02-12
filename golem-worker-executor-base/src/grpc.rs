@@ -21,7 +21,8 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ActivatePluginRequest, ActivatePluginResponse, ConnectWorkerRequest, DeactivatePluginRequest,
+    ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
+    CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
     DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
     GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
@@ -466,6 +467,56 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
                 worker.revert(target).await?;
                 Ok(())
+            }
+            None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
+        }
+    }
+
+    async fn cancel_invocation_internal(
+        &self,
+        request: CancelInvocationRequest,
+    ) -> Result<bool, GolemError> {
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or(GolemError::invalid_request("idempotency_key not found"))?
+            .into();
+
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?;
+
+        match metadata {
+            Some(metadata) => {
+                if metadata
+                    .last_known_status
+                    .pending_invocations
+                    .iter()
+                    .any(|invocation| {
+                        invocation.invocation.idempotency_key() == Some(&idempotency_key)
+                    })
+                {
+                    let worker = Worker::get_or_create_suspended(
+                        self,
+                        &owned_worker_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    worker.cancel_invocation(idempotency_key).await?;
+                    Ok(true)
+                } else if metadata
+                    .last_known_status
+                    .invocation_results
+                    .contains_key(&idempotency_key)
+                {
+                    Ok(false)
+                } else {
+                    Err(GolemError::invalid_request("Invocation not found"))
+                }
             }
             None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
         }
@@ -992,7 +1043,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                         let mut skipped_regions =
                             metadata.last_known_status.skipped_regions.clone();
-                        let (pending_updates, temporary_skipped_regions) = worker.pending_updates();
+                        let (pending_updates, temporary_skipped_regions) =
+                            worker.pending_updates().await;
                         skipped_regions.set_override(temporary_skipped_regions);
                         metadata.last_known_status.pending_updates = pending_updates;
                         metadata.last_known_status.skipped_regions = skipped_regions;
@@ -2297,6 +2349,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(RevertWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::revert_worker_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: Request<CancelInvocationRequest>,
+    ) -> Result<Response<CancelInvocationResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "cancel_invocation",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+        );
+
+        let result = self
+            .cancel_invocation_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(canceled) => record.succeed(Ok(Response::new(CancelInvocationResponse {
+                result: Some(
+                    golem::workerexecutor::v1::cancel_invocation_response::Result::Success(
+                        canceled,
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(CancelInvocationResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::cancel_invocation_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),

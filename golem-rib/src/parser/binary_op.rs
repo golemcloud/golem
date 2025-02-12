@@ -70,7 +70,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::greater_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
                 ""
             ))
         );
@@ -83,7 +83,10 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than_or_equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::greater_than_or_equal_to(
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None)
+                ),
                 ""
             ))
         );
@@ -96,7 +99,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::less_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
                 ""
             ))
         );
@@ -109,7 +112,10 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than_or_equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::less_than_or_equal_to(
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None)
+                ),
                 ""
             ))
         );
@@ -122,7 +128,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
                 ""
             ))
         );
@@ -136,8 +142,8 @@ mod test {
             result,
             Expr::cond(
                 Expr::boolean(true),
-                Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
-                Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo")),
+                Expr::greater_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("foo", None)),
             ),
         );
     }
@@ -149,13 +155,19 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![
-                    Expr::greater_than_or_equal_to(
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    ),
-                    Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar"))
-                ]),
+                Expr::sequence(
+                    vec![
+                        Expr::greater_than_or_equal_to(
+                            Expr::identifier("foo", None),
+                            Expr::identifier("bar", None)
+                        ),
+                        Expr::less_than(
+                            Expr::identifier("foo", None),
+                            Expr::identifier("bar", None)
+                        )
+                    ],
+                    None
+                ),
                 ""
             ))
         );
@@ -191,14 +203,20 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::sequence(vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2))
-                    ]),
-                    Expr::sequence(vec![
-                        Expr::untyped_number(BigDecimal::from(3)),
-                        Expr::untyped_number(BigDecimal::from(4))
-                    ]),
+                    Expr::sequence(
+                        vec![
+                            Expr::untyped_number(BigDecimal::from(1)),
+                            Expr::untyped_number(BigDecimal::from(2))
+                        ],
+                        None
+                    ),
+                    Expr::sequence(
+                        vec![
+                            Expr::untyped_number(BigDecimal::from(3)),
+                            Expr::untyped_number(BigDecimal::from(4))
+                        ],
+                        None
+                    ),
                 ),
                 ""
             ))
@@ -235,8 +253,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::select_field(Expr::identifier("baz"), "qux"),
+                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                    Expr::select_field(Expr::identifier("baz", None), "qux", None),
                 ),
                 ""
             ))
@@ -251,8 +269,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::select_index(Expr::identifier("foo"), 1),
-                    Expr::select_index(Expr::identifier("bar"), 2),
+                    Expr::select_index(Expr::identifier("foo", None), 1),
+                    Expr::select_index(Expr::identifier("bar", None), 2),
                 ),
                 ""
             ))
@@ -267,8 +285,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::ok(Expr::identifier("foo")),
-                    Expr::ok(Expr::identifier("bar")),
+                    Expr::ok(Expr::identifier("foo", None), None),
+                    Expr::ok(Expr::identifier("bar", None), None),
                 ),
                 ""
             ))
@@ -283,8 +301,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::option(Some(Expr::identifier("foo"))),
-                    Expr::option(Some(Expr::identifier("bar"))),
+                    Expr::option(Some(Expr::identifier("foo", None))),
+                    Expr::option(Some(Expr::identifier("bar", None))),
                 ),
                 ""
             ))
@@ -333,11 +351,17 @@ mod test {
                 Expr::record(vec![
                     (
                         "foo".to_string(),
-                        Expr::greater_than(Expr::identifier("bar"), Expr::identifier("baz"))
+                        Expr::greater_than(
+                            Expr::identifier("bar", None),
+                            Expr::identifier("baz", None)
+                        )
                     ),
                     (
                         "baz".to_string(),
-                        Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo"))
+                        Expr::equal_to(
+                            Expr::identifier("bar", None),
+                            Expr::identifier("foo", None)
+                        )
                     ),
                 ]),
                 ""

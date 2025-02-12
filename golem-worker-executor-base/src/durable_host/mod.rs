@@ -329,15 +329,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut status = self.get_worker_status_record();
 
         let mut skipped_regions = self.state.replay_state.skipped_regions().await;
-        let (pending_updates, extra_skipped_regions) = self.public_state.worker().pending_updates();
+        let (pending_updates, extra_skipped_regions) =
+            self.public_state.worker().pending_updates().await;
         skipped_regions.set_override(extra_skipped_regions);
 
         status.skipped_regions = skipped_regions;
         status
             .overridden_retry_config
             .clone_from(&self.state.overridden_retry_policy);
-        status.pending_invocations = self.public_state.worker().pending_invocations();
-        status.invocation_results = self.public_state.worker().invocation_results();
+        status.pending_invocations = self.public_state.worker().pending_invocations().await;
+        status.invocation_results = self.public_state.worker().invocation_results().await;
         status.pending_updates = pending_updates;
         status
             .current_idempotency_key
@@ -536,7 +537,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .durable_ctx()
             .public_state
             .worker()
-            .pop_pending_update();
+            .pop_pending_update()
+            .await;
         match pending_update {
             Some(pending_update) => match result {
                 Ok(RetryDecision::None) => {

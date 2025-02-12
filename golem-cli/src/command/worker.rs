@@ -475,6 +475,16 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(long, conflicts_with = "last_oplog_index")]
         number_of_invocations: Option<u64>,
     },
+    /// Cancels an enqueued invocation if it has not started yet
+    #[command()]
+    CancelInvocation {
+        #[command(flatten)]
+        worker_ref: WorkerRef,
+
+        /// Idempotency key of the invocation to be cancelled
+        #[arg(short = 'k', long)]
+        idempotency_key: IdempotencyKey,
+    },
 }
 
 pub trait WorkerRefSplit<ProjectRef> {
@@ -729,6 +739,16 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                     )),
                 }?;
                 service.revert(worker_uri, target, project_id).await
+            }
+            WorkerSubcommand::CancelInvocation {
+                worker_ref,
+                idempotency_key,
+            } => {
+                let (worker_uri, project_ref) = worker_ref.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .cancel_invocation(worker_uri, idempotency_key, project_id)
+                    .await
             }
         }
     }

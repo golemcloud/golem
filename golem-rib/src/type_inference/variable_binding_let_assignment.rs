@@ -30,7 +30,7 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
                 queue.push_front(expr);
             }
 
-            Expr::Identifier(variable_id, _) if !variable_id.is_match_binding() => {
+            Expr::Identifier(variable_id, _, _) if !variable_id.is_match_binding() => {
                 let field_name = variable_id.name();
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
                     // If there existed a let statement, this ensures global is changed to local
@@ -108,6 +108,7 @@ mod name_binding_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
+                None,
                 InferredType::Unknown,
             )],
             InferredType::Unknown,
@@ -155,6 +156,7 @@ mod name_binding_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
+                None,
                 InferredType::Unknown,
             )],
             InferredType::Unknown,
@@ -169,6 +171,7 @@ mod name_binding_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::local("y", 0),
+                None,
                 InferredType::Unknown,
             )],
             InferredType::Unknown,
@@ -216,6 +219,7 @@ mod name_binding_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
+                None,
                 InferredType::Unknown,
             )],
             InferredType::Unknown,
@@ -230,6 +234,7 @@ mod name_binding_tests {
             }),
             vec![Expr::Identifier(
                 VariableId::local("x", 1),
+                None,
                 InferredType::Unknown,
             )],
             InferredType::Unknown,

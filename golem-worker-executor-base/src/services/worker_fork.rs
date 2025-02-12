@@ -417,7 +417,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             Worker::get_or_create_suspended(self, &owned_source_worker_id, None, None, None, None)
                 .await?;
 
-        let source_worker_metadata = source_worker_instance.get_metadata().await?;
+        let source_worker_metadata = source_worker_instance.get_metadata()?;
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),

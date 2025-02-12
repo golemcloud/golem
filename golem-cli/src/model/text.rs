@@ -1351,6 +1351,14 @@ pub mod worker {
                         format_id(&params.dropped_region.start.previous())
                     );
                 }
+                PublicOplogEntry::CancelInvocation(params) => {
+                    println!("{}", format_message_highlight("CANCEL INVOCATION"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&params.idempotency_key)
+                    );
+                }
             }
         }
     }

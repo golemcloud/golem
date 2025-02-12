@@ -52,7 +52,7 @@ mod interpolation_tests {
     fn test_expr_wrapped_in_interpolation() {
         let input = r#"${foo}"#;
         let result = text::from_string(input);
-        assert_eq!(result, Ok(Expr::identifier("foo")));
+        assert_eq!(result, Ok(Expr::identifier("foo", None)));
 
         let input = r#"${{foo}}"#;
         let result = text::from_string(input);
@@ -81,7 +81,10 @@ mod record_tests {
 
     #[test]
     fn test_round_trip_simple_record_single() {
-        let input_expr = Expr::record(vec![("field".to_string(), Expr::identifier("request"))]);
+        let input_expr = Expr::record(vec![(
+            "field".to_string(),
+            Expr::identifier("request", None),
+        )]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -91,8 +94,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_multiple() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::identifier("request")),
-            ("field".to_string(), Expr::identifier("request")),
+            ("field".to_string(), Expr::identifier("request", None)),
+            ("field".to_string(), Expr::identifier("request", None)),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request, field: request}".to_string();
@@ -135,11 +138,11 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "field".to_string(),
-                Expr::select_field(Expr::identifier("request"), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
             ),
             (
                 "field".to_string(),
-                Expr::select_field(Expr::identifier("request"), "bar"),
+                Expr::select_field(Expr::identifier("request", None), "bar", None),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -153,11 +156,11 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "field".to_string(),
-                Expr::select_index(Expr::identifier("request"), 1),
+                Expr::select_index(Expr::identifier("request", None), 1),
             ),
             (
                 "field".to_string(),
-                Expr::select_index(Expr::identifier("request"), 2),
+                Expr::select_index(Expr::identifier("request", None), 2),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -171,17 +174,23 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "field".to_string(),
-                Expr::sequence(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("request"),
-                ]),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier("request", None),
+                        Expr::identifier("request", None),
+                    ],
+                    None,
+                ),
             ),
             (
                 "field".to_string(),
-                Expr::sequence(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("request"),
-                ]),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier("request", None),
+                        Expr::identifier("request", None),
+                    ],
+                    None,
+                ),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -196,16 +205,19 @@ mod record_tests {
             (
                 "a".to_string(),
                 Expr::record(vec![
-                    ("ab".to_string(), Expr::identifier("request")),
-                    ("ac".to_string(), Expr::identifier("request")),
+                    ("ab".to_string(), Expr::identifier("request", None)),
+                    ("ac".to_string(), Expr::identifier("request", None)),
                 ]),
             ),
             (
                 "b".to_string(),
-                Expr::sequence(vec![Expr::record(vec![
-                    ("bc".to_string(), Expr::identifier("request")),
-                    ("bd".to_string(), Expr::identifier("request")),
-                ])]),
+                Expr::sequence(
+                    vec![Expr::record(vec![
+                        ("bc".to_string(), Expr::identifier("request", None)),
+                        ("bd".to_string(), Expr::identifier("request", None)),
+                    ])],
+                    None,
+                ),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -221,15 +233,15 @@ mod record_tests {
             (
                 "a".to_string(),
                 Expr::tuple(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("worker"),
+                    Expr::identifier("request", None),
+                    Expr::identifier("worker", None),
                 ]),
             ),
             (
                 "b".to_string(),
                 Expr::tuple(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("worker"),
+                    Expr::identifier("request", None),
+                    Expr::identifier("worker", None),
                 ]),
             ),
         ]);
@@ -276,14 +288,14 @@ mod record_tests {
                 "a".to_string(),
                 Expr::concat(vec![
                     Expr::literal("user-id-1-"),
-                    Expr::select_field(Expr::identifier("request"), "user-id-1"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
                 ]),
             ),
             (
                 "b".to_string(),
                 Expr::concat(vec![
                     Expr::literal("user-id-2-"),
-                    Expr::select_field(Expr::identifier("request"), "user-id-2"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
                 ]),
             ),
         ]);
@@ -326,7 +338,7 @@ mod record_tests {
                 "a".to_string(),
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request"), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -337,7 +349,7 @@ mod record_tests {
                 "b".to_string(),
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request"), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -357,19 +369,19 @@ mod record_tests {
             (
                 "a".to_string(),
                 Expr::pattern_match(
-                    Expr::identifier("request"),
+                    Expr::identifier("request", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::literal(Expr::identifier("foo"))],
+                                vec![ArmPattern::literal(Expr::identifier("foo", None))],
                             ),
                             Expr::literal("success"),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::literal(Expr::identifier("msg"))],
+                                vec![ArmPattern::literal(Expr::identifier("msg", None))],
                             ),
                             Expr::literal("failure"),
                         ),
@@ -379,34 +391,38 @@ mod record_tests {
             (
                 "b".to_string(),
                 Expr::pattern_match(
-                    Expr::identifier("request"),
+                    Expr::identifier("request", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::literal(Expr::identifier("foo"))],
+                                vec![ArmPattern::literal(Expr::identifier("foo", None))],
                             ), // Use Constructor for ok
                             Expr::literal("success"),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::literal(Expr::identifier("msg"))],
+                                vec![ArmPattern::literal(Expr::identifier("msg", None))],
                             ),
                             Expr::pattern_match(
-                                Expr::identifier("request"),
+                                Expr::identifier("request", None),
                                 vec![
                                     MatchArm::new(
                                         ArmPattern::constructor(
                                             "ok",
-                                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+                                            vec![ArmPattern::literal(Expr::identifier(
+                                                "foo", None,
+                                            ))],
                                         ),
                                         Expr::literal("success"),
                                     ),
                                     MatchArm::new(
                                         ArmPattern::constructor(
                                             "err",
-                                            vec![ArmPattern::literal(Expr::identifier("msg"))],
+                                            vec![ArmPattern::literal(Expr::identifier(
+                                                "msg", None,
+                                            ))],
                                         ),
                                         Expr::literal("failure"),
                                     ),
@@ -427,8 +443,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_record_of_constructor() {
         let input_expr = Expr::record(vec![
-            ("a".to_string(), Expr::ok(Expr::literal("foo"))),
-            ("b".to_string(), Expr::err(Expr::literal("msg"))),
+            ("a".to_string(), Expr::ok(Expr::literal("foo"), None)),
+            ("b".to_string(), Expr::err(Expr::literal("msg"), None)),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = r#"{a: ok("foo"), b: err("msg")}"#.to_string();
@@ -467,7 +483,7 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_empty() {
-        let input_expr = Expr::sequence(vec![]);
+        let input_expr = Expr::sequence(vec![], None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -479,19 +495,25 @@ mod sequence_tests {
     fn test_sequence_of_records_singleton() {
         let expr_string = "[{bc: request}]";
         let output_expr = from_string(expr_string).unwrap();
-        let expected_expr = Expr::sequence(vec![Expr::record(vec![(
-            "bc".to_string(),
-            Expr::identifier("request"),
-        )])]);
+        let expected_expr = Expr::sequence(
+            vec![Expr::record(vec![(
+                "bc".to_string(),
+                Expr::identifier("request", None),
+            )])],
+            None,
+        );
         assert_eq!(output_expr, expected_expr);
     }
 
     #[test]
     fn test_round_trip_read_write_sequence_of_request() {
-        let input_expr = Expr::sequence(vec![
-            Expr::identifier("request"),
-            Expr::identifier("request"),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::identifier("request", None),
+                Expr::identifier("request", None),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[request, request]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -500,7 +522,7 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_literal() {
-        let input_expr = Expr::sequence(vec![Expr::literal("hello"), Expr::literal("world")]);
+        let input_expr = Expr::sequence(vec![Expr::literal("hello"), Expr::literal("world")], None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"["hello", "world"]"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -509,10 +531,13 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_select_field() {
-        let input_expr = Expr::sequence(vec![
-            Expr::select_field(Expr::identifier("request"), "field"),
-            Expr::select_field(Expr::identifier("request"), "field"),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::select_field(Expr::identifier("request", None), "field", None),
+                Expr::select_field(Expr::identifier("request", None), "field", None),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[request.field, request.field]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -521,10 +546,13 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_select_index() {
-        let input_expr = Expr::sequence(vec![
-            Expr::select_index(Expr::identifier("request"), 1),
-            Expr::select_index(Expr::identifier("request"), 2),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::select_index(Expr::identifier("request", None), 1),
+                Expr::select_index(Expr::identifier("request", None), 2),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[request[1], request[2]]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -533,16 +561,25 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_sequence() {
-        let input_expr = Expr::sequence(vec![
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::sequence(
+                    vec![
+                        Expr::identifier("request", None),
+                        Expr::identifier("request", None),
+                    ],
+                    None,
+                ),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier("request", None),
+                        Expr::identifier("request", None),
+                    ],
+                    None,
+                ),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[[request, request], [request, request]]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -551,16 +588,19 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_tuple() {
-        let input_expr = Expr::sequence(vec![
-            Expr::tuple(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-            Expr::tuple(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::tuple(vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ]),
+                Expr::tuple(vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ]),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[(request, request), (request, request)]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -569,10 +609,19 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_record() {
-        let input_expr = Expr::sequence(vec![
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::record(vec![(
+                    "field".to_string(),
+                    Expr::identifier("request", None),
+                )]),
+                Expr::record(vec![(
+                    "field".to_string(),
+                    Expr::identifier("request", None),
+                )]),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[{field: request}, {field: request}]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -581,10 +630,13 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_flags() {
-        let input_expr = Expr::sequence(vec![
-            Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
-            Expr::flags(vec!["flag3".to_string(), "flag4".to_string()]),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
+                Expr::flags(vec!["flag3".to_string(), "flag4".to_string()]),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[{flag1, flag2}, {flag3, flag4}]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -593,16 +645,19 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_concat() {
-        let input_expr = Expr::sequence(vec![
-            Expr::concat(vec![
-                Expr::literal("user-id-1-"),
-                Expr::select_field(Expr::identifier("request"), "user-id-1"),
-            ]),
-            Expr::concat(vec![
-                Expr::literal("user-id-2-"),
-                Expr::select_field(Expr::identifier("request"), "user-id-2"),
-            ]),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::concat(vec![
+                    Expr::literal("user-id-1-"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
+                ]),
+                Expr::concat(vec![
+                    Expr::literal("user-id-2-"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
+                ]),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"["user-id-1-${request.user-id-1}", "user-id-2-${request.user-id-2}"]"#.to_string();
@@ -612,16 +667,19 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_math_op() {
-        let input_expr = Expr::sequence(vec![
-            Expr::greater_than(
-                Expr::untyped_number(BigDecimal::from(1)),
-                Expr::untyped_number(BigDecimal::from(2)),
-            ),
-            Expr::less_than(
-                Expr::untyped_number(BigDecimal::from(1)),
-                Expr::untyped_number(BigDecimal::from(2)),
-            ),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::greater_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
+                Expr::less_than(
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2)),
+                ),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[1 > 2, 1 < 2]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -630,24 +688,27 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_if_condition() {
-        let input_expr = Expr::sequence(vec![
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::select_field(Expr::identifier("request"), "foo"),
-                    Expr::literal("bar"),
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
+                        Expr::literal("bar"),
+                    ),
+                    Expr::literal("success"),
+                    Expr::literal("failed"),
                 ),
-                Expr::literal("success"),
-                Expr::literal("failed"),
-            ),
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::select_field(Expr::identifier("request"), "foo"),
-                    Expr::literal("bar"),
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
+                        Expr::literal("bar"),
+                    ),
+                    Expr::literal("success"),
+                    Expr::literal("failed"),
                 ),
-                Expr::literal("success"),
-                Expr::literal("failed"),
-            ),
-        ]);
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"[if request.foo == "bar" then "success" else "failed", if request.foo == "bar" then "success" else "failed"]"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -656,64 +717,71 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_pattern_match() {
-        let input_expr = Expr::sequence(vec![
-            Expr::pattern_match(
-                Expr::identifier("request"),
-                vec![
-                    MatchArm::new(
-                        ArmPattern::Constructor(
-                            "ok".to_string(),
-                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::pattern_match(
+                    Expr::identifier("request", None),
+                    vec![
+                        MatchArm::new(
+                            ArmPattern::Constructor(
+                                "ok".to_string(),
+                                vec![ArmPattern::literal(Expr::identifier("foo", None))],
+                            ),
+                            Expr::literal("success"),
                         ),
-                        Expr::literal("success"),
-                    ),
-                    MatchArm::new(
-                        ArmPattern::Constructor(
-                            "err".to_string(),
-                            vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        MatchArm::new(
+                            ArmPattern::Constructor(
+                                "err".to_string(),
+                                vec![ArmPattern::literal(Expr::identifier("msg", None))],
+                            ),
+                            Expr::literal("failure"),
                         ),
-                        Expr::literal("failure"),
-                    ),
-                ],
-            ),
-            Expr::pattern_match(
-                Expr::identifier("request"),
-                vec![
-                    MatchArm::new(
-                        ArmPattern::Constructor(
-                            "ok".to_string(),
-                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ],
+                ),
+                Expr::pattern_match(
+                    Expr::identifier("request", None),
+                    vec![
+                        MatchArm::new(
+                            ArmPattern::Constructor(
+                                "ok".to_string(),
+                                vec![ArmPattern::literal(Expr::identifier("foo", None))],
+                            ),
+                            Expr::literal("success"),
                         ),
-                        Expr::literal("success"),
-                    ),
-                    MatchArm::new(
-                        ArmPattern::Constructor(
-                            "err".to_string(),
-                            vec![ArmPattern::literal(Expr::identifier("msg"))],
-                        ),
-                        Expr::pattern_match(
-                            Expr::identifier("request"),
-                            vec![
-                                MatchArm::new(
-                                    ArmPattern::Constructor(
-                                        "ok".to_string(),
-                                        vec![ArmPattern::literal(Expr::identifier("foo"))],
-                                    ), // Use Constructor for ok
-                                    Expr::literal("success"),
-                                ),
-                                MatchArm::new(
-                                    ArmPattern::Constructor(
-                                        "err".to_string(),
-                                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        MatchArm::new(
+                            ArmPattern::Constructor(
+                                "err".to_string(),
+                                vec![ArmPattern::literal(Expr::identifier("msg", None))],
+                            ),
+                            Expr::pattern_match(
+                                Expr::identifier("request", None),
+                                vec![
+                                    MatchArm::new(
+                                        ArmPattern::Constructor(
+                                            "ok".to_string(),
+                                            vec![ArmPattern::literal(Expr::identifier(
+                                                "foo", None,
+                                            ))],
+                                        ), // Use Constructor for ok
+                                        Expr::literal("success"),
                                     ),
-                                    Expr::literal("failure"),
-                                ),
-                            ],
+                                    MatchArm::new(
+                                        ArmPattern::Constructor(
+                                            "err".to_string(),
+                                            vec![ArmPattern::literal(Expr::identifier(
+                                                "msg", None,
+                                            ))],
+                                        ),
+                                        Expr::literal("failure"),
+                                    ),
+                                ],
+                            ),
                         ),
-                    ),
-                ],
-            ),
-        ]);
+                    ],
+                ),
+            ],
+            None,
+        );
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"[match request {  ok(foo) => "success", err(msg) => "failure" } , match request {  ok(foo) => "success", err(msg) => match request {  ok(foo) => "success", err(msg) => "failure" }  } ]"#.to_string();
@@ -723,10 +791,13 @@ mod sequence_tests {
 
     #[test]
     fn test_round_trip_read_write_sequence_of_constructor() {
-        let input_expr = Expr::sequence(vec![
-            Expr::ok(Expr::literal("foo")),
-            Expr::err(Expr::literal("msg")),
-        ]);
+        let input_expr = Expr::sequence(
+            vec![
+                Expr::ok(Expr::literal("foo"), None),
+                Expr::err(Expr::literal("msg"), None),
+            ],
+            None,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[ok(\"foo\"), err(\"msg\")]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -754,8 +825,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_request() {
         let input_expr = Expr::tuple(vec![
-            Expr::identifier("request"),
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
+            Expr::identifier("request", None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(request, request)".to_string();
@@ -775,8 +846,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_field() {
         let input_expr = Expr::tuple(vec![
-            Expr::select_field(Expr::identifier("request"), "field"),
-            Expr::select_field(Expr::identifier("request"), "field"),
+            Expr::select_field(Expr::identifier("request", None), "field", None),
+            Expr::select_field(Expr::identifier("request", None), "field", None),
         ]);
         let _expr_str = to_string(&input_expr).unwrap();
         let _expected_str = "(request.field, request.field)".to_string();
@@ -785,8 +856,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_index() {
         let input_expr = Expr::tuple(vec![
-            Expr::select_index(Expr::identifier("request"), 1),
-            Expr::select_index(Expr::identifier("request"), 2),
+            Expr::select_index(Expr::identifier("request", None), 1),
+            Expr::select_index(Expr::identifier("request", None), 2),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "(request[1], request[2])".to_string();
@@ -798,12 +869,12 @@ mod tuple_tests {
     fn test_round_trip_read_write_tuple_of_tuple() {
         let input_expr = Expr::tuple(vec![
             Expr::tuple(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
+                Expr::identifier("request", None),
+                Expr::identifier("request", None),
             ]),
             Expr::tuple(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
+                Expr::identifier("request", None),
+                Expr::identifier("request", None),
             ]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -815,14 +886,20 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_sequence() {
         let input_expr = Expr::tuple(vec![
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
+            Expr::sequence(
+                vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ],
+                None,
+            ),
+            Expr::sequence(
+                vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ],
+                None,
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "([request, request], [request, request])".to_string();
@@ -833,8 +910,14 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_record() {
         let input_expr = Expr::tuple(vec![
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
+            Expr::record(vec![(
+                "field".to_string(),
+                Expr::identifier("request", None),
+            )]),
+            Expr::record(vec![(
+                "field".to_string(),
+                Expr::identifier("request", None),
+            )]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "({field: request}, {field: request})".to_string();
@@ -859,11 +942,11 @@ mod tuple_tests {
         let input_expr = Expr::tuple(vec![
             Expr::concat(vec![
                 Expr::literal("user-id-1-"),
-                Expr::select_field(Expr::identifier("request"), "user-id-1"),
+                Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
             ]),
             Expr::concat(vec![
                 Expr::literal("user-id-2-"),
-                Expr::select_field(Expr::identifier("request"), "user-id-2"),
+                Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
             ]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -894,8 +977,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_constructor() {
         let input_expr = Expr::tuple(vec![
-            Expr::ok(Expr::literal("foo")),
-            Expr::err(Expr::literal("msg")),
+            Expr::ok(Expr::literal("foo"), None),
+            Expr::err(Expr::literal("msg"), None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"(ok("foo"), err("msg"))"#.to_string();
@@ -924,7 +1007,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_request() {
-        let input_expr = Expr::identifier("request");
+        let input_expr = Expr::identifier("request", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -959,7 +1042,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_worker() {
-        let input_expr = Expr::identifier("worker");
+        let input_expr = Expr::identifier("worker", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "worker".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -968,7 +1051,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_variable() {
-        let input_expr = Expr::identifier("variable");
+        let input_expr = Expr::identifier("variable", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "variable".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -998,8 +1081,8 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let() {
         let input_expr = Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::literal("hello")),
-            Expr::let_binding("y", Expr::literal("bar")),
+            Expr::let_binding("x", Expr::literal("hello"), None),
+            Expr::let_binding("y", Expr::literal("bar"), None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "let x = \"hello\";\nlet y = \"bar\"".to_string();
@@ -1103,6 +1186,7 @@ mod let_tests {
                 Some(TypeName::Option(Box::new(TypeName::Str))),
                 Box::new(Expr::Option(
                     Some(Box::new(Expr::literal("foo"))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
@@ -1112,6 +1196,7 @@ mod let_tests {
                 Some(TypeName::Option(Box::new(TypeName::Str))),
                 Box::new(Expr::Option(
                     Some(Box::new(Expr::literal("bar"))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
@@ -1133,6 +1218,7 @@ mod let_tests {
                 Some(TypeName::List(Box::new(TypeName::Str))),
                 Box::new(Expr::Sequence(
                     vec![Expr::literal("foo")],
+                    None,
                     InferredType::List(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
@@ -1142,6 +1228,7 @@ mod let_tests {
                 Some(TypeName::List(Box::new(TypeName::Str))),
                 Box::new(Expr::Sequence(
                     vec![Expr::literal("bar")],
+                    None,
                     InferredType::List(Box::new(InferredType::Str)),
                 )),
                 InferredType::Unknown,
@@ -1193,7 +1280,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
-        let input_expr = Expr::select_field(Expr::identifier("request"), "field");
+        let input_expr = Expr::select_field(Expr::identifier("request", None), "field", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request.field".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1202,7 +1289,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_index_from_request() {
-        let input_expr = Expr::select_index(Expr::identifier("request"), 1);
+        let input_expr = Expr::select_index(Expr::identifier("request", None), 1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request[1]".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1212,8 +1299,12 @@ mod selection_tests {
     #[test]
     fn test_round_trip_read_write_select_field_from_record() {
         let input_expr = Expr::select_field(
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
+            Expr::record(vec![(
+                "field".to_string(),
+                Expr::identifier("request", None),
+            )]),
             "field",
+            None,
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request}.field".to_string();
@@ -1224,10 +1315,13 @@ mod selection_tests {
     #[test]
     fn test_round_trip_read_write_select_index_from_sequence() {
         let input_expr = Expr::select_index(
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
+            Expr::sequence(
+                vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ],
+                None,
+            ),
             1,
         );
         let expr_str = to_string(&input_expr).unwrap();
@@ -1281,19 +1375,19 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr() {
         let mut input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
                     Expr::literal("success"),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1313,19 +1407,19 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_flags() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
                     Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1342,22 +1436,22 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_tuple() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
                     Expr::tuple(vec![
-                        Expr::identifier("request"),
-                        Expr::identifier("request"),
+                        Expr::identifier("request", None),
+                        Expr::identifier("request", None),
                     ]),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1375,22 +1469,25 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_sequence() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
-                    Expr::sequence(vec![
-                        Expr::identifier("request"),
-                        Expr::identifier("request"),
-                    ]),
+                    Expr::sequence(
+                        vec![
+                            Expr::identifier("request", None),
+                            Expr::identifier("request", None),
+                        ],
+                        None,
+                    ),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1408,19 +1505,22 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_record() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
-                    Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
+                    Expr::record(vec![(
+                        "field".to_string(),
+                        Expr::identifier("request", None),
+                    )]),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1437,12 +1537,12 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_math_op() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
                     Expr::greater_than(
                         Expr::untyped_number(BigDecimal::from_str("1.1").unwrap()),
@@ -1452,7 +1552,7 @@ mod match_tests {
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::less_than(
                         Expr::untyped_number(BigDecimal::from(1)),
@@ -1471,16 +1571,16 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_if_condition() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::constructor(
                         "ok",
-                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        vec![ArmPattern::literal(Expr::identifier("foo", None))],
                     ),
                     Expr::cond(
                         Expr::equal_to(
-                            Expr::select_field(Expr::identifier("request"), "foo"),
+                            Expr::select_field(Expr::identifier("request", None), "foo", None),
                             Expr::literal("bar"),
                         ),
                         Expr::literal("success"),
@@ -1490,7 +1590,7 @@ mod match_tests {
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
-                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        vec![ArmPattern::literal(Expr::identifier("msg", None))],
                     ),
                     Expr::literal("failure"),
                 ),
@@ -1507,7 +1607,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_multiple_constructor_variables() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::custom_constructor(
@@ -1533,7 +1633,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_empty_constructor_variables() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(ArmPattern::identifier("foo"), Expr::literal("success")),
                 MatchArm::new(
@@ -1553,7 +1653,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_empty_with_nested_constructor_patterns() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::custom_constructor(
@@ -1582,15 +1682,15 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_in_arm_rhs() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::identifier("foo1"),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1605,15 +1705,15 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_in_wild_pattern() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::custom_constructor("foo1", vec![ArmPattern::WildCard]),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1628,7 +1728,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_with_alias() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::As(
@@ -1638,11 +1738,11 @@ mod match_tests {
                             vec![ArmPattern::WildCard],
                         )),
                     ),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1657,7 +1757,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_with_nested_alias() {
         let input_expr = Expr::pattern_match(
-            Expr::identifier("request"),
+            Expr::identifier("request", None),
             vec![
                 MatchArm::new(
                     ArmPattern::As(
@@ -1670,7 +1770,7 @@ mod match_tests {
                             )],
                         )),
                     ),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::As(
@@ -1686,7 +1786,7 @@ mod match_tests {
                             )],
                         )),
                     ),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1726,7 +1826,7 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_select_field() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("request"), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
                 Expr::literal("bar"),
             ),
             Expr::literal("success"),
@@ -1743,13 +1843,13 @@ mod if_cond_tests {
     fn test_round_trip_nested_if_condition() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("request"), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
                 Expr::literal("bar"),
             ),
             Expr::literal("success"),
             Expr::cond(
                 Expr::equal_to(
-                    Expr::select_field(Expr::identifier("request"), "foo"),
+                    Expr::select_field(Expr::identifier("request", None), "foo", None),
                     Expr::literal("baz"),
                 ),
                 Expr::literal("success"),
@@ -1766,11 +1866,14 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_tuple() {
         let input_expr = Expr::cond(
-            Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
-            Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+            Expr::equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
             Expr::tuple(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
+                Expr::identifier("foo", None),
+                Expr::identifier("bar", None),
+            ]),
+            Expr::tuple(vec![
+                Expr::identifier("request", None),
+                Expr::identifier("request", None),
             ]),
         );
 
@@ -1783,12 +1886,18 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_sequence() {
         let input_expr = Expr::cond(
-            Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
-            Expr::sequence(vec![
-                Expr::identifier("request"),
-                Expr::identifier("request"),
-            ]),
-            Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+            Expr::equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+            Expr::sequence(
+                vec![
+                    Expr::identifier("request", None),
+                    Expr::identifier("request", None),
+                ],
+                None,
+            ),
+            Expr::sequence(
+                vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                None,
+            ),
         );
 
         let expr_str = to_string(&input_expr).unwrap();
@@ -1800,8 +1909,14 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_record() {
         let input_expr = Expr::cond(
-            Expr::equal_to(Expr::identifier("field1"), Expr::identifier("field2")),
-            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
+            Expr::equal_to(
+                Expr::identifier("field1", None),
+                Expr::identifier("field2", None),
+            ),
+            Expr::record(vec![(
+                "field".to_string(),
+                Expr::identifier("request", None),
+            )]),
             Expr::literal("failed"),
         );
 
@@ -1815,7 +1930,7 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_flags() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("worker"), "response"),
+                Expr::select_field(Expr::identifier("worker", None), "response", None),
                 Expr::untyped_number(BigDecimal::from(1)),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),

@@ -874,6 +874,15 @@ async fn test_definition_crud(
             true,
         );
 
+    let def1v3 = get_api_definition(
+        "test-def;;",
+        "0.0.2",
+        "/api/get1/22v3",
+        "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
+        "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
+        true,
+    );
+
     definition_service
         .create(
             &def1v1,
@@ -890,6 +899,17 @@ async fn test_definition_crud(
         )
         .await
         .unwrap();
+    assert!(
+        definition_service
+            .create(
+                &def1v3,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .is_err(),
+        "Definition name should be invalid"
+    );
 
     let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all_versions(

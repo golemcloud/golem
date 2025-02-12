@@ -65,7 +65,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     if variants.contains(&variable_id.name()) {
                         *expr = Expr::Call(
                             CallType::VariantConstructor(variable_id.name()),
@@ -90,7 +90,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     let key = RegistryKey::FunctionName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
                         function_type_registry.types.get(&key)
