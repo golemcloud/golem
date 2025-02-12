@@ -226,7 +226,7 @@ mod internal {
                 // However, there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (field, arm_pattern) in bind_patterns.iter() {
-                    let new_pred = Expr::select_field(pred_expr.clone(), field);
+                    let new_pred = Expr::select_field(pred_expr.clone(), field, None);
                     let new_pred_type = field_and_types
                         .iter()
                         .find(|(f, _)| f == field)

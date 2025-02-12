@@ -253,8 +253,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::select_field(Expr::identifier("foo", None), "bar"),
-                    Expr::select_field(Expr::identifier("baz", None), "qux"),
+                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                    Expr::select_field(Expr::identifier("baz", None), "qux", None),
                 ),
                 ""
             ))

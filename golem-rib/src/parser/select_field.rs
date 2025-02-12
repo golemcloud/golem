@@ -103,7 +103,7 @@ mod internal {
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
             Expr::Identifier(variable_id, _, _) => {
-                Some(Expr::select_field(base, variable_id.name().as_str()))
+                Some(Expr::select_field(base, variable_id.name().as_str(), None))
             }
             Expr::SelectField(second, last, type_name, inferred_type) => {
                 let inner_select = build_selector(base, *second)?;
@@ -174,7 +174,7 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_field(Expr::identifier("foo", None), "bar"))
+            Ok(Expr::select_field(Expr::identifier("foo", None), "bar", None))
         );
     }
 
@@ -184,10 +184,10 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_field_with_type_annotation(
+            Ok(Expr::select_field(
                 Expr::identifier("foo", None),
                 "bar",
-                TypeName::U32
+                Some(TypeName::U32)
             ))
         );
     }
@@ -200,7 +200,8 @@ mod tests {
             result,
             Ok(Expr::select_field(
                 Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
-                "foo"
+                "foo",
+                None
             ))
         );
     }
@@ -211,10 +212,10 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_field_with_type_annotation(
+            Ok(Expr::select_field(
                 Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
                 "foo",
-                TypeName::U32
+                Some(TypeName::U32)
             ))
         );
     }
@@ -226,8 +227,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_field(Expr::identifier("foo", None), "bar"),
-                "baz"
+                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                "baz",
+                None
             ))
         );
     }
@@ -238,10 +240,10 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::select_field_with_type_annotation(
-                Expr::select_field(Expr::identifier("foo", None), "bar"),
+            Ok(Expr::select_field(
+                Expr::select_field(Expr::identifier("foo", None), "bar", None),
                 "baz",
-                TypeName::U32
+                Some(TypeName::U32)
             ))
         );
     }
@@ -260,7 +262,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_index(
-                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar"),
+                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar", None),
                 1
             ))
         );
@@ -273,7 +275,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_index_with_type_annotation(
-                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar"),
+                Expr::select_field(Expr::select_index(Expr::identifier("foo", None), 0), "bar", None),
                 1,
                 TypeName::U32
             ))
@@ -287,8 +289,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_index(Expr::select_field(Expr::identifier("foo", None), "bar"), 0),
-                "baz"
+                Expr::select_index(Expr::select_field(Expr::identifier("foo", None), "bar", None), 0),
+                "baz",
+                None
             ))
         );
     }
@@ -299,7 +302,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::greater_than(
-                Expr::select_field(Expr::identifier("foo", None), "bar"),
+                Expr::select_field(Expr::identifier("foo", None), "bar", None),
                 Expr::literal("bar")
             ))
         );
@@ -311,7 +314,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::greater_than(
-                Expr::select_field(Expr::identifier("foo", None), "bar"),
+                Expr::select_field(Expr::identifier("foo", None), "bar", None),
                 Expr::untyped_number(BigDecimal::from(1))
             ))
         );
@@ -325,11 +328,11 @@ mod tests {
             result,
             Ok(Expr::cond(
                 Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo", None), "bar"),
+                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
                     Expr::untyped_number(BigDecimal::from(1))
                 ),
-                Expr::select_field(Expr::identifier("foo", None), "bar"),
-                Expr::select_field(Expr::identifier("foo", None), "baz")
+                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier("foo", None), "baz", None)
             ))
         );
     }
@@ -371,7 +374,7 @@ mod tests {
                     ),
                     MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::identifier("foo", None))),
-                        Expr::select_field(Expr::identifier("foo", None), "bar"),
+                        Expr::select_field(Expr::identifier("foo", None), "bar", None),
                     ),
                 ]
             ))

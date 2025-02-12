@@ -138,11 +138,11 @@ mod record_tests {
         let input_expr = Expr::record(vec![
             (
                 "field".to_string(),
-                Expr::select_field(Expr::identifier("request", None), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
             ),
             (
                 "field".to_string(),
-                Expr::select_field(Expr::identifier("request", None), "bar"),
+                Expr::select_field(Expr::identifier("request", None), "bar", None),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -288,14 +288,14 @@ mod record_tests {
                 "a".to_string(),
                 Expr::concat(vec![
                     Expr::literal("user-id-1-"),
-                    Expr::select_field(Expr::identifier("request", None), "user-id-1"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
                 ]),
             ),
             (
                 "b".to_string(),
                 Expr::concat(vec![
                     Expr::literal("user-id-2-"),
-                    Expr::select_field(Expr::identifier("request", None), "user-id-2"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
                 ]),
             ),
         ]);
@@ -338,7 +338,7 @@ mod record_tests {
                 "a".to_string(),
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request", None), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -349,7 +349,7 @@ mod record_tests {
                 "b".to_string(),
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request", None), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -533,8 +533,8 @@ mod sequence_tests {
     fn test_round_trip_read_write_sequence_of_select_field() {
         let input_expr = Expr::sequence(
             vec![
-                Expr::select_field(Expr::identifier("request", None), "field"),
-                Expr::select_field(Expr::identifier("request", None), "field"),
+                Expr::select_field(Expr::identifier("request", None), "field", None),
+                Expr::select_field(Expr::identifier("request", None), "field", None),
             ],
             None,
         );
@@ -649,11 +649,11 @@ mod sequence_tests {
             vec![
                 Expr::concat(vec![
                     Expr::literal("user-id-1-"),
-                    Expr::select_field(Expr::identifier("request", None), "user-id-1"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
                 ]),
                 Expr::concat(vec![
                     Expr::literal("user-id-2-"),
-                    Expr::select_field(Expr::identifier("request", None), "user-id-2"),
+                    Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
                 ]),
             ],
             None,
@@ -692,7 +692,7 @@ mod sequence_tests {
             vec![
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request", None), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -700,7 +700,7 @@ mod sequence_tests {
                 ),
                 Expr::cond(
                     Expr::equal_to(
-                        Expr::select_field(Expr::identifier("request", None), "foo"),
+                        Expr::select_field(Expr::identifier("request", None), "foo", None),
                         Expr::literal("bar"),
                     ),
                     Expr::literal("success"),
@@ -846,8 +846,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_field() {
         let input_expr = Expr::tuple(vec![
-            Expr::select_field(Expr::identifier("request", None), "field"),
-            Expr::select_field(Expr::identifier("request", None), "field"),
+            Expr::select_field(Expr::identifier("request", None), "field", None),
+            Expr::select_field(Expr::identifier("request", None), "field", None),
         ]);
         let _expr_str = to_string(&input_expr).unwrap();
         let _expected_str = "(request.field, request.field)".to_string();
@@ -942,11 +942,11 @@ mod tuple_tests {
         let input_expr = Expr::tuple(vec![
             Expr::concat(vec![
                 Expr::literal("user-id-1-"),
-                Expr::select_field(Expr::identifier("request", None), "user-id-1"),
+                Expr::select_field(Expr::identifier("request", None), "user-id-1", None),
             ]),
             Expr::concat(vec![
                 Expr::literal("user-id-2-"),
-                Expr::select_field(Expr::identifier("request", None), "user-id-2"),
+                Expr::select_field(Expr::identifier("request", None), "user-id-2", None),
             ]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1280,7 +1280,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
-        let input_expr = Expr::select_field(Expr::identifier("request", None), "field");
+        let input_expr = Expr::select_field(Expr::identifier("request", None), "field", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request.field".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1304,6 +1304,7 @@ mod selection_tests {
                 Expr::identifier("request", None),
             )]),
             "field",
+            None
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request}.field".to_string();
@@ -1579,7 +1580,7 @@ mod match_tests {
                     ),
                     Expr::cond(
                         Expr::equal_to(
-                            Expr::select_field(Expr::identifier("request", None), "foo"),
+                            Expr::select_field(Expr::identifier("request", None), "foo", None),
                             Expr::literal("bar"),
                         ),
                         Expr::literal("success"),
@@ -1825,7 +1826,7 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_select_field() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("request", None), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
                 Expr::literal("bar"),
             ),
             Expr::literal("success"),
@@ -1842,13 +1843,13 @@ mod if_cond_tests {
     fn test_round_trip_nested_if_condition() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("request", None), "foo"),
+                Expr::select_field(Expr::identifier("request", None), "foo", None),
                 Expr::literal("bar"),
             ),
             Expr::literal("success"),
             Expr::cond(
                 Expr::equal_to(
-                    Expr::select_field(Expr::identifier("request", None), "foo"),
+                    Expr::select_field(Expr::identifier("request", None), "foo", None),
                     Expr::literal("baz"),
                 ),
                 Expr::literal("success"),
@@ -1929,7 +1930,7 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_flags() {
         let input_expr = Expr::cond(
             Expr::equal_to(
-                Expr::select_field(Expr::identifier("worker", None), "response"),
+                Expr::select_field(Expr::identifier("worker", None), "response", None),
                 Expr::untyped_number(BigDecimal::from(1)),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),

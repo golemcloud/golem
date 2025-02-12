@@ -484,11 +484,11 @@ impl Expr {
         )
     }
 
-    pub fn select_field(expr: Expr, field: impl AsRef<str>) -> Self {
+    pub fn select_field(expr: Expr, field: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
         Expr::SelectField(
             Box::new(expr),
             field.as_ref().to_string(),
-            None,
+            type_annotation,
             InferredType::Unknown,
         )
     }
@@ -1254,15 +1254,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 ssing expr",
                 )?;
 
-                if let Some(type_name) = type_name {
-                    Expr::select_field_with_type_annotation(
-                        expr.try_into()?,
-                        field.as_str(),
-                        type_name,
-                    )
-                } else {
-                    Expr::select_field(expr.try_into()?, field.as_str())
-                }
+                Expr::select_field(expr.try_into()?, field.as_str(), type_name)
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
                 let expr = *expr;

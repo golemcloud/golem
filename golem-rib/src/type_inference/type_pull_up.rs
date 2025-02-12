@@ -970,8 +970,8 @@ mod type_pull_up_tests {
                 "foo".to_string(),
                 InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
             )]));
-        let select_expr = Expr::select_field(record_identifier, "foo");
-        let expr = Expr::select_field(select_expr, "bar");
+        let select_expr = Expr::select_field(record_identifier, "foo", None);
+        let expr = Expr::select_field(select_expr, "bar", None);
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
@@ -1179,8 +1179,8 @@ mod type_pull_up_tests {
             ("baz".to_string(), InferredType::U64),
         ]));
 
-        let select_field1 = Expr::select_field(inner.clone(), "bar");
-        let select_field2 = Expr::select_field(inner, "baz");
+        let select_field1 = Expr::select_field(inner.clone(), "bar", None);
+        let select_field2 = Expr::select_field(inner, "baz", None);
         let expr = Expr::greater_than(select_field1.clone(), select_field2.clone());
 
         let new_expr = expr.pull_types_up().unwrap();
@@ -1223,9 +1223,9 @@ mod type_pull_up_tests {
             .add_infer_type(InferredType::List(Box::new(record_type.clone())));
 
         let select_field_from_first =
-            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar");
+            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar", None);
         let select_field_from_second =
-            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz");
+            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz", None);
         let expr = Expr::less_than_or_equal_to(
             select_field_from_first.clone(),
             select_field_from_second.clone(),
@@ -1236,12 +1236,14 @@ mod type_pull_up_tests {
         let new_select_field_from_first = Expr::select_field(
             Expr::select_index(inner.clone(), 0).add_infer_type(record_type.clone()),
             "bar",
+            None
         )
         .add_infer_type(InferredType::Str);
 
         let new_select_field_from_second = Expr::select_field(
             Expr::select_index(inner.clone(), 1).add_infer_type(record_type),
             "baz",
+            None
         )
         .add_infer_type(InferredType::U64);
 
@@ -1388,6 +1390,7 @@ mod type_pull_up_tests {
                     InferredType::Str,
                 )])),
                 "bar",
+                None
             ),
             vec![
                 MatchArm {
