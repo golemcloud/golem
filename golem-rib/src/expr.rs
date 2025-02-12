@@ -66,7 +66,7 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
-    Call(CallType,  Vec<Expr>, InferredType),
+    Call(CallType, Option<TypeParameter>, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),
@@ -251,7 +251,7 @@ impl Expr {
         cond
     }
 
-    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, args: Vec<Expr>) -> Self {
+    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, type_parameter: Option<TypeParameter>, args: Vec<Expr>) -> Self {
         Expr::Call(
             CallType::Function(dynamic_parsed_fn_name),
             args,

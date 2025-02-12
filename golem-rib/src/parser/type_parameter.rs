@@ -1,9 +1,9 @@
 use crate::parser::errors::RibParseError;
 use crate::type_parameter::TypeParameter;
 use combine::error::StreamError;
-use combine::parser::char::{alpha_num, char, spaces, string};
+use combine::parser::char::{char};
 use combine::stream::Stream;
-use combine::{attempt, choice, many1, not_followed_by, optional, parser, sep_by, ParseError, Parser};
+use combine::{attempt, choice, ParseError, Parser};
 use internal::*;
 // Parser for TypeParameter
 pub fn type_parameter<Input>() -> impl Parser<Input, Output = TypeParameter>
