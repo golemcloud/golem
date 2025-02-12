@@ -213,6 +213,13 @@ pub trait WorkerService {
         target: RevertWorkerTarget,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_uri: WorkerUri,
+        idempotency_key: IdempotencyKey,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
@@ -862,5 +869,25 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
         self.client.revert(worker_urn, target).await?;
         Ok(GolemResult::Str("Reverted".to_string()))
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_uri: WorkerUri,
+        idempotency_key: IdempotencyKey,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        if self
+            .client
+            .cancel_invocation(worker_urn, idempotency_key)
+            .await?
+        {
+            Ok(GolemResult::Str("Cancelled".to_string()))
+        } else {
+            Err(GolemError(
+                "Could not cancel invocation, it has been already performed".to_string(),
+            ))
+        }
     }
 }
