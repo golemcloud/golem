@@ -73,10 +73,7 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
     ) -> Result<Vec<ApiDeployment>, GolemError> {
         info!("List api deployments with definition {api_definition_id}");
 
-        let deployments = self
-            .client
-            .list_deployments(Some(&api_definition_id.0))
-            .await?;
+        let deployments = self.client.list_deployments(&api_definition_id.0).await?;
 
         Ok(deployments.into_iter().map_into().collect())
     }
