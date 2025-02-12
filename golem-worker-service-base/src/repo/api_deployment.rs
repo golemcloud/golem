@@ -60,6 +60,8 @@ pub trait ApiDeploymentRepo {
 
     async fn delete(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError>;
 
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
+
     async fn get_by_id(
         &self,
         namespace: &str,
@@ -141,6 +143,11 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         let result = self.repo.get_by_id(namespace, definition_id).await;
         Self::logged_with_id("get_by_id", namespace, definition_id, result)
+    }
+
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        let result = self.repo.get_all(namespace).await;
+        Self::logged_with_id("get_all", namespace, "*", result)
     }
 
     async fn get_by_id_and_version(
@@ -229,6 +236,37 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
         } else {
             Ok(false)
         }
+    }
+    #[when(sqlx::Postgres -> get_all)]
+    async fn get_all_postgres(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
+                FROM api_deployments
+                WHERE namespace = $1
+                "#,
+        )
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+    #[when(sqlx::Sqlite -> get_all)]
+    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
+                FROM api_deployments
+                WHERE namespace = $1
+                "#,
+        )
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     #[when(sqlx::Postgres -> get_by_id)]

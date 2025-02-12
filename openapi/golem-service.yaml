@@ -2075,7 +2075,6 @@ paths:
       parameters:
       - in: query
         name: api-definition-id
-        required: true
         deprecated: false
         schema:
           type: string

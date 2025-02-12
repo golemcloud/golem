@@ -645,9 +645,16 @@ async fn test_deployment(
     assert!(deployment.is_some());
 
     let deployments = deployment_service
-        .get_by_id(&DefaultNamespace::default(), &def3.id)
+        .get_by_id(&DefaultNamespace::default(), Some(def3.id.clone()))
         .await
         .unwrap();
+    assert!(!deployments.is_empty());
+
+    let deployments = deployment_service
+        .get_by_id(&DefaultNamespace::default(), None)
+        .await
+        .unwrap();
+    assert_eq!(deployments.len(), 2);
     assert!(!deployments.is_empty());
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
