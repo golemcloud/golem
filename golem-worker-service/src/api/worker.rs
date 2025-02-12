@@ -146,13 +146,27 @@ impl WorkerApi {
             function = function.0
         );
 
+        let typed_params = params
+            .0
+            .params
+            .into_iter()
+            .map(|param| {
+                param
+                    .try_into_type_annotated_value()
+                    .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|param| param.unwrap()) // TODO: handle untyped case
+            .collect();
+
         let response = self
             .worker_service
             .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                typed_params,
                 None,
                 empty_worker_metadata(),
             )
@@ -189,13 +203,27 @@ impl WorkerApi {
             function = function.0
         );
 
+        let typed_params = params
+            .0
+            .params
+            .into_iter()
+            .map(|param| {
+                param
+                    .try_into_type_annotated_value()
+                    .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|param| param.unwrap()) // TODO: handle untyped case
+            .collect();
+
         let response = self
             .worker_service
             .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                typed_params,
                 None,
                 empty_worker_metadata(),
             )
@@ -231,13 +259,27 @@ impl WorkerApi {
             function = function.0
         );
 
+        let typed_params = params
+            .0
+            .params
+            .into_iter()
+            .map(|param| {
+                param
+                    .try_into_type_annotated_value()
+                    .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|param| param.unwrap()) // TODO: handle untyped case
+            .collect();
+
         let response = self
             .worker_service
             .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                typed_params,
                 None,
                 empty_worker_metadata(),
             )
@@ -274,13 +316,27 @@ impl WorkerApi {
             function = function.0
         );
 
+        let typed_params = params
+            .0
+            .params
+            .into_iter()
+            .map(|param| {
+                param
+                    .try_into_type_annotated_value()
+                    .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|param| param.unwrap()) // TODO: handle untyped case
+            .collect();
+
         let response = self
             .worker_service
             .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                typed_params,
                 None,
                 empty_worker_metadata(),
             )

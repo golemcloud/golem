@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
+use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -1052,7 +1053,7 @@ impl From<crate::model::GolemErrorShardingNotReady>
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
-    pub params: Vec<TypeAnnotatedValue>,
+    pub params: Vec<OptionallyTypeAnnotatedValueJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]

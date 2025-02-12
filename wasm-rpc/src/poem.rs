@@ -125,3 +125,66 @@ impl ParseFromJSON for ValueAndType {
 }
 
 impl IsObjectType for ValueAndType {}
+
+#[cfg(feature = "json")]
+mod json {
+    use std::borrow::Cow;
+    use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
+    use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
+    use serde_json::Value;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use crate::json::OptionallyTypeAnnotatedValueJson;
+
+    impl Type for OptionallyTypeAnnotatedValueJson {
+        const IS_REQUIRED: bool = true;
+        type RawValueType = Self;
+        type RawElementValueType = Self;
+
+        fn name() -> Cow<'static, str> {
+            "ValueAndType".into()
+        }
+
+        fn schema_ref() -> MetaSchemaRef {
+            MetaSchemaRef::Reference(Self::name().into_owned())
+        }
+
+        fn register(registry: &mut Registry) {
+            registry.create_schema::<Self, _>(Self::name().into_owned(), |registry| {
+                AnalysedType::register(registry);
+                serde_json::Value::register(registry);
+                let mut schema = MetaSchema::new("object");
+                schema.required = vec!["value"];
+                schema.properties = vec![
+                    ("typ", AnalysedType::schema_ref()),
+                    ("value", Value::schema_ref()),
+                ];
+
+                schema
+            });
+        }
+
+        fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+            Some(self)
+        }
+
+        fn raw_element_iter<'a>(
+            &'a self,
+        ) -> Box<dyn Iterator<Item=&'a Self::RawElementValueType> + 'a> {
+            Box::new(self.as_raw_value().into_iter())
+        }
+    }
+
+    impl ToJSON for OptionallyTypeAnnotatedValueJson {
+        fn to_json(&self) -> Option<Value> {
+            serde_json::to_value(self).ok()
+        }
+    }
+
+    impl ParseFromJSON for OptionallyTypeAnnotatedValueJson {
+        fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+            Ok(serde_json::from_value(value.unwrap_or_default())?)
+        }
+    }
+
+    impl IsObjectType for OptionallyTypeAnnotatedValueJson {}
+}

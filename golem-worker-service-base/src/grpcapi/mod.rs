@@ -18,6 +18,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
 use golem_service_base::model::validate_worker_name;
+use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tonic::Status;
 
@@ -205,9 +206,28 @@ pub fn error_to_status(error: WorkerError) -> Status {
 pub fn parse_json_invoke_parameters(
     parameters: &[String],
 ) -> Result<Vec<TypeAnnotatedValue>, WorkerError> {
-    parameters
+    let optionally_typed_parameters: Vec<OptionallyTypeAnnotatedValueJson> = parameters
         .iter()
         .map(|param| serde_json::from_str(param))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))
+        .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))?;
+
+    let typed_params = optionally_typed_parameters
+        .into_iter()
+        .map(|param| {
+            param
+                .try_into_type_annotated_value()
+                .map_err(|errors: Vec<String>| {
+                    bad_request_error(format!(
+                        "Failed to parse JSON parameters: {}",
+                        errors.join(", ")
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, WorkerError>>()?
+        .into_iter()
+        .map(|param| param.unwrap()) // TODO: handle untyped case
+        .collect();
+
+    Ok(typed_params)
 }
