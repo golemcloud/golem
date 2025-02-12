@@ -207,7 +207,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![("foo".to_string(), Expr::ok(Expr::identifier("bar")))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::ok(Expr::identifier("bar"), None)
+                )]),
                 ""
             ))
         );

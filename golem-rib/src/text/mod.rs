@@ -427,8 +427,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_record_of_constructor() {
         let input_expr = Expr::record(vec![
-            ("a".to_string(), Expr::ok(Expr::literal("foo"))),
-            ("b".to_string(), Expr::err(Expr::literal("msg"))),
+            ("a".to_string(), Expr::ok(Expr::literal("foo"), None)),
+            ("b".to_string(), Expr::err(Expr::literal("msg"), None)),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = r#"{a: ok("foo"), b: err("msg")}"#.to_string();
@@ -724,8 +724,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_constructor() {
         let input_expr = Expr::sequence(vec![
-            Expr::ok(Expr::literal("foo")),
-            Expr::err(Expr::literal("msg")),
+            Expr::ok(Expr::literal("foo"), None),
+            Expr::err(Expr::literal("msg"), None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "[ok(\"foo\"), err(\"msg\")]".to_string();
@@ -894,8 +894,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_constructor() {
         let input_expr = Expr::tuple(vec![
-            Expr::ok(Expr::literal("foo")),
-            Expr::err(Expr::literal("msg")),
+            Expr::ok(Expr::literal("foo"), None),
+            Expr::err(Expr::literal("msg"), None),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"(ok("foo"), err("msg"))"#.to_string();
@@ -1588,11 +1588,11 @@ mod match_tests {
             vec![
                 MatchArm::new(
                     ArmPattern::identifier("foo1"),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1611,11 +1611,11 @@ mod match_tests {
             vec![
                 MatchArm::new(
                     ArmPattern::custom_constructor("foo1", vec![ArmPattern::WildCard]),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1640,11 +1640,11 @@ mod match_tests {
                             vec![ArmPattern::WildCard],
                         )),
                     ),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );
@@ -1672,7 +1672,7 @@ mod match_tests {
                             )],
                         )),
                     ),
-                    Expr::ok(Expr::literal("foo")),
+                    Expr::ok(Expr::literal("foo"), None),
                 ),
                 MatchArm::new(
                     ArmPattern::As(
@@ -1688,7 +1688,7 @@ mod match_tests {
                             )],
                         )),
                     ),
-                    Expr::err(Expr::literal("bar")),
+                    Expr::err(Expr::literal("bar"), None),
                 ),
             ],
         );

@@ -2391,6 +2391,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Result(
                             Err(Box::new(Expr::literal("foo"))),
+                            None,
                             InferredType::Result {
                                 ok: Some(Box::new(InferredType::Unknown)),
                                 error: Some(Box::new(InferredType::Str)),
@@ -2403,6 +2404,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Result(
                             Ok(Box::new(Expr::literal("bar"))),
+                            None,
                             InferredType::Result {
                                 ok: Some(Box::new(InferredType::Str)),
                                 error: Some(Box::new(InferredType::Unknown)),

@@ -107,7 +107,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Result(Ok(expr), inferred_type) => {
+            Expr::Result(Ok(expr), _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -121,7 +121,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Result(Err(expr), inferred_type) => {
+            Expr::Result(Err(expr), _, inferred_type) => {
                 queue.push(expr);
 
                 let unified_inferred_type = inferred_type.unify();

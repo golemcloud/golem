@@ -267,8 +267,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::ok(Expr::identifier("foo")),
-                    Expr::ok(Expr::identifier("bar")),
+                    Expr::ok(Expr::identifier("foo"), None),
+                    Expr::ok(Expr::identifier("bar"), None),
                 ),
                 ""
             ))

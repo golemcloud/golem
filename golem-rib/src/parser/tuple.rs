@@ -149,8 +149,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::ok(Expr::identifier("foo")),
-                    Expr::err(Expr::identifier("bar"))
+                    Expr::ok(Expr::identifier("foo"), None),
+                    Expr::err(Expr::identifier("bar"), None)
                 ]),
                 ""
             ))

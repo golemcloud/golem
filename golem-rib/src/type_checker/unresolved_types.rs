@@ -128,7 +128,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            expr @ Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err, expr)?,
+            expr @ Expr::Result(ok_err, _, _) => {
+                internal::unresolved_type_for_result(ok_err, expr)?
+            }
             Expr::Call(_, args, _) => {
                 for arg in args {
                     queue.push_back(arg);

@@ -89,11 +89,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 )?;
             }
 
-            Expr::Result(Ok(_), current_inferred_type) => {
+            Expr::Result(Ok(_), _, current_inferred_type) => {
                 internal::handle_result_ok(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
-            Expr::Result(Err(_), current_inferred_type) => {
+            Expr::Result(Err(_), _, current_inferred_type) => {
                 internal::handle_result_error(
                     expr,
                     current_inferred_type,
@@ -497,6 +497,7 @@ mod internal {
         };
         let new_result = Expr::Result(
             Ok(Box::new(ok_expr.clone())),
+            None,
             current_ok_type.merge(result_type),
         );
         inferred_type_stack.push_front(new_result);
@@ -517,6 +518,7 @@ mod internal {
         };
         let new_result = Expr::Result(
             Err(Box::new(expr.clone())),
+            None,
             current_error_type.merge(result_type),
         );
         inferred_type_stack.push_front(new_result);

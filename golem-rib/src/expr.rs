@@ -64,7 +64,7 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
-    Result(Result<Box<Expr>, Box<Expr>>, InferredType),
+    Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
     Call(CallType, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
@@ -134,7 +134,7 @@ impl Expr {
     }
 
     pub fn is_result(&self) -> bool {
-        matches!(self, Expr::Result(_, _))
+        matches!(self, Expr::Result(_, _, _))
     }
 
     pub fn is_option(&self) -> bool {
@@ -206,8 +206,8 @@ impl Expr {
                 Some(("some".to_string(), Some(expr.deref().clone())))
             }
             Expr::Option(None, _, _) => Some(("some".to_string(), None)),
-            Expr::Result(Ok(expr), _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
-            Expr::Result(Err(expr), _) => Some(("err".to_string(), Some(expr.deref().clone()))),
+            Expr::Result(Ok(expr), _, _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
+            Expr::Result(Err(expr), _, _) => Some(("err".to_string(), Some(expr.deref().clone()))),
             _ => None,
         }
     }
@@ -275,10 +275,11 @@ impl Expr {
         Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
-    pub fn err(expr: Expr) -> Self {
+    pub fn err(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
         Expr::Result(
             Err(Box::new(expr)),
+            type_annotation,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(inferred_type)),
@@ -432,10 +433,12 @@ impl Expr {
         Expr::Not(Box::new(expr), InferredType::Bool)
     }
 
-    pub fn ok(expr: Expr) -> Self {
+    pub fn ok(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
+
         Expr::Result(
             Ok(Box::new(expr)),
+            type_annotation,
             InferredType::Result {
                 ok: Some(Box::new(inferred_type)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -586,7 +589,7 @@ impl Expr {
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
@@ -739,7 +742,7 @@ impl Expr {
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
@@ -787,7 +790,7 @@ impl Expr {
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::And(_, _, inferred_type)
@@ -1001,6 +1004,7 @@ impl ArmPattern {
                 None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -1016,6 +1020,7 @@ impl ArmPattern {
                 None,
                 InferredType::Unknown,
             ))),
+            None,
             InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
@@ -1316,10 +1321,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let result = expr.result.ok_or("Missing result")?;
                 match result {
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
-                        Expr::ok((*expr).try_into()?)
+                        Expr::ok((*expr).try_into()?, None)
                     }
                     golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
-                        Expr::err((*expr).try_into()?)
+                        Expr::err((*expr).try_into()?, None)
                     }
                 }
             }
@@ -1667,7 +1672,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Result(expr, _) => {
+                Expr::Result(expr, _, _) => {
                     let result = match expr {
                         Ok(expr) => golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(
                             Box::new((*expr).into()),
@@ -1995,7 +2000,7 @@ mod tests {
                 Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),
             ),
             Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result")))),
-            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"))),
+            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"), None)),
             Expr::let_binding(
                 "baz",
                 Expr::pattern_match(

@@ -100,7 +100,7 @@ mod internal {
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, inferred_type)
+            | Expr::Result(_, _, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)

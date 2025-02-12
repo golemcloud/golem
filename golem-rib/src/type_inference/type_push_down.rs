@@ -57,12 +57,12 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
 
-            Expr::Result(Ok(expr), inferred_type) => {
+            Expr::Result(Ok(expr), _, inferred_type) => {
                 internal::handle_ok(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::Result(Err(expr), inferred_type) => {
+            Expr::Result(Err(expr), _, inferred_type) => {
                 internal::handle_err(expr, inferred_type)?;
                 queue.push_back(expr);
             }

@@ -149,9 +149,9 @@ mod tests {
             result,
             Ok((
                 Expr::sequence(vec![
-                    Expr::ok(Expr::identifier("x")),
-                    Expr::ok(Expr::identifier("y")),
-                    Expr::ok(Expr::identifier("z"))
+                    Expr::ok(Expr::identifier("x"), None),
+                    Expr::ok(Expr::identifier("y"), None),
+                    Expr::ok(Expr::identifier("z"), None)
                 ]),
                 ""
             ))

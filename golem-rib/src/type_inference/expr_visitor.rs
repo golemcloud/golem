@@ -65,8 +65,8 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             }
         }
         Expr::Option(Some(expr), _, _) => queue.push_back(&mut *expr),
-        Expr::Result(Ok(expr), _) => queue.push_back(&mut *expr),
-        Expr::Result(Err(expr), _) => queue.push_back(&mut *expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_back(&mut *expr),
+        Expr::Result(Err(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
             if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
                 queue.extend(exprs.iter_mut())
@@ -180,8 +180,8 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             }
         }
         Expr::Option(Some(expr), _, _) => queue.push_back(expr),
-        Expr::Result(Ok(expr), _) => queue.push_back(expr),
-        Expr::Result(Err(expr), _) => queue.push_back(expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_back(expr),
+        Expr::Result(Err(expr), _, _) => queue.push_back(expr),
         Expr::Call(call_type, arguments, _) => {
             if let CallType::Function(dynamic) = call_type {
                 if let Some(params) = dynamic.function.raw_resource_params() {
@@ -321,8 +321,8 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             }
         }
         Expr::Option(Some(expr), _, _) => queue.push_front(&mut *expr),
-        Expr::Result(Ok(expr), _) => queue.push_front(&mut *expr),
-        Expr::Result(Err(expr), _) => queue.push_front(&mut *expr),
+        Expr::Result(Ok(expr), _, _) => queue.push_front(&mut *expr),
+        Expr::Result(Err(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Call(call_type, arguments, _) => {
             if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
                 for expr in exprs.iter_mut() {

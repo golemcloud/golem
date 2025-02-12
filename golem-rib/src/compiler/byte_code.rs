@@ -288,7 +288,7 @@ mod internal {
                 instructions.push(RibIR::PushNone(optional.ok()));
             }
 
-            Expr::Result(Ok(inner_expr), inferred_type) => {
+            Expr::Result(Ok(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushOkResult(convert_to_analysed_type(
                     expr,
@@ -296,7 +296,7 @@ mod internal {
                 )?));
             }
 
-            Expr::Result(Err(inner_expr), inferred_type) => {
+            Expr::Result(Err(inner_expr), _, inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushErrResult(convert_to_analysed_type(
                     expr,

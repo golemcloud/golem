@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"))),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"), None)),
                 ""
             ))
         );

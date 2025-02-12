@@ -286,7 +286,7 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
-            Expr::Result(constructor, _) => match constructor {
+            Expr::Result(constructor, _, _) => match constructor {
                 Ok(expr) => {
                     self.write_str("ok(")?;
                     self.write_expr(expr)?;

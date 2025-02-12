@@ -350,6 +350,7 @@ mod pattern_match_bindings {
                         None,
                         InferredType::Option(Box::new(InferredType::Unknown)),
                     ))),
+                    None,
                     InferredType::Result {
                         ok: Some(Box::new(InferredType::Option(Box::new(
                             InferredType::Unknown,

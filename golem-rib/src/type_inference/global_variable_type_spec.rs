@@ -135,15 +135,20 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 )?;
             }
 
-            Expr::Result(Ok(_), current_inferred_type) => {
-                internal::handle_result_ok(expr, current_inferred_type, &mut temp_stack);
+            Expr::Result(Ok(_), type_name, current_inferred_type) => {
+                internal::handle_result_ok(expr, current_inferred_type, &mut temp_stack, type_name);
             }
 
-            Expr::Result(Err(_), current_inferred_type) => {
-                internal::handle_result_error(expr, current_inferred_type, &mut temp_stack);
+            Expr::Result(Err(_), type_name, current_inferred_type) => {
+                internal::handle_result_error(
+                    expr,
+                    current_inferred_type,
+                    &mut temp_stack,
+                    type_name,
+                );
             }
 
-            Expr::Option(Some(expr), _, current_inferred_type) => {
+            Expr::Option(Some(expr), type_name, current_inferred_type) => {
                 internal::handle_option_some(expr, current_inferred_type, &mut temp_stack);
             }
 
@@ -560,12 +565,17 @@ mod internal {
         original_ok_expr: &Expr,
         current_ok_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let ok_expr = temp_stack
             .pop_front()
             .unwrap_or((original_ok_expr.clone(), false));
 
-        let new_result = Expr::Result(Ok(Box::new(ok_expr.0.clone())), current_ok_type.clone());
+        let new_result = Expr::Result(
+            Ok(Box::new(ok_expr.0.clone())),
+            type_name.clone(),
+            current_ok_type.clone(),
+        );
         temp_stack.push_front((new_result, true));
     }
 
@@ -573,13 +583,18 @@ mod internal {
         original_error_expr: &Expr,
         current_error_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let expr = temp_stack
             .pop_front()
             .map(|x| x.0)
             .unwrap_or(original_error_expr.clone());
 
-        let new_result = Expr::Result(Err(Box::new(expr.clone())), current_error_type.clone());
+        let new_result = Expr::Result(
+            Err(Box::new(expr.clone())),
+            type_name.clone(),
+            current_error_type.clone(),
+        );
 
         temp_stack.push_front((new_result, false));
     }
@@ -588,13 +603,14 @@ mod internal {
         original_some_expr: &Expr,
         current_some_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_some_expr.clone(), false));
         let new_option = Expr::Option(
             Some(Box::new(expr.0.clone())),
-            None,
+            type_name.clone(),
             current_some_type.clone(),
         );
         temp_stack.push_front((new_option, false));
