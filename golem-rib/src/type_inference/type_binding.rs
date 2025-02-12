@@ -64,6 +64,17 @@ pub(crate) fn bind_type(expr: &mut Expr) {
                 }
             }
 
+            Expr::Result(expr, optional_type_name, inferred_type) => {
+                if let Some(type_name) = optional_type_name {
+                    *inferred_type = type_name.clone().into();
+                }
+
+                match expr {
+                    Ok(expr) => queue.push_back(expr),
+                    Err(expr) => queue.push_back(expr),
+                }
+            }
+
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -170,6 +181,133 @@ mod type_binding_tests {
             ))),
             Some(TypeName::Option(Box::new(TypeName::U64))),
             InferredType::Option(Box::new(InferredType::U64)),
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_in_result_1() {
+        // Data associated with both success and error case
+        let expr_str = r#"
+            ok(1): result<u64, string>
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::Result(
+            Ok(Box::new(Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::number(),
+            ))),
+            Some(TypeName::Result {
+                ok: Some(Box::new(TypeName::U64)),
+                error: Some(Box::new(TypeName::Str)),
+            }),
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::U64)),
+                error: Some(Box::new(InferredType::Str)),
+            },
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_in_result_2() {
+        // Data associated with only success case
+        let expr_str = r#"
+            ok(1): result<u64>
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::Result(
+            Ok(Box::new(Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::number(),
+            ))),
+            Some(TypeName::Result {
+                ok: Some(Box::new(TypeName::U64)),
+                error: None,
+            }),
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::U64)),
+                error: None,
+            },
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_in_result_3() {
+        // Data associated with only error case
+        let expr_str = r#"
+            err(1): result<_, u64>
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+
+        expr.bind_types();
+
+        let expected = Expr::Result(
+            Err(Box::new(Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::number(),
+            ))),
+            Some(TypeName::Result {
+                ok: None,
+                error: Some(Box::new(TypeName::U64)),
+            }),
+            InferredType::Result {
+                ok: None,
+                error: Some(Box::new(InferredType::U64)),
+            },
+        );
+
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_bind_type_in_result_4() {
+        // Don't care the data associated with either case
+        let expr_str = r#"
+            ok(1): result
+        "#;
+
+        let mut expr = Expr::from_text(expr_str).unwrap();
+        expr.bind_types();
+
+        let expected = Expr::Result(
+            Ok(Box::new(Expr::Number(
+                Number {
+                    value: BigDecimal::from(1),
+                },
+                None,
+                InferredType::number(),
+            ))),
+            Some(TypeName::Result {
+                ok: None,
+                error: None,
+            }),
+            InferredType::Result {
+                ok: None,
+                error: None,
+            },
         );
 
         assert_eq!(expr, expected);

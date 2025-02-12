@@ -18,8 +18,7 @@ use std::ops::Deref;
 use bincode::{Decode, Encode};
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
-use combine::parser::choice::choice;
-use combine::{attempt, between, sep_by, Parser};
+use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
@@ -445,6 +444,12 @@ where
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
 }
 
+enum ResultSuccess {
+    NoType,
+    WithType(TypeName),
+}
+
+// https://component-model.bytecodealliance.org/design/wit.html#results
 pub fn parse_result_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
@@ -454,18 +459,44 @@ where
 {
     string("result")
         .skip(spaces())
-        .with(between(
+        .with(optional(between(
             char('<').skip(spaces()),
             char('>').skip(spaces()),
             (
-                parse_type_name().skip(spaces()),
-                char(',').skip(spaces()),
-                parse_type_name().skip(spaces()),
+                choice!(
+                    string("_").skip(spaces()).map(|_| ResultSuccess::NoType),
+                    parse_type_name()
+                        .skip(spaces())
+                        .map(ResultSuccess::WithType)
+                ),
+                optional(
+                    char(',')
+                        .skip(spaces())
+                        .with(parse_type_name().skip(spaces())),
+                ),
             ),
-        ))
-        .map(|(ok, _, error)| TypeName::Result {
-            ok: Some(Box::new(ok)),
-            error: Some(Box::new(error)),
+        )))
+        .map(|result| match result {
+            None => TypeName::Result {
+                ok: None,
+                error: None,
+            },
+            Some((ResultSuccess::NoType, None)) => TypeName::Result {
+                ok: None,
+                error: None,
+            },
+            Some((ResultSuccess::NoType, Some(error))) => TypeName::Result {
+                ok: None,
+                error: Some(Box::new(error)),
+            },
+            Some((ResultSuccess::WithType(ok), None)) => TypeName::Result {
+                ok: Some(Box::new(ok)),
+                error: None,
+            },
+            Some((ResultSuccess::WithType(ok), Some(error))) => TypeName::Result {
+                ok: Some(Box::new(ok)),
+                error: Some(Box::new(error)),
+            },
         })
 }
 
