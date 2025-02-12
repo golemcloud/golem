@@ -177,7 +177,10 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::tuple(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)])
+                    Expr::tuple(vec![
+                        Expr::identifier("bar", None),
+                        Expr::identifier("baz", None)
+                    ])
                 )]),
                 ""
             ))
@@ -193,7 +196,10 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::sequence(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)], None)
+                    Expr::sequence(
+                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        None
+                    )
                 )]),
                 ""
             ))

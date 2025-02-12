@@ -74,7 +74,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::tuple(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]),
+                Expr::tuple(vec![
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None)
+                ]),
                 ""
             ))
         );
@@ -88,8 +91,14 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::sequence(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)], None),
-                    Expr::sequence(vec![Expr::identifier("baz", None), Expr::identifier("qux", None)], None)
+                    Expr::sequence(
+                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        None
+                    ),
+                    Expr::sequence(
+                        vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
+                        None
+                    )
                 ]),
                 ""
             ))
@@ -133,8 +142,14 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::tuple(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]),
-                    Expr::tuple(vec![Expr::identifier("baz", None), Expr::identifier("qux", None)])
+                    Expr::tuple(vec![
+                        Expr::identifier("foo", None),
+                        Expr::identifier("bar", None)
+                    ]),
+                    Expr::tuple(vec![
+                        Expr::identifier("baz", None),
+                        Expr::identifier("qux", None)
+                    ])
                 ]),
                 ""
             ))

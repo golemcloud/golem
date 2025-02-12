@@ -521,7 +521,10 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::sequence(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)], None),
+                    Expr::sequence(
+                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        None,
+                    ),
                     Expr::identifier("qux", None),
                 ],
             ),
@@ -543,9 +546,15 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::sequence(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)], None),
                     Expr::sequence(
-                        vec![Expr::identifier("qux", None), Expr::identifier("quux", None)],
+                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        None,
+                    ),
+                    Expr::sequence(
+                        vec![
+                            Expr::identifier("qux", None),
+                            Expr::identifier("quux", None),
+                        ],
                         None,
                     ),
                 ],
@@ -590,7 +599,10 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::tuple(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)]),
+                    Expr::tuple(vec![
+                        Expr::identifier("bar", None),
+                        Expr::identifier("baz", None),
+                    ]),
                     Expr::identifier("qux", None),
                 ],
             ),

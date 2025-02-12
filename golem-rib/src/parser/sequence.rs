@@ -70,7 +70,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::sequence(vec![Expr::identifier("foo", None)], None), ""))
+            Ok((
+                Expr::sequence(vec![Expr::identifier("foo", None)], None),
+                ""
+            ))
         );
     }
 
@@ -81,7 +84,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)], None),
+                Expr::sequence(
+                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                    None
+                ),
                 ""
             ))
         );
@@ -224,8 +230,14 @@ mod tests {
             Ok((
                 Expr::sequence(
                     vec![
-                        Expr::tuple(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]),
-                        Expr::tuple(vec![Expr::identifier("baz", None), Expr::identifier("qux", None)])
+                        Expr::tuple(vec![
+                            Expr::identifier("foo", None),
+                            Expr::identifier("bar", None)
+                        ]),
+                        Expr::tuple(vec![
+                            Expr::identifier("baz", None),
+                            Expr::identifier("qux", None)
+                        ])
                     ],
                     None
                 ),

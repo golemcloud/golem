@@ -70,14 +70,20 @@ mod tests {
     fn test_result() {
         let input = "ok(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::ok(Expr::identifier("foo", None), None), "")));
+        assert_eq!(
+            result,
+            Ok((Expr::ok(Expr::identifier("foo", None), None), ""))
+        );
     }
 
     #[test]
     fn test_result_err() {
         let input = "err(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::err(Expr::identifier("foo", None), None), "")));
+        assert_eq!(
+            result,
+            Ok((Expr::err(Expr::identifier("foo", None), None), ""))
+        );
     }
 
     #[test]
@@ -88,7 +94,10 @@ mod tests {
             result,
             Ok((
                 Expr::ok(
-                    Expr::sequence(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)], None),
+                    Expr::sequence(
+                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        None
+                    ),
                     None
                 ),
                 ""
@@ -104,7 +113,10 @@ mod tests {
             result,
             Ok((
                 Expr::err(
-                    Expr::sequence(vec![Expr::identifier("foo", None), Expr::identifier("bar", None)], None),
+                    Expr::sequence(
+                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        None
+                    ),
                     None
                 ),
                 ""
@@ -118,7 +130,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::err(Expr::identifier("foo", None), None), None), ""))
+            Ok((
+                Expr::ok(Expr::err(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 
@@ -128,7 +143,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::ok(Expr::identifier("foo", None), None), None), ""))
+            Ok((
+                Expr::err(Expr::ok(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 
@@ -138,7 +156,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::ok(Expr::identifier("foo", None), None), None), ""))
+            Ok((
+                Expr::ok(Expr::ok(Expr::identifier("foo", None), None), None),
+                ""
+            ))
         );
     }
 

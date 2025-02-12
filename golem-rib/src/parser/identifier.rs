@@ -41,9 +41,7 @@ where
                 .skip(spaces()),
         ),
     )
-        .map(|(variable, typ)| {
-            Expr::identifier(variable, typ)
-        })
+        .map(|(variable, typ)| Expr::identifier(variable, typ))
         .message("Invalid identifier")
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>

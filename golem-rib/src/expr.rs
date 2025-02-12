@@ -1161,7 +1161,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs , type_name},
+                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
             ) => {
                 let type_name = type_name.map(TypeName::try_from).transpose()?;
 
@@ -1967,7 +1967,10 @@ mod tests {
     fn test_single_expr_in_interpolation_wrapped_in_quotes() {
         let input = r#""${foo}""#;
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::concat(vec![Expr::identifier("foo", None)])));
+        assert_eq!(
+            result,
+            Ok(Expr::concat(vec![Expr::identifier("foo", None)]))
+        );
 
         let input = r#""${{foo}}""#;
         let result = Expr::from_text(input);

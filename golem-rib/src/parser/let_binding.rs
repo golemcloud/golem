@@ -98,7 +98,10 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(vec![Expr::identifier("bar", None), Expr::identifier("baz", None)], None)
+                    Expr::sequence(
+                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        None
+                    )
                 ),
                 ""
             ))

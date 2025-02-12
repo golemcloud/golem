@@ -161,7 +161,10 @@ mod literal_parse_tests {
             Expr::cond(
                 Expr::equal_to(
                     Expr::identifier("foo", None),
-                    Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id", None)])
+                    Expr::concat(vec![
+                        Expr::literal("bar-"),
+                        Expr::identifier("worker_id", None)
+                    ])
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
                 Expr::literal("baz"),

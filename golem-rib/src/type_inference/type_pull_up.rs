@@ -978,8 +978,8 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_select_index() {
-        let identifier =
-            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let identifier = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
         let expr = Expr::select_index(identifier.clone(), 0);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::select_index(identifier, 0).add_infer_type(InferredType::U64);
@@ -1104,14 +1104,14 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_if_else() {
-        let inner1 =
-            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner1 = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner1.clone(), 0);
         let select_index2 = Expr::select_index(inner1, 1);
 
-        let inner2 =
-            Expr::identifier("bar", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner2 = Expr::identifier("bar", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index3 = Expr::select_index(inner2.clone(), 0);
         let select_index4 = Expr::select_index(inner2, 1);
@@ -1195,8 +1195,8 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
-        let inner =
-            Expr::identifier("foo", None).add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner = Expr::identifier("foo", None)
+            .add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner.clone(), 0);
         let select_index2 = Expr::select_index(inner, 1);
@@ -1394,18 +1394,18 @@ mod type_pull_up_tests {
                     arm_pattern: ArmPattern::Constructor(
                         "cons1".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::SelectField(
-                            Box::new(Expr::identifier("foo", None).add_infer_type(InferredType::Record(
-                                vec![("bar".to_string(), InferredType::Str)],
-                            ))),
+                            Box::new(Expr::identifier("foo", None).add_infer_type(
+                                InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
+                            )),
                             "bar".to_string(),
                             None,
                             InferredType::Unknown,
                         )))],
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
-                        Box::new(Expr::identifier("baz", None).add_infer_type(InferredType::Record(
-                            vec![("qux".to_string(), InferredType::Str)],
-                        ))),
+                        Box::new(Expr::identifier("baz", None).add_infer_type(
+                            InferredType::Record(vec![("qux".to_string(), InferredType::Str)]),
+                        )),
                         "qux".to_string(),
                         None,
                         InferredType::Unknown,
@@ -1427,11 +1427,9 @@ mod type_pull_up_tests {
                         )))],
                     ),
                     arm_resolution_expr: Box::new(Expr::SelectField(
-                        Box::new(
-                            Expr::identifier("grault", None).add_infer_type(InferredType::Record(vec![
-                                ("garply".to_string(), InferredType::Str),
-                            ])),
-                        ),
+                        Box::new(Expr::identifier("grault", None).add_infer_type(
+                            InferredType::Record(vec![("garply".to_string(), InferredType::Str)]),
+                        )),
                         "garply".to_string(),
                         None,
                         InferredType::Unknown,

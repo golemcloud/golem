@@ -83,7 +83,10 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than_or_equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::greater_than_or_equal_to(
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None)
+                ),
                 ""
             ))
         );
@@ -109,7 +112,10 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than_or_equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::less_than_or_equal_to(
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None)
+                ),
                 ""
             ))
         );
@@ -155,7 +161,10 @@ mod test {
                             Expr::identifier("foo", None),
                             Expr::identifier("bar", None)
                         ),
-                        Expr::less_than(Expr::identifier("foo", None), Expr::identifier("bar", None))
+                        Expr::less_than(
+                            Expr::identifier("foo", None),
+                            Expr::identifier("bar", None)
+                        )
                     ],
                     None
                 ),
@@ -342,11 +351,17 @@ mod test {
                 Expr::record(vec![
                     (
                         "foo".to_string(),
-                        Expr::greater_than(Expr::identifier("bar", None), Expr::identifier("baz", None))
+                        Expr::greater_than(
+                            Expr::identifier("bar", None),
+                            Expr::identifier("baz", None)
+                        )
                     ),
                     (
                         "baz".to_string(),
-                        Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("foo", None))
+                        Expr::equal_to(
+                            Expr::identifier("bar", None),
+                            Expr::identifier("foo", None)
+                        )
                     ),
                 ]),
                 ""

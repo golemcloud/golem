@@ -320,7 +320,10 @@ mod tests {
             Ok((
                 Expr::pattern_match(
                     Expr::identifier("foo", None),
-                    vec![MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar", None))]
+                    vec![MatchArm::new(
+                        ArmPattern::WildCard,
+                        Expr::identifier("bar", None)
+                    )]
                 ),
                 ""
             ))
