@@ -77,10 +77,10 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
 
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
-            expr @ Expr::Identifier(variable_id, _) => {
+            expr @ Expr::Identifier(variable_id, type_name, _) => {
                 if variable_id == &type_spec.variable_id {
                     if path.is_empty() {
-                        let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _)) if inner.as_ref() == expr);
+                        let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
 
                         if continue_traverse {
                             temp_stack.push_front((expr.clone(), true));
@@ -88,6 +88,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                             temp_stack.push_front((
                                 Expr::Identifier(
                                     variable_id.clone(),
+                                    type_name.clone(),
                                     type_spec.inferred_type.clone(),
                                 ),
                                 false,
@@ -101,8 +102,8 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 }
             }
 
-            outer @ Expr::SelectField(inner_expr, field, current_inferred_type) => {
-                let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _)) if inner.as_ref() == outer);
+            outer @ Expr::SelectField(inner_expr, field, type_name, current_inferred_type) => {
+                let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
 
                 internal::handle_select_field(
                     inner_expr,
@@ -112,6 +113,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                     &mut temp_stack,
                     &mut path,
                     &type_spec.inferred_type,
+                    type_name,
                 )?;
             }
 
@@ -123,24 +125,43 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 temp_stack.push_front((expr.clone(), false));
             }
 
-            Expr::SelectIndex(expr, index, current_inferred_type) => {
-                internal::handle_select_index(expr, index, current_inferred_type, &mut temp_stack)?;
+            Expr::SelectIndex(expr, index, type_name, current_inferred_type) => {
+                internal::handle_select_index(
+                    expr,
+                    index,
+                    current_inferred_type,
+                    &mut temp_stack,
+                    type_name,
+                )?;
             }
 
-            Expr::Result(Ok(_), current_inferred_type) => {
-                internal::handle_result_ok(expr, current_inferred_type, &mut temp_stack);
+            Expr::Result(Ok(_), type_name, current_inferred_type) => {
+                internal::handle_result_ok(expr, current_inferred_type, &mut temp_stack, type_name);
             }
 
-            Expr::Result(Err(_), current_inferred_type) => {
-                internal::handle_result_error(expr, current_inferred_type, &mut temp_stack);
+            Expr::Result(Err(_), type_name, current_inferred_type) => {
+                internal::handle_result_error(
+                    expr,
+                    current_inferred_type,
+                    &mut temp_stack,
+                    type_name,
+                );
             }
 
-            Expr::Option(Some(expr), current_inferred_type) => {
-                internal::handle_option_some(expr, current_inferred_type, &mut temp_stack);
+            Expr::Option(Some(expr), type_name, current_inferred_type) => {
+                internal::handle_option_some(
+                    expr,
+                    current_inferred_type,
+                    &mut temp_stack,
+                    type_name,
+                );
             }
 
-            Expr::Option(None, current_inferred_type) => {
-                temp_stack.push_front((Expr::Option(None, current_inferred_type.clone()), false));
+            Expr::Option(None, type_name, current_inferred_type) => {
+                temp_stack.push_front((
+                    Expr::Option(None, type_name.clone(), current_inferred_type.clone()),
+                    false,
+                ));
             }
 
             Expr::Cond(pred, then, else_, current_inferred_type) => {
@@ -261,8 +282,8 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
             Expr::Let(variable_id, typ, expr, inferred_type) => {
                 internal::handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
             }
-            Expr::Sequence(exprs, current_inferred_type) => {
-                internal::handle_sequence(exprs, current_inferred_type, &mut temp_stack);
+            Expr::Sequence(exprs, type_name, current_inferred_type) => {
+                internal::handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
             }
             Expr::Record(expr, inferred_type) => {
                 internal::handle_record(expr, inferred_type, &mut temp_stack);
@@ -357,7 +378,7 @@ mod internal {
     use crate::call_type::CallType;
 
     use crate::type_checker::{Path, PathElem};
-    use crate::{Expr, InferredType, MatchArm, VariableId};
+    use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -467,6 +488,7 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
         path: &mut Path,
         override_type: &InferredType,
+        type_name: &Option<TypeName>,
     ) -> Result<(), String> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
@@ -488,7 +510,12 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::SelectField(Box::new(expr.clone()), field.to_string(), new_type),
+                    Expr::SelectField(
+                        Box::new(expr.clone()),
+                        field.to_string(),
+                        type_name.clone(),
+                        new_type,
+                    ),
                     continue_search,
                 ));
             } else {
@@ -496,6 +523,7 @@ mod internal {
                     Expr::SelectField(
                         Box::new(expr.clone()),
                         field.to_string(),
+                        type_name.clone(),
                         current_field_type.clone(),
                     ),
                     true,
@@ -506,6 +534,7 @@ mod internal {
                 Expr::SelectField(
                     Box::new(expr.clone()),
                     field.to_string(),
+                    type_name.clone(),
                     current_field_type.clone(),
                 ),
                 false,
@@ -520,13 +549,18 @@ mod internal {
         index: &usize,
         current_index_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) -> Result<(), String> {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
-        let new_select_index =
-            Expr::SelectIndex(Box::new(expr.0.clone()), *index, current_index_type.clone());
+        let new_select_index = Expr::SelectIndex(
+            Box::new(expr.0.clone()),
+            *index,
+            type_name.clone(),
+            current_index_type.clone(),
+        );
         temp_stack.push_front((new_select_index, false));
 
         Ok(())
@@ -536,12 +570,17 @@ mod internal {
         original_ok_expr: &Expr,
         current_ok_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let ok_expr = temp_stack
             .pop_front()
             .unwrap_or((original_ok_expr.clone(), false));
 
-        let new_result = Expr::Result(Ok(Box::new(ok_expr.0.clone())), current_ok_type.clone());
+        let new_result = Expr::Result(
+            Ok(Box::new(ok_expr.0.clone())),
+            type_name.clone(),
+            current_ok_type.clone(),
+        );
         temp_stack.push_front((new_result, true));
     }
 
@@ -549,13 +588,18 @@ mod internal {
         original_error_expr: &Expr,
         current_error_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let expr = temp_stack
             .pop_front()
             .map(|x| x.0)
             .unwrap_or(original_error_expr.clone());
 
-        let new_result = Expr::Result(Err(Box::new(expr.clone())), current_error_type.clone());
+        let new_result = Expr::Result(
+            Err(Box::new(expr.clone())),
+            type_name.clone(),
+            current_error_type.clone(),
+        );
 
         temp_stack.push_front((new_result, false));
     }
@@ -564,11 +608,16 @@ mod internal {
         original_some_expr: &Expr,
         current_some_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_some_expr.clone(), false));
-        let new_option = Expr::Option(Some(Box::new(expr.0.clone())), current_some_type.clone());
+        let new_option = Expr::Option(
+            Some(Box::new(expr.0.clone())),
+            type_name.clone(),
+            current_some_type.clone(),
+        );
         temp_stack.push_front((new_option, false));
     }
 
@@ -869,6 +918,7 @@ mod internal {
         current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        type_name: &Option<TypeName>,
     ) {
         let mut new_exprs = vec![];
 
@@ -879,7 +929,7 @@ mod internal {
 
         new_exprs.reverse();
 
-        let expr = Expr::Sequence(new_exprs, current_inferred_type.clone());
+        let expr = Expr::Sequence(new_exprs, type_name.clone(), current_inferred_type.clone());
 
         temp_stack.push_front((expr, false));
     }
@@ -929,7 +979,11 @@ mod tests {
 
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
-        let expected = Expr::Identifier(VariableId::global("foo".to_string()), InferredType::Str);
+        let expected = Expr::Identifier(
+            VariableId::global("foo".to_string()),
+            None,
+            InferredType::Str,
+        );
 
         assert_eq!(result, expected);
     }
@@ -953,8 +1007,13 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -979,8 +1038,13 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -1005,8 +1069,13 @@ mod tests {
         let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
-            Box::new(Expr::select_field(Expr::identifier("foo"), "bar")),
+            Box::new(Expr::select_field(
+                Expr::identifier("foo", None),
+                "bar",
+                None,
+            )),
             "baz".to_string(),
+            None,
             InferredType::Str,
         );
 
@@ -1042,6 +1111,7 @@ mod tests {
                         Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::Global("foo".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1051,12 +1121,14 @@ mod tests {
                                 )]),
                             )),
                             "bar".to_string(),
+                            None,
                             InferredType::Record(vec![
                                 ("number".to_string(), InferredType::U64),
                                 ("user-id".to_string(), InferredType::Str),
                             ]),
                         )),
                         "user-id".to_string(),
+                        None,
                         InferredType::Str,
                     )),
                     InferredType::Unknown,
@@ -1068,6 +1140,7 @@ mod tests {
                         Box::new(Expr::SelectField(
                             Box::new(Expr::Identifier(
                                 VariableId::Global("foo".to_string()),
+                                None,
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1077,18 +1150,21 @@ mod tests {
                                 )]),
                             )),
                             "bar".to_string(),
+                            None,
                             InferredType::Record(vec![
                                 ("number".to_string(), InferredType::U64),
                                 ("user-id".to_string(), InferredType::Str),
                             ]),
                         )),
                         "number".to_string(),
+                        None,
                         InferredType::U64,
                     )),
                     InferredType::Unknown,
                 ),
                 Expr::Identifier(
                     VariableId::Local("hello".to_string(), Some(Id(0))),
+                    None,
                     InferredType::U64,
                 ),
             ],

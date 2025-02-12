@@ -55,7 +55,7 @@ mod internal {
                     queue.push_front(expr);
                     shadowed_let_binding.push(variable_id.name());
                 }
-                Expr::Identifier(variable_id, _) => {
+                Expr::Identifier(variable_id, _, _) => {
                     let identifier_name = variable_id.name();
                     if let Some(x) = match_identifiers.iter().find(|x| x.name == identifier_name) {
                         if !shadowed_let_binding.contains(&identifier_name) {
@@ -148,7 +148,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier(variable_id, _) => {
+                Expr::Identifier(variable_id, _, _) => {
                     let match_identifier =
                         MatchIdentifier::new(variable_id.name(), global_arm_index);
                     identifier_names.push(match_identifier);
@@ -266,8 +266,10 @@ mod pattern_match_bindings {
                 Box::new(Expr::Option(
                     Some(Box::new(Expr::Identifier(
                         VariableId::Global("x".to_string()),
+                        None,
                         InferredType::Unknown,
                     ))),
+                    None,
                     InferredType::Option(Box::new(InferredType::Unknown)),
                 )),
                 vec![
@@ -279,6 +281,7 @@ mod pattern_match_bindings {
                                     "x".to_string(),
                                     index,
                                 )),
+                                None,
                                 InferredType::Unknown,
                             ))],
                         ),
@@ -287,6 +290,7 @@ mod pattern_match_bindings {
                                 "x".to_string(),
                                 index,
                             )),
+                            None,
                             InferredType::Unknown,
                         )),
                     },
@@ -300,13 +304,17 @@ mod pattern_match_bindings {
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
-            let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)));
-            let identifier_expr =
-                Expr::Identifier(VariableId::Global("x".to_string()), InferredType::Unknown);
+            let let_binding =
+                Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
+            let identifier_expr = Expr::Identifier(
+                VariableId::Global("x".to_string()),
+                None,
+                InferredType::Unknown,
+            );
             let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
 
             Expr::PatternMatch(
-                Box::new(Expr::option(Some(Expr::identifier("x")))), // x is still global
+                Box::new(Expr::option(Some(Expr::identifier("x", None)))), // x is still global
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
@@ -316,6 +324,7 @@ mod pattern_match_bindings {
                                     "x".to_string(),
                                     index,
                                 )),
+                                None,
                                 InferredType::Unknown,
                             ))],
                         ),
@@ -336,10 +345,13 @@ mod pattern_match_bindings {
                     Ok(Box::new(Expr::Option(
                         Some(Box::new(Expr::Identifier(
                             VariableId::Global("x".to_string()),
+                            None,
                             InferredType::Unknown,
                         ))),
+                        None,
                         InferredType::Option(Box::new(InferredType::Unknown)),
                     ))),
+                    None,
                     InferredType::Result {
                         ok: Some(Box::new(InferredType::Option(Box::new(
                             InferredType::Unknown,
@@ -356,6 +368,7 @@ mod pattern_match_bindings {
                                     "x".to_string(),
                                     1,
                                 )),
+                                None,
                                 InferredType::Unknown,
                             ))],
                         ),
@@ -365,6 +378,7 @@ mod pattern_match_bindings {
                                     "x".to_string(),
                                     1,
                                 )),
+                                None,
                                 InferredType::Unknown,
                             )),
                             vec![
@@ -376,6 +390,7 @@ mod pattern_match_bindings {
                                                 "x".to_string(),
                                                 2,
                                             )),
+                                            None,
                                             InferredType::Unknown,
                                         ))],
                                     ),
@@ -384,6 +399,7 @@ mod pattern_match_bindings {
                                             "x".to_string(),
                                             2,
                                         )),
+                                        None,
                                         InferredType::Unknown,
                                     )),
                                 },
@@ -405,6 +421,7 @@ mod pattern_match_bindings {
                                     "x".to_string(),
                                     4,
                                 )),
+                                None,
                                 InferredType::Unknown,
                             ))],
                         ),

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::digit;
+use combine::parser::char::{char, digit, spaces};
 use combine::parser::char::{char as char_, letter};
-use combine::{many, ParseError, Parser, Stream};
+use combine::{many, optional, ParseError, Parser, Stream};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
+use crate::parser::type_name::parse_type_name;
 
 const RESERVED_KEYWORDS: &[&str] = &[
     "if", "then", "else", "match", "ok", "some", "err", "none", "let", "for", "yield", "reduce",
@@ -31,8 +32,16 @@ where
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    identifier_text()
-        .map(Expr::identifier)
+    (
+        identifier_text(),
+        optional(
+            char(':')
+                .skip(spaces())
+                .with(parse_type_name())
+                .skip(spaces()),
+        ),
+    )
+        .map(|(variable, typ)| Expr::identifier(variable, typ))
         .message("Invalid identifier")
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>
@@ -71,7 +80,7 @@ mod tests {
     fn test_identifier() {
         let input = "foo";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::identifier("foo")));
+        assert_eq!(result, Ok(Expr::identifier("foo", None)));
     }
 
     #[test]

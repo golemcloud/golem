@@ -32,7 +32,7 @@ mod internal {
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     // We are only interested in global variables
                     if variable_id.is_global() {
                         if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
@@ -54,7 +54,7 @@ mod internal {
         let mut all_types_of_global_variables = HashMap::new();
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
+                Expr::Identifier(variable_id, _, inferred_type) => {
                     if variable_id.is_global() {
                         match all_types_of_global_variables.get_mut(&variable_id.name().clone()) {
                             None => {

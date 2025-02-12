@@ -205,7 +205,7 @@ mod internal {
     #[cfg(feature = "json_in_errors")]
     pub fn unable_to_complete_math_operation(left: &ValueAndType, right: &ValueAndType) -> String {
         format!(
-            "Unable to complete math operation for {}, {}",
+            "Unable to complete math operation for operands {}, {}",
             serde_json::to_string(left).unwrap_or_default(),
             serde_json::to_string(right).unwrap_or_default()
         )
