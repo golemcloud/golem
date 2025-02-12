@@ -20,7 +20,7 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::Tracing;
@@ -1457,13 +1457,13 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1515,13 +1515,13 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1601,13 +1601,13 @@ async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -1661,13 +1661,13 @@ async fn worker_initial_files_after_automatic_worker_update(
     let file1_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 

@@ -16,7 +16,7 @@ use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -233,13 +233,13 @@ async fn initial_file_read_write(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -304,13 +304,13 @@ async fn initial_file_listing_through_api(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
@@ -403,13 +403,13 @@ async fn initial_file_reading_through_api(
     let file1_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &Path::new("initial-file-read-write/files/foo.txt"),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
             &account_id,
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+            &Path::new("initial-file-read-write/files/baz.txt"),
         )
         .await;
 
