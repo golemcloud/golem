@@ -138,7 +138,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let (params, result) = match to_db_values(params) {
+            let (input, result) = match to_db_values(params) {
                 Ok(params) => {
                     let result = self
                         .state
@@ -146,11 +146,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                         .mysql()
                         .query(&pool_key, &worker_id, &statement, params.clone())
                         .await;
-                    (params, result)
+                    (
+                        Some(RdbmsRequest::<MysqlType>::new(pool_key, statement, params)),
+                        result,
+                    )
                 }
-                Err(error) => (vec![], Err(RdbmsError::QueryParameterFailure(error))),
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
             };
-            let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -181,7 +183,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .pool_key
                 .clone();
 
-            let (params, result) = match to_db_values(params) {
+            let (input, result) = match to_db_values(params) {
                 Ok(params) => {
                     let result = self
                         .state
@@ -189,11 +191,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                         .mysql()
                         .execute(&pool_key, &worker_id, &statement, params.clone())
                         .await;
-                    (params, result)
+                    (
+                        Some(RdbmsRequest::<MysqlType>::new(pool_key, statement, params)),
+                        result,
+                    )
                 }
-                Err(error) => (vec![], Err(RdbmsError::QueryParameterFailure(error))),
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
             };
-            let input = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
