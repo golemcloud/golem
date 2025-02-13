@@ -82,18 +82,22 @@ impl ApiDeploymentApi {
     #[oai(path = "/", method = "get", operation_id = "list_deployments")]
     async fn list(
         &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "list_deployments",
-            api_definition_id = api_definition_id_query.0.to_string(),
+            api_definition_id = api_definition_id_query
+                .0
+                .clone()
+                .unwrap_or(ApiDefinitionId("".to_string()))
+                .to_string(),
         );
         let response = {
             let api_definition_id = api_definition_id_query.0;
 
             let values = self
                 .deployment_service
-                .get_by_id(&DefaultNamespace::default(), &api_definition_id)
+                .get_by_id(&DefaultNamespace::default(), api_definition_id)
                 .await?;
 
             Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
