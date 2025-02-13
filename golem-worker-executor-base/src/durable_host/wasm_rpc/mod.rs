@@ -508,7 +508,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
 
         let cancellation_token = CancellationTokenEntry {
-            schedule_id: bincode::encode_to_vec(schedule_id, bincode::config::standard()).unwrap(),
+            schedule_id: golem_common::serialization::serialize(&schedule_id).unwrap().to_vec(),
         };
 
         let resource = self.table().push(cancellation_token)?;
@@ -874,9 +874,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let (schedule_id, serialized_schedule_id) = {
             let entry = self.table().get(&this)?;
-            let (payload, _): (ScheduleId, _) =
-                bincode::decode_from_slice(&entry.schedule_id.clone(), bincode::config::standard())
-                    .expect("not a valid cancellation token");
+            let payload: ScheduleId = golem_common::serialization::deserialize(&entry.schedule_id).expect("not a valid cancellation token");
             (payload, entry.schedule_id.clone())
         };
 
