@@ -3933,7 +3933,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit",
+ "golem-wit 1.1.8",
  "include_dir",
  "itertools 0.14.0",
  "nanoid",
@@ -4195,7 +4195,7 @@ dependencies = [
  "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
+ "golem-wit 0.0.0",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.7.0",
@@ -4223,6 +4223,11 @@ dependencies = [
  "wit-encoder",
  "wit-parser 0.221.3",
 ]
+
+[[package]]
+name = "golem-wit"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem-wit.git?rev=3ab953070b7926aba50cc02a99ead84c38a80c95#3ab953070b7926aba50cc02a99ead84c38a80c95"
 
 [[package]]
 name = "golem-wit"

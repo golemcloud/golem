@@ -62,7 +62,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
 
         // Common used types
         stub_interface.use_type(
-            "golem:rpc/types@0.1.2",
+            "golem:rpc/types@0.1.3",
             "uri",
             Some(Ident::new("golem-rpc-uri")),
         );

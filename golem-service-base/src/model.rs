@@ -27,6 +27,7 @@ use golem_common::model::{
 use golem_common::SafeDisplay;
 use golem_wasm_ast::analysis::analysed_type::{case, field, record, variant};
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -1052,7 +1053,7 @@ impl From<crate::model::GolemErrorShardingNotReady>
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
-    pub params: Vec<TypeAnnotatedValue>,
+    pub params: Vec<OptionallyTypeAnnotatedValueJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]

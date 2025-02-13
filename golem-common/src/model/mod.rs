@@ -292,7 +292,7 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct ScheduleId {
     pub timestamp: i64,
     pub action: ScheduledAction,

@@ -2075,7 +2075,6 @@ paths:
       parameters:
       - in: query
         name: api-definition-id
-        required: true
         deprecated: false
         schema:
           type: string
@@ -4925,7 +4924,7 @@ components:
         params:
           type: array
           items:
-            $ref: '#/components/schemas/TypeAnnotatedValue'
+            $ref: '#/components/schemas/ValueAndOptionalType'
       required:
       - params
     InvokeResponse:
@@ -6010,6 +6009,14 @@ components:
             type: string
       required:
       - errors
+    ValueAndOptionalType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - value
     ValueAndType:
       type: object
       properties:

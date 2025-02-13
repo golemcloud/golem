@@ -70,6 +70,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialComponentFile",
                 "golem_common::model::InitialComponentFile",
             ),
+            (
+                "ValueAndOptionalType",
+                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("ShardId", "golem_common::model::ShardId"),
             (
