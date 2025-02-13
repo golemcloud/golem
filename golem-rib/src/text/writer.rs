@@ -384,6 +384,16 @@ impl<W: Write> Writer<W> {
                 internal::write_yield_block(self, yield_expr)?;
                 self.write_display(" } ")
             }
+
+            Expr::Invoke {
+                lhs,
+                function_name,
+                generic_type_parameter,
+                inferred_type,
+                ..
+            } => {
+                todo!("Invoke write back not yet supported")
+            }
         }
     }
 

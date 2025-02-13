@@ -317,6 +317,10 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 );
             }
 
+            Expr::Invoke { .. } => {
+                temp_stack.push_front((expr.clone(), false));
+            }
+
             Expr::Call(call_type, _, exprs, inferred_type) => {
                 internal::handle_call(call_type, exprs, inferred_type, &mut temp_stack);
             }
@@ -332,6 +336,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
             Expr::GetTag(_, inferred_type) => {
                 internal::handle_get_tag(expr, inferred_type, &mut temp_stack);
             }
+
 
             Expr::ListComprehension {
                 iterated_variable,
@@ -823,6 +828,16 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
+            CallType::InstanceCreation(instance_creation_type) => {
+                // TODO; Need to retrieve the resource params from the stack
+                let new_call = Expr::Call(
+                    CallType::InstanceCreation(instance_creation_type.clone()),
+                    None,
+                    new_arg_exprs,
+                    inferred_type.clone(),
+                );
+                temp_stack.push_front((new_call, false));
+            }
             CallType::Function(fun_name) => {
                 let mut function_name = fun_name.clone();
 

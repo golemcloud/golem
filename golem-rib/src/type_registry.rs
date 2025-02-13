@@ -270,21 +270,24 @@ impl RegistryKey {
         })
     }
 
-    pub fn from_call_type(call_type: &CallType) -> RegistryKey {
+    pub fn from_call_type(call_type: &CallType) -> Option<RegistryKey> {
         match call_type {
             CallType::VariantConstructor(variant_name) => {
-                RegistryKey::FunctionName(variant_name.clone())
+                Some(RegistryKey::FunctionName(variant_name.clone()))
             }
-            CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
+            CallType::EnumConstructor(enum_name) => Some(RegistryKey::FunctionName(enum_name.clone())),
             CallType::Function(function_name) => match function_name.site.interface_name() {
                 None => {
-                    RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers())
+                    Some(RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers()))
                 }
-                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+                Some(interface_name) => Some(RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
                     function_name: function_name.function_name_with_prefix_identifiers(),
-                },
+                }),
             },
+            CallType::InstanceCreation(_) => {
+                None
+            }
         }
     }
 }

@@ -125,9 +125,15 @@ mod internal {
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
     ) -> Result<(), FunctionCallTypeError> {
+        let registry_key = RegistryKey::from_call_type(call_type).ok_or(
+            FunctionCallTypeError::InvalidFunctionCall {
+                function_call_name: call_type.to_string(),
+            },
+        )?;
+
         let registry_value = type_registry
             .types
-            .get(&RegistryKey::from_call_type(call_type))
+            .get(&registry_key)
             .ok_or(FunctionCallTypeError::InvalidFunctionCall {
                 function_call_name: call_type.to_string(),
             })?;

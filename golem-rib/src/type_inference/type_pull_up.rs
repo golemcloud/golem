@@ -71,6 +71,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
+            Expr::Invoke {..} => {
+                Err("Internal compiler error: Invoke expression cannot be part of type pull up phase".to_string())?;
+            }
+
             Expr::SelectField(expr, field, _, current_inferred_type) => {
                 internal::handle_select_field(
                     expr,
@@ -278,8 +282,8 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Call(call_type, _, exprs, inferred_type) => {
-                internal::handle_call(call_type, exprs, inferred_type, &mut inferred_type_stack);
+            Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
+                internal::handle_call(call_type, generic_type_parameter.clone(), exprs, inferred_type, &mut inferred_type_stack);
             }
 
             Expr::Unwrap(expr, inferred_type) => {
@@ -335,13 +339,14 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InferredType, MatchArm, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
+    use crate::generic_type_parameter::GenericTypeParameter;
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();
@@ -749,6 +754,7 @@ mod internal {
 
     pub(crate) fn handle_call(
         call_type: &CallType,
+        generic_type_parameter: Option<GenericTypeParameter>,
         arguments: &[Expr],
         inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
@@ -792,6 +798,36 @@ mod internal {
                     inferred_type.clone(),
                 );
                 inferred_type_stack.push_front(new_call);
+            }
+
+            CallType::InstanceCreation(instance_creation) => {
+                let worker_name = instance_creation.worker_name();
+
+                if let Some(worker_name) = worker_name {
+                    let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
+
+                    let new_instance_creation = InstanceCreationType::Durable {
+                        worker_name: Box::new(worker_name),
+                        component_id: instance_creation.component_id().clone(),
+                    };
+
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(new_instance_creation.clone()),
+                        generic_type_parameter,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+                    inferred_type_stack.push_front(new_call);
+                } else {
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(instance_creation.clone()),
+                        generic_type_parameter,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+
+                    inferred_type_stack.push_front(new_call);
+                }
             }
 
             CallType::VariantConstructor(str) => {

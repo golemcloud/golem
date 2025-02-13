@@ -105,6 +105,11 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(yield_expr);
         }
 
+        Expr::Invoke { lhs,  args, ..} => {
+            queue.push_back(lhs);
+            queue.extend(args.iter_mut());
+        }
+
         Expr::GetTag(exr, _) => {
             queue.push_back(&mut *exr);
         }
@@ -219,6 +224,10 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         }
         Expr::GetTag(expr, _) => {
             queue.push_back(expr);
+        }
+        Expr::Invoke { lhs, args, .. } => {
+            queue.push_back(lhs);
+            queue.extend(args.iter());
         }
 
         Expr::Literal(_, _) => {}
@@ -364,6 +373,12 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Boolean(_, _) => {}
         Expr::Option(None, _, _) => {}
         Expr::Throw(_, _) => {}
+        Expr::Invoke { lhs, args, .. } => {
+            queue.push_front(lhs);
+            for arg in args.iter_mut() {
+                queue.push_front(arg);
+            }
+        }
     }
 }
 

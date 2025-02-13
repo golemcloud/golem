@@ -12,6 +12,16 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Let(_, _, expr, _) => {
                 queue.push_back(expr);
             }
+            Expr::Invoke { lhs, function_name, generic_type_parameter, args, inferred_type } => {
+                queue.push_back(lhs);
+                for arg in args {
+                    queue.push_back(arg);
+                }
+
+                if inferred_type.un_resolved() {
+                    return Err(UnResolvedTypesError::new(expr));
+                }
+            }
             Expr::SelectField(expr, field, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {

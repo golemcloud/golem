@@ -139,7 +139,13 @@ mod internal {
                         args,
                     ),
                     None => {
-                        let registry_key = RegistryKey::from_call_type(&cloned);
+                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(
+                            format!(
+                                "Invalid function call: `{}`",
+                                dynamic_parsed_function_name.to_string()
+                            ),
+                        )?;
+
                         infer_args_and_result_type(
                             &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),
                             function_type_registry,
