@@ -142,4 +142,82 @@ mod tests {
         ]);
         assert_eq!(expr, expected);
     }
+
+    #[test]
+    fn test_worker_function_invoke_6() {
+        let rib_expr = r#"
+          let worker = instance("my-worker");
+          worker.function-name[foo](foo, bar, baz)
+        "#;
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let worker_variable = Expr::identifier("worker", None);
+        let function_name = "function-name".to_string();
+        let type_parameter = GenericTypeParameter {
+            value: "foo".to_string(),
+        };
+
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding(
+                "worker",
+                Expr::call(
+                    DynamicParsedFunctionName::parse("instance").unwrap(),
+                    None,
+                    vec![Expr::literal("my-worker")],
+                ),
+                None,
+            ),
+            Expr::invoke_worker_function(
+                worker_variable,
+                function_name,
+                Some(type_parameter),
+                vec![
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None),
+                    Expr::identifier("baz", None),
+                ],
+            ),
+        ]);
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_worker_function_invoke_7() {
+        let rib_expr = r#"
+          let worker = instance[foo]("my-worker");
+          worker.function-name[bar](foo, bar, baz)
+        "#;
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let worker_variable = Expr::identifier("worker", None);
+        let function_name = "function-name".to_string();
+        let type_parameter1 = GenericTypeParameter {
+            value: "foo".to_string(),
+        };
+
+        let type_parameter2 = GenericTypeParameter {
+            value: "bar".to_string(),
+        };
+
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding(
+                "worker",
+                Expr::call(
+                    DynamicParsedFunctionName::parse("instance").unwrap(),
+                    Some(type_parameter1),
+                    vec![Expr::literal("my-worker")],
+                ),
+                None,
+            ),
+            Expr::invoke_worker_function(
+                worker_variable,
+                function_name,
+                Some(type_parameter2),
+                vec![
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None),
+                    Expr::identifier("baz", None),
+                ],
+            ),
+        ]);
+        assert_eq!(expr, expected);
+    }
 }
