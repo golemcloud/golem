@@ -25,6 +25,8 @@ impl InvocationParameters {
         values: Vec<OptionallyTypeAnnotatedValueJson>,
     ) -> Result<Self, Vec<String>> {
         let all_have_types = values.iter().all(|v| v.has_type());
+        let some_has_types = values.iter().any(|v| v.has_type());
+
         if all_have_types {
             let vals: Vec<TypeAnnotatedValue> = values
                 .into_iter()
@@ -34,12 +36,14 @@ impl InvocationParameters {
                 .map(|param| param.unwrap()) // This is expected to always succeed because of the `all_have_types` condition
                 .collect();
             Ok(Self::TypedProtoVals(vals))
-        } else {
+        } else if !some_has_types {
             let vals: Vec<String> = values
                 .into_iter()
                 .map(|param| param.into_json_value().to_string())
                 .collect();
             Ok(Self::RawJsonStrings(vals))
+        } else {
+            Err(vec!["Some parameters have types specified, while others don't. Either all parameters must have types or none of them should.".to_string()])
         }
     }
 }
