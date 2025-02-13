@@ -35,3 +35,31 @@ where
         .message("Invalid function call")
 }
 
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+    use crate::generic_type_parameter::GenericTypeParameter;
+    use super::*;
+
+    #[test]
+    fn test_worker_function_invoke_1(){
+        let expr = Expr::from_text("worker.function-name()").unwrap();
+        let worker_variable = Expr::identifier("worker", None);
+        let function_name = "function-name".to_string();
+
+        assert_eq!(expr, Expr::invoke_worker_function(worker_variable, function_name, None, vec![]));
+    }
+
+    #[test]
+    fn test_worker_function_invoke_2(){
+        let expr = Expr::from_text("worker.function-name[foo]()").unwrap();
+        let worker_variable = Expr::identifier("worker", None);
+        let function_name = "function-name".to_string();
+        let type_parameter = GenericTypeParameter {
+            value: "foo".to_string()
+        };
+
+        assert_eq!(expr, Expr::invoke_worker_function(worker_variable, function_name, Some(type_parameter), vec![]));
+    }
+}
+
