@@ -206,6 +206,7 @@ export interface ComponentTransformerSpecs {
 
 export interface Plugin {
   name: string;
+  id?:string
   version: string;
   description?: string;
   icon: number[];

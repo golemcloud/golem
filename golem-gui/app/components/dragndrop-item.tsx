@@ -158,11 +158,11 @@ export function DragDropItem({
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [editingId, file.id]);
+  }, [editingId, file.id,finalizeEdit]);
 
   return (
     <div
-      // @ts-ignore
+    // @ts-expect-error - The structure of `ref` is not fully typed yet
       ref={(node) => drag(drop(node))}
       className={`${isDragging ? "opacity-50" : ""} ${
         isOver ? "bg-muted/50" : ""

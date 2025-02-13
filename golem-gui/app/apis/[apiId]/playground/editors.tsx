@@ -21,7 +21,7 @@ const operationMap = {
   "view_api": "View Api",
 } as Record<string, string>
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import RouteDetails from "../[routeId]/page";
+import RouteDetails from "../[routeId]/route-details";
 
 export default function Editors() {
   const [open, setOpen] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export default function Editors() {
       }
       setOpen(trigger?.type || null);
     })();
-  }, [apiId, trigger]);
+  }, [apiId, trigger,handleClose]);
 
   return (
     <div>

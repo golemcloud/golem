@@ -162,7 +162,8 @@ export const MultiSelect = React.forwardRef<
         onValueChange(newSelectedValues);
       }
     };
-
+    //TODO_ refractoring
+    console.log(maxCount,variant,asChild,animation);
     const toggleOption = (option: string) => {
       let newSelectedValues;
       if (selectMode === "single") {

@@ -127,7 +127,7 @@ export function AvailableFunctions({
   );
 }
 
-export function RecordDataType({ record }: { record: Record<string, any> }) {
+export function RecordDataType({ record }: { record: Record<string, string> }) {
   return (
     <PopoverDemo
       Icon={

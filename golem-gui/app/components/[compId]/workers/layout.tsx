@@ -8,8 +8,8 @@ export default function WorkersLayout({
   workers,
   workersephemeral,
 }: {
-    workers?: React.ReactNode;
-    workersephemeral?: React.ReactNode;
+    workers: React.ReactNode;
+    workersephemeral: React.ReactNode;
 }) {
   const { compId } = useCustomParam();
   const params = useSearchParams();
