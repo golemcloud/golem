@@ -72,6 +72,7 @@ impl FunctionTypeRegistry {
             CallType::EnumConstructor(enum_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(enum_name.clone())),
+            CallType::InstanceCreation(_) => None,
         }
     }
 
