@@ -115,6 +115,8 @@ interface MultiSelectProps
   selectMode?: "single" | "multi";
 
   buttonType?: {variant:"success" | "primary", size:"icon_sm" | "icon"};
+
+  align?: "start" | "end" | "center";
 }
 
 export const MultiSelect = React.forwardRef<
@@ -135,6 +137,7 @@ export const MultiSelect = React.forwardRef<
       className,
       selectMode = "multi",
       buttonType,
+      align="start",
       ...props
     },
     ref
@@ -258,7 +261,7 @@ export const MultiSelect = React.forwardRef<
 
         <PopoverContent
           className="w-auto p-0"
-          align="start"
+          align={align}
           onEscapeKeyDown={() => setIsPopoverOpen(false)}
         >
           <Command>

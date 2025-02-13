@@ -74,7 +74,7 @@ const WorkerSettings = () => {
                     },
                   }}
                 >
-                  <Tab label="General" />
+                  {/* <Tab label="General" /> */}
                   <Tab label="Info" />
                   <Tab label="Update" />
                 </Tabs>
@@ -82,7 +82,7 @@ const WorkerSettings = () => {
             </Stack>
 
             <Box className={"p-3"}>
-              {activeTab === 0 && (
+              {/* {activeTab === 0 && (
                 <div>
                   <DangerZone
                     title="General Settings"
@@ -90,8 +90,8 @@ const WorkerSettings = () => {
                     actions={actions}
                   />
                 </div>
-              )}
-              {activeTab === 1 && (
+              )} */}
+              {activeTab === 0 && (
                 <div>
                   <Stack
                     direction="row"
@@ -157,7 +157,7 @@ const WorkerSettings = () => {
                   )}
                 </div>
               )}
-              {activeTab === 2 && (
+              {activeTab === 1 && (
                 <div>
                   <Box className="flex flex-col">
                     <Typography variant="h6">Update Component</Typography>

@@ -121,7 +121,7 @@ const Overview = () => {
   const stats = useMemo(() => {
     return [
       {
-        label: "Latest Component Version",
+        label: "Latest Component",
         value: error ?  "0" : `v${latestComponent?.versionedComponentId?.version}`,
         icon: <InsertChart fontSize="small" />,
         isLoading: componentDataLoading,

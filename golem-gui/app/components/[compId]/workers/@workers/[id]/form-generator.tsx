@@ -129,7 +129,7 @@ const generateField = (
       );
     case ["Str", "S8", "S32", "Chr", "S64", "S16"].includes(paramType):
       return (
-        <>
+        <div className="mb-2">
           <Stack direction="row" gap={1} alignItems="center">
             <Typography variant="body1">{parameter?.name}</Typography>
             <Typography variant="caption" fontFamily="monospace">
@@ -147,22 +147,17 @@ const generateField = (
               <TextField
                 size="small"
                 {..._field}
-                // label={parameter.name}
                 variant="outlined"
                 fullWidth
                 placeholder={parameter.name}
                 defaultValue={""}
-                className="mt-2"
-                // onChange={(e) => {
-                //   handleChange(finalRootKey, e.target.value);
-                // }}
               />
             )}
           />
           <Typography variant="caption" color="error">
             {getFormErrorMessage(finalRootKey, errors)}
           </Typography>
-        </>
+        </div>
       );
     case paramType == "Bool":
       return (
@@ -199,7 +194,7 @@ const generateField = (
       );
     case ["F32", "F64", "U32", "U64", "U16", "U8"].includes(paramType):
       return (
-        <>
+        <div className="mb-2">
           <Stack direction="row" gap={1} alignItems="center">
             <Typography variant="body1">{parameter?.name}</Typography>
             <Typography variant="caption" fontFamily="monospace">
@@ -216,10 +211,9 @@ const generateField = (
             render={({ field: _field }) => (
               <TextField
                 {..._field}
-                // label={parameter.name}
+                size="small"
                 type="number"
                 variant="outlined"
-                className="mt-2"
                 fullWidth
                 placeholder={parameter.name}
                 onChange={(e) => {
@@ -235,7 +229,7 @@ const generateField = (
           <Typography variant="caption" color="error">
             {getFormErrorMessage(finalRootKey, errors)}
           </Typography>
-        </>
+        </div>
       );
     case paramType === "Record":
       return (

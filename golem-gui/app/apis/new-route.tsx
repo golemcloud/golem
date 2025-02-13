@@ -412,7 +412,7 @@ const NewRouteForm = ({
               (selectedVersion || typeof selectedVersion == "number") ? (
                 <AvailableFunctions
                   compId={component}
-                  version={`${selectedVersion}`}
+                  version={selectedVersion}
                 />
               ) : (
                 <Typography variant="body2" padding={1}>
