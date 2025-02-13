@@ -123,6 +123,22 @@ fn make(
     );
     add_test!(
         r,
+        format!("worker_invoke_drop_direct_json_value{suffix}"),
+        TestProperties {
+            test_type: TestType::IntegrationTest,
+            ..TestProperties::default()
+        },
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_drop_direct_json_value((
+                deps,
+                name.to_string(),
+                cli.with_args(short),
+                ref_kind,
+            ))
+        }
+    );
+    add_test!(
+        r,
         format!("worker_invoke_json_params{suffix}"),
         TestProperties {
             test_type: TestType::IntegrationTest,
@@ -578,7 +594,7 @@ fn worker_invoke_drop(
         "counters.wasm",
     )?;
 
-    let worker_name = format!("{name}_worker_invoke_and_await");
+    let worker_name = format!("{name}_worker_invoke_drop");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
         "worker",
@@ -604,9 +620,9 @@ fn worker_invoke_drop(
         args_key.0.clone(),
     ];
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
-    let result = cli.run_json(&cli_args)?;
+    let result1 = cli.run_json(&cli_args)?;
 
-    println!("JSON: {result}");
+    println!("JSON: {result1}");
 
     // result is a JSON response containing a tuple with a single element holding the resource handle:
     // {"result": {
@@ -614,7 +630,7 @@ fn worker_invoke_drop(
     //   "value":["urn:worker:fcb5d2d4-d6db-4eca-99ec-6260ae9270db/CLI_short_name_worker_invoke_and_await/0"]}
     // }
     // we only need this inner element:
-    let counter1 = result
+    let counter1 = result1
         .as_object()
         .unwrap()
         .get("value")
@@ -624,7 +640,88 @@ fn worker_invoke_drop(
         .first()
         .unwrap();
 
-    let json_parameter_list = Value::Array(vec![counter1.clone()]);
+    let json_parameter_list = json! { [ { "value": counter1 } ]};
+
+    let args_key1: IdempotencyKey = IdempotencyKey::fresh();
+
+    let mut cli_args = vec![
+        "worker".to_string(),
+        "invoke-and-await".to_string(),
+        cfg.arg('f', "function"),
+        "rpc:counters-exports/api.{[drop]counter}".to_string(),
+        cfg.arg('j', "parameters"),
+        json_parameter_list.to_string(),
+        cfg.arg('k', "idempotency-key"),
+        args_key1.0.clone(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_json(&cli_args)?;
+
+    Ok(())
+}
+
+fn worker_invoke_drop_direct_json_value(
+    (deps, name, cli, ref_kind): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> anyhow::Result<()> {
+    let component = add_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_drop_direct_json_value"),
+        &cli,
+        "counters.wasm",
+    )?;
+
+    let worker_name = format!("{name}_worker_invoke_drop_direct_json_value");
+    let cfg = &cli.config;
+    let _: WorkerUrn = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
+        &cfg.arg('e', "env"),
+        "TEST_ENV=test-value",
+        "test-arg",
+    ])?;
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
+
+    let mut cli_args = vec![
+        "worker".to_string(),
+        "invoke-and-await".to_string(),
+        cfg.arg('f', "function"),
+        "rpc:counters-exports/api.{[constructor]counter}".to_string(),
+        cfg.arg('j', "parameters"),
+        "[\"counter1\"]".to_string(),
+        cfg.arg('k', "idempotency-key"),
+        args_key.0.clone(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result1 = cli.run_json(&cli_args)?;
+
+    println!("JSON: {result1}");
+
+    // result is a JSON response containing a tuple with a single element holding the resource handle:
+    // {"result": {
+    //   "typ":  {"items":[{"mode":{"type":"Owned"},"resource_id":0,"type":"Handle"}],"type":"Tuple"},
+    //   "value":["urn:worker:fcb5d2d4-d6db-4eca-99ec-6260ae9270db/CLI_short_name_worker_invoke_and_await/0"]}
+    // }
+    // we only need this inner element:
+    let counter1 = result1
+        .as_object()
+        .unwrap()
+        .get("value")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+
+    let json_parameter_list = json! { [ counter1 ]};
 
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
 
