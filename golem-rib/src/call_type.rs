@@ -30,8 +30,8 @@ pub enum InstanceCreationType {
         component_id: String,
     },
     Durable {
-        worker_name: Box<Expr>, // Boxed since being used recursively
-        component_id: String, // golem-rib doesn't depend on golem-common
+        worker_name: Box<Expr>,
+        component_id: String,
     },
 }
 
