@@ -7,13 +7,13 @@ import {
   Typography,
   Divider,
   Box,
-  Chip,
   Stack
 } from "@mui/material";
 import DynamicForm from "./form-generator";
 import { useWorkerInvocation } from "@/lib/hooks/use-worker";
 import JsonEditor from "@/components/json-editor/json-editor";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
+import { SelectInvoke } from "./select-invoke";
 
 export function InvokeForm({
   invoke,
@@ -116,51 +116,17 @@ export default function InvokePage({ worker }: { worker?: Worker }) {
           }}
           className="border"
         >
-          <Typography variant="h6" fontWeight="bold" gutterBottom>
-            Select a Function
-          </Typography>
-          <Divider sx={{ marginY: 2, bgcolor: "#555" }} />
-          <Stack direction="row" flexWrap="wrap" gap={1}>
-            {exports.map((item) =>
-              item.type === "Instance" ? (
-                item?.functions?.map((fun) => {
-                  const active =
-                    invoke?.fun?.name === fun.name &&
-                    invoke?.instanceName === item.name;
-                  return (
-                    <Chip
-                      key={fun.name}
-                      label={`${item.name} - ${fun.name}`}
-                      onClick={() =>
-                        setInvoke({
-                          fun: fun,
-                          instanceName: item.name,
-                        })
-                      }
-                      className={`text-foreground ${
-                        active
-                          ? "bg-green-800 hover:bg-green-800"
-                          : "bg-border hover:bg-border"
-                      }`}
-                    />
-                  );
-                })
-              ) : (
-                <Chip
-                  key={item.name}
-                  label={item.name}
-                  onClick={() => setInvoke({ fun: item, instanceName: null })}
-                  className={`${
-                    invoke?.fun?.name === item.name &&
-                    invoke?.instanceName === null
-                      ? "bg-green-800 hover:bg-green-800 text-white"
-                      : "bg-border hover:bg-border text-foreground"
-                  }`}
-                />
-              )
-            )}
+          <Stack direction="row" justifyContent="space-between">
+            <Typography variant="h6" fontWeight="bold">
+              Select a Function
+            </Typography>
+            <SelectInvoke
+              exports={exports}
+              invoke={invoke}
+              setInvoke={(item) => setInvoke(item as { fun: WorkerFunction; instanceName?: string | null })}
+            />
           </Stack>
-          <Divider className="my-2 bg-border" />
+          <Divider className="my-1 bg-border" />
           <Box mt={4}>
             {invoke ? (
               <InvokeForm invoke={invoke} isEmpheral={latestComponent.componentType === "Ephemeral"}/>
