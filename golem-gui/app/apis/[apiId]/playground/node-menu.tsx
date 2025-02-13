@@ -163,7 +163,7 @@ export default function NodeMenu({
 
                     <MenuItem disabled={!canDelete}>
                       <AlertDialogDemo
-                        onSubmit={(e: any) => handleDelete(route as ApiRoute, apiInfo?.version)}
+                        onSubmit={() => handleDelete(route as ApiRoute, apiInfo?.version)}
                         paragraph={
                           "This action cannot be undone. This will permanently delete this route."
                         }

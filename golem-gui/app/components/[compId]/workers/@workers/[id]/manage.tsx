@@ -28,7 +28,7 @@ export default function Manage() {
         },
       },
     ],
-    [compId, workerName]
+    [compId, workerName,deleteWorker]
   );
 
   return (

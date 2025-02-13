@@ -29,7 +29,7 @@ export function FileOrganizer({
       fileObject: file,
     }));
     setFiles((prev) => [...prev, ...newFiles]);
-  }, []);
+  }, [setFiles]);
 
   return (
     <DndProvider backend={HTML5Backend}>

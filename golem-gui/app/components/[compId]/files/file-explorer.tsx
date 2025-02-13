@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { ChevronRight, ChevronDown, File, Folder, LayoutGrid, List } from "lucide-react";
+import { ChevronRight, ChevronDown, File as FileIcon, Folder, LayoutGrid, List } from "lucide-react";
 import { buildFileTree } from "./build-tree";
 import useComponents from "@/lib/hooks/use-component";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
-interface File {
+interface FileItem {
   key: string;
   path: string;
   permissions: string;
+  name?: string;
 }
 
 interface FileNode {
@@ -20,16 +21,16 @@ interface FileNode {
 }
 
 // Flatten tree for table view
-const flattenTree = (node: FileNode, path: string = ""): any[] => {
+const flattenTree = (node: FileNode, path: string = ""): FileItem[] => {
   const currentPath = `${path}/${node.name}`.replace(/^\/+/, '/');
-  let files: any[] = [];
-  
+  let files: FileItem[] = [];
+
   if (node.type === "file") {
     files.push({
       name: node.name,
       path: currentPath,
-      permissions: node.permissions,
-      key: node.key
+      permissions: node.permissions ?? "none",  // Default to "none" if no permissions
+      key: node.key ?? currentPath
     });
   } else if (node.children) {
     node.children.forEach(child => {
@@ -43,7 +44,7 @@ const TreeView: React.FC<{ fileTree: FileNode }> = ({ fileTree }) => {
   const getAllFolderPaths = (node: FileNode, path: string = ""): string[] => {
     const currentPath = `${path}/${node.name}`;
     let paths: string[] = [];
-    
+
     if (node.type === "folder") {
       paths.push(currentPath);
       node.children?.forEach(child => {
@@ -93,8 +94,8 @@ const TreeView: React.FC<{ fileTree: FileNode }> = ({ fileTree }) => {
       );
     } else {
       return (
-        <div key={node.key} className="flex items-center gap-1 px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700  rounded ml-6">
-          <File size={16} className="text-gray-400" />
+        <div key={node.key} className="flex items-center gap-1 px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded ml-6">
+          <FileIcon size={16} className="text-gray-400" />
           <span className="text-foreground">{node.name}</span>
           <span className="ml-2 text-xs px-2 py-0.5 bg-gray-700 rounded-full text-gray-300">
             {node.permissions}
@@ -107,7 +108,7 @@ const TreeView: React.FC<{ fileTree: FileNode }> = ({ fileTree }) => {
   return <div className="font-sans">{renderTree(fileTree)}</div>;
 };
 
-const TableView: React.FC<{ files: any[] }> = ({ files }) => {
+const TableView: React.FC<{ files: FileItem[] }> = ({ files }) => {
   return (
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -123,12 +124,12 @@ const TableView: React.FC<{ files: any[] }> = ({ files }) => {
             <tr key={file.key} className="border-b border-gray-700 dark:hover:bg-gray-700 hover:bg-gray-200">
               <td className="p-3 text-muted-foreground">
                 <div className="flex items-center gap-2">
-                  <File size={16} className="text-gray-400" />
+                  <FileIcon size={16} className="text-gray-400" />
                   {file.name}
                 </div>
               </td>
               <td className="p-3 text-muted-foreground">{file.path}</td>
-              <td className="p-3 text-muted-foregrounds">
+              <td className="p-3 text-muted-foreground">
                 <span className="text-xs px-2 py-0.5 bg-gray-700 rounded-full text-gray-300">
                   {file.permissions}
                 </span>
@@ -143,9 +144,9 @@ const TableView: React.FC<{ files: any[] }> = ({ files }) => {
 
 const FileExplorerCombined: React.FC = () => {
   const [viewMode, setViewMode] = useState<'tree' | 'table'>('tree');
-  const [files,setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<FileItem[]>([]);
   const { compId } = useCustomParam();
-  const { components, error } = useComponents(compId, "latest");
+  const { components } = useComponents(compId, "latest");
   const [latestComponent] = components;
   console.log("latestComponent", latestComponent);
 
@@ -154,7 +155,7 @@ const FileExplorerCombined: React.FC = () => {
       const files = latestComponent.files;
       setFiles(files);
     }
-    }, [latestComponent]);
+  }, [latestComponent]);
 
   const fileTree = buildFileTree(files);
   const flattenedFiles = flattenTree(fileTree);
@@ -167,8 +168,8 @@ const FileExplorerCombined: React.FC = () => {
           <button
             onClick={() => setViewMode('tree')}
             className={`p-2 rounded ${
-              viewMode === 'tree'  ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
-                      : "dark:text-gray-200 text-gray-700"
+              viewMode === 'tree' ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
+                : "dark:text-gray-200 text-gray-700"
             }`}
           >
             <LayoutGrid size={20} />
@@ -176,8 +177,8 @@ const FileExplorerCombined: React.FC = () => {
           <button
             onClick={() => setViewMode('table')}
             className={`p-2 rounded ${
-              viewMode === 'table' ?  "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
-                      : "dark:text-gray-200 text-gray-700"
+              viewMode === 'table' ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
+                : "dark:text-gray-200 text-gray-700"
             }`}
           >
             <List size={20} />

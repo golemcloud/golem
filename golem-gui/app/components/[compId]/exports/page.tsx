@@ -17,18 +17,41 @@ type DataItem = {
   returnType: string;
 };
 
-const formatRecordType = (fields: any[]): string => {
+type RecordField = {
+  name: string;
+  typ: {
+    type: string;
+  };
+};
+
+type VariantCase = {
+  name: string;
+  typ: {
+    type: string;
+    fields?: RecordField[];
+    cases?: VariantCase[];
+  };
+};
+
+type VariantType = {
+  typ: {
+    type: string;
+    cases?: VariantCase[];
+  };
+};
+
+const formatRecordType = (fields: RecordField[]): string => {
   const formattedFields = fields
     .map((field) => `    ${field.name}: ${field.typ.type.toLowerCase()}`)
     .join(",\n");
   return `record {\n${formattedFields}\n  }`;
 };
 
-const formatVariantType = (result: any): string => {
+const formatVariantType = (result: VariantType): string => {
   if (!result?.typ?.cases) return "variant {}";
 
   const cases = result.typ.cases
-    .map((caseItem: any) => {
+    .map((caseItem: VariantCase) => {
       const typeName = caseItem.typ.type.toLowerCase();
       if (typeName === "record" && caseItem.typ.fields) {
         return `  ${caseItem.name}(${formatRecordType(caseItem.typ.fields)})`;
@@ -46,8 +69,7 @@ export default function ExportsPage() {
   const [latestComponent] = components;
 
   const exports = useMemo(() => {
-    const metaExports = (latestComponent?.metadata?.exports ||
-      []) as ComponentExport[];
+    const metaExports = (latestComponent?.metadata?.exports || []) as ComponentExport[];
     return metaExports.flatMap((exportItem) =>
       exportItem.type === "Instance"
         ? exportItem.functions.map((func) => ({
@@ -74,6 +96,7 @@ export default function ExportsPage() {
     returnType: func.results
       .map((result) => {
         if (result?.typ?.type === "Variant") {
+          // @ts-expect-error - The structure of `result` is not fully typed yet
           return formatVariantType(result);
         } else if (result?.typ?.type === "List") {
           return `list<record>`;
@@ -98,17 +121,17 @@ export default function ExportsPage() {
               {
                 key: "package",
                 label: "Package",
-                accessor: (item: any) => item.package,
+                accessor: (item: DataItem) => item.package,
               },
               {
                 key: "function",
                 label: "Function",
-                accessor: (item: any) => item.method,
+                accessor: (item: DataItem) => item.method,
               },
               {
                 key: "parameters",
                 label: "Parameters",
-                accessor: (item: any) => (
+                accessor: (item: DataItem) => (
                   <div className='flex gap-1 font-mono text-xs'>
                     {item.parameters ? <>({item.parameters})</> : ""}
                   </div>
@@ -117,7 +140,7 @@ export default function ExportsPage() {
               {
                 key: "results",
                 label: "Return Type",
-                accessor: (item: any) => (
+                accessor: (item: DataItem) => (
                   <PopoverDemo
                     Icon={
                       item.returnType ? (

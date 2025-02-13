@@ -1,11 +1,10 @@
 import { MultiSelect } from "@/components/ui/multi-select";
 import { useMemo } from "react";
 
-
 type WorkerFunction = {
     name: string;
-    parameters?: any[];
-    results?: any[];
+    parameters?: unknown[];
+    results?: unknown[];
     type?: string;
   };
   

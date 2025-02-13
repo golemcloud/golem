@@ -268,7 +268,7 @@ export function CustomDatePickFilter({label, searchKey}:{
     } else {
       selectedDateRef.current = undefined;
     }
-  }, [searchParams]);
+  }, [searchParams,searchKey]);
 
   const handleChange = (value?: Date) => {
     const params = new URLSearchParams(searchParams);

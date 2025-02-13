@@ -1,13 +1,10 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
-import DangerZone from "@/components/ui/settings";
 import ComponentInfo from "@/app/components/component-info-card";
 import { Tabs, Tab, Box, Typography, Divider, Stack } from "@mui/material";
 import { useSearchParams } from "next/navigation";
 import CreateComponentForm from "@/app/components/new-component";
-
-import { toast } from "react-toastify";
 import useComponents, { downloadComponent } from "@/lib/hooks/use-component";
 import { Component } from "@/types/api";
 import SecondaryHeader from "@/components/ui/secondary-header";
@@ -37,17 +34,17 @@ const WorkerSettings = () => {
     []
   );
 
-  const actions = useMemo(() => {
-    return [
-      {
-        title: "Delete All Workers",
-        description:
-          "This will permanently delete all workers associated with this component.",
-        buttonText: "Delete All Workers",
-        onClick: () => toast.success("All workers deleted successfully"),
-      },
-    ];
-  }, []);
+  // const actions = useMemo(() => {
+  //   return [
+  //     {
+  //       title: "Delete All Workers",
+  //       description:
+  //         "This will permanently delete all workers associated with this component.",
+  //       buttonText: "Delete All Workers",
+  //       onClick: () => toast.success("All workers deleted successfully"),
+  //     },
+  //   ];
+  // }, []);
 
   return (
     <>

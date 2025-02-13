@@ -9,13 +9,10 @@ import {
     AlertDialogTitle,
     AlertDialogTrigger,
   } from "@/components/ui/alert-dialog"
-  import { Button2 as Button } from "@/components/ui/button"
-import { Trash } from "lucide-react"
 import React from "react"
 
 
-  
-  export function AlertDialogDemo({onSubmit, paragraph, child}: {onSubmit:(e:any)=>void, paragraph:string, child:React.ReactNode}) {
+  export function AlertDialogDemo({onSubmit, paragraph, child}: {onSubmit:()=>void, paragraph:string, child:React.ReactNode}) {
     return (
       <AlertDialog>
         <AlertDialogTrigger asChild>

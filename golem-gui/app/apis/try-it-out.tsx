@@ -3,7 +3,6 @@ import DynamicForm from "@/app/components/[compId]/workers/@workers/[id]/form-ge
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 import { ApiDeployment, ApiRoute, Parameter } from "@/types/api";
 import {
-  AnalysedType,
   AnalysedType_TypeRecord,
 } from "@/types/golem-data-types";
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
@@ -164,10 +163,12 @@ export default function TryItOut({
        return
     }
 
+    // @ts-expect-error - The structure of `data` is not fully typed yet
     const tansformedPath = transformPath(route.path, data?.request?.path);
     copyCurlToClipboard(
       route.method,
       `https://${deployment.site.subdomain}.${deployment.site.host}${tansformedPath}`,
+      // @ts-expect-error - The structure of `data` is not fully typed yet
       data?.request?.body
     )
       .then((curl) => {
