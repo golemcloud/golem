@@ -740,6 +740,149 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
+async fn counter_resource_test_2_json_no_types(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.component("counters").unique().store().await;
+    let worker_id = deps.start_worker(&component_id, "counters-2j").await;
+    deps.log_output(&worker_id).await;
+
+    let _ = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
+            vec![json!(
+                {
+                    "value": 5
+                }
+            )],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
+            vec![json!(
+                {
+                    "value": 1
+                }
+            )],
+        )
+        .await;
+    let _ = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
+            vec![json!(
+                {
+                    "value": 2
+                }
+            )],
+        )
+        .await;
+
+    let result1 = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+    let result2 = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
+            vec![],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
+            vec![],
+        )
+        .await;
+    let _ = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
+            vec![],
+        )
+        .await;
+
+    let result3 = deps
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{get-all-dropped}",
+            vec![],
+        )
+        .await;
+
+    check!(
+        result1
+            == Ok(json!(
+                {
+                    "typ": {
+                        "type": "Tuple",
+                        "items": [ { "type": "U64" } ]
+                    },
+                    "value": [5]
+                }
+            ))
+    );
+    check!(
+        result2
+            == Ok(json!(
+                {
+                    "typ": {
+                        "type": "Tuple",
+                        "items": [ { "type": "U64" } ]
+                    },
+                    "value": [3]
+                }
+            ))
+    );
+
+    check!(
+        result3
+            == Ok(json!(
+                {
+              "typ": {
+                "type": "Tuple",
+                "items": [
+                  {
+                    "type": "List",
+                    "inner": {
+                      "type": "Tuple",
+                      "items": [
+                        {
+                          "type": "Str"
+                        },
+                        {
+                          "type": "U64"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+                "value": [
+                            [
+                                ["counter1",5],
+                                ["counter2",3]
+                            ]
+                        ]
+            }
+            ))
+    );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
 async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("shopping-cart").store().await;
     let worker_id = deps.start_worker(&component_id, "shopping-cart-1").await;
