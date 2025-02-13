@@ -6,7 +6,7 @@ use combine::stream::Stream;
 use combine::{attempt, choice, ParseError, Parser};
 use internal::*;
 // Parser for TypeParameter
-pub fn instance_type<Input>() -> impl Parser<Input, Output =TypeParameter>
+pub fn instance_type<Input>() -> impl Parser<Input, Output = TypeParameter>
 where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,

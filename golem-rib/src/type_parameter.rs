@@ -1,10 +1,10 @@
-use std::fmt;
-use std::fmt::Display;
+use crate::parser;
 use bincode::{Decode, Encode};
-use combine::{eof, EasyParser};
 use combine::parser::char::spaces;
 use combine::stream::position;
-use crate::parser;
+use combine::{eof, EasyParser};
+use std::fmt;
+use std::fmt::Display;
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
 pub enum TypeParameter {
@@ -18,7 +18,9 @@ impl TypeParameter {
         match self {
             TypeParameter::Interface(_) => None,
             TypeParameter::PackageName(package) => Some(package.clone()),
-            TypeParameter::FullyQualifiedInterface(qualified) => Some(qualified.package_name.clone()),
+            TypeParameter::FullyQualifiedInterface(qualified) => {
+                Some(qualified.package_name.clone())
+            }
         }
     }
 
@@ -26,7 +28,9 @@ impl TypeParameter {
         match self {
             TypeParameter::Interface(interface) => Some(interface.clone()),
             TypeParameter::PackageName(_) => None,
-            TypeParameter::FullyQualifiedInterface(qualified) => Some(qualified.interface_name.clone()),
+            TypeParameter::FullyQualifiedInterface(qualified) => {
+                Some(qualified.interface_name.clone())
+            }
         }
     }
 

@@ -68,9 +68,14 @@ pub enum Expr {
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
     // instance["foo"]("my-worker") will begin with Expr::Call(.., Some(ns:pkg), vec!["my-worker"])
     // The type of this is InstanceType (InferredType::InstanceType)
-    Call(CallType, Option<GenericTypeParameter>, Vec<Expr>, InferredType),
+    Call(
+        CallType,
+        Option<GenericTypeParameter>,
+        Vec<Expr>,
+        InferredType,
+    ),
     Invoke {
-        lhs: Box<Expr>, // This should be of the type InferredType::InstanceType
+        lhs: Box<Expr>,        // This should be of the type InferredType::InstanceType
         function_name: String, // This will be always a simple string rather than complicated parsed-function-name
         args: Vec<Expr>,
         inferred_type: InferredType, // This will be the return type of the function similar to Call

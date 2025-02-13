@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::CallType;
+use crate::instance_type::InstanceType;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
-use crate::call_type::CallType;
-use crate::instance_type::InstanceType;
 
 // Resolving function arguments, return type etc based on function type registry
 // If the call was for creating a worker instance, that will be handled too.
@@ -39,13 +39,22 @@ pub fn infer_function_call_type(
             //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-duration}(when: u64) -> handle<0> // Function from a different package-interface
             //   app:component-b-exports/app-component-b-inline-functions.{run}() -> u64 // A top level function but part of a package and a generated interface
             Expr::Call(call_type, _, args, inferred_type) => {
-
-                let instance_creation_details = internal::get_instance_creation_details(call_type, args.clone());
+                let instance_creation_details =
+                    internal::get_instance_creation_details(call_type, args.clone());
                 // We change the call_type to instance creation which hardly does anything during interpretation
                 if let Some(instance_creation_details) = instance_creation_details {
-                    *call_type = CallType::InstanceCreation(instance_creation_details);
-                    let new_instance_type = InstanceType::
+                    *call_type = CallType::InstanceCreation(instance_creation_details.clone());
+                    let new_instance_type = InstanceType::from(
+                        instance_creation_details.component_id(),
+                        function_type_registry.clone(),
+                        instance_creation_details.worker_name(),
+                    );
+                    *inferred_type = InferredType::InstanceType {
+                        instance_type: new_instance_type,
+                    }
                 } else {
+                    // If this is not about instance creation, we resolve the function arguments and return type
+                    // otherwise return type is InstanceType
                     internal::resolve_call_argument_types(
                         call_type,
                         function_type_registry,
@@ -64,45 +73,46 @@ pub fn infer_function_call_type(
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::kind::GetTypeKind;
-    use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, ParsedFunctionReference, RegistryKey, RegistryValue};
+    use crate::{
+        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType,
+        ParsedFunctionReference, RegistryKey, RegistryValue,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
-    use crate::instance_type::InstanceType;
 
-    pub(crate) fn get_instance_type(instance_creation_details: &InstanceCreationType, function_type_registry: FunctionTypeRegistry) {
-        InstanceType::from()
-    }
-
-    pub(crate) fn get_instance_creation_details(call_type: &CallType, args: Vec<Expr>) -> Option<InstanceCreationType> {
+    pub(crate) fn get_instance_creation_details(
+        call_type: &CallType,
+        args: Vec<Expr>,
+    ) -> Option<InstanceCreationType> {
         match call_type {
             CallType::Function(function_name) => {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
-                    ParsedFunctionReference::Function {
-                        function
-                    } if function == "instance" => {
+                    ParsedFunctionReference::Function { function } if function == "instance" => {
                         let optional_worker_name_expression = args.get(0);
                         match optional_worker_name_expression {
                             None => {
                                 Some(InstanceCreationType::Ephemeral {
-                                    component_id: "component_id_to_be_provided".to_string() // TODO: This is a placeholder
+                                    component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
                                 })
                             }
                             Some(worker_name_expr) => {
                                 Some(InstanceCreationType::Durable {
                                     worker_name: worker_name_expr.clone(),
-                                    component_id: "component_id_to_be_provided".to_string() // TODO: This is a placeholder
+                                    component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
                                 })
                             }
                         }
                     }
 
-                    _ => None
+                    _ => None,
                 }
-            },
+            }
             CallType::VariantConstructor(_) => None,
-            CallType::EnumConstructor(_) => {}
-            CallType::InstanceCreation(instance_creation_type) => Some(instance_creation_type.clone())
+            CallType::EnumConstructor(_) => None,
+            CallType::InstanceCreation(instance_creation_type) => {
+                Some(instance_creation_type.clone())
+            }
         }
     }
 

@@ -20,17 +20,33 @@ pub enum CallType {
     Function(DynamicParsedFunctionName),
     VariantConstructor(String),
     EnumConstructor(String),
-    InstanceCreation(InstanceCreationType)
+    InstanceCreation(InstanceCreationType),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum InstanceCreationType {
     Ephemeral {
-        component_id: String
+        component_id: String,
     },
     Durable {
-        worker_name: Expr, // golem-rib doesn't depend on golem-common
-        component_id: String // golem-rib doesn't depend on golem-common
+        worker_name: Expr,    // golem-rib doesn't depend on golem-common
+        component_id: String, // golem-rib doesn't depend on golem-common
+    },
+}
+
+impl InstanceCreationType {
+    pub fn component_id(&self) -> String {
+        match self {
+            InstanceCreationType::Ephemeral { component_id } => component_id.clone(),
+            InstanceCreationType::Durable { component_id, .. } => component_id.clone(),
+        }
+    }
+
+    pub fn worker_name(&self) -> Option<Expr> {
+        match self {
+            InstanceCreationType::Ephemeral { .. } => None,
+            InstanceCreationType::Durable { worker_name, .. } => Some(worker_name.clone()),
+        }
     }
 }
 
@@ -53,9 +69,7 @@ impl Display for CallType {
             CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
-            CallType::Invoke {
-                function_name, ..
-            } => write!(f, "{}", function_name), // TODO; what does it mean to print an invocation?
+            CallType::Invoke { function_name, .. } => write!(f, "{}", function_name), // TODO; what does it mean to print an invocation?
         }
     }
 }
