@@ -28,7 +28,7 @@ pub trait ApiDeploymentClient {
     ) -> Result<ApiDeployment, GolemError>;
     async fn list(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_id: Option<&ApiDefinitionId>,
         project: &Self::ProjectContext,
     ) -> Result<Vec<ApiDeployment>, GolemError>;
     async fn get(&self, site: &str) -> Result<ApiDeployment, GolemError>;

@@ -118,6 +118,12 @@ pub trait WorkerClient {
         worker_urn: WorkerUrn,
         target: RevertWorkerTarget,
     ) -> Result<(), GolemError>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_urn: WorkerUrn,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<bool, GolemError>;
 }
 
 pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {

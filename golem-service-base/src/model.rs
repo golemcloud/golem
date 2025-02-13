@@ -1080,6 +1080,11 @@ pub struct DeactivatePluginResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct RevertWorkerResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct CancelInvocationResponse {
+    pub canceled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
