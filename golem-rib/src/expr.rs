@@ -35,7 +35,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
@@ -627,7 +627,9 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, _, inferred_type) => inferred_type.clone(),
+            | Expr::Call(_, _, _, inferred_type)
+            | Expr::Invoke { inferred_type, .. } => inferred_type.clone(),
+
         }
     }
 
@@ -780,6 +782,7 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
+            | Expr::Invoke { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -828,6 +831,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
+            | Expr::Invoke { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -878,7 +882,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Hash, Clone, PartialEq)]
 pub struct Number {
     pub value: BigDecimal,
 }
@@ -909,7 +913,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -923,7 +927,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
@@ -1780,6 +1784,9 @@ mod protobuf {
                         yield_expr: Some(Box::new((*yield_expr).into())),
                     }),
                 )),
+                Expr::Invoke { .. } => {
+                    todo!("Invoke is not supported in protobuf serialization")
+                }
             };
 
             golem_api_grpc::proto::golem::rib::Expr { expr }

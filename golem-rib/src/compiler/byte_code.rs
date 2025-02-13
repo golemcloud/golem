@@ -439,6 +439,9 @@ mod internal {
                         }
                     }
 
+                    // There is nothing to do as such for instance creation
+                    CallType::InstanceCreation(_) => {}
+
                     CallType::VariantConstructor(variant_name) => {
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
@@ -520,6 +523,11 @@ mod internal {
                     &analysed_type,
                 )
             }
+
+            // Invoke is always handled by the CallType::Function branch
+            Expr::Invoke {
+                ..
+            } => {},
 
             Expr::ListReduce {
                 reduce_variable,

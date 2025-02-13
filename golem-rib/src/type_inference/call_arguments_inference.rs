@@ -49,7 +49,7 @@ pub fn infer_function_call_type(
                         function_type_registry.clone(),
                         instance_creation_details.worker_name(),
                     )?;
-                    *inferred_type = InferredType::InstanceType {
+                    *inferred_type = InferredType::Instance {
                         instance_type: new_instance_type,
                     }
                 } else {
@@ -98,7 +98,7 @@ mod internal {
                             }
                             Some(worker_name_expr) => {
                                 Some(InstanceCreationType::Durable {
-                                    worker_name: worker_name_expr.clone(),
+                                    worker_name: Box::new(worker_name_expr.clone()),
                                     component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
                                 })
                             }

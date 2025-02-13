@@ -63,6 +63,9 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
 
     fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
         match inferred_type {
+            InferredType::Instance {
+                ..
+            } => Err("Cannot convert Instance type to AnalysedType".to_string()),
             InferredType::Bool => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Bool(
                 TypeBool,
             ))),

@@ -4,15 +4,14 @@ use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::type_parameter_parser::type_parameter;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
 // but with better structure and mandates the fact that it belongs to a specific component or a specific namespace or package or interface within a package if needed
-#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq)]
 pub enum InstanceType {
     Durable {
-        worker_name: Expr,
+        worker_name: Box<Expr>,
         component_id: String,
         function_dict: FunctionDictionary, // This needs to be revisited
     },
@@ -25,26 +24,26 @@ pub enum InstanceType {
 
 // FunctionDictionary is a map of function names (not variant or any enums)
 // to their respective function details
-#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq)]
 pub struct FunctionDictionary {
-    pub map: HashMap<FunctionName, FunctionDetails>,
+    pub map: Vec<(FunctionName, FunctionDetails)>,
 }
 
 impl FunctionDictionary {
     pub fn from_function_type_registry(registry: FunctionTypeRegistry) -> Result<FunctionDictionary, String> {
-        let mut map = HashMap::new();
+        let mut map = vec![];
 
         for (key, value) in registry.types {
             match value {
-                RegistryValue {
+                RegistryValue::Function {
                     parameter_types,
                     return_types
                 } => {
 
                     match key {
                         RegistryKey::FunctionName(function_name) => {
-                            map.insert(
-                                FunctionName {
+                            map.push(
+                                (FunctionName {
                                     package_name: None,
                                     interface_name: None,
                                     function_name,
@@ -52,7 +51,7 @@ impl FunctionDictionary {
                                 FunctionDetails {
                                     parameter_types,
                                     return_type: return_types,
-                                },
+                                }),
                             );
                         }
 
@@ -68,8 +67,8 @@ impl FunctionDictionary {
                             let interface_name = type_parameter.get_interface_name();
                             let package_name = type_parameter.get_package_name();
 
-                            map.insert(
-                                FunctionName {
+                            map.push(
+                                (FunctionName {
                                     package_name,
                                     interface_name,
                                     function_name,
@@ -77,7 +76,7 @@ impl FunctionDictionary {
                                 FunctionDetails {
                                     parameter_types,
                                     return_type: return_types,
-                                },
+                                }),
                             );
                         }
                     }
@@ -99,7 +98,7 @@ pub struct FunctionName {
     function_name: String,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub struct FunctionDetails {
     parameter_types: Vec<AnalysedType>,
     return_type: Vec<AnalysedType>
@@ -118,7 +117,7 @@ impl InstanceType {
         match worker_name {
             Some(worker_name) => Ok(InstanceType::Durable {
                 component_id,
-                worker_name,
+                worker_name: Box::new(worker_name),
                 function_dict,
             }),
 

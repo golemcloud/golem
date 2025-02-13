@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use crate::instance_type::InstanceType;
 
-#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum InferredType {
     Bool,
     S8,
@@ -52,7 +52,7 @@ pub enum InferredType {
         resource_id: u64,
         resource_mode: u8,
     },
-    InstanceType {
+    Instance {
         instance_type: InstanceType,
     },
     OneOf(Vec<InferredType>),

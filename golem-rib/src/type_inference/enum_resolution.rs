@@ -41,6 +41,7 @@ mod internal {
                     if enum_cases.cases.contains(&variable_id.name()) {
                         *expr = Expr::Call(
                             CallType::EnumConstructor(variable_id.name()),
+                            None,
                             vec![],
                             inferred_type.clone(),
                         );

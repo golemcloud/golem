@@ -37,9 +37,8 @@ impl TypeParameter {
 
 
     pub fn from_str(input: &str) -> Result<TypeParameter, String> {
-        spaces()
-            .with(type_parameter().skip(eof()))
-            .easy_parse(position::Stream::new(&input))
+        type_parameter()
+            .easy_parse(position::Stream::new(input))
             .map(|t| t.0)
             .map_err(|err| format!("Invalid instance type {}", err))
     }
