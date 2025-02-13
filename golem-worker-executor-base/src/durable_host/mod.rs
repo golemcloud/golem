@@ -352,6 +352,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.worker_proxy.clone()
     }
 
+    pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
+        self.state.scheduler_service.clone()
+    }
+
     pub fn total_linear_memory_size(&self) -> u64 {
         self.state.total_linear_memory_size
     }

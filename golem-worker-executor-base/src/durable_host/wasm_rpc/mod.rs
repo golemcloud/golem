@@ -14,6 +14,8 @@
 
 pub mod serialized;
 
+use self::serialized::SerializableScheduleInvocationRequest;
+use crate::durable_host::serialized::SerializableDateTime;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
@@ -28,21 +30,23 @@ use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
-    WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction,
+    TargetWorkerId, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{
-    FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
+    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
+    Uri,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
-    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value, ValueAndType, WasmRpcEntry, WitType,
-    WitValue,
+    CancellationTokenEntry, FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value,
+    ValueAndType, WasmRpcEntry, WitType, WitValue,
 };
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
@@ -426,40 +430,91 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: golem_wasm_rpc::WasiDatetime,
         full_function_name: String,
-        mut function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+        function_input: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
     ) -> anyhow::Result<()> {
-        let entry = self.table().get(&this)?;
-        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id().clone();
-
-        Self::add_self_parameter_if_needed(&mut function_input, payload);
-
-        let current_idempotency_key = self
-            .state
-            .get_current_idempotency_key()
-            .expect("Expected to get an idempotency key as we are inside an invocation");
-
-        let current_oplog_index = self.state.current_oplog_index().await;
-
-        let idempotency_key =
-            IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
-
-        let action = ScheduledAction::Invoke {
-            owned_worker_id: remote_worker_id,
-            idempotency_key,
-            full_function_name,
-            function_input: function_input.into_iter().map(|e| e.into()).collect(),
-        };
-
-        // The scheduler uses the (deterministic) datetime to deduplicate scheduled actions.
-        // The worker executor uses the idempotency key to deduplicate invocation.
-        // With both together we don't need any extra idempotency handling here.
-        self.state
-            .scheduler_service
-            .schedule(datetime.into(), action)
-            .await;
+        self.schedule_cancelable_invocation(this, datetime, full_function_name, function_input)
+            .await?;
 
         Ok(())
+    }
+
+    async fn schedule_cancelable_invocation(
+        &mut self,
+        this: Resource<WasmRpcEntry>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        function_name: String,
+        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_1_x::types::WitValue>,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
+        let durability = Durability::<ScheduleId, GolemError>::new(
+            self,
+            "golem::rpc::wasm-rpc",
+            "schedule_invocation",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let schedule_id = if durability.is_live() {
+            let entry = self.table().get(&this)?;
+            let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+            let remote_worker_id = payload.remote_worker_id().clone();
+
+            Self::add_self_parameter_if_needed(&mut function_params, payload);
+
+            let current_idempotency_key = self
+                .state
+                .get_current_idempotency_key()
+                .expect("Expected to get an idempotency key as we are inside an invocation");
+
+            let current_oplog_index = self.state.current_oplog_index().await;
+
+            let idempotency_key =
+                IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
+
+            let serializable_input = SerializableScheduleInvocationRequest {
+                remote_worker_id: remote_worker_id.worker_id(),
+                idempotency_key: idempotency_key.clone(),
+                function_name: function_name.clone(),
+                function_params: try_get_typed_parameters(
+                    self.state.component_service.clone(),
+                    &remote_worker_id.account_id,
+                    &remote_worker_id.worker_id.component_id,
+                    &function_name,
+                    &function_params,
+                )
+                .await,
+                datetime: <SerializableDateTime as From<DateTime<Utc>>>::from(datetime.into()),
+            };
+
+            let action = ScheduledAction::Invoke {
+                owned_worker_id: remote_worker_id,
+                idempotency_key,
+                full_function_name: function_name,
+                function_input: function_params.into_iter().map(|e| e.into()).collect(),
+            };
+
+            let result = self
+                .state
+                .scheduler_service
+                .schedule(datetime.into(), action)
+                .await;
+
+            durability
+                .persist_serializable(self, serializable_input, Ok(result.clone()))
+                .await?;
+
+            result
+        } else {
+            durability.replay::<ScheduleId, GolemError>(self).await?
+        };
+
+        let cancellation_token = CancellationTokenEntry {
+            schedule_id: golem_common::serialization::serialize(&schedule_id)
+                .unwrap()
+                .to_vec(),
+        };
+
+        let resource = self.table().push(cancellation_token)?;
+        Ok(resource)
     }
 
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
@@ -810,6 +865,44 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+        let _ = self.table().delete(this)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
+    async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        let (schedule_id, serialized_schedule_id) = {
+            let entry = self.table().get(&this)?;
+            let payload: ScheduleId = golem_common::serialization::deserialize(&entry.schedule_id)
+                .expect("not a valid cancellation token");
+            (payload, entry.schedule_id.clone())
+        };
+
+        let durability = Durability::<(), GolemError>::new(
+            self,
+            "golem::rpc::cancellation-token",
+            "cancel",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            self.scheduler_service().cancel(schedule_id).await;
+
+            durability
+                .persist_serializable(self, serialized_schedule_id, Ok(()))
+                .await?;
+        } else {
+            durability.replay::<(), GolemError>(self).await?;
+        };
+
+        Ok(())
+    }
+
+    async fn drop(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
         let _ = self.table().delete(this)?;
         Ok(())

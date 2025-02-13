@@ -860,6 +860,18 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn schedule_cancelable_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        datetime: golem_wasm_rpc::WasiDatetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_1_x::types::CancellationToken>> {
+        self.durable_ctx
+            .schedule_cancelable_invocation(self_, datetime, function_name, function_params)
+            .await
+    }
+
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
