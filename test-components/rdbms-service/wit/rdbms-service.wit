@@ -19,7 +19,8 @@ interface api {
   record statement {
     statement: string,
     params: list<string>,
-    action: statement-action
+    action: statement-action,
+    sleep: option<u64>
   }
 
   variant mysql-result {

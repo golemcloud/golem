@@ -83,6 +83,7 @@ struct StatementTest {
     pub action: StatementAction,
     pub statement: &'static str,
     pub params: Vec<String>,
+    pub sleep: Option<u64>,
     pub expected: Option<serde_json::Value>,
 }
 
@@ -92,6 +93,7 @@ impl StatementTest {
             action: StatementAction::Execute,
             statement,
             params,
+            sleep: None,
             expected: expected.map(execute_ok_response),
         }
     }
@@ -105,6 +107,7 @@ impl StatementTest {
             action: StatementAction::Query,
             statement,
             params,
+            sleep: None,
             expected,
         }
     }
@@ -118,6 +121,7 @@ impl StatementTest {
             action: StatementAction::QueryStream,
             statement,
             params,
+            sleep: None,
             expected,
         }
     }
@@ -135,6 +139,13 @@ impl StatementTest {
             ..self.clone()
         }
     }
+
+    // fn with_sleep(&self, sleep: u64) -> Self {
+    //     Self {
+    //         sleep: Some(sleep),
+    //         ..self.clone()
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone)]
@@ -415,6 +426,166 @@ async fn rdbms_postgres_idempotency(
     drop(executor);
 }
 
+// #[test]
+// #[tracing::instrument]
+// async fn rdbms_postgres_recovery(
+//     last_unique_id: &LastUniqueId,
+//     deps: &WorkerExecutorTestDependencies,
+//     postgres: &DockerPostgresRdbs,
+//     _tracing: &Tracing,
+// ) {
+//     let db_address = postgres.host_connection_strings()[0].clone();
+//
+//     let context = TestContext::new(last_unique_id);
+//     let executor = start(deps, &context).await.unwrap();
+//     let component_id = executor.component("rdbms-service").store().await;
+//
+//     let worker_ids =
+//         start_workers::<PostgresType>(&executor, &component_id, vec![db_address.clone()], 2).await;
+//
+//     let worker_id = worker_ids[0].clone();
+//     let worker_id2 = worker_ids[1].clone();
+//
+//     let create_table_statement = r#"
+//             CREATE TABLE IF NOT EXISTS test_users_rec
+//             (
+//                 user_id             uuid    NOT NULL PRIMARY KEY,
+//                 name                text    NOT NULL,
+//                 tags                text[],
+//                 created_on          timestamp DEFAULT NOW()
+//             );
+//         "#;
+//
+//     let insert_statement = r#"
+//             INSERT INTO test_users_rec
+//             (user_id, name, tags)
+//             VALUES
+//             ($1::uuid, $2, $3)
+//         "#;
+//
+//     let test = RdbmsTest::new(
+//         vec![StatementTest::execute_test(
+//             create_table_statement,
+//             vec![],
+//             None,
+//         )],
+//         Some(TransactionEnd::Commit),
+//     );
+//
+//     let result1 = execute_worker_test::<PostgresType>(
+//         &executor,
+//         &worker_id,
+//         &IdempotencyKey::fresh(),
+//         test.clone(),
+//     )
+//     .await;
+//
+//     check_test_result(&worker_id, result1.clone(), test.clone());
+//
+//     let count = 10;
+//
+//     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count);
+//
+//     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
+//
+//     for (index, (user_id, name, tags)) in expected_values.iter().enumerate() {
+//         let params: Vec<String> = vec![user_id.to_string(), name.clone(), tags.clone()];
+//         if index == (count / 2) {
+//             insert_tests.push(StatementTest::execute_test(
+//                 insert_statement,
+//                 params.clone(),
+//                 Some(1),
+//             ).with_sleep(3000));
+//         } else {
+//             insert_tests.push(StatementTest::execute_test(
+//                 insert_statement,
+//                 params.clone(),
+//                 Some(1),
+//             ));
+//         }
+//     }
+//
+//     let mut worker_output = executor.capture_output(&worker_id).await;
+//     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+//
+//     let executor_clone = executor.clone();
+//     let worker_id_clone = worker_id.clone();
+//     let test_clone = test.clone();
+//     let _fiber = spawn(async move {
+//         let _ = execute_worker_test::<PostgresType>(
+//             &executor_clone,
+//             &worker_id_clone,
+//             &IdempotencyKey::fresh(),
+//             test_clone,
+//         )
+//         .await;
+//     });
+//
+//     tokio::time::sleep(Duration::from_millis(1000)).await;
+//     let _ = executor.interrupt(&worker_id).await;
+//     // let _ = fiber.await.unwrap();
+//
+//     // drop(executor);
+//     //
+//     // let executor = start(deps, &context).await.unwrap();
+//
+//     let select_test1 = StatementTest::query_stream_test(
+//         "SELECT user_id, name, tags FROM test_users_rec ORDER BY created_on ASC",
+//         vec![],
+//         Some(postgres_get_expected(vec![])),
+//     );
+//
+//     let test = RdbmsTest::new(vec![select_test1.clone()], Some(TransactionEnd::Commit));
+//
+//     let result2 = execute_worker_test::<PostgresType>(
+//         &executor,
+//         &worker_id2,
+//         &IdempotencyKey::fresh(),
+//         test.clone(),
+//     )
+//     .await;
+//
+//     check_test_result(&worker_id, result2.clone(), test.clone());
+//
+//
+//     let mut events = vec![];
+//     worker_output.recv_many(&mut events, 100).await;
+//
+//     println!("worker {} events: {:?}", worker_id.clone(), events);
+//
+//     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+//     let oplog = serde_json::to_string(&oplog).unwrap();
+//     println!("worker {} oplog: {}", worker_id.clone(), oplog);
+//
+//     let metadata = executor.get_worker_metadata(&worker_id).await;
+//     println!("worker {} metadata: {:?}", worker_id.clone(), metadata);
+//
+//     executor.resume(&worker_id, false).await;
+//
+//     let _metadata = executor
+//         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+//         .await;
+//
+//     let expected = postgres_get_expected(expected_values.clone());
+//
+//     let test = RdbmsTest::new(
+//         vec![select_test1.clone().with_expected(Some(expected))],
+//         Some(TransactionEnd::Commit),
+//     );
+//
+//     let result1 = execute_worker_test::<PostgresType>(
+//         &executor,
+//         &worker_id,
+//         &IdempotencyKey::fresh(),
+//         test.clone(),
+//     )
+//     .await;
+//
+//     check_test_result(&worker_id, result1.clone(), test.clone());
+//
+//     drop(executor);
+// }
+
 fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
     let mut values: Vec<(Uuid, String, String)> = Vec::with_capacity(count);
 
@@ -457,32 +628,36 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
     let expected_rows: Vec<serde_json::Value> =
         expected_values.into_iter().map(postgres_get_row).collect();
 
-    let expected_columns: Vec<serde_json::Value> = vec![
-        json!({
-           "db-type":{
-              "uuid":null
-           },
-           "db-type-name":"UUID",
-           "name":"user_id",
-           "ordinal":0
-        }),
-        json!({
-           "db-type":{
-              "text":null
-           },
-           "db-type-name":"TEXT",
-           "name":"name",
-           "ordinal":1
-        }),
-        json!({
-           "db-type":{
-                 "text":null
-           },
-           "db-type-name":"TEXT[]",
-           "name":"tags",
-           "ordinal":2
-        }),
-    ];
+    let expected_columns: Vec<serde_json::Value> = if expected_rows.is_empty() {
+        vec![]
+    } else {
+        vec![
+            json!({
+               "db-type":{
+                  "uuid":null
+               },
+               "db-type-name":"UUID",
+               "name":"user_id",
+               "ordinal":0
+            }),
+            json!({
+               "db-type":{
+                  "text":null
+               },
+               "db-type-name":"TEXT",
+               "name":"name",
+               "ordinal":1
+            }),
+            json!({
+               "db-type":{
+                     "text":null
+               },
+               "db-type-name":"TEXT[]",
+               "name":"tags",
+               "ordinal":2
+            }),
+        ]
+    };
     query_ok_response(expected_columns, expected_rows)
 }
 
@@ -805,26 +980,30 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
     let expected_rows: Vec<serde_json::Value> =
         expected_values.into_iter().map(mysql_get_row).collect();
 
-    let expected_columns: Vec<serde_json::Value> = vec![
-        json!(
-        {
-           "db-type":{
-              "varchar":null
-           },
-           "db-type-name":"VARCHAR",
-           "name":"user_id",
-           "ordinal":0
-        }),
-        json!(
-        {
-           "db-type":{
-              "varchar":null
-           },
-           "db-type-name":"VARCHAR",
-           "name":"name",
-           "ordinal":1
-        }),
-    ];
+    let expected_columns: Vec<serde_json::Value> = if expected_rows.is_empty() {
+        vec![]
+    } else {
+        vec![
+            json!(
+            {
+               "db-type":{
+                  "varchar":null
+               },
+               "db-type-name":"VARCHAR",
+               "name":"user_id",
+               "ordinal":0
+            }),
+            json!(
+            {
+               "db-type":{
+                  "varchar":null
+               },
+               "db-type-name":"VARCHAR",
+               "name":"name",
+               "ordinal":1
+            }),
+        ]
+    };
     query_ok_response(expected_columns, expected_rows)
 }
 
@@ -939,6 +1118,7 @@ async fn execute_worker_test<T: RdbmsType>(
             Value::String(s.statement.to_string()),
             params,
             Value::Enum(s.action as u32),
+            Value::Option(s.sleep.map(|v| Box::new(Value::U64(v)))),
         ]));
     }
 
@@ -951,6 +1131,7 @@ async fn execute_worker_test<T: RdbmsType>(
                 "action",
                 analysed_type::r#enum(&["execute", "query", "query-stream"]),
             ),
+            analysed_type::field("sleep", analysed_type::option(analysed_type::u64())),
         ])),
     );
 

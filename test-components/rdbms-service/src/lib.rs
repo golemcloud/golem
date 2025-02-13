@@ -75,6 +75,16 @@ fn get_postgres_db_param(value: String) -> PostgresDbValue {
     }
 }
 
+fn sleep(sleep: u64) {
+    let c = 10;
+    let s = std::time::Duration::from_millis(sleep / c);
+    for i in 0..c {
+        println!("sleeping {i}/{c} for {s:?}");
+        std::thread::sleep(s);
+    }
+
+}
+
 struct Component;
 
 
@@ -125,6 +135,10 @@ impl Guest for Component {
                     results.push(result.map(PostgresResult::Query));
                 }
             }
+
+            if let Some(s) = statement.sleep {
+                sleep(s);
+            }
         }
         Ok(results)
     }
@@ -168,6 +182,10 @@ impl Guest for Component {
                     };
                     results.push(result.map(PostgresResult::Query));
                 }
+            }
+
+            if let Some(s) = statement.sleep {
+                sleep(s);
             }
         }
 
@@ -213,6 +231,10 @@ impl Guest for Component {
                     results.push(result.map(MysqlResult::Query));
                 }
             }
+
+            if let Some(s) = statement.sleep {
+                sleep(s);
+            }
         }
 
 
@@ -252,6 +274,10 @@ impl Guest for Component {
                     };
                     results.push(result.map(MysqlResult::Query));
                 }
+            }
+
+            if let Some(s) = statement.sleep {
+                sleep(s);
             }
         }
 
