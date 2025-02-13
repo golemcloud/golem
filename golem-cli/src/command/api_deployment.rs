@@ -55,7 +55,7 @@ pub enum ApiDeploymentSubcommand<ProjectRef: clap::Args> {
 
         /// Api definition id
         #[arg(short, long)]
-        id: ApiDefinitionId,
+        id: Option<ApiDefinitionId>,
     },
 
     /// Delete api deployment
@@ -88,7 +88,7 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDeploymentSubcommand<Pro
             ApiDeploymentSubcommand::Get { site } => service.get(site).await,
             ApiDeploymentSubcommand::List { project_ref, id } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service.list(id, &project_id).await
+                service.list(id.as_ref(), &project_id).await
             }
             ApiDeploymentSubcommand::Delete { site } => service.delete(site).await,
         }
