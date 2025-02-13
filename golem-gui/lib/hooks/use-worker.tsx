@@ -224,7 +224,7 @@ export function useWorkerLogs(
   const queryString = new URLSearchParams({
     count: params.count.toString(),
     ...(params.from ? { from: params.from.toString() } : {}),
-    ...(params.cursor ? { cursor: params.cursor } : {}),
+    ...(params.cursor ? { next: JSON.stringify(params.cursor) } : {}), // Serialize cursor as JSON
     ...(params.query ? { query: params.query } : {}),
   }).toString();
 
@@ -239,6 +239,7 @@ export function useWorkerLogs(
     isLoading,
   };
 }
+
 
 export function useWorkerFind(compId: string, limit?: number, slientToast?:boolean) {
   const [error, setError] = useState<string | null>(null);
