@@ -57,11 +57,11 @@ use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::grpcapi::{
-    bad_request_error, error_to_status, parse_json_invoke_parameters, validate_component_file_path,
-    validate_protobuf_plugin_installation_id, validate_protobuf_target_worker_id,
-    validate_protobuf_worker_id, validated_worker_id,
+    bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
+    validate_component_file_path, validate_protobuf_plugin_installation_id,
+    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
 };
-use golem_worker_service_base::service::worker::WorkerStream;
+use golem_worker_service_base::service::worker::{InvocationParameters, WorkerStream};
 use std::pin::Pin;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
@@ -954,22 +954,40 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+        let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
+            .map_err(bad_request_errors)?;
 
         let idempotency_key = request
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
-        self.worker_service
-            .validate_and_invoke(
-                &worker_id,
-                Some(idempotency_key),
-                request.function,
-                params,
-                request.context,
-                empty_worker_metadata(),
-            )
-            .await?;
+        match params {
+            InvocationParameters::TypedProtoVals(params) => {
+                self.worker_service
+                    .validate_and_invoke(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        params,
+                        request.context,
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_json(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        jsons,
+                        request.context,
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+        }
 
         Ok(())
     }
@@ -1004,24 +1022,42 @@ impl WorkerGrpcApi {
         request: InvokeAndAwaitJsonRequest,
     ) -> Result<String, GrpcWorkerError> {
         let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+        let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
+            .map_err(bad_request_errors)?;
 
         let idempotency_key = request
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
-        let result = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &worker_id,
-                Some(idempotency_key),
-                request.function,
-                params,
-                request.context,
-                empty_worker_metadata(),
-            )
-            .await?;
+        let result = match params {
+            InvocationParameters::TypedProtoVals(params) => {
+                self.worker_service
+                    .validate_and_invoke_and_await_typed(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        params,
+                        request.context,
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_and_await_json(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        jsons,
+                        request.context,
+                        empty_worker_metadata(),
+                    )
+                    .await?
+            }
+        };
 
         Ok(serde_json::to_value(result)
             .map_err(|err| GrpcWorkerError {

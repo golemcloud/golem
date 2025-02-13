@@ -4924,7 +4924,7 @@ components:
         params:
           type: array
           items:
-            $ref: '#/components/schemas/TypeAnnotatedValue'
+            $ref: '#/components/schemas/ValueAndOptionalType'
       required:
       - params
     InvokeResponse:
@@ -6009,6 +6009,14 @@ components:
             type: string
       required:
       - errors
+    ValueAndOptionalType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - value
     ValueAndType:
       type: object
       properties:
