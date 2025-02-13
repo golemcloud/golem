@@ -128,12 +128,12 @@ impl IsObjectType for ValueAndType {}
 
 #[cfg(feature = "json")]
 mod json {
-    use std::borrow::Cow;
+    use crate::json::OptionallyTypeAnnotatedValueJson;
+    use golem_wasm_ast::analysis::AnalysedType;
     use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
     use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
     use serde_json::Value;
-    use golem_wasm_ast::analysis::AnalysedType;
-    use crate::json::OptionallyTypeAnnotatedValueJson;
+    use std::borrow::Cow;
 
     impl Type for OptionallyTypeAnnotatedValueJson {
         const IS_REQUIRED: bool = true;
@@ -169,7 +169,7 @@ mod json {
 
         fn raw_element_iter<'a>(
             &'a self,
-        ) -> Box<dyn Iterator<Item=&'a Self::RawElementValueType> + 'a> {
+        ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
             Box::new(self.as_raw_value().into_iter())
         }
     }

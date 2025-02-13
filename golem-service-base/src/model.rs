@@ -27,6 +27,7 @@ use golem_common::model::{
 use golem_common::SafeDisplay;
 use golem_wasm_ast::analysis::analysed_type::{case, field, record, variant};
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -34,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {

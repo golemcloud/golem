@@ -66,7 +66,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.proto_account_limits().clone()
+        *self.proto_account_limits()
     }
 
     fn worker_id(&self) -> Result<TargetWorkerId, GolemError> {
@@ -372,7 +372,7 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     input_json_strings: &[String],
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<Vec<Val>, GolemError> {
-    let metadata = worker.get_metadata().await?;
+    let metadata = worker.get_metadata()?;
     let assumed_component_version = assume_future_component_version(&metadata);
     let component_metadata = worker
         .component_service()
@@ -386,9 +386,9 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
 
     let expected_params: Vec<&AnalysedFunctionParameter> =
         if parsed.function().is_indexed_resource() {
-            function.parameters.iter().skip(1).map(|r| r).collect()
+            function.parameters.iter().skip(1).collect()
         } else {
-            function.parameters.iter().map(|r| r).collect()
+            function.parameters.iter().collect()
         };
 
     let mut input = Vec::new();

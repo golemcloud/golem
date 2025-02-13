@@ -63,9 +63,13 @@ impl OptionallyTypeAnnotatedValueJson {
         TypeAnnotatedValue::parse_with_type(&self.value, &typ)
     }
 
+    pub fn into_json_value(self) -> serde_json::Value {
+        self.value
+    }
+
     pub fn into_value_and_type(self, typ: AnalysedType) -> Result<ValueAndType, Vec<String>> {
         let tav = self.into_type_annotated_value(typ)?;
-        Ok(tav.try_into().map_err(|err| vec![err])?)
+        tav.try_into().map_err(|err| vec![err])
     }
 
     pub fn try_into_type_annotated_value(self) -> Result<Option<TypeAnnotatedValue>, Vec<String>> {
