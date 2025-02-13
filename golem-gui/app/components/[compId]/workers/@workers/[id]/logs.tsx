@@ -12,145 +12,232 @@ import {
 } from "@mui/material";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";
 
-//this type is temporary for now as we haven't worked on logs yet
+type WorkerId = {
+  componentId: string;
+  workerName: string;
+};
+
+type Plugin = {
+  installation_id: string;
+  plugin_name: string;
+  plugin_version: string;
+  parameters: Record<string, string>;
+};
 
 type LogEntry = {
   type: string;
   timestamp: string;
-  worker_id: {
-    componentId: string;
-    workerName: string;
-  };
-  env: Record<string, string | number | boolean>;
-  account_id: string;
-  parent?: {
-    componentId: string;
-    workerName: string;
-  };
-  initial_total_linear_memory_size: number;
-  initial_active_plugins: Array<{
-    plugin_name: string;
-    plugin_version: string;
-    installation_id: string;
-    parameters: Record<string, string | number | boolean>;
-  }>;
+  worker_id?: WorkerId;
+  component_version?: number;
+  args?: string[];
+  env?: Record<string, string>;
+  account_id?: string;
+  parent?: WorkerId;
+  component_size?: number;
+  initial_total_linear_memory_size?: number;
+  initial_active_plugins?: Plugin[];
 };
 
-type Log = {
-  entry: LogEntry;
+type LogItem = {
+  oplogIndex: number;
+  entry?: LogEntry;
 };
 
+type LogResponse = {
+  entries?: LogItem[];
+  next?: {
+    next_oplog_index: number;
+    current_component_version: number;
+  };
+  firstIndexInChunk?: number;
+  lastIndex?: number;
+};
 
 export default function WorkerLogs() {
   const { compId } = useCustomParam();
   const { id: workerName } = useCustomParam();
-  const { logs, error, isLoading } = useWorkerLogs(compId, workerName, {
-    count: 1,
+  const { logs, error, isLoading } = useWorkerLogs<LogResponse>(compId, workerName, {
+    count: 10,
   });
 
-
-  const entries = logs?.entries || [];
-
-  if (isLoading)
+  if (isLoading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <CircularProgress />
       </Box>
     );
+  }
 
-  if (error)
+  if (error) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
-        <Alert severity="error">Error: {error}</Alert>
+        <Alert severity="error">Error: {error.toString()}</Alert>
       </Box>
     );
+  }
 
-  if (!entries || entries.length === 0)
+  if (!logs?.entries || logs.entries.length === 0) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
-        <Typography>No entries available.</Typography>
+        <Typography>No logs available.</Typography>
       </Box>
     );
+  }
 
   return (
     <Box>
       <List>
-        {entries.map((log:Log , index: number) => (
-          <Paper
-            key={index}
-            variant="outlined"
-            sx={{ mb: 2, p: 2, borderRadius: 2, boxShadow: 1 }}
-          >
-            <Typography variant="h6" gutterBottom>
-              {log.entry.type} - {new Date(log.entry.timestamp).toLocaleString()}
-            </Typography>
+        {logs.entries.map((logItem) => {
+          // Skip rendering if entry is missing
+          if (!logItem?.entry) return null;
 
-            <Divider sx={{ my: 1 }} />
+          const entry = logItem.entry;
 
-            <Typography variant="subtitle1" >
-              Worker Info:
-            </Typography>
-            <List dense>
-              <ListItem>Component ID: {log.entry.worker_id.componentId}</ListItem>
-              <ListItem>Worker Name: {log.entry.worker_id.workerName}</ListItem>
-            </List>
+          return (
+            <div
+              key={logItem.oplogIndex}
+              variant="outlined"
+              sx={{ mb: 2, p: 2, borderRadius: 2, boxShadow: 1 }}
+            >
+              <Typography variant="h6" gutterBottom>
+                {entry.type ?? 'Unknown Type'} - {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'No timestamp'}
+              </Typography>
 
-            <Typography variant="subtitle1"  sx={{ mt: 2 }}>
-              Environment Variables:
-            </Typography>
-            <List dense>
-              {Object.entries(log.entry.env).map(([key, value]) => (
-                <ListItem key={key}>
-                  {key}: {String(value)}
-                </ListItem>
-              ))}
-            </List>
+              <Divider sx={{ my: 1 }} />
 
-            <Typography variant="subtitle1"  sx={{ mt: 2 }}>
-              Account ID:
-            </Typography>
-            <Typography>{log.entry.account_id}</Typography>
-
-            {log.entry.parent && (
-              <>
-                <Typography variant="subtitle1"  sx={{ mt: 2 }}>
-                  Parent Info:
-                </Typography>
-                <List dense>
-                  <ListItem>Parent Component ID: {log.entry.parent.componentId}</ListItem>
-                  <ListItem>Parent Worker Name: {log.entry.parent.workerName}</ListItem>
-                </List>
-              </>
-            )}
-
-            <Typography variant="subtitle1" sx={{ mt: 2 }}>
-              Initial Memory Size:
-            </Typography>
-            <Typography>{log.entry.initial_total_linear_memory_size}</Typography>
-
-            <Typography variant="subtitle1" sx={{ mt: 2 }}>
-              Active Plugins:
-            </Typography>
-            <List dense>
-              {log.entry.initial_active_plugins.map((plugin, idx: number) => (
-                <Box key={idx} sx={{ mb: 2 }}>
-                  <Typography>Plugin Name: {plugin.plugin_name}</Typography>
-                  <Typography>Plugin Version: {plugin.plugin_version}</Typography>
-                  <Typography>Installation ID: {plugin.installation_id}</Typography>
-                  <Typography>Parameters:</Typography>
+              {entry.worker_id && (
+                <>
+                  <Typography variant="subtitle1">Worker Info:</Typography>
                   <List dense>
-                    {Object.entries(plugin.parameters).map(([paramKey, paramValue]) => (
-                      <ListItem key={paramKey}>
-                        {paramKey}: {String(paramValue)}
+                    {entry.worker_id.componentId && (
+                      <ListItem>Component ID: {entry.worker_id.componentId}</ListItem>
+                    )}
+                    {entry.worker_id.workerName && (
+                      <ListItem>Worker Name: {entry.worker_id.workerName}</ListItem>
+                    )}
+                    {entry.component_version !== undefined && (
+                      <ListItem>Component Version: {entry.component_version}</ListItem>
+                    )}
+                    {entry.component_size !== undefined && (
+                      <ListItem>Component Size: {entry.component_size}</ListItem>
+                    )}
+                  </List>
+                </>
+              )}
+
+              {entry.args && entry.args.length > 0 && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Arguments:
+                  </Typography>
+                  <List dense>
+                    {entry.args.map((arg, index) => (
+                      <ListItem key={index}>{arg}</ListItem>
+                    ))}
+                  </List>
+                </>
+              )}
+
+              {entry.env && Object.keys(entry.env).length > 0 && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Environment Variables:
+                  </Typography>
+                  <List dense>
+                    {Object.entries(entry.env).map(([key, value]) => (
+                      <ListItem key={key}>
+                        {key}: {value}
                       </ListItem>
                     ))}
                   </List>
-                </Box>
-              ))}
-            </List>
-          </Paper>
-        ))}
+                </>
+              )}
+
+              {entry.account_id && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Account ID:
+                  </Typography>
+                  <Typography>{entry.account_id}</Typography>
+                </>
+              )}
+
+              {entry.parent && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Parent Info:
+                  </Typography>
+                  <List dense>
+                    {entry.parent.componentId && (
+                      <ListItem>Component ID: {entry.parent.componentId}</ListItem>
+                    )}
+                    {entry.parent.workerName && (
+                      <ListItem>Worker Name: {entry.parent.workerName}</ListItem>
+                    )}
+                  </List>
+                </>
+              )}
+
+              {entry.initial_total_linear_memory_size !== undefined && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Memory Info:
+                  </Typography>
+                  <Typography>
+                    Initial Total Linear Memory Size: {entry.initial_total_linear_memory_size}
+                  </Typography>
+                </>
+              )}
+
+              {entry.initial_active_plugins && entry.initial_active_plugins.length > 0 && (
+                <>
+                  <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                    Active Plugins:
+                  </Typography>
+                  <List dense>
+                    {entry.initial_active_plugins.map((plugin, idx) => (
+                      <Box key={plugin.installation_id || idx} sx={{ mb: 2 }}>
+                        {plugin.plugin_name && (
+                          <Typography>Plugin Name: {plugin.plugin_name}</Typography>
+                        )}
+                        {plugin.plugin_version && (
+                          <Typography>Plugin Version: {plugin.plugin_version}</Typography>
+                        )}
+                        {plugin.installation_id && (
+                          <Typography>Installation ID: {plugin.installation_id}</Typography>
+                        )}
+                        {plugin.parameters && Object.keys(plugin.parameters).length > 0 && (
+                          <>
+                            <Typography>Parameters:</Typography>
+                            <List dense>
+                              {Object.entries(plugin.parameters).map(([key, value]) => (
+                                <ListItem key={key}>
+                                  {key}: {value}
+                                </ListItem>
+                              ))}
+                            </List>
+                          </>
+                        )}
+                      </Box>
+                    ))}
+                  </List>
+                </>
+              )}
+            </div>
+          );
+        })}
       </List>
+
+      {logs.next && (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Next Index: {logs.next.next_oplog_index}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Current Component Version: {logs.next.current_component_version}
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 }
