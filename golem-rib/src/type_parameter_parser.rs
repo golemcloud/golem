@@ -1,12 +1,13 @@
-use crate::parser::errors::RibParseError;
 use crate::type_parameter::TypeParameter;
 use combine::error::StreamError;
 use combine::parser::char::char;
 use combine::stream::Stream;
 use combine::{attempt, choice, ParseError, Parser};
 use internal::*;
+use crate::parser::RibParseError;
+
 // Parser for TypeParameter
-pub fn instance_type<Input>() -> impl Parser<Input, Output = TypeParameter>
+pub fn type_parameter<Input>() -> impl Parser<Input, Output = TypeParameter>
 where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
@@ -22,11 +23,11 @@ where
 }
 
 mod internal {
-    use crate::parser::errors::RibParseError;
     use crate::type_parameter::{FullyQualifiedInterfaceName, InterfaceName, PackageName};
     use combine::parser::char::{alpha_num, char as char_};
     use combine::stream::Stream;
     use combine::{many1, optional, ParseError, Parser};
+    use crate::parser::RibParseError;
 
     pub(crate) fn fully_qualified_interface_name<Input>(
     ) -> impl Parser<Input, Output = FullyQualifiedInterfaceName>

@@ -305,7 +305,7 @@ impl<W: Write> Writer<W> {
                 }
             },
 
-            Expr::Call(invocation_name, params, _) => {
+            Expr::Call(invocation_name, _, params, _) => {
                 let function_name = invocation_name.to_string();
 
                 self.write_str(function_name)?;

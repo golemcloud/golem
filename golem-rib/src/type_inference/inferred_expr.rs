@@ -47,7 +47,7 @@ impl InferredExpr {
         queue.push_back(&self.0);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(CallType::Function(function_name), _, _) => {
+                Expr::Call(CallType::Function(function_name), _, _, _) => {
                     worker_calls.push(function_name.clone())
                 }
                 _ => expr.visit_children_bottom_up(&mut queue),

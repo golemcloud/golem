@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::instance_type::InstanceType;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
+use crate::instance_type::InstanceType;
 
 // Resolving function arguments, return type etc based on function type registry
 // If the call was for creating a worker instance, that will be handled too.
@@ -48,7 +48,7 @@ pub fn infer_function_call_type(
                         instance_creation_details.component_id(),
                         function_type_registry.clone(),
                         instance_creation_details.worker_name(),
-                    );
+                    )?;
                     *inferred_type = InferredType::InstanceType {
                         instance_type: new_instance_type,
                     }
@@ -596,6 +596,7 @@ mod function_parameters_inference_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::global("x".to_string()),
                 None,

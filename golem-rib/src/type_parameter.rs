@@ -1,11 +1,12 @@
-use crate::parser;
 use bincode::{Decode, Encode};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::{eof, EasyParser};
 use std::fmt;
 use std::fmt::Display;
+use crate::type_parameter_parser::type_parameter;
 
+// The type parameter which can be part of instance creation or worker function call
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
 pub enum TypeParameter {
     Interface(InterfaceName),
@@ -34,9 +35,10 @@ impl TypeParameter {
         }
     }
 
+
     pub fn from_str(input: &str) -> Result<TypeParameter, String> {
         spaces()
-            .with(parser::instance_type().skip(eof()))
+            .with(type_parameter().skip(eof()))
             .easy_parse(position::Stream::new(&input))
             .map(|t| t.0)
             .map_err(|err| format!("Invalid instance type {}", err))

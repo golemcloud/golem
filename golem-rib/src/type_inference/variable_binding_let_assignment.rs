@@ -106,6 +106,7 @@ mod name_binding_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -154,6 +155,7 @@ mod name_binding_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -169,6 +171,7 @@ mod name_binding_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("y", 0),
                 None,
@@ -217,6 +220,7 @@ mod name_binding_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -232,6 +236,7 @@ mod name_binding_tests {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 1),
                 None,

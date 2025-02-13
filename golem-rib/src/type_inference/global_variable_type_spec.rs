@@ -317,7 +317,7 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 );
             }
 
-            Expr::Call(call_type, exprs, inferred_type) => {
+            Expr::Call(call_type, _, exprs, inferred_type) => {
                 internal::handle_call(call_type, exprs, inferred_type, &mut temp_stack);
             }
 
@@ -848,6 +848,7 @@ mod internal {
 
                 let new_call = Expr::Call(
                     CallType::Function(function_name),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -857,6 +858,7 @@ mod internal {
             CallType::VariantConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::VariantConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -866,6 +868,7 @@ mod internal {
             CallType::EnumConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::EnumConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );

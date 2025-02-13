@@ -1,8 +1,10 @@
-use crate::generic_type_parameter::GenericTypeParameter;
-use crate::type_parameter::TypeParameter;
+use std::collections::HashMap;
 use crate::{Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
 use bincode::{Decode, Encode};
-use std::collections::HashMap;
+use golem_wasm_ast::analysis::AnalysedType;
+use crate::parser::{PackageName, TypeParameter};
+use crate::type_parameter::InterfaceName;
+use crate::type_parameter_parser::type_parameter;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -12,13 +14,95 @@ pub enum InstanceType {
     Durable {
         worker_name: Expr,
         component_id: String,
-        registry: FunctionTypeRegistry, // This needs to be revisited
+        function_dict: FunctionDictionary, // This needs to be revisited
     },
 
     Ephemeral {
         component_id: String,
-        registry: FunctionTypeRegistry, // This needs to be revisited
+        function_dict: FunctionDictionary, // This needs to be revisited
     },
+}
+
+// FunctionDictionary is a map of function names (not variant or any enums)
+// to their respective function details
+#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+pub struct FunctionDictionary {
+    pub map: HashMap<FunctionName, FunctionDetails>,
+}
+
+impl FunctionDictionary {
+    pub fn from_function_type_registry(registry: FunctionTypeRegistry) -> Result<FunctionDictionary, String> {
+        let mut map = HashMap::new();
+
+        for (key, value) in registry.types {
+            match value {
+                RegistryValue {
+                    parameter_types,
+                    return_types
+                } => {
+
+                    match key {
+                        RegistryKey::FunctionName(function_name) => {
+                            map.insert(
+                                FunctionName {
+                                    package_name: None,
+                                    interface_name: None,
+                                    function_name,
+                                },
+                                FunctionDetails {
+                                    parameter_types,
+                                    return_type: return_types,
+                                },
+                            );
+                        }
+
+                        RegistryKey::FunctionNameWithInterface {
+                            interface_name,
+                            function_name,
+                        } => {
+
+                            let type_parameter = TypeParameter::from_str(
+                                interface_name.as_str()
+                            )?;
+
+                            let interface_name = type_parameter.get_interface_name();
+                            let package_name = type_parameter.get_package_name();
+
+                            map.insert(
+                                FunctionName {
+                                    package_name,
+                                    interface_name,
+                                    function_name,
+                                },
+                                FunctionDetails {
+                                    parameter_types,
+                                    return_type: return_types,
+                                },
+                            );
+                        }
+                    }
+
+
+                }
+
+                _ => continue,
+            };
+        }
+
+        Ok(FunctionDictionary { map })
+    }
+}
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
+pub struct FunctionName {
+    package_name: Option<PackageName>,
+    interface_name: Option<InterfaceName>,
+    function_name: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
+pub struct FunctionDetails {
+    parameter_types: Vec<AnalysedType>,
+    return_type: Vec<AnalysedType>
 }
 
 impl InstanceType {
@@ -26,18 +110,22 @@ impl InstanceType {
         component_id: String,
         registry: FunctionTypeRegistry,
         worker_name: Option<Expr>,
-    ) -> InstanceType {
+    ) -> Result<InstanceType, String> {
+
+        let function_dict =
+            FunctionDictionary::from_function_type_registry(registry)?;
+
         match worker_name {
-            Some(worker_name) => InstanceType::Durable {
+            Some(worker_name) => Ok(InstanceType::Durable {
                 component_id,
                 worker_name,
-                registry,
-            },
+                function_dict,
+            }),
 
-            None => InstanceType::Ephemeral {
+            None => Ok(InstanceType::Ephemeral {
                 component_id,
-                registry,
-            },
+                function_dict,
+            }),
         }
     }
 }

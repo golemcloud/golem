@@ -68,15 +68,19 @@ pub enum Expr {
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
     // instance["foo"]("my-worker") will begin with Expr::Call(.., Some(ns:pkg), vec!["my-worker"])
     // The type of this is InstanceType (InferredType::InstanceType)
+    // instance("my-worker") is handled as part of usual function call.
+    // GenericTypeParameter is kept here if we need to disambiguate the instance creation further
     Call(
         CallType,
         Option<GenericTypeParameter>,
         Vec<Expr>,
         InferredType,
     ),
+    // Corresponds to worker.checkout-cart();
     Invoke {
         lhs: Box<Expr>,        // This should be of the type InferredType::InstanceType
-        function_name: String, // This will be always a simple string rather than complicated parsed-function-name
+        function_name: String,
+        generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
         inferred_type: InferredType, // This will be the return type of the function similar to Call
     },
@@ -180,7 +184,7 @@ impl Expr {
     }
 
     pub fn is_function_call(&self) -> bool {
-        matches!(self, Expr::Call(_, _, _))
+        matches!(self, Expr::Call(_, _, _, _))
     }
 
     pub fn is_match_expr(&self) -> bool {
@@ -271,9 +275,26 @@ impl Expr {
     ) -> Self {
         Expr::Call(
             CallType::Function(dynamic_parsed_fn_name),
+            generic_type_parameter,
             args,
             InferredType::Unknown,
         )
+    }
+
+
+    pub fn invoke_worker_function(
+        lhs: Expr,
+        function_name: String,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+    ) -> Self {
+        Expr::Invoke {
+            lhs: Box::new(lhs),
+            function_name,
+            generic_type_parameter,
+            args,
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn concat(expressions: Vec<Expr>) -> Self {
@@ -606,7 +627,7 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
+            | Expr::Call(_, _, _, inferred_type) => inferred_type.clone(),
         }
     }
 
@@ -759,7 +780,7 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => {
+            | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
                 }
@@ -807,7 +828,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => {
+            | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
                 }
@@ -1685,7 +1706,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Call(function_name, args, _) => {
+                Expr::Call(function_name, _, args, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
                         golem_api_grpc::proto::golem::rib::CallExpr {
                             name: None,

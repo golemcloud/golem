@@ -304,7 +304,7 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(call_type, arguments, inferred_type) => {
+            Expr::Call(call_type, _, arguments, inferred_type) => {
                 for expr in arguments.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }

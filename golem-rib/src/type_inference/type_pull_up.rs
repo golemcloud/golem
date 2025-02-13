@@ -278,7 +278,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Call(call_type, exprs, inferred_type) => {
+            Expr::Call(call_type, _, exprs, inferred_type) => {
                 internal::handle_call(call_type, exprs, inferred_type, &mut inferred_type_stack);
             }
 
@@ -787,6 +787,7 @@ mod internal {
 
                 let new_call = Expr::Call(
                     CallType::Function(function_name),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -796,6 +797,7 @@ mod internal {
             CallType::VariantConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::VariantConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -805,6 +807,7 @@ mod internal {
             CallType::EnumConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::EnumConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -1348,6 +1351,7 @@ mod type_pull_up_tests {
                             method: "checkout".to_string(),
                         },
                     }),
+                    None,
                     vec![],
                     InferredType::Unknown,
                 ),

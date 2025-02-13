@@ -346,6 +346,7 @@ mod type_inference_tests {
                         function: "foo".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
                     None,
@@ -408,6 +409,7 @@ mod type_inference_tests {
                         function: "foo".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
                     None,
@@ -423,6 +425,7 @@ mod type_inference_tests {
                         function: "baz".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("y", 0),
                     None,
@@ -1481,6 +1484,7 @@ mod type_inference_tests {
                                     function: "foo".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
                                 None,
@@ -1504,6 +1508,7 @@ mod type_inference_tests {
                                     function: "baz".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("y", 0),
                                 None,
@@ -2677,6 +2682,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("foo".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2691,6 +2697,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("bar".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2705,6 +2712,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("foo-bar".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2724,6 +2732,7 @@ mod type_inference_tests {
                                     function: "process".to_string(),
                                 },
                             }),
+                            None,
                             vec![
                                 Expr::Identifier(
                                     VariableId::local("query1", 0),
@@ -2783,6 +2792,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("success".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2808,6 +2818,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("failure".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2830,6 +2841,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("in-progress".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2864,6 +2876,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2886,6 +2899,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2908,6 +2922,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2942,6 +2957,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2964,6 +2980,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2986,6 +3003,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -3232,6 +3250,7 @@ mod type_inference_tests {
                                     function: "foo".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
                                 None,

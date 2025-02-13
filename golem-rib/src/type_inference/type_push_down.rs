@@ -91,7 +91,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 internal::handle_record(expressions, inferred_type, &mut queue)?;
             }
 
-            Expr::Call(call_type, expressions, inferred_type) => {
+            Expr::Call(call_type, _, expressions, inferred_type) => {
                 internal::handle_call(call_type, expressions, inferred_type, &mut queue);
             }
 

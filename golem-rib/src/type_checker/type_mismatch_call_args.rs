@@ -19,7 +19,7 @@ pub fn check_type_errors_in_function_call(
 
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Call(call_type, args, ..) => {
+            Expr::Call(call_type, _, args, ..) => {
                 internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?;
             }
             _ => expr.visit_children_mut_bottom_up(&mut queue),

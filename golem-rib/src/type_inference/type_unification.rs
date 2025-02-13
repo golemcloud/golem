@@ -220,7 +220,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Call(function_call, vec, inferred_type) => {
+            Expr::Call(function_call, _, vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
 
                 let unified_inferred_type = inferred_type.unify();
