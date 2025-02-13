@@ -37,6 +37,7 @@ where
 mod tests {
     use super::*;
     use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::DynamicParsedFunctionName;
     use test_r::test;
 
     #[test]
@@ -106,5 +107,39 @@ mod tests {
                 vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]
             )
         );
+    }
+
+    #[test]
+    fn test_worker_function_invoke_5() {
+        let rib_expr = r#"
+          let worker = instance("my-worker");
+          worker.function-name(foo, bar, baz)
+        "#;
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let worker_variable = Expr::identifier("worker", None);
+        let function_name = "function-name".to_string();
+
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding(
+                "worker",
+                Expr::call(
+                    DynamicParsedFunctionName::parse("instance").unwrap(),
+                    None,
+                    vec![Expr::literal("my-worker")],
+                ),
+                None,
+            ),
+            Expr::invoke_worker_function(
+                worker_variable,
+                function_name,
+                None,
+                vec![
+                    Expr::identifier("foo", None),
+                    Expr::identifier("bar", None),
+                    Expr::identifier("baz", None),
+                ],
+            ),
+        ]);
+        assert_eq!(expr, expected);
     }
 }
