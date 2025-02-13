@@ -381,6 +381,9 @@ impl TryFrom<InferredType> for TypeName {
             InferredType::Sequence(_) => {
                 Err("Cannot convert a sequence type to a type name".to_string())
             }
+            InferredType::Instance { .. } => {
+                Err("Cannot convert an instance type to a type name".to_string())
+            }
         }
     }
 }
