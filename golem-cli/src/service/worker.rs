@@ -294,17 +294,35 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     function: &str,
 ) -> Result<(Vec<OptionallyTypeAnnotatedValueJson>, Option<Component>), GolemError> {
     if let Some(parameters) = parameters {
-        // A JSON parameter was provided. It is an array of serialized OptionallyTypeAnnotatedValueJson valuess
+        // A JSON parameter was provided. It is an array of serialized OptionallyTypeAnnotatedValueJson values
         let parameters = parameters
             .as_array()
             .ok_or_else(|| GolemError("Parameters must be an array".to_string()))?;
 
-        let values = parameters
+        if let Ok(values) = parameters
             .iter()
             .map(|v| serde_json::from_value::<OptionallyTypeAnnotatedValueJson>(v.clone()))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| GolemError(format!("Invalid JSON format used for parameters: {err}")))?;
-        Ok((values, None))
+        {
+            // The JSON was a valid array of OptionallyTypeAnnotatedValueJson
+            Ok((values, None))
+        } else {
+            // The JSON was not a valid array of OptionallyTypeAnnotatedValueJson, we assume that it is an array
+            // of values only (without the { "value": ... } object around them)
+            let values = parameters
+                .iter()
+                .map(|v| {
+                    serde_json::from_value::<OptionallyTypeAnnotatedValueJson>(
+                        serde_json::json!({ "value": v.clone() }),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| {
+                    GolemError(format!("Invalid JSON format used for parameters: {err}"))
+                })?;
+
+            Ok((values, None))
+        }
     } else {
         // No JSON parameters, we use the WAVE ones
         let component = get_component_metadata_for_worker(client, components, worker_urn).await?;
