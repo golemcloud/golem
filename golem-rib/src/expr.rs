@@ -66,19 +66,23 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
-    // instance["foo"]("my-worker") will begin with Expr::Call(.., Some(ns:pkg), vec!["my-worker"])
-    // The type of this is InstanceType (InferredType::InstanceType)
-    // instance("my-worker") is handled as part of usual function call.
-    // GenericTypeParameter is kept here if we need to disambiguate the instance creation further
+    // instance("my-worker") will be simply be parsed Expr::Call("instance", vec!["my-worker"])
+    // or as we go, instance[ns:pkg]("my-worker") will be parsed as Expr::Call("instance", vec!["my-worker"])
+    // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call(InstanceCreation,..)
+    // with inferred-type as `InstanceType`. This way any variables attached to the instance creation
+    // will be having the `InstanceType`.
     Call(
         CallType,
         Option<GenericTypeParameter>,
         Vec<Expr>,
         InferredType,
     ),
-    // Corresponds to worker.checkout-cart();
+    // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
+    // such that `my-worker-variable-expr` will be of the type `InferredType::InstanceType`
+    // As part of a separate type inference phase this will be converted back to `Expr::Call` with fully
+    // qualified function names (the complex version) which further takes part in all other type inference phases.
     Invoke {
-        lhs: Box<Expr>,        // This should be of the type InferredType::InstanceType
+        lhs: Box<Expr>,
         function_name: String,
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,

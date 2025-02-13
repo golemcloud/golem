@@ -54,6 +54,7 @@ mod variable_binding_list_comprehension;
 mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
+mod worker_function_invocation;
 
 #[cfg(test)]
 mod type_inference_tests {

@@ -19,18 +19,10 @@ use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-// A type-registry is a mapping from a function name (global or part of an interface in WIT)
-// to the registry value that represents the type of the name.
-// Here, registry key names are called function names (and not really the names of the types),
-// as this is what the component-model parser output (golem-wasm-ast) gives us.
-// We make sure if we bump into any variant types (as part of processing the function parameter types),
-// we store them as a mapping from FunctionName(name_of_variant) to a registry value. If the variant
-// has parameters, then the RegistryValue is considered a function type itself with parameter types,
-// and a return type that the member variant represents. If the variant has no parameters,
-// then the RegistryValue is simply an AnalysedType representing the variant type itself.
-// RegistryKey is more aligned to the component metadata, and possess all the complexities that the component metadata
-// may have.
-// In future Rib may choose to have a registry that spans the details across multiple components
+// A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
+// The structure is raw and closer to the original component metadata.
+// FunctionTypeRegistry act as a set of all dependencies in Rib.
+// Currently it talks about only 1 component.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
