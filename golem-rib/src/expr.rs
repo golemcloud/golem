@@ -643,6 +643,7 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
@@ -682,6 +683,10 @@ impl Expr {
         *self = expr;
         self.infer_global_inputs();
         Ok(())
+    }
+
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), String> {
+        type_inference::infer_worker_function_invokes(self)
     }
 
     // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.

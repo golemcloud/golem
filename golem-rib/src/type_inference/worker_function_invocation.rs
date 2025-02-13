@@ -1,18 +1,32 @@
 use std::collections::VecDeque;
-use crate::{Expr, FunctionTypeRegistry, InferredType};
+use crate::{Expr, InferredType};
+use crate::type_parameter::TypeParameter;
 
-pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry,) -> Result<(), String> {
+pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
     while let Some(expr) = queue.pop_back() {
         if let Expr::Invoke {lhs, function_name, generic_type_parameter, args, inferred_type } = expr {
-            queue.push_back(lhs); // This variable hardly lead to another nested call, yet safe to push them to the queue
 
-            let inferred_type = lhs.inferred_type(); // By this time we assume we correctly tag the inferred type of lhs to be InstanceType
+            let inferred_type = lhs.clone().inferred_type(); // By this time we assume we correctly tag the inferred type of lhs to be InstanceType
 
             match inferred_type {
                 InferredType::Instance { instance_type } => {
+                    let generic_type_parameter = generic_type_parameter.clone().map(|gtp| {
+                        TypeParameter::from_str(&gtp.value)
+                    }).transpose()?;
+
+                    let function = instance_type.get_function(function_name, generic_type_parameter)?;
+                    let function_name = function.dynamic_parsed_function_name()?;
+
+                    let new_call = Expr::call(
+                        function_name,
+                        None,
+                        args.clone(),
+                    );
+
+                    *expr = new_call;
 
                 },
                 inferred_type => return Err(format!("Expected instance type, found {:?}", inferred_type))

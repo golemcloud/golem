@@ -32,6 +32,7 @@ pub use variable_binding_list_comprehension::*;
 pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
+pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
 mod enum_resolution;

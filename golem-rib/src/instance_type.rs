@@ -1,4 +1,5 @@
-use crate::{Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
+use std::fmt::Display;
+use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::parser::{PackageName, TypeParameter};
@@ -157,11 +158,18 @@ impl InstanceType {
     }
 }
 
-struct Function {
-    function_name: FullyQualifiedFunctionName,
-    function_type: FunctionType,
+// TODO; This can be resource type too and not fully qualified function name
+// But we will add this as part of tests
+pub struct Function {
+    pub function_name: FullyQualifiedFunctionName,
+    pub function_type: FunctionType,
 }
-
+impl Function {
+    pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
+        let name = self.function_name.to_string();
+        DynamicParsedFunctionName::parse(name)
+    }
+}
 
 // FunctionDictionary is a map of function names (not variant or any enums)
 // to their respective function details
@@ -237,6 +245,22 @@ pub struct FullyQualifiedFunctionName {
     package_name: Option<PackageName>,
     interface_name: Option<InterfaceName>,
     function_name: String,
+}
+
+impl Display for FullyQualifiedFunctionName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.package_name {
+            Some(package_name) => write!(f, "{}:", package_name)?,
+            None => {}
+        }
+
+        match &self.interface_name {
+            Some(interface_name) => write!(f, "/{}.", interface_name)?,
+            None => {}
+        }
+
+        write!(f, ".{{{}}}", self.function_name)
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
