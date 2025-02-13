@@ -35,12 +35,13 @@ pub enum InstanceCreationType {
     },
 }
 
-
 impl Display for InstanceCreationType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             InstanceCreationType::Ephemeral { .. } => write!(f, "instance"),
-            InstanceCreationType::Durable { worker_name, .. } => write!(f, "instance({})", worker_name),
+            InstanceCreationType::Durable { worker_name, .. } => {
+                write!(f, "instance({})", worker_name)
+            }
         }
     }
 }
@@ -80,7 +81,9 @@ impl Display for CallType {
             CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
-            CallType::InstanceCreation(instance_creation_type) => write!(f, "{}", instance_creation_type)
+            CallType::InstanceCreation(instance_creation_type) => {
+                write!(f, "{}", instance_creation_type)
+            }
         }
     }
 }
@@ -130,7 +133,9 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name),
                     ),
                 },
-                CallType::InstanceCreation(_) => todo!("InstanceCreation not supported in protobuf"),
+                CallType::InstanceCreation(_) => {
+                    todo!("InstanceCreation not supported in protobuf")
+                }
             }
         }
     }

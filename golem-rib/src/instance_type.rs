@@ -1,9 +1,9 @@
-use std::fmt::Display;
+use crate::parser::{PackageName, TypeParameter};
+use crate::type_parameter::InterfaceName;
 use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
-use crate::parser::{PackageName, TypeParameter};
-use crate::type_parameter::InterfaceName;
+use std::fmt::Display;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -25,9 +25,7 @@ pub enum InstanceType {
     },
 }
 
-
 impl InstanceType {
-
     pub fn get_function(
         &self,
         function_name: &str,
@@ -44,31 +42,39 @@ impl InstanceType {
             Some(param) => {
                 for (fqfn, ftype) in &functions {
                     match &param {
-                        TypeParameter::Interface(iface) if fqfn.interface_name.as_ref() == Some(iface) => {
+                        TypeParameter::Interface(iface)
+                            if fqfn.interface_name.as_ref() == Some(iface) =>
+                        {
                             return Ok(Function {
                                 function_name: fqfn.clone(),
                                 function_type: ftype.clone(),
                             });
                         }
-                        TypeParameter::PackageName(pkg) if fqfn.package_name.as_ref() == Some(pkg) => {
+                        TypeParameter::PackageName(pkg)
+                            if fqfn.package_name.as_ref() == Some(pkg) =>
+                        {
                             return Ok(Function {
                                 function_name: fqfn.clone(),
                                 function_type: ftype.clone(),
                             });
                         }
                         TypeParameter::FullyQualifiedInterface(fq_iface)
-                        if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
-                            && fqfn.interface_name.as_ref() == Some(&fq_iface.interface_name) =>
-                            {
-                                return Ok(Function {
-                                    function_name: fqfn.clone(),
-                                    function_type: ftype.clone(),
-                                });
-                            }
+                            if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
+                                && fqfn.interface_name.as_ref()
+                                    == Some(&fq_iface.interface_name) =>
+                        {
+                            return Ok(Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            });
+                        }
                         _ => continue,
                     }
                 }
-                Err(format!("No function '{}' found for the given type parameter.", function_name))
+                Err(format!(
+                    "No function '{}' found for the given type parameter.",
+                    function_name
+                ))
             }
             None => {
                 let unique_packages: Vec<_> = functions
@@ -97,9 +103,9 @@ impl InstanceType {
                                 unique_packages
                                     .iter()
                                     .flat_map(|pkg| {
-                                        unique_interfaces
-                                            .iter()
-                                            .map(move |iface| format!("{}::{}", pkg.package_name, iface.name))
+                                        unique_interfaces.iter().map(move |iface| {
+                                            format!("{}::{}", pkg.package_name, iface.name)
+                                        })
                                     })
                                     .collect::<Vec<_>>()
                             ));
@@ -139,9 +145,7 @@ impl InstanceType {
         registry: FunctionTypeRegistry,
         worker_name: Option<Expr>,
     ) -> Result<InstanceType, String> {
-
-        let function_dict =
-            FunctionDictionary::from_function_type_registry(registry)?;
+        let function_dict = FunctionDictionary::from_function_type_registry(registry)?;
 
         match worker_name {
             Some(worker_name) => Ok(InstanceType::Durable {
@@ -179,59 +183,53 @@ pub struct FunctionDictionary {
 }
 
 impl FunctionDictionary {
-    pub fn from_function_type_registry(registry: FunctionTypeRegistry) -> Result<FunctionDictionary, String> {
+    pub fn from_function_type_registry(
+        registry: FunctionTypeRegistry,
+    ) -> Result<FunctionDictionary, String> {
         let mut map = vec![];
 
         for (key, value) in registry.types {
             match value {
                 RegistryValue::Function {
                     parameter_types,
-                    return_types
-                } => {
-
-                    match key {
-                        RegistryKey::FunctionName(function_name) => {
-                            map.push(
-                                (FullyQualifiedFunctionName {
-                                    package_name: None,
-                                    interface_name: None,
-                                    function_name,
-                                },
-                                 FunctionType {
-                                    parameter_types,
-                                    return_type: return_types,
-                                }),
-                            );
-                        }
-
-                        RegistryKey::FunctionNameWithInterface {
-                            interface_name,
-                            function_name,
-                        } => {
-
-                            let type_parameter = TypeParameter::from_str(
-                                interface_name.as_str()
-                            )?;
-
-                            let interface_name = type_parameter.get_interface_name();
-                            let package_name = type_parameter.get_package_name();
-
-                            map.push(
-                                (FullyQualifiedFunctionName {
-                                    package_name,
-                                    interface_name,
-                                    function_name,
-                                },
-                                 FunctionType {
-                                    parameter_types,
-                                    return_type: return_types,
-                                }),
-                            );
-                        }
+                    return_types,
+                } => match key {
+                    RegistryKey::FunctionName(function_name) => {
+                        map.push((
+                            FullyQualifiedFunctionName {
+                                package_name: None,
+                                interface_name: None,
+                                function_name,
+                            },
+                            FunctionType {
+                                parameter_types,
+                                return_type: return_types,
+                            },
+                        ));
                     }
 
+                    RegistryKey::FunctionNameWithInterface {
+                        interface_name,
+                        function_name,
+                    } => {
+                        let type_parameter = TypeParameter::from_str(interface_name.as_str())?;
 
-                }
+                        let interface_name = type_parameter.get_interface_name();
+                        let package_name = type_parameter.get_package_name();
+
+                        map.push((
+                            FullyQualifiedFunctionName {
+                                package_name,
+                                interface_name,
+                                function_name,
+                            },
+                            FunctionType {
+                                parameter_types,
+                                return_type: return_types,
+                            },
+                        ));
+                    }
+                },
 
                 _ => continue,
             };
@@ -266,5 +264,5 @@ impl Display for FullyQualifiedFunctionName {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub struct FunctionType {
     parameter_types: Vec<AnalysedType>,
-    return_type: Vec<AnalysedType>
+    return_type: Vec<AnalysedType>,
 }

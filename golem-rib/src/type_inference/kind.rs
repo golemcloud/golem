@@ -103,7 +103,7 @@ impl GetTypeKind for InferredType {
             InferredType::AllOf(possibilities) => internal::get_type_kind(possibilities),
             InferredType::Unknown => TypeKind::Unknown,
             InferredType::Sequence(_) => TypeKind::Unknown,
-            InferredType::Instance {..} => TypeKind::Unknown,
+            InferredType::Instance { .. } => TypeKind::Unknown,
         }
     }
 }

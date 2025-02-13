@@ -15,6 +15,7 @@
 use crate::expr::Expr;
 use crate::function_name::{ParsedFunctionSite, SemVer};
 use crate::parser::errors::RibParseError;
+use crate::parser::generic_type_parameter::generic_type_parameter;
 use crate::parser::rib_expr::rib_expr;
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 use combine::error::Commit;
@@ -24,7 +25,6 @@ use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
 use poem_openapi::__private::poem::EndpointExt;
-use crate::parser::generic_type_parameter::generic_type_parameter;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>

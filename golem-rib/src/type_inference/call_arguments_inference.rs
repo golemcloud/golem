@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::instance_type::InstanceType;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
-use crate::instance_type::InstanceType;
 
 // Resolving function arguments, return type etc based on function type registry
 // If the call was for creating a worker instance, that will be handled too.
@@ -139,12 +139,10 @@ mod internal {
                         args,
                     ),
                     None => {
-                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(
-                            format!(
-                                "Invalid function call: `{}`",
-                                dynamic_parsed_function_name.to_string()
-                            ),
-                        )?;
+                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(format!(
+                            "Invalid function call: `{}`",
+                            dynamic_parsed_function_name.to_string()
+                        ))?;
 
                         infer_args_and_result_type(
                             &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),

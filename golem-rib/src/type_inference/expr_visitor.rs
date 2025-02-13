@@ -105,7 +105,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(yield_expr);
         }
 
-        Expr::Invoke { lhs,  args, ..} => {
+        Expr::Invoke { lhs, args, .. } => {
             queue.push_back(lhs);
             queue.extend(args.iter_mut());
         }

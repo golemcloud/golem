@@ -337,7 +337,6 @@ fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Resul
                 internal::handle_get_tag(expr, inferred_type, &mut temp_stack);
             }
 
-
             Expr::ListComprehension {
                 iterated_variable,
                 iterable_expr,

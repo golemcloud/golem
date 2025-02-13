@@ -71,7 +71,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::Invoke {..} => {
+            Expr::Invoke { .. } => {
                 Err("Internal compiler error: Invoke expression cannot be part of type pull up phase".to_string())?;
             }
 
@@ -283,7 +283,13 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
-                internal::handle_call(call_type, generic_type_parameter.clone(), exprs, inferred_type, &mut inferred_type_stack);
+                internal::handle_call(
+                    call_type,
+                    generic_type_parameter.clone(),
+                    exprs,
+                    inferred_type,
+                    &mut inferred_type_stack,
+                );
             }
 
             Expr::Unwrap(expr, inferred_type) => {
@@ -341,12 +347,12 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
+    use crate::generic_type_parameter::GenericTypeParameter;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InferredType, MatchArm, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
-    use crate::generic_type_parameter::GenericTypeParameter;
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();

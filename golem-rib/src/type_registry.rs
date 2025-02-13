@@ -268,19 +268,19 @@ impl RegistryKey {
             CallType::VariantConstructor(variant_name) => {
                 Some(RegistryKey::FunctionName(variant_name.clone()))
             }
-            CallType::EnumConstructor(enum_name) => Some(RegistryKey::FunctionName(enum_name.clone())),
+            CallType::EnumConstructor(enum_name) => {
+                Some(RegistryKey::FunctionName(enum_name.clone()))
+            }
             CallType::Function(function_name) => match function_name.site.interface_name() {
-                None => {
-                    Some(RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers()))
-                }
+                None => Some(RegistryKey::FunctionName(
+                    function_name.function_name_with_prefix_identifiers(),
+                )),
                 Some(interface_name) => Some(RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
                     function_name: function_name.function_name_with_prefix_identifiers(),
                 }),
             },
-            CallType::InstanceCreation(_) => {
-                None
-            }
+            CallType::InstanceCreation(_) => None,
         }
     }
 }

@@ -1,10 +1,10 @@
+use crate::type_parameter_parser::type_parameter;
 use bincode::{Decode, Encode};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::{eof, EasyParser};
 use std::fmt;
 use std::fmt::Display;
-use crate::type_parameter_parser::type_parameter;
 
 // The type parameter which can be part of instance creation or worker function call
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
@@ -34,7 +34,6 @@ impl TypeParameter {
             }
         }
     }
-
 
     pub fn from_str(input: &str) -> Result<TypeParameter, String> {
         type_parameter()

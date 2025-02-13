@@ -285,7 +285,6 @@ impl Expr {
         )
     }
 
-
     pub fn invoke_worker_function(
         lhs: Expr,
         function_name: String,
@@ -633,7 +632,6 @@ impl Expr {
             | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type)
             | Expr::Invoke { inferred_type, .. } => inferred_type.clone(),
-
         }
     }
 

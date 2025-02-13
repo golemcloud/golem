@@ -134,7 +134,7 @@ impl ParsedFunctionSite {
     }
 }
 
-#[derive(Debug,  Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum DynamicParsedFunctionReference {
     Function {
         function: String,

@@ -1,7 +1,7 @@
-use combine::{many1, ParseError, Parser};
-use combine::parser::char::{alpha_num, char as char_};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::RibParseError;
+use combine::parser::char::{alpha_num, char as char_};
+use combine::{many1, ParseError, Parser};
 
 pub fn generic_type_parameter<Input>() -> impl Parser<Input, Output = GenericTypeParameter>
 where
@@ -18,7 +18,7 @@ where
             .or(char_(':')) // Colon
             .or(char_('/')),
     )
-        .map(|chars: Vec<char>| GenericTypeParameter {
-            value: chars.into_iter().collect(),
-        })
+    .map(|chars: Vec<char>| GenericTypeParameter {
+        value: chars.into_iter().collect(),
+    })
 }

@@ -15,12 +15,12 @@
 pub(crate) use flatten::*;
 mod flatten;
 mod unification;
+use crate::instance_type::InstanceType;
 use crate::TypeName;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use crate::instance_type::InstanceType;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum InferredType {

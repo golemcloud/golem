@@ -131,12 +131,11 @@ mod internal {
             },
         )?;
 
-        let registry_value = type_registry
-            .types
-            .get(&registry_key)
-            .ok_or(FunctionCallTypeError::InvalidFunctionCall {
+        let registry_value = type_registry.types.get(&registry_key).ok_or(
+            FunctionCallTypeError::InvalidFunctionCall {
                 function_call_name: call_type.to_string(),
-            })?;
+            },
+        )?;
 
         let expected_arg_types = registry_value.argument_types();
 
