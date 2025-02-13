@@ -1974,7 +1974,7 @@ mod interpreter_tests {
         "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+                internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2007,7 +2007,7 @@ mod interpreter_tests {
             );
 
             let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+                internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2041,7 +2041,7 @@ mod interpreter_tests {
             );
 
             let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+                internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2062,7 +2062,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+                internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2089,7 +2089,7 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let component_metadata =
-                internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+                internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2115,7 +2115,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2152,7 +2152,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2171,7 +2171,7 @@ mod interpreter_tests {
         "#;
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2206,7 +2206,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2222,7 +2222,7 @@ mod interpreter_tests {
            "success"
         "#;
             let expr = Expr::from_text(expr).unwrap();
-            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let component_metadata = internal::get_metadata_with_resource_without_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2233,17 +2233,41 @@ mod interpreter_tests {
         }
     }
 
+    mod first_class_worker_tests {
+        use test_r::test;
+        use golem_wasm_rpc::IntoValueAndType;
+        use crate::{compiler, Expr};
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal::static_test_interpreter;
+
+        #[test]
+        async fn test_first_class_worker_1() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.foo("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter = static_test_interpreter(
+                &"success".into_value_and_type(),
+                None
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+    }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{RibFunctionInvoke, RibInput};
-        use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
-            unit_case, variant,
-        };
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
-        };
+        use golem_wasm_ast::analysis::analysed_type::{case, f32, field, handle, list, r#enum, record, result, s32, str, tuple, u32, u64, unit_case, variant};
+        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair};
         use golem_wasm_rpc::{Value, ValueAndType};
         use std::sync::Arc;
 
@@ -2327,27 +2351,48 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_resource_with_parameters(
+        pub(crate) fn get_metadata_with_resource_with_params(
         ) -> Vec<AnalysedExport> {
-            get_shopping_cart_metadata_with_cart_resource(vec![AnalysedFunctionParameter {
+            get_metadata_with_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: str(),
             }])
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_raw_resource() -> Vec<AnalysedExport> {
-            get_shopping_cart_metadata_with_cart_resource(vec![])
+        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<AnalysedExport> {
+            get_metadata_with_resource(vec![])
         }
 
-        fn get_shopping_cart_metadata_with_cart_resource(
-            constructor_parameters: Vec<AnalysedFunctionParameter>,
+        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+            let analysed_function = AnalysedFunction {
+                name: "foo".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            let analysed_export = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![analysed_function],
+            });
+
+            vec![analysed_export]
+        }
+
+        fn get_metadata_with_resource(
+            resource_constructor_params: Vec<AnalysedFunctionParameter>,
         ) -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
                     AnalysedFunction {
                         name: "[constructor]cart".to_string(),
-                        parameters: constructor_parameters,
+                        parameters: resource_constructor_params,
                         results: vec![AnalysedFunctionResult {
                             name: None,
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),

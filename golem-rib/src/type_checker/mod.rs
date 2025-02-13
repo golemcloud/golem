@@ -52,7 +52,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -76,7 +76,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -93,7 +93,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -110,7 +110,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -127,7 +127,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -144,7 +144,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -161,7 +161,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -178,7 +178,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -194,7 +194,7 @@ mod type_check_tests {
             NameTypePair,
         };
 
-        pub(crate) fn get_metadata_record() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_record_input_params() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {

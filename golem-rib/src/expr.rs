@@ -641,9 +641,10 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        // Making sure instance calls are inferred
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.check_types(function_type_registry)
