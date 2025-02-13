@@ -141,7 +141,7 @@ mod json {
         type RawElementValueType = Self;
 
         fn name() -> Cow<'static, str> {
-            "ValueAndType".into()
+            "ValueAndOptionalType".into()
         }
 
         fn schema_ref() -> MetaSchemaRef {
