@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::DynamicParsedFunctionName;
+use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -20,8 +20,19 @@ pub enum CallType {
     Function(DynamicParsedFunctionName),
     VariantConstructor(String),
     EnumConstructor(String),
+    InstanceCreation(InstanceCreationType)
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum InstanceCreationType {
+    Ephemeral {
+        component_id: String
+    },
+    Durable {
+        worker_name: Expr, // golem-rib doesn't depend on golem-common
+        component_id: String // golem-rib doesn't depend on golem-common
+    }
+}
 
 impl CallType {
     pub fn is_resource_method(&self) -> bool {

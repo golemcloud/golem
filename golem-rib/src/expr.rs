@@ -678,7 +678,7 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_inference::infer_call_arguments_type(self, function_type_registry)
+        type_inference::infer_function_call_type(self, function_type_registry)
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {

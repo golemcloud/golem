@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::Expr;
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
+use crate::call_type::CallType;
+use crate::instance_type::InstanceType;
 
-pub fn infer_call_arguments_type(
+// Resolving function arguments, return type etc based on function type registry
+// If the call was for creating a worker instance, that will be handled too.
+pub fn infer_function_call_type(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
@@ -24,13 +28,31 @@ pub fn infer_call_arguments_type(
     queue.push_back(expr);
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call(parsed_fn_name, args, inferred_type) => {
-                internal::resolve_call_argument_types(
-                    parsed_fn_name,
-                    function_type_registry,
-                    args,
-                    inferred_type,
-                )?;
+            // We discard the generic parameter when identifying instance creation as we think the context of Rib doesn't deal with packages across components to identify which component, as of now
+            // In a component metadata, all we infer is the list of functions and it can be a mix of different package names and interfaces. Example:
+            // Exports:
+            //   app:component-b-exports/app-component-b-api.{add}(value: u64) // Function that's part of the main package app:component-b-exports (which in actual WIT is app:component-b) and interface called api
+            //   app:component-b-exports/app-component-b-api.{get}() -> u64 // Function that's part of the main package app:component-b-exports (which in actual WIT is app:component-b) and interface called api
+            //   wasi:clocks/monotonic-clock@0.2.0.{now}() -> u64 // Function from a different package-interface
+            //   wasi:clocks/monotonic-clock@0.2.0.{resolution}() -> u64 // Function from a different package-interface
+            //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-instant}(when: u64) -> handle<0> // Function from a different package-interface
+            //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-duration}(when: u64) -> handle<0> // Function from a different package-interface
+            //   app:component-b-exports/app-component-b-inline-functions.{run}() -> u64 // A top level function but part of a package and a generated interface
+            Expr::Call(call_type, _, args, inferred_type) => {
+
+                let instance_creation_details = internal::get_instance_creation_details(call_type, args.clone());
+                // We change the call_type to instance creation which hardly does anything during interpretation
+                if let Some(instance_creation_details) = instance_creation_details {
+                    *call_type = CallType::InstanceCreation(instance_creation_details);
+                    let new_instance_type = InstanceType::
+                } else {
+                    internal::resolve_call_argument_types(
+                        call_type,
+                        function_type_registry,
+                        args,
+                        inferred_type,
+                    )?;
+                }
             }
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
@@ -40,14 +62,49 @@ pub fn infer_call_arguments_type(
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::kind::GetTypeKind;
-    use crate::{
-        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey,
-        RegistryValue,
-    };
+    use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, ParsedFunctionReference, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
+    use crate::instance_type::InstanceType;
+
+    pub(crate) fn get_instance_type(instance_creation_details: &InstanceCreationType, function_type_registry: FunctionTypeRegistry) {
+        InstanceType::from()
+    }
+
+    pub(crate) fn get_instance_creation_details(call_type: &CallType, args: Vec<Expr>) -> Option<InstanceCreationType> {
+        match call_type {
+            CallType::Function(function_name) => {
+                let function_name = function_name.to_parsed_function_name().function;
+                match function_name {
+                    ParsedFunctionReference::Function {
+                        function
+                    } if function == "instance" => {
+                        let optional_worker_name_expression = args.get(0);
+                        match optional_worker_name_expression {
+                            None => {
+                                Some(InstanceCreationType::Ephemeral {
+                                    component_id: "component_id_to_be_provided".to_string() // TODO: This is a placeholder
+                                })
+                            }
+                            Some(worker_name_expr) => {
+                                Some(InstanceCreationType::Durable {
+                                    worker_name: worker_name_expr.clone(),
+                                    component_id: "component_id_to_be_provided".to_string() // TODO: This is a placeholder
+                                })
+                            }
+                        }
+                    }
+
+                    _ => None
+                }
+            },
+            CallType::VariantConstructor(_) => None,
+            CallType::EnumConstructor(_) => {}
+            CallType::InstanceCreation(instance_creation_type) => Some(instance_creation_type.clone())
+        }
+    }
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
@@ -58,6 +115,7 @@ mod internal {
         let cloned = call_type.clone();
 
         match call_type {
+            CallType::InstanceCreation(_) => Ok(()), // There is nothing to infer
             CallType::Function(dynamic_parsed_function_name) => {
                 let resource_constructor_registry_key =
                     RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
