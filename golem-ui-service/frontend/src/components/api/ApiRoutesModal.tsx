@@ -55,35 +55,35 @@ const getContextVariables = (
   pathParams: Record<string, { name: string; type: string }>,
   suggestions: Array<string> = [],
 ) => [
-  {
-    name: "request",
-    type: "Record",
-    documentation: "The incoming HTTP request object.",
-    fields: {
-      path: {
-        name: "path",
-        type: "Record",
-        documentation: "URL path parameters",
-        fields: pathParams,
-      },
-      body: {
-        name: "body",
-        type: "any",
-        documentation: "The request body content",
-      },
-      headers: {
-        name: "headers",
-        type: "Record",
-        documentation: "HTTP request headers",
+    {
+      name: "request",
+      type: "Record",
+      documentation: "The incoming HTTP request object.",
+      fields: {
+        path: {
+          name: "path",
+          type: "Record",
+          documentation: "URL path parameters",
+          fields: pathParams,
+        },
+        body: {
+          name: "body",
+          type: "any",
+          documentation: "The request body content",
+        },
+        headers: {
+          name: "headers",
+          type: "Record",
+          documentation: "HTTP request headers",
+        },
       },
     },
-  },
-  ...suggestions.map((s) => ({
-    name: s,
-    type: "string",
-    documentation: "Suggestion",
-  })),
-];
+    ...suggestions.map((s) => ({
+      name: s,
+      type: "string",
+      documentation: "Suggestion",
+    })),
+  ];
 
 interface RouteModalProps {
   isOpen: boolean;
@@ -153,7 +153,12 @@ export const RouteModal = ({
   const [responseScript, setResponseScript] = useState("");
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [bindingType, setBindingType] = useState("default");
-  const [corsHeaders, setCorsHeaders] = useState<Record<string, string>>({});
+  const [corsHeaders, setCorsHeaders] = useState<Record<string, string>>({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+    "Access-Control-Max-Age": "86400",
+  });
   const [contextVariables, setContextVariables] = useState(
     getContextVariables(getPathParams("")),
   );
@@ -195,9 +200,9 @@ export const RouteModal = ({
         components?.find(
           (c) =>
             c.versionedComponentId.componentId ===
-              existingRoute.binding.componentId.componentId &&
+            existingRoute.binding.componentId.componentId &&
             c.versionedComponentId.version ===
-              existingRoute.binding.componentId.version,
+            existingRoute.binding.componentId.version,
         ),
       );
       setSelectedVersion(existingRoute.binding.componentId.version);
@@ -239,7 +244,7 @@ export const RouteModal = ({
     const newErrors: Record<string, boolean> = {};
 
     if (!path) newErrors.path = true;
-    if (!selectedComponent) newErrors.component = true;
+    if (!selectedComponent && bindingType !== "cors-preflight") { newErrors.component = true; }
     // if (!workerNameScript) newErrors.worker = true;
 
     setErrors(newErrors);
@@ -256,8 +261,8 @@ export const RouteModal = ({
     if (bindingType === "cors-preflight") {
       finalResponse = `{
   ${Object.entries(corsHeaders)
-    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-    .join(",\n  ")}
+          .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+          .join(",\n  ")}
 }`;
     }
 
@@ -265,7 +270,7 @@ export const RouteModal = ({
       method,
       path,
       binding: {
-        componentId: {
+        componentId: bindingType == "cors-preflight" ? null : {
           componentId: selectedComponent!.versionedComponentId.componentId,
           version: selectedVersion,
         },
@@ -275,13 +280,14 @@ export const RouteModal = ({
       },
     };
 
+
     onSave(route as Route);
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed overflow-y-scroll inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+    <div className="-top-8 fixed overflow-y-scroll inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
       <div className="bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85">
         <div className="flex justify-between items-start mb-6">
           <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -345,7 +351,7 @@ export const RouteModal = ({
             </div>
           </div>
 
-          <div>
+          {bindingType !== "cors-preflight" && <div>
             <label className="block text-sm font-medium mb-1">
               Component <span className="text-red-500">*</span>
             </label>
@@ -374,7 +380,7 @@ export const RouteModal = ({
               placeholder="Select component"
               error={errors.component}
             />
-          </div>
+          </div>}
 
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -396,9 +402,8 @@ export const RouteModal = ({
                   onClick={() => setUseWorkerName(!useWorkerName)}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors 
                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary 
-                   focus-visible:ring-offset-2 ${
-                     useWorkerName ? "bg-primary" : "bg-muted"
-                   }`}
+                   focus-visible:ring-offset-2 ${useWorkerName ? "bg-primary" : "bg-muted"
+                    }`}
                 >
                   <span
                     className={`inline-block h-4 w-4 rounded-full bg-white transition-transform 

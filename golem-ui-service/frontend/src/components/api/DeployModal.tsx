@@ -16,7 +16,7 @@ export const DeployModal = ({
   onClose,
   apiDefinition,
 }: DeployModalProps) => {
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState("localhost:9006");
   const [subdomain, setSubdomain] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -138,7 +138,7 @@ export const DeployModal = ({
             <div className="bg-gray-900 rounded-lg p-3 font-mono text-sm">
               <div className="text-muted-foreground mb-1">Preview URL:</div>
               <div className="text-green-400">
-                https://{subdomain ? `${subdomain}.` : ""}
+                http://{subdomain ? `${subdomain}.` : ""}
                 {host}
               </div>
             </div>
