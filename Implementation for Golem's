@@ -1,0 +1,75 @@
+To implement the new feature allowing Golem workers to interact with gRPC and OpenAPI services in a type-safe manner, the following solutions are proposed:
+
+1. Schema Capture and Dependency Management
+Solution: Modify the Golem application manifest file to support new dependency types for gRPC (Protobuf) and OpenAPI specifications.
+Implementation:
+Extend the YAML parser to accept new fields for grpc and openapi dependencies.
+Capture the Protobuf and OpenAPI schemas during component creation and updates using golem-cli.
+Example manifest addition:
+dependencies:
+         - type: grpc
+           name: TodoService
+           version: 1.0.0
+           path: ./protos/todo.proto
+         - type: openapi
+           name: TodoAPI
+           version: 1.0.0
+           path: ./schemas/todo-api.yaml
+WIT Generation
+Solution: Create a tool to generate WIT definitions from Protobuf and OpenAPI specifications.
+Implementation:
+Develop a module that uses the wasm-rpc project to translate Protobuf and OpenAPI schemas into WIT definitions.
+Ensure that the generated WIT is idiomatic and maintains the structure of the original schemas.
+Example of generated WIT for a Protobuf message:
+record todo-object {
+           user-id: string,
+           id: string,
+           task: string,
+       }
+Dynamic Stub Generation
+Solution: Implement dynamic stubs in the worker-executor to handle gRPC and OpenAPI calls.
+Implementation:
+Modify the worker-executor to dynamically generate and link stubs based on the generated WIT definitions.
+Ensure that the stubs are implemented in Rust and can handle the API calls with appropriate metadata.
+Example of dynamic stub implementation:
+fn create_todo_stub(request: todo-add-request) -> result<todo-add-response, todo-error> {
+           // Implementation for making gRPC call to TodoService
+       }
+Error Handling and Durability
+Solution: Create a robust error handling mechanism for API calls.
+Implementation:
+Design a generalized error type that captures various error scenarios (e.g., unauthorized, not-found).
+Ensure that durability is maintained for API calls using the existing mechanisms in the worker-executor.
+Example error type:
+variant todo-error {
+           not-found,
+           unauthorized,
+           invalid-input,
+           internal-error,
+       }
+Testing Framework
+Solution: Develop a comprehensive testing framework to validate the functionality.
+Implementation:
+Create unit tests for individual components, integration tests for the interaction between golem-cli and wasm-rpc, and system tests for end-to-end scenarios.
+Include automated tests against real gRPC and OpenAPI APIs to ensure the correctness of the generated WIT and the functionality of the dynamically added stubs.
+Example unit test:
+#[test]
+       fn test_create_todo() {
+           let request = todo-add-request { user-id: "user123", task: "Finish homework" };
+           let response = create_todo_stub(request);
+           assert!(response.is_ok());
+       }
+Documentation and Developer Support
+Solution: Provide clear documentation to assist developers in using the new feature.
+Implementation:
+Write comprehensive guides on how to add gRPC and OpenAPI dependencies, how to use the generated WIT, and how to implement dynamic stubs.
+Ensure that examples are included for common use cases.
+
+
+
+
+
+
+
+
+
