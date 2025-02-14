@@ -151,7 +151,8 @@ impl DockerWorkerService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
-            ).await,
+            )
+            .await,
         }
     }
 }

@@ -106,11 +106,7 @@ pub trait ComponentService {
                     .result
                     .ok_or_else(|| anyhow!("get_components: no result"))?
                 {
-                    get_components_response::Result::Success(result) => Ok(result
-                        .components
-                        .into_iter()
-                        .map(|component| component.try_into().unwrap())
-                        .collect()),
+                    get_components_response::Result::Success(result) => Ok(result.components),
                     get_components_response::Result::Error(error) => Err(anyhow!("{error:?}")),
                 }
             }

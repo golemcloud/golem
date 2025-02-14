@@ -1093,7 +1093,7 @@ pub trait WorkerService {
 
     async fn list_api_deployments(
         &self,
-        api_definition_id: &str,
+        api_definition_id: Option<&str>,
     ) -> crate::Result<Vec<ApiDeployment>> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
@@ -1618,8 +1618,7 @@ fn http_api_definition_to_grpc(
                     binding: Some(GatewayBinding {
                         component: route.binding.component_id.map(|versioned_component_id| {
                             VersionedComponentId {
-                                component_id: ComponentId(versioned_component_id.component_id)
-                                    .into(),
+                                component_id: ComponentId(versioned_component_id.component_id),
                                 version: versioned_component_id.version,
                             }
                             .into()
