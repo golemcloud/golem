@@ -17,7 +17,7 @@ interface WorkerLogEntry {
     type: string;
     timestamp: string;
     component_version?: number;
-    args?: any[];
+    args?: unknown[];
     env?: Record<string, string>;
     initial_active_plugins?: Array<{
       plugin_name: string;
@@ -39,18 +39,18 @@ interface WorkerLogEntry {
       typ: {
         type: string;
       };
-      value: any;
+      value: string;
     }>;
     response?: {
       typ: {
         err?: {
           cases: Array<{
             name: string;
-            typ: any;
+            typ: string;
           }>;
         };
       };
-      value: any;
+      value: string;
     };
   };
 }
@@ -61,19 +61,15 @@ interface OplogCursor {
 }
 
 // Custom debounce function
-function debounce(func: (...args: any[]) => void, delay: number) {
+function debounce(func: (...args: string[]) => void, delay: number) {
   let timeoutId: NodeJS.Timeout;
-  return function (...args: any[]) {
+  return function (...args: string[]) {
     clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func.apply(null, args), delay);
+    timeoutId = setTimeout(() => func(...args), delay);
   };
 }
 
-export default function WorkerLogs({
-  lastClearTimeStamp,
-}: {
-  lastClearTimeStamp: Date | null;
-}) {
+export default function WorkerLogs() {
   const { compId: componentId } = useCustomParam();
   const { id: workerName } = useCustomParam();
 
@@ -239,11 +235,12 @@ export default function WorkerLogs({
                     Array.isArray(entry.entry.request) && (
                       <>
                         {"          "}request:
-                        {entry.entry.request.map((req, idx) => (
+                        {/* {(entry.entry.request).map((req, idx) => (
                           <div key={idx}>
                             {"            "}- {req.value} (type: {req.typ.type})
                           </div>
-                        ))}
+                        ))} */}
+                        {JSON.stringify(entry.entry.request)}
                         {"\n"}
                       </>
                     )}

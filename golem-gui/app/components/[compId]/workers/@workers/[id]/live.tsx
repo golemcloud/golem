@@ -107,7 +107,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
             messages={messages}
           />
         )}
-        {activeTab === 2 && <Logs lastClearTimeStamp = {lastClearTimeStamp}/>}
+        {activeTab === 2 && <Logs/>}
       </Box>
     </Box>
   );
