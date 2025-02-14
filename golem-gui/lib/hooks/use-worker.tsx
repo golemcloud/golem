@@ -216,25 +216,35 @@ export function useWorker(componentId: string, workerName: string) {
   };
 }
 
+async function fetchLastIndex(componentId: string, workerName: string) {
+  const initialEndpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}/oplog?count=0`;
+  const response = await fetcher(initialEndpoint);
+  console.log("data", response);
+  return response.data.lastIndex;
+}
+
 export function useWorkerLogs(
   componentId: string,
   workerName: string,
   params: OplogQueryParams
 ) {
+  const [lastIndex, setLastIndex] = useState(0);
+  useEffect(() => {
+    fetchLastIndex(componentId, workerName)
+      .then((data) => setLastIndex(Number(data)))
+      .catch((error) => console.error('Error fetching last index:', error));
+  }, []);
+
   const queryString = new URLSearchParams({
     count: params.count.toString(),
-    ...(params.from ? { from: params.from.toString() } : {}),
-    ...(params.cursor ? { next: JSON.stringify(params.cursor) } : {}), // Serialize cursor as JSON
-    ...(params.query ? { query: params.query } : {}),
+    ...(params.cursor ? { next: JSON.stringify(params.cursor) } : {}),
+    ...(params.query ? { query: params.query } : {from: (lastIndex - params.count>0 ? lastIndex - params.count:0).toString()}),
   }).toString();
 
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}/oplog?${queryString}`;
   const { data, error, isLoading } = useSWR(endpoint, fetcher);
-
-  const logs = data?.data || [];
-
   return {
-    logs,
+    logs: data?.data ?? [],
     error: error || data?.error,
     isLoading,
   };
