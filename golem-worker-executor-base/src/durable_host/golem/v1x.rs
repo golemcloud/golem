@@ -17,6 +17,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem::rpc::types::Uri;
 use crate::preview2::golem_api_0_2_x;
 use crate::preview2::golem_api_0_2_x::host::GetWorkers;
 use crate::preview2::golem_api_1_x;
@@ -255,6 +256,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+
+
+    async fn resolve_component_id(
+        &mut self,
+        component_slug: String
+    ) -> anyhow::Result<Option<ComponentId>> { todo!() }
+
+    async fn resolve_worker_id(
+        &mut self,
+        component_slug: String,
+        worker_name: String
+    ) -> anyhow::Result<Option<WorkerId>> { todo!() }
+
+    async fn resolve_worker_id_strict(
+        &mut self,
+        component_slug: String,
+        worker_name: String
+    ) -> anyhow::Result<Option<WorkerId>> { todo!() }
+
+    async fn worker_uri(
+        &mut self,
+        worker_id: WorkerId
+    ) -> anyhow::Result<Uri> { todo!() }
 }
 
 #[async_trait]

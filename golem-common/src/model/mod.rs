@@ -49,6 +49,7 @@ pub mod plugin;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
+pub mod component_slug;
 
 #[cfg(feature = "poem")]
 mod poem;
