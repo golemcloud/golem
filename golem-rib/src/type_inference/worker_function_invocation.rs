@@ -1,5 +1,5 @@
 use crate::type_parameter::TypeParameter;
-use crate::{Expr, InferredType};
+use crate::{Expr, InferredType, TypeName};
 use std::collections::VecDeque;
 
 pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
@@ -14,8 +14,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             args, ..
         } = expr
         {
-            // There is no guarantee lhs is inferred during this time
-            let inferred_type = lhs.clone().inferred_type(); // By this time we assume we correctly tag the inferred type of lhs to be InstanceType
+            // This should be an instance type if instance_type_binding phase has been run.
+            let inferred_type = lhs.clone().inferred_type();
 
             match inferred_type {
                 InferredType::Instance { instance_type } => {
@@ -34,7 +34,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
                 // This would
-                _ => {}
+                inferred_type => {
+                    return Err(format!(
+                        "Invalid worker function invoke. Expected {} to be an instance type, found {}",
+                        lhs, TypeName::try_from(inferred_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
+                    ));
+                }
             }
         }
         expr.visit_children_mut_bottom_up(&mut queue);

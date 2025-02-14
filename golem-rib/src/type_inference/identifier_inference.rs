@@ -66,7 +66,6 @@ mod internal {
         while let Some(expr) = queue.pop_front() {
             match expr {
                 Expr::Let(variable_id, _, expr, _) => {
-                    dbg!(variable_id.clone());
                     if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                         expr.add_infer_type_mut(inferred_type);
                     }

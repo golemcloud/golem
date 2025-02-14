@@ -441,6 +441,10 @@ impl Expr {
         Ok(result_expr)
     }
 
+    pub fn bind_instance_types(&mut self) {
+        type_inference::bind_instance_types(self)
+    }
+
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
@@ -641,10 +645,10 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
-        // Making sure instance calls are inferred
+        self.bind_instance_types();
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.check_types(function_type_registry)
