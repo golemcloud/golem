@@ -311,7 +311,10 @@ export interface OpLog {
 export interface OplogQueryParams {
   from?: number;
   count: number;
-  cursor?: string;
+  cursor?: {
+    next_oplog_index: number;
+    current_component_version: number;
+  };
   query?: string;
 }
 
