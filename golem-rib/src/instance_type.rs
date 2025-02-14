@@ -79,7 +79,6 @@ impl InstanceType {
                     return Err(format!("Function '{}' not found.", function_name));
                 }
 
-                // Group functions by package name
                 let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
                     HashMap::new();
 
@@ -92,63 +91,11 @@ impl InstanceType {
 
                 match package_map.len() {
                     1 => {
-                        // Only one package, check if multiple interfaces exist
-                        let (_, interfaces) = package_map.into_iter().next().unwrap();
-                        if interfaces.len() == 1 {
-                            // Single package, single interface -> Return the function
-                            let (fqfn, ftype) = functions[0];
-                            Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            })
-                        } else {
-                            let mut interfaces = interfaces
-                                .into_iter()
-                                .filter_map(|iface| iface.map(|i| i.name))
-                                .collect::<Vec<_>>();
-
-                            interfaces.sort();
-
-                            // Multiple interfaces in the same package -> Ask for an interface name
-                            Err(format!(
-                                "Multiple interfaces contain function '{}'. Specify an interface name as type parameter from: {}",
-                                function_name,
-                                interfaces
-                                    .join(", ")
-                            ))
-                        }
+                        let interfaces = package_map.values().flatten().cloned().collect();
+                        handle_single_package_multiple_interfaces(interfaces, functions, function_name)
                     }
                     _ => {
-                        // Multiple packages -> Ask for package first
-                        let mut error_msg = format!(
-                            "Function '{}' exists in multiple packages. Specify a package name as type parameter from: ",
-                            function_name
-                        );
-
-                        let mut package_interface_list = package_map
-                            .into_iter()
-                            .filter_map(|(pkg, interfaces)| {
-                                pkg.map(|p| {
-                                    let mut interface_list = interfaces
-                                        .into_iter()
-                                        .filter_map(|iface| iface.map(|i| i.name))
-                                        .collect::<Vec<_>>();
-
-                                    interface_list.sort();
-
-                                    if interface_list.is_empty() {
-                                        format!("{}", p)
-                                    } else {
-                                        format!("{} (interfaces: {})", p, interface_list.join(", "))
-                                    }
-                                })
-                            })
-                            .collect::<Vec<_>>();
-
-                        package_interface_list.sort();
-
-                        error_msg.push_str(&package_interface_list.join(", "));
-                        Err(error_msg)
+                        handle_multiple_packages_multiple_interfaces(function_name, package_map)
                     }
                 }
             }
@@ -292,4 +239,62 @@ impl Display for FullyQualifiedFunctionName {
 pub struct FunctionType {
     parameter_types: Vec<InferredType>,
     return_type: Vec<InferredType>,
+}
+
+fn handle_single_package_multiple_interfaces(interfaces: HashSet<Option<InterfaceName>>, functions: Vec<&(FullyQualifiedFunctionName, FunctionType)>, function_name: &str) -> Result<Function, String> {
+    if interfaces.len() == 1 {
+        // Single package, single interface -> Return the function
+        let (fqfn, ftype) = functions[0];
+        Ok(Function {
+            function_name: fqfn.clone(),
+            function_type: ftype.clone(),
+        })
+    } else {
+        let mut interfaces = interfaces
+            .into_iter()
+            .filter_map(|iface| iface.map(|i| i.name))
+            .collect::<Vec<_>>();
+
+        interfaces.sort();
+
+        // Multiple interfaces in the same package -> Ask for an interface name
+        Err(format!(
+            "Multiple interfaces contain function '{}'. Specify an interface name as type parameter from: {}",
+            function_name,
+            interfaces
+                .join(", ")
+        ))
+    }
+}
+
+fn handle_multiple_packages_multiple_interfaces(function_name: &str, package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>) -> Result<Function, String> {
+    let mut error_msg = format!(
+        "Function '{}' exists in multiple packages. Specify a package name as type parameter from: ",
+        function_name
+    );
+
+    let mut package_interface_list = package_map
+        .into_iter()
+        .filter_map(|(pkg, interfaces)| {
+            pkg.map(|p| {
+                let mut interface_list = interfaces
+                    .into_iter()
+                    .filter_map(|iface| iface.map(|i| i.name))
+                    .collect::<Vec<_>>();
+
+                interface_list.sort();
+
+                if interface_list.is_empty() {
+                    format!("{}", p)
+                } else {
+                    format!("{} (interfaces: {})", p, interface_list.join(", "))
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    package_interface_list.sort();
+
+    error_msg.push_str(&package_interface_list.join(", "));
+    Err(error_msg)
 }

@@ -2389,6 +2389,46 @@ mod interpreter_tests {
                 "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
             );
         }
+
+        #[test]
+        async fn test_first_class_worker_9() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.qux[amazon:shopping-cart]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_10() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.qux[wasi:clocks]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;

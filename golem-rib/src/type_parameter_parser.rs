@@ -15,8 +15,8 @@ where
 {
     choice((
         attempt(fully_qualified_interface_name().map(TypeParameter::FullyQualifiedInterface)),
-        attempt(interface_name().map(TypeParameter::Interface)),
         attempt(package_name().map(TypeParameter::PackageName)),
+        attempt(interface_name().map(TypeParameter::Interface)),
     ))
 }
 
