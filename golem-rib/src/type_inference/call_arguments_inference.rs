@@ -42,50 +42,14 @@ pub fn infer_function_call_types(
 }
 
 mod internal {
-    use crate::call_type::{CallType, InstanceCreationType};
+    use crate::call_type::CallType;
     use crate::type_inference::kind::GetTypeKind;
     use crate::{
-        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType,
-        ParsedFunctionReference, RegistryKey, RegistryValue,
+        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey,
+        RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
-
-    pub(crate) fn get_instance_creation_details(
-        call_type: &CallType,
-        args: Vec<Expr>,
-    ) -> Option<InstanceCreationType> {
-        match call_type {
-            CallType::Function(function_name) => {
-                let function_name = function_name.to_parsed_function_name().function;
-                match function_name {
-                    ParsedFunctionReference::Function { function } if function == "instance" => {
-                        let optional_worker_name_expression = args.first();
-                        match optional_worker_name_expression {
-                            None => {
-                                Some(InstanceCreationType::Ephemeral {
-                                    component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
-                                })
-                            }
-                            Some(worker_name_expr) => {
-                                Some(InstanceCreationType::Durable {
-                                    worker_name: Box::new(worker_name_expr.clone()),
-                                    component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
-                                })
-                            }
-                        }
-                    }
-
-                    _ => None,
-                }
-            }
-            CallType::VariantConstructor(_) => None,
-            CallType::EnumConstructor(_) => None,
-            CallType::InstanceCreation(instance_creation_type) => {
-                Some(instance_creation_type.clone())
-            }
-        }
-    }
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,

@@ -14,10 +14,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Invoke {
                 lhs,
-                function_name,
-                generic_type_parameter,
                 args,
                 inferred_type,
+                ..
             } => {
                 queue.push_back(lhs);
                 for arg in args {

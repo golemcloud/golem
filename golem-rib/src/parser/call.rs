@@ -24,7 +24,6 @@ use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
-use poem_openapi::__private::poem::EndpointExt;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>

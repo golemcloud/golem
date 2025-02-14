@@ -92,11 +92,13 @@ impl InstanceType {
                 match package_map.len() {
                     1 => {
                         let interfaces = package_map.values().flatten().cloned().collect();
-                        handle_single_package_multiple_interfaces(interfaces, functions, function_name)
+                        handle_single_package_multiple_interfaces(
+                            interfaces,
+                            functions,
+                            function_name,
+                        )
                     }
-                    _ => {
-                        handle_multiple_packages_multiple_interfaces(function_name, package_map)
-                    }
+                    _ => handle_multiple_packages_multiple_interfaces(function_name, package_map),
                 }
             }
         }
@@ -241,7 +243,11 @@ pub struct FunctionType {
     return_type: Vec<InferredType>,
 }
 
-fn handle_single_package_multiple_interfaces(interfaces: HashSet<Option<InterfaceName>>, functions: Vec<&(FullyQualifiedFunctionName, FunctionType)>, function_name: &str) -> Result<Function, String> {
+fn handle_single_package_multiple_interfaces(
+    interfaces: HashSet<Option<InterfaceName>>,
+    functions: Vec<&(FullyQualifiedFunctionName, FunctionType)>,
+    function_name: &str,
+) -> Result<Function, String> {
     if interfaces.len() == 1 {
         // Single package, single interface -> Return the function
         let (fqfn, ftype) = functions[0];
@@ -267,7 +273,10 @@ fn handle_single_package_multiple_interfaces(interfaces: HashSet<Option<Interfac
     }
 }
 
-fn handle_multiple_packages_multiple_interfaces(function_name: &str, package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>) -> Result<Function, String> {
+fn handle_multiple_packages_multiple_interfaces(
+    function_name: &str,
+    package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>,
+) -> Result<Function, String> {
     let mut error_msg = format!(
         "Function '{}' exists in multiple packages. Specify a package name as type parameter from: ",
         function_name
