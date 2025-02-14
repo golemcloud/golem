@@ -27,6 +27,7 @@ pub trait ComponentResolver<ComponentOwner>: Send + Sync {
 
 pub struct DefaultComponentResolver;
 
+/// Only supports resolving components based on the component name.
 impl ComponentResolver<DefaultComponentOwner> for DefaultComponentResolver {
     fn resolve_component(&self, component_reference: String, context: DefaultComponentOwner) -> Result<Option<ComponentId>, GolemError> {
         todo!()
