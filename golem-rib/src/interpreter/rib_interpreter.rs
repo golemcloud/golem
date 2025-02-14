@@ -2238,7 +2238,6 @@ mod interpreter_tests {
         use golem_wasm_rpc::IntoValueAndType;
         use crate::{compiler, Expr};
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::interpreter::rib_interpreter::interpreter_tests::internal::static_test_interpreter;
 
         #[test]
         async fn test_first_class_worker_1() {
@@ -2252,7 +2251,7 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter = static_test_interpreter(
+            let mut rib_interpreter = internal::static_test_interpreter(
                 &"success".into_value_and_type(),
                 None
             );
@@ -2262,6 +2261,89 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
+        #[test]
+        async fn test_first_class_worker_2() {
+            let expr = r#"
+           let my_worker = instance("my-worker");
+           let result = my_worker.foo[api1]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                None
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_3() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.bar("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compilation_error,
+                "Multiple functions named 'bar' found. Conflicting interfaces. Specify any of the following type parameters: api1, api2.".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_worker_4() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.bar[api1]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                None
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_5() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.bar[api2]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                None
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
@@ -2364,7 +2446,7 @@ mod interpreter_tests {
         }
 
         pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
-            let analysed_function = AnalysedFunction {
+            let analysed_function_unique = AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "arg1".to_string(),
@@ -2376,12 +2458,29 @@ mod interpreter_tests {
                 }],
             };
 
-            let analysed_export = AnalysedExport::Instance(AnalysedInstance {
-                name: "golem:it/api".to_string(),
-                functions: vec![analysed_function],
+            let analysed_function_common = AnalysedFunction {
+                name: "bar".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api1".to_string(),
+                functions: vec![analysed_function_unique, analysed_function_common.clone()],
             });
 
-            vec![analysed_export]
+            let analysed_export2 =  AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api2".to_string(),
+                functions: vec![analysed_function_common],
+            });
+
+            vec![analysed_export1, analysed_export2]
         }
 
         fn get_metadata_with_resource(
@@ -2514,6 +2613,7 @@ mod interpreter_tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
+        // A simple interpreter that always return result_value regardless of the input
         pub(crate) fn static_test_interpreter(
             result_value: &ValueAndType,
             input: Option<RibInput>,

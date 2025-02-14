@@ -24,10 +24,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                         .map(|gtp| TypeParameter::from_str(&gtp.value))
                         .transpose()?;
 
-                    dbg!(function_name.clone());
                     let function =
                         instance_type.get_function(function_name, generic_type_parameter)?;
-                    dbg!(function.clone());
                     let function_name = function.dynamic_parsed_function_name()?;
 
                     let new_call = Expr::call(function_name, None, args.clone());

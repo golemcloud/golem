@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
@@ -77,14 +78,15 @@ impl InstanceType {
                 ))
             }
             None => {
-                let unique_packages: Vec<_> = functions
+                let unique_packages = functions
                     .iter()
-                    .filter_map(|(fqfn, _)| fqfn.package_name.as_ref())
-                    .collect();
-                let unique_interfaces: Vec<_> = functions
+                    .filter_map(|(fqfn, _)| if fqfn.function_name == function_name { fqfn.package_name.as_ref() } else { None })
+                    .collect::<HashSet<_>>();
+
+                let unique_interfaces = functions
                     .iter()
-                    .filter_map(|(fqfn, _)| fqfn.interface_name.as_ref())
-                    .collect();
+                    .filter_map(|(fqfn, _)| if fqfn.function_name == function_name { fqfn.interface_name.as_ref() } else { None })
+                    .collect::<HashSet<_>>();
 
                 match functions.len() {
                     0 => Err(format!("Function '{}' not found.", function_name)),
@@ -94,36 +96,36 @@ impl InstanceType {
                     }),
                     _ => {
                         let mut error_msg = format!(
-                            "Multiple functions named '{}' found. Please specify a type parameter.",
+                            "Multiple functions named '{}' found.",
                             function_name
                         );
                         if unique_packages.len() > 1 && unique_interfaces.len() > 1 {
                             error_msg.push_str(&format!(
-                                " Conflicting locations: {:?}.",
+                                " Conflicting locations. Specify any of the following type parameters {}.",
                                 unique_packages
                                     .iter()
                                     .flat_map(|pkg| {
                                         unique_interfaces.iter().map(move |iface| {
-                                            format!("{}::{}", pkg.package_name, iface.name)
+                                            format!("{}/{}", pkg, iface.name)
                                         })
                                     })
-                                    .collect::<Vec<_>>()
+                                    .collect::<Vec<_>>().join(", ")
                             ));
                         } else if unique_packages.len() > 1 {
                             error_msg.push_str(&format!(
-                                " Conflicting packages: {:?}.",
+                                " Conflicting packages. Specify any of the following type parameteres {}.",
                                 unique_packages
                                     .iter()
-                                    .map(|pkg| format!("{}", pkg.package_name))
-                                    .collect::<Vec<_>>()
+                                    .map(|pkg| format!("{}", pkg))
+                                    .collect::<Vec<_>>().join(", ")
                             ));
                         } else if unique_interfaces.len() > 1 {
                             error_msg.push_str(&format!(
-                                " Conflicting interfaces: {:?}.",
+                                " Conflicting interfaces. Specify any of the following type parameters: {}.",
                                 unique_interfaces
-                                    .iter()
-                                    .map(|iface| iface.name.clone())
-                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .map(|iface| iface.to_string())
+                                    .collect::<Vec<_>>().join(", ")
                             ));
                         }
                         Err(error_msg)
@@ -172,7 +174,6 @@ pub struct Function {
 impl Function {
     pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
         let name = self.function_name.to_string();
-        dbg!(name.clone());
         DynamicParsedFunctionName::parse(name)
     }
 }
