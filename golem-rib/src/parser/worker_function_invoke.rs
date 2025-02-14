@@ -4,7 +4,7 @@ use crate::parser::identifier::identifier;
 use crate::parser::RibParseError;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
-use combine::{attempt, between, optional, sep_by, ParseError, Parser};
+use combine::{attempt, ParseError, Parser};
 use poem_openapi::__private::poem::EndpointExt;
 
 pub fn worker_function_invoke<Input>() -> impl Parser<Input, Output = Expr>

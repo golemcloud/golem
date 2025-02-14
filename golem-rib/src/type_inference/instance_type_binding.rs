@@ -26,11 +26,8 @@ pub fn bind_instance_types(expr: &mut Expr) {
     while let Some(expr) = queue.pop_front() {
         match expr {
             Expr::Let(variable_id, _, expr, _) => {
-                match expr.inferred_type() {
-                    InferredType::Instance { instance_type } => {
-                        instance_variables.insert(variable_id.clone(), instance_type);
-                    }
-                    _ => {}
+                if let InferredType::Instance { instance_type } = expr.inferred_type() {
+                    instance_variables.insert(variable_id.clone(), instance_type);
                 }
 
                 queue.push_front(expr)

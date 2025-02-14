@@ -1,7 +1,5 @@
 use crate::parser::RibParseError;
 use crate::type_parameter::TypeParameter;
-use combine::error::StreamError;
-use combine::parser::char::char;
 use combine::stream::Stream;
 use combine::{attempt, choice, ParseError, Parser};
 use internal::*;

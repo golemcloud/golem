@@ -76,13 +76,13 @@ pub fn identify_instance_creation(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::kind::GetTypeKind;
+    
     use crate::{
-        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType,
-        ParsedFunctionReference, RegistryKey, RegistryValue,
+        Expr,
+        ParsedFunctionReference,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
-    use std::fmt::Display;
+    
+    
 
     pub(crate) fn get_instance_creation_details(
         call_type: &CallType,
@@ -93,7 +93,7 @@ mod internal {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
-                        let optional_worker_name_expression = args.get(0);
+                        let optional_worker_name_expression = args.first();
                         match optional_worker_name_expression {
                             None => {
                                 Some(InstanceCreationType::Ephemeral {

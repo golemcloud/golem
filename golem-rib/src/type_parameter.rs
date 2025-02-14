@@ -1,8 +1,7 @@
 use crate::type_parameter_parser::type_parameter;
 use bincode::{Decode, Encode};
-use combine::parser::char::spaces;
 use combine::stream::position;
-use combine::{eof, EasyParser};
+use combine::EasyParser;
 use std::fmt;
 use std::fmt::Display;
 

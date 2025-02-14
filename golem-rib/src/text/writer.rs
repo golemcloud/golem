@@ -386,10 +386,10 @@ impl<W: Write> Writer<W> {
             }
 
             Expr::Invoke {
-                lhs,
-                function_name,
-                generic_type_parameter,
-                inferred_type,
+                
+                
+                
+                
                 ..
             } => {
                 todo!("Invoke write back not yet supported")

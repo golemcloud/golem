@@ -1,6 +1,5 @@
 use crate::type_checker::Path;
 use crate::{Expr, InferredType, VariableId};
-use std::collections::VecDeque;
 
 // The goal is to be able to specify the types associated with an identifier.
 // i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`

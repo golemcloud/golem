@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, InferredType};
+use crate::Expr;
 use std::collections::VecDeque;
 
 // Resolving function arguments and return types based on function type registry
@@ -60,7 +60,7 @@ mod internal {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
-                        let optional_worker_name_expression = args.get(0);
+                        let optional_worker_name_expression = args.first();
                         match optional_worker_name_expression {
                             None => {
                                 Some(InstanceCreationType::Ephemeral {
@@ -112,7 +112,7 @@ mod internal {
                     None => {
                         let registry_key = RegistryKey::from_call_type(&cloned).ok_or(format!(
                             "Invalid function call: `{}`",
-                            dynamic_parsed_function_name.to_string()
+                            dynamic_parsed_function_name
                         ))?;
 
                         infer_args_and_result_type(

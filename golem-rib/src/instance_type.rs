@@ -3,8 +3,6 @@ use crate::type_parameter::InterfaceName;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
 };
-use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::HashSet;
 use std::fmt::Display;
 
@@ -268,15 +266,9 @@ pub struct FullyQualifiedFunctionName {
 
 impl Display for FullyQualifiedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.package_name {
-            Some(package_name) => write!(f, "{}", package_name)?,
-            None => {}
-        }
+        if let Some(package_name) = &self.package_name { write!(f, "{}", package_name)? }
 
-        match &self.interface_name {
-            Some(interface_name) => write!(f, "/{}.", interface_name)?,
-            None => {}
-        }
+        if let Some(interface_name) = &self.interface_name { write!(f, "/{}.", interface_name)? }
 
         write!(f, "{{{}}}", self.function_name)
     }
