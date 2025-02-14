@@ -14,7 +14,7 @@ const queryClient = new QueryClient({
       refetchOnMount: "always",
     },
     mutations: {
-      retry: 2, // Retry failed mutations twice
+      retry: 0, // Retry failed mutations twice
     },
   },
 });

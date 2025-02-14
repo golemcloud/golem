@@ -375,6 +375,49 @@ export const useWorkerFiles = (componentId: string, workerName: string) => {
     queryFn: () => getWorkerFiles(componentId, workerName),
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching Worker files"),
-    retry: 2,
+    retry: 0,
+  });
+};
+
+export interface UpdateWorkerVersionPayload {
+  mode: "Automatic";
+  targetVersion: number;
+}
+
+// Add this API function
+export const updateWorkerVersion = async ({
+  componentId,
+  workerName,
+  payload,
+}: {
+  componentId: string;
+  workerName: string;
+  payload: UpdateWorkerVersionPayload;
+}) => {
+  const { data } = await apiClient.post(
+    `/v1/components/${componentId}/workers/${workerName}/update`,
+    payload
+  );
+  return data;
+};
+
+export const useUpdateWorkerVersion = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: updateWorkerVersion,
+    onSuccess: (_, { componentId, workerName }:any) => {
+      // Invalidate specific worker query
+      queryClient.invalidateQueries({
+        queryKey: workerKeys.detail(componentId, workerName),
+      });
+
+      // Invalidate worker list for the component
+      queryClient.invalidateQueries({
+        queryKey: workerKeys.lists(),
+      });
+    },
+    onError: (error: Error | GolemError) =>
+      displayError(error, "Failed to update worker version"),
   });
 };
