@@ -131,6 +131,7 @@ pub enum ApiSecurityServiceClient {
 
 #[async_trait]
 pub trait WorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol;
     fn worker_client(&self) -> WorkerServiceClient;
     fn api_definition_client(&self) -> ApiDefinitionServiceClient;
     fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
@@ -1138,7 +1139,8 @@ pub trait WorkerService {
     ) -> crate::Result<SecuritySchemeData> {
         match self.api_security_client() {
             ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
-            ApiSecurityServiceClient::Http(client) => client
+            ApiSecurityServiceClient::Http(client) =>
+                client
                 .get(security_scheme_id)
                 .await
                 .map_err(|error| anyhow!("{error:?}")),

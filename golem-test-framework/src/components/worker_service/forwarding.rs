@@ -18,6 +18,7 @@ use crate::components::worker_service::{
     ApiDefinitionServiceClient, ApiDeploymentServiceClient, ApiSecurityServiceClient,
     WorkerLogEventStream, WorkerService, WorkerServiceClient,
 };
+use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -76,6 +77,10 @@ impl ForwardingWorkerService {
 
 #[async_trait]
 impl WorkerService for ForwardingWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("There is no worker-service, cannot get client protocol")
+    }
+
     fn worker_client(&self) -> WorkerServiceClient {
         panic!("There is no worker-service, cannot create worker client")
     }

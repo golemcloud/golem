@@ -1,0 +1,64 @@
+use crate::{http_only, Tracing};
+use assert2::{assert, check};
+use golem_client::model::{Provider, SecuritySchemeData};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, GolemClientProtocol, TestDependencies,
+};
+use test_r::{inherit_test_dep, test};
+use uuid::Uuid;
+
+inherit_test_dep!(Tracing);
+inherit_test_dep!(EnvBasedTestDependencies);
+
+// TODO: no delete for security scheme?
+
+#[test]
+#[tracing::instrument]
+async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
+    http_only!(deps);
+
+    let security_scheme = SecuritySchemeData {
+        provider_type: Provider::Google,
+        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
+        client_id: "client_id".to_string(),
+        client_secret: "super_secret".to_string(),
+        redirect_url: "http://localhost/redirect-url".to_string(),
+        scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
+    };
+
+    let created_security_scheme = deps
+        .worker_service()
+        .create_api_security_scheme(security_scheme.clone())
+        .await
+        .unwrap();
+
+    assert!(created_security_scheme == security_scheme);
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
+    http_only!(deps);
+
+    let security_scheme = SecuritySchemeData {
+        provider_type: Provider::Google,
+        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
+        client_id: "client_id".to_string(),
+        client_secret: "super_secret".to_string(),
+        redirect_url: "http://localhost/redirect-url".to_string(),
+        scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
+    };
+
+    deps.worker_service()
+        .create_api_security_scheme(security_scheme.clone())
+        .await
+        .unwrap();
+
+    let get_result = deps
+        .worker_service()
+        .get_api_security_scheme(&security_scheme.scheme_identifier)
+        .await
+        .unwrap();
+
+    assert!(get_result == security_scheme);
+}

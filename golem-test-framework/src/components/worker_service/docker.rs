@@ -39,6 +39,7 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
+    client_protocol: GolemClientProtocol,
     worker_client: WorkerServiceClient,
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
@@ -124,6 +125,7 @@ impl DockerWorkerService {
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
+            client_protocol,
             worker_client: new_worker_client(
                 client_protocol,
                 "localhost",
@@ -159,6 +161,10 @@ impl DockerWorkerService {
 
 #[async_trait]
 impl WorkerService for DockerWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol.clone()
+    }
+
     fn worker_client(&self) -> WorkerServiceClient {
         self.worker_client.clone()
     }

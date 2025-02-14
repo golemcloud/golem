@@ -34,7 +34,7 @@ use std::sync::Arc;
 pub mod cli;
 mod env;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "kebab-case")]
 pub enum GolemClientProtocol {
     Grpc,

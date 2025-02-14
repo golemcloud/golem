@@ -36,6 +36,7 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
+    client_protocol: GolemClientProtocol,
     worker_client: WorkerServiceClient,
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
@@ -135,6 +136,7 @@ impl SpawnedWorkerService {
             custom_request_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
+            client_protocol,
             worker_client: new_worker_client(client_protocol, "localhost", grpc_port, http_port)
                 .await,
             api_definition_client: new_api_definition_client(
@@ -171,6 +173,10 @@ impl SpawnedWorkerService {
 
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
     fn worker_client(&self) -> WorkerServiceClient {
         self.worker_client.clone()
     }

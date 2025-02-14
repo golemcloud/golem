@@ -46,6 +46,7 @@ pub struct K8sWorkerService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
+    client_protocol: GolemClientProtocol,
     worker_client: WorkerServiceClient,
     api_definition_client: ApiDefinitionServiceClient,
     api_deployment_client: ApiDeploymentServiceClient,
@@ -233,6 +234,7 @@ impl K8sWorkerService {
             service: Arc::new(Mutex::new(Some(managed_service))),
             grpc_routing: Arc::new(Mutex::new(Some(grpc_routing.routing))),
             http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
+            client_protocol,
             worker_client: new_worker_client(
                 client_protocol,
                 &grpc_routing.hostname,
@@ -267,6 +269,10 @@ impl K8sWorkerService {
 
 #[async_trait]
 impl WorkerService for K8sWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol.clone()
+    }
+
     fn worker_client(&self) -> WorkerServiceClient {
         self.worker_client.clone()
     }
