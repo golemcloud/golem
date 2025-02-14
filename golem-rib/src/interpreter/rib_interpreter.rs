@@ -2288,7 +2288,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compilation_error,
-                "Multiple functions named 'bar' found. Conflicting interfaces. Specify any of the following type parameters: api1, api2.".to_string()
+                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
             );
         }
 
@@ -2331,6 +2331,67 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
+
+        #[test]
+        async fn test_first_class_worker_6() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.bar[api2]("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+
+        #[test]
+        async fn test_first_class_worker_7() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.baz("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_8() {
+            let expr = r#"
+           let worker = instance("my-worker");
+           let result = worker.qux("bar");
+           result
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
+            );
+        }
+
+
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
@@ -2438,7 +2499,8 @@ mod interpreter_tests {
         }
 
         pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
-            let analysed_function_unique = AnalysedFunction {
+            // Exist in only amazon:shopping-cart/api1
+            let analysed_function_in_api1 = AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "arg1".to_string(),
@@ -2450,7 +2512,8 @@ mod interpreter_tests {
                 }],
             };
 
-            let analysed_function_common = AnalysedFunction {
+            // Exist in both amazon:shopping-cart/api1 and amazon:shopping-cart/api2
+            let analysed_function_in_api1_and_api2 = AnalysedFunction {
                 name: "bar".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "arg1".to_string(),
@@ -2462,17 +2525,49 @@ mod interpreter_tests {
                 }],
             };
 
+            // Exist in only wasi:clocks/monotonic-clock
+            let analysed_function_in_wasi = AnalysedFunction {
+                name: "baz".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
+            // Exist in wasi:clocks/monotonic-clock and amazon:shopping-cart/api1
+            let analysed_function_in_wasi_and_api1 = AnalysedFunction {
+                name: "qux".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            };
+
             let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
-                name: "golem:it/api1".to_string(),
-                functions: vec![analysed_function_unique, analysed_function_common.clone()],
+                name: "amazon:shopping-cart/api1".to_string(),
+                functions: vec![analysed_function_in_api1, analysed_function_in_api1_and_api2.clone(), analysed_function_in_wasi_and_api1.clone()],
             });
 
             let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
-                name: "golem:it/api2".to_string(),
-                functions: vec![analysed_function_common],
+                name: "amazon:shopping-cart/api2".to_string(),
+                functions: vec![analysed_function_in_api1_and_api2],
             });
 
-            vec![analysed_export1, analysed_export2]
+            let analysed_export3 = AnalysedExport::Instance(AnalysedInstance {
+                name: "wasi:clocks/monotonic-clock".to_string(),
+                functions: vec![analysed_function_in_wasi, analysed_function_in_wasi_and_api1],
+            });
+
+
+            vec![analysed_export1, analysed_export2, analysed_export3]
         }
 
         fn get_metadata_with_resource(

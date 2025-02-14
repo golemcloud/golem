@@ -3,7 +3,7 @@ use crate::type_parameter::InterfaceName;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
@@ -32,7 +32,7 @@ impl InstanceType {
         function_name: &str,
         type_parameter: Option<TypeParameter>,
     ) -> Result<Function, String> {
-        let functions: Vec<_> = self
+        let functions: Vec<&(FullyQualifiedFunctionName, FunctionType)> = self
             .function_dict()
             .map
             .iter()
@@ -44,31 +44,31 @@ impl InstanceType {
                 for (fqfn, ftype) in &functions {
                     match &param {
                         TypeParameter::Interface(iface)
-                            if fqfn.interface_name.as_ref() == Some(iface) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
+                        if fqfn.interface_name.as_ref() == Some(iface) =>
+                            {
+                                return Ok(Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                });
+                            }
                         TypeParameter::PackageName(pkg)
-                            if fqfn.package_name.as_ref() == Some(pkg) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
+                        if fqfn.package_name.as_ref() == Some(pkg) =>
+                            {
+                                return Ok(Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                });
+                            }
                         TypeParameter::FullyQualifiedInterface(fq_iface)
-                            if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
-                                && fqfn.interface_name.as_ref()
-                                    == Some(&fq_iface.interface_name) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
+                        if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
+                            && fqfn.interface_name.as_ref()
+                            == Some(&fq_iface.interface_name) =>
+                            {
+                                return Ok(Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                });
+                            }
                         _ => continue,
                     }
                 }
@@ -78,66 +78,79 @@ impl InstanceType {
                 ))
             }
             None => {
-                let unique_packages = functions
-                    .iter()
-                    .filter_map(|(fqfn, _)| {
-                        if fqfn.function_name == function_name {
-                            fqfn.package_name.as_ref()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<HashSet<_>>();
+                if functions.is_empty() {
+                    return Err(format!("Function '{}' not found.", function_name));
+                }
 
-                let unique_interfaces = functions
-                    .iter()
-                    .filter_map(|(fqfn, _)| {
-                        if fqfn.function_name == function_name {
-                            fqfn.interface_name.as_ref()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<HashSet<_>>();
+                // Group functions by package name
+                let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
+                    HashMap::new();
 
-                match functions.len() {
-                    0 => Err(format!("Function '{}' not found.", function_name)),
-                    1 => Ok(Function {
-                        function_name: functions[0].0.clone(),
-                        function_type: functions[0].1.clone(),
-                    }),
+                for (fqfn, _) in &functions {
+                    package_map
+                        .entry(fqfn.package_name.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(fqfn.interface_name.clone());
+                }
+
+                match package_map.len() {
+                    1 => {
+                        // Only one package, check if multiple interfaces exist
+                        let (_, interfaces) = package_map.into_iter().next().unwrap();
+                        if interfaces.len() == 1 {
+                            // Single package, single interface -> Return the function
+                            let (fqfn, ftype) = functions[0];
+                            Ok(Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            })
+                        } else {
+                            let mut interfaces = interfaces
+                                .into_iter()
+                                .filter_map(|iface| iface.map(|i| i.name))
+                                .collect::<Vec<_>>();
+
+                            interfaces.sort();
+
+                            // Multiple interfaces in the same package -> Ask for an interface name
+                            Err(format!(
+                                "Multiple interfaces contain function '{}'. Specify an interface name as type parameter from: {}",
+                                function_name,
+                                interfaces
+                                    .join(", ")
+                            ))
+                        }
+                    }
                     _ => {
-                        let mut error_msg =
-                            format!("Multiple functions named '{}' found.", function_name);
-                        if unique_packages.len() > 1 && unique_interfaces.len() > 1 {
-                            error_msg.push_str(&format!(
-                                " Conflicting locations. Specify any of the following type parameters {}.",
-                                unique_packages
-                                    .iter()
-                                    .flat_map(|pkg| {
-                                        unique_interfaces.iter().map(move |iface| {
-                                            format!("{}/{}", pkg, iface.name)
-                                        })
-                                    })
-                                    .collect::<Vec<_>>().join(", ")
-                            ));
-                        } else if unique_packages.len() > 1 {
-                            error_msg.push_str(&format!(
-                                " Conflicting packages. Specify any of the following type parameteres {}.",
-                                unique_packages
-                                    .iter()
-                                    .map(|pkg| format!("{}", pkg))
-                                    .collect::<Vec<_>>().join(", ")
-                            ));
-                        } else if unique_interfaces.len() > 1 {
-                            error_msg.push_str(&format!(
-                                " Conflicting interfaces. Specify any of the following type parameters: {}.",
-                                unique_interfaces
-                                    .into_iter()
-                                    .map(|iface| iface.to_string())
-                                    .collect::<Vec<_>>().join(", ")
-                            ));
-                        }
+                        // Multiple packages -> Ask for package first
+                        let mut error_msg = format!(
+                            "Function '{}' exists in multiple packages. Specify a package name as type parameter from: ",
+                            function_name
+                        );
+
+                        let mut package_interface_list = package_map
+                            .into_iter()
+                            .filter_map(|(pkg, interfaces)| {
+                                pkg.map(|p| {
+                                    let mut interface_list = interfaces
+                                        .into_iter()
+                                        .filter_map(|iface| iface.map(|i| i.name))
+                                        .collect::<Vec<_>>();
+
+                                    interface_list.sort();
+
+                                    if interface_list.is_empty() {
+                                        format!("{}", p)
+                                    } else {
+                                        format!("{} (interfaces: {})", p, interface_list.join(", "))
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+
+                        package_interface_list.sort();
+
+                        error_msg.push_str(&package_interface_list.join(", "));
                         Err(error_msg)
                     }
                 }
