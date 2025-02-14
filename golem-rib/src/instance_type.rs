@@ -69,7 +69,9 @@ impl InstanceType {
                                 function_type: ftype.clone(),
                             });
                         }
-                        _ => continue,
+                        TypeParameter::Interface(_) => {}
+                        TypeParameter::PackageName(_) => {}
+                        TypeParameter::FullyQualifiedInterface(_) => {}
                     }
                 }
                 Err(format!("No function '{}' found", function_name))

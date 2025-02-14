@@ -2434,12 +2434,12 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{RibFunctionInvoke, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, r#enum, record, result, s32, str, tuple, u32, u64,
+            case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
         use golem_wasm_rpc::{Value, ValueAndType};
         use std::sync::Arc;
