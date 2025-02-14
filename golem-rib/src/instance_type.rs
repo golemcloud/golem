@@ -1,6 +1,6 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
+use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
@@ -11,7 +11,7 @@ use std::fmt::Display;
 // with better lookups in terms of namespace:package and interfaces.
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
-#[derive(Debug, Hash, Clone, Eq, PartialEq)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     Durable {
         worker_name: Box<Expr>,
@@ -177,7 +177,7 @@ impl Function {
 
 // FunctionDictionary is a map of function names (not variant or any enums)
 // to their respective function details
-#[derive(Debug, Hash, Clone, Eq, PartialEq)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionDictionary {
     pub map: Vec<(FullyQualifiedFunctionName, FunctionType)>,
 }
@@ -202,8 +202,8 @@ impl FunctionDictionary {
                                 function_name,
                             },
                             FunctionType {
-                                parameter_types,
-                                return_type: return_types,
+                                parameter_types: parameter_types.into_iter().map(|x| x.into()).collect(),
+                                return_type: return_types.into_iter().map(|x| x.into()).collect(),
                             },
                         ));
                     }
@@ -224,8 +224,8 @@ impl FunctionDictionary {
                                 function_name,
                             },
                             FunctionType {
-                                parameter_types,
-                                return_type: return_types,
+                                parameter_types: parameter_types.into_iter().map(|x| x.into()).collect(),
+                                return_type: return_types.into_iter().map(|x| x.into()).collect(),
                             },
                         ));
                     }
@@ -238,7 +238,7 @@ impl FunctionDictionary {
         Ok(FunctionDictionary { map })
     }
 }
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedFunctionName {
     package_name: Option<PackageName>,
     interface_name: Option<InterfaceName>,
@@ -261,8 +261,8 @@ impl Display for FullyQualifiedFunctionName {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionType {
-    parameter_types: Vec<AnalysedType>,
-    return_type: Vec<AnalysedType>,
+    parameter_types: Vec<InferredType>,
+    return_type: Vec<InferredType>,
 }

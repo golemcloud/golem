@@ -35,7 +35,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
@@ -642,9 +642,9 @@ impl Expr {
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
         // Making sure instance calls are inferred
-        self.infer_call_arguments_type(function_type_registry)
+        self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        //self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.check_types(function_type_registry)
@@ -710,11 +710,11 @@ impl Expr {
         type_inference::bind_variables_of_list_reduce(self);
     }
 
-    pub fn infer_call_arguments_type(
+    pub fn infer_function_call_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_inference::infer_function_call_type(self, function_type_registry)
+        type_inference::infer_function_call_types(self, function_type_registry)
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {
@@ -890,7 +890,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq)]
+#[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd)]
 pub struct Number {
     pub value: BigDecimal,
 }
@@ -921,7 +921,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -935,7 +935,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),

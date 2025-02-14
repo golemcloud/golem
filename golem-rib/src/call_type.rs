@@ -16,7 +16,7 @@ use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
     Function(DynamicParsedFunctionName),
     VariantConstructor(String),
@@ -24,7 +24,7 @@ pub enum CallType {
     InstanceCreation(InstanceCreationType),
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum InstanceCreationType {
     Ephemeral {
         component_id: String,

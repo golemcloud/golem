@@ -33,7 +33,7 @@ use crate::{InferredNumber, InferredType};
 // Any compilation or interpreter error messages will also be using `TypeName` to show the type of the expression
 // for which we convert AnalysedType or InferredType back to TypeName. If `InferredType` cannot be converted to `TypeName`, we explain the error displaying
 // the original expression, and there is no point displaying `InferredType` to the user.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode, Ord, PartialOrd)]
 pub enum TypeName {
     Bool,
     S8,

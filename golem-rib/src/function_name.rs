@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
 
-#[derive(PartialEq, Hash, Eq, Clone)]
+#[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
 
 impl std::fmt::Debug for SemVer {
@@ -94,7 +94,7 @@ impl<'de> BorrowDecode<'de> for SemVer {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Encode, Decode, Ord, PartialOrd)]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -134,7 +134,7 @@ impl ParsedFunctionSite {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum DynamicParsedFunctionReference {
     Function {
         function: String,
@@ -504,7 +504,7 @@ impl ParsedFunctionReference {
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,

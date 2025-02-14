@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 
 // Resolving function arguments, return type etc based on function type registry
 // If the call was for creating a worker instance, that will be handled too.
-pub fn infer_function_call_type(
+pub fn infer_function_call_types(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
@@ -588,7 +588,7 @@ mod function_parameters_inference_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_call_arguments_type(&function_type_registry)
+        expr.infer_function_call_types(&function_type_registry)
             .unwrap();
 
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);

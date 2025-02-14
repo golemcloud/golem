@@ -22,7 +22,7 @@ use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum InferredType {
     Bool,
     S8,
@@ -235,7 +235,7 @@ impl InferredType {
             unique_types.into_iter().next()
         } else {
             let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
-            unique_all_of_types.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b))); // Step 2: Sort
+            unique_all_of_types.sort();
             Some(InferredType::AllOf(unique_all_of_types))
         }
     }
@@ -256,7 +256,7 @@ impl InferredType {
             types.into_iter().next()
         } else {
             let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect(); // Step 1: Col
-            unique_one_of_types.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b))); // Step 2: Sort
+            unique_one_of_types.sort();
             Some(InferredType::OneOf(unique_one_of_types))
         }
     }

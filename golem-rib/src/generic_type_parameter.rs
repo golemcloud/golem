@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct GenericTypeParameter {
     pub value: String,
 }
