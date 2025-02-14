@@ -2236,11 +2236,14 @@ mod interpreter_tests {
 
         #[test]
         async fn test_first_class_worker_1() {
+            // Ephemeral worker. Equivalent to:
+            // let worker = instance;
+            // let result worker.foo("bar");
+            // result
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.foo("bar");
-           result
-        "#;
+              let result = instance.foo("bar");
+              result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2257,10 +2260,29 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_2() {
             let expr = r#"
-           let my_worker = instance("my-worker");
-           let result = my_worker.foo[api1]("bar");
-           result
-        "#;
+                let result = instance.bar("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compilation_error,
+                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+            );
+        }
+
+
+        /// Durable worker
+        #[test]
+        async fn test_first_class_worker_3() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.foo("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2275,30 +2297,12 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_3() {
-            let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.bar("bar");
-           result
-        "#;
-            let expr = Expr::from_text(expr).unwrap();
-            let component_metadata = internal::get_metadata();
-
-            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
-
-            assert_eq!(
-                compilation_error,
-                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
-            );
-        }
-
-        #[test]
         async fn test_first_class_worker_4() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.bar[api1]("bar");
-           result
-        "#;
+                let my_worker = instance("my-worker");
+                let result = my_worker.foo[api1]("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2315,30 +2319,28 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_5() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.bar[api2]("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.bar("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            let mut rib_interpreter =
-                internal::static_test_interpreter(&"success".into_value_and_type(), None);
-
-            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
-
-            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+            assert_eq!(
+                compilation_error,
+                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+            );
         }
 
         #[test]
         async fn test_first_class_worker_6() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.bar[api2]("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.bar[api1]("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2355,10 +2357,10 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_7() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.baz("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.bar[api2]("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2375,28 +2377,30 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_8() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.qux("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.bar[api2]("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            assert_eq!(
-                compiled,
-                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
-            );
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
         #[test]
         async fn test_first_class_worker_9() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.qux[amazon:shopping-cart]("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.baz("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
@@ -2413,10 +2417,48 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_10() {
             let expr = r#"
-           let worker = instance("my-worker");
-           let result = worker.qux[wasi:clocks]("bar");
-           result
-        "#;
+                let worker = instance("my-worker");
+                let result = worker.qux("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
+            );
+        }
+
+        #[test]
+        async fn test_first_class_worker_11() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_12() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let result = worker.qux[wasi:clocks]("bar");
+                result
+            "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
