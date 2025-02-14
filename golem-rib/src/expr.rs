@@ -433,11 +433,11 @@ impl Expr {
         )
     }
 
-    pub fn bind_global_variables_type(
+    pub fn bind_global_variable_types(
         &self,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<Self, String> {
-        let result_expr = type_inference::bind_global_variables_type(self, type_spec)?;
+        let result_expr = type_inference::bind_global_variable_types(self, type_spec)?;
         Ok(result_expr)
     }
 
@@ -644,7 +644,7 @@ impl Expr {
         // Making sure instance calls are inferred
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
-        //self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.check_types(function_type_registry)
@@ -658,10 +658,12 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        *self = self
-            .bind_global_variables_type(type_spec)
+        self.identify_instance_creation(function_type_registry)
             .map_err(|x| vec![x])?;
-        self.bind_types();
+        *self = self
+            .bind_global_variable_types(type_spec)
+            .map_err(|x| vec![x])?;
+        self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
@@ -672,8 +674,9 @@ impl Expr {
         Ok(())
     }
 
-    // An inference scan is a single cycle of to-and-fro scanning of Rib expression
-    // to infer the types
+    // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
+    // Not all phases of compilation will be part of this scan.
+    // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
     pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
         self.push_types_down()?;
@@ -710,6 +713,13 @@ impl Expr {
         type_inference::bind_variables_of_list_reduce(self);
     }
 
+    pub fn identify_instance_creation(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        type_inference::identify_instance_creation(self, function_type_registry)
+    }
+
     pub fn infer_function_call_types(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
@@ -733,8 +743,8 @@ impl Expr {
         type_inference::infer_global_inputs(self);
     }
 
-    pub fn bind_types(&mut self) {
-        type_inference::bind_type(self);
+    pub fn bind_type_annotations(&mut self) {
+        type_inference::bind_type_annotations(self);
     }
 
     pub fn check_types(

@@ -11,10 +11,10 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             lhs,
             function_name,
             generic_type_parameter,
-            args,
-            inferred_type,
+            args, ..
         } = expr
         {
+            // There is no guarantee lhs is inferred during this time
             let inferred_type = lhs.clone().inferred_type(); // By this time we assume we correctly tag the inferred type of lhs to be InstanceType
 
             match inferred_type {
@@ -32,9 +32,9 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
 
                     *expr = new_call;
                 }
-                inferred_type => {
-                    return Err(format!("Expected instance type, found {:?}", inferred_type))
-                }
+                // This implies, none of the phase identified `lhs` to be an instance-type yet.
+                // This would
+                _ => {}
             }
         }
         expr.visit_children_mut_bottom_up(&mut queue);

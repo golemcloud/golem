@@ -16,13 +16,13 @@ pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
-pub use global_variable_type_spec::*;
+pub use global_variable_type_binding::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
-pub(crate) use type_binding::*;
+pub(crate) use type_annotation_binding::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_reset::*;
@@ -33,19 +33,21 @@ pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 pub use worker_function_invocation::*;
+pub use identify_instance_creation::*;
+pub use instance_type_binding::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
 mod expr_visitor;
 mod global_input_inference;
-mod global_variable_type_spec;
+mod global_variable_type_binding;
 mod identifier_inference;
 mod inference_fix_point;
 mod inferred_expr;
 pub(crate) mod kind;
 mod rib_input_type;
 mod rib_output_type;
-mod type_binding;
+mod type_annotation_binding;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;
@@ -56,13 +58,15 @@ mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 mod worker_function_invocation;
+mod identify_instance_creation;
+mod instance_type_binding;
 
 #[cfg(test)]
 mod type_inference_tests {
 
     mod global_variable {
         use crate::type_checker::Path;
-        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
         use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
         use test_r::test;
 
@@ -141,7 +145,7 @@ mod type_inference_tests {
 
     mod inline_type_annotations {
         use crate::type_checker::Path;
-        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
         use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
         use test_r::test;
 
