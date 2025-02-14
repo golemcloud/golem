@@ -41,7 +41,7 @@ use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::PluginScope;
+use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
@@ -80,8 +80,10 @@ pub trait WorkerCtx:
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
-    type ComponentOwner: ComponentOwner;
+    type PluginOwner: PluginOwner;
     type PluginScope: PluginScope;
+
+    type ComponentOwner: ComponentOwner<PluginOwner = Self::PluginOwner>;
 
     /// Creates a new worker context
     ///

@@ -17,7 +17,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::DefaultPluginScope;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -40,6 +40,7 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor_base::services::component_resolver::DefaultComponentResolver;
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
@@ -305,6 +306,7 @@ impl IndexedResourceStore for Context {
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
     type ComponentOwner = DefaultComponentOwner;
+    type PluginOwner = DefaultPluginOwner;
     type PluginScope = DefaultPluginScope;
 
     async fn create(
@@ -358,6 +360,8 @@ impl WorkerCtx for Context {
             execution_status,
             file_loader,
             plugins,
+            Arc::new(DefaultComponentResolver),
+            DefaultComponentOwner,
         )
         .await?;
         Ok(Self {

@@ -27,6 +27,7 @@ pub mod active_workers;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
+pub mod component_resolver;
 pub mod events;
 pub mod file_loader;
 pub mod golem_config;
