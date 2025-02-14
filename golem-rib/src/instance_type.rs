@@ -17,13 +17,13 @@ pub enum InstanceType {
     Durable {
         worker_name: Box<Expr>,
         component_id: String,
-        function_dict: FunctionDictionary, // This needs to be revisited
+        function_dict: FunctionDictionary,
     },
 
     Ephemeral {
         component_id: String,
-        function_dict: FunctionDictionary, // This needs to be revisited
-    },
+        function_dict: FunctionDictionary,
+    }
 }
 
 impl InstanceType {
@@ -32,11 +32,11 @@ impl InstanceType {
         function_name: &str,
         type_parameter: Option<TypeParameter>,
     ) -> Result<Function, String> {
-        let functions: Vec<&(FullyQualifiedFunctionName, FunctionType)> = self
+        let functions: Vec<&(FunctionName, FunctionType)> = self
             .function_dict()
             .map
             .iter()
-            .filter(|(fqfn, _)| fqfn.function_name == function_name)
+            .filter(|(f, _)| f.name() == function_name.to_string())
             .collect();
 
         match type_parameter {
@@ -44,7 +44,7 @@ impl InstanceType {
                 for (fqfn, ftype) in &functions {
                     match &param {
                         TypeParameter::Interface(iface)
-                            if fqfn.interface_name.as_ref() == Some(iface) =>
+                            if fqfn.interface_name().as_ref() == Some(iface) =>
                         {
                             return Ok(Function {
                                 function_name: fqfn.clone(),
@@ -52,7 +52,7 @@ impl InstanceType {
                             });
                         }
                         TypeParameter::PackageName(pkg)
-                            if fqfn.package_name.as_ref() == Some(pkg) =>
+                            if fqfn.package_name() == Some(pkg.clone()) =>
                         {
                             return Ok(Function {
                                 function_name: fqfn.clone(),
@@ -60,9 +60,9 @@ impl InstanceType {
                             });
                         }
                         TypeParameter::FullyQualifiedInterface(fq_iface)
-                            if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
-                                && fqfn.interface_name.as_ref()
-                                    == Some(&fq_iface.interface_name) =>
+                            if fqfn.package_name() == Some(fq_iface.package_name.clone())
+                                && fqfn.interface_name()
+                                    == Some(fq_iface.interface_name.clone()) =>
                         {
                             return Ok(Function {
                                 function_name: fqfn.clone(),
@@ -86,9 +86,9 @@ impl InstanceType {
 
                 for (fqfn, _) in &functions {
                     package_map
-                        .entry(fqfn.package_name.clone())
+                        .entry(fqfn.package_name())
                         .or_insert_with(HashSet::new)
-                        .insert(fqfn.interface_name.clone());
+                        .insert(fqfn.interface_name());
                 }
 
                 match package_map.len() {
@@ -139,7 +139,7 @@ impl InstanceType {
 // But we will add this as part of tests
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub function_name: FullyQualifiedFunctionName,
+    pub function_name: FunctionName,
     pub function_type: FunctionType,
 }
 impl Function {
@@ -153,7 +153,7 @@ impl Function {
 // to their respective function details
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionDictionary {
-    pub map: Vec<(FullyQualifiedFunctionName, FunctionType)>,
+    pub map: Vec<(FunctionName, FunctionType)>,
 }
 
 impl FunctionDictionary {
@@ -169,12 +169,10 @@ impl FunctionDictionary {
                     return_types,
                 } => match key {
                     RegistryKey::FunctionName(function_name) => {
+                       let function_name = resolve_function_name(None, None, &function_name);
+
                         map.push((
-                            FullyQualifiedFunctionName {
-                                package_name: None,
-                                interface_name: None,
-                                function_name,
-                            },
+                            function_name,
                             FunctionType {
                                 parameter_types: parameter_types
                                     .into_iter()
@@ -194,12 +192,10 @@ impl FunctionDictionary {
                         let interface_name = type_parameter.get_interface_name();
                         let package_name = type_parameter.get_package_name();
 
+                        let function_name = resolve_function_name(package_name, interface_name, &function_name);
+
                         map.push((
-                            FullyQualifiedFunctionName {
-                                package_name,
-                                interface_name,
-                                function_name,
-                            },
+                            function_name,
                             FunctionType {
                                 parameter_types: parameter_types
                                     .into_iter()
@@ -218,6 +214,83 @@ impl FunctionDictionary {
         Ok(FunctionDictionary { map })
     }
 }
+
+fn resolve_function_name(package_name: Option<PackageName>,  interface_name: Option<InterfaceName>, function_name: &str) -> FunctionName {
+    match get_resource_name(&function_name) {
+        Some(resource_name) => FunctionName::ResourceConstructor(FullyQualifiedResourceName {
+            package_name: None,
+            interface_name: None,
+            resource_name,
+        }),
+        None => match get_resource_method_name(&function_name) {
+            Some(resource_method_name) => FunctionName::ResourceMethod(resource_method_name),
+            None => FunctionName::Function(FullyQualifiedFunctionName {
+                package_name: None,
+                interface_name: None,
+                function_name: function_name.to_string(),
+            }),
+        }
+    }
+}
+
+fn get_resource_name(function_name: &str) -> Option<String> {
+    if function_name.starts_with("[constructor]") {
+        Some(function_name.trim_start_matches("[constructor]").to_string())
+    } else {
+        None
+    }
+}
+
+fn get_resource_method_name(function_name: &str) -> Option<String> {
+    if function_name.starts_with("[method]") {
+        Some(function_name.trim_start_matches("[method]").to_string())
+    } else {
+        None
+    }
+}
+
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum FunctionName {
+   Function(FullyQualifiedFunctionName),
+   ResourceConstructor(FullyQualifiedResourceName),
+   ResourceMethod(String)
+}
+
+impl FunctionName {
+    pub fn interface_name(&self) -> Option<InterfaceName> {
+        match self {
+            FunctionName::Function(fqfn) => fqfn.interface_name.clone(),
+            FunctionName::ResourceConstructor(fqfn) => fqfn.interface_name.clone(),
+            FunctionName::ResourceMethod(_) => None,
+        }
+    }
+
+    pub fn package_name(&self) -> Option<PackageName> {
+        match self {
+            FunctionName::Function(fqfn) => fqfn.package_name.clone(),
+            FunctionName::ResourceConstructor(fqfn) => fqfn.package_name.clone(),
+            FunctionName::ResourceMethod(_) => None,
+        }
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            FunctionName::Function(fqfn) => fqfn.function_name.to_string(),
+            FunctionName::ResourceConstructor(fqfn) => fqfn.resource_name.to_string(),
+            FunctionName::ResourceMethod(name) => name.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct FullyQualifiedResourceName {
+    package_name: Option<PackageName>,
+    interface_name: Option<InterfaceName>,
+    resource_name: String,
+}
+
+
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedFunctionName {
     package_name: Option<PackageName>,
@@ -247,7 +320,7 @@ pub struct FunctionType {
 
 fn handle_single_package_multiple_interfaces(
     interfaces: HashSet<Option<InterfaceName>>,
-    functions: Vec<&(FullyQualifiedFunctionName, FunctionType)>,
+    functions: Vec<&(FunctionName, FunctionType)>,
     function_name: &str,
 ) -> Result<Function, String> {
     if interfaces.len() == 1 {

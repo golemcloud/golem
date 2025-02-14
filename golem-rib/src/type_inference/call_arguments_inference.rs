@@ -60,7 +60,7 @@ mod internal {
         let cloned = call_type.clone();
 
         match call_type {
-            CallType::InstanceCreation(_) => Ok(()), // There is nothing to infer
+            CallType::InstanceCreation(_) => Ok(()),
             CallType::Function(dynamic_parsed_function_name) => {
                 let resource_constructor_registry_key =
                     RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
