@@ -44,38 +44,35 @@ impl InstanceType {
                 for (fqfn, ftype) in &functions {
                     match &param {
                         TypeParameter::Interface(iface)
-                        if fqfn.interface_name.as_ref() == Some(iface) =>
-                            {
-                                return Ok(Function {
-                                    function_name: fqfn.clone(),
-                                    function_type: ftype.clone(),
-                                });
-                            }
+                            if fqfn.interface_name.as_ref() == Some(iface) =>
+                        {
+                            return Ok(Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            });
+                        }
                         TypeParameter::PackageName(pkg)
-                        if fqfn.package_name.as_ref() == Some(pkg) =>
-                            {
-                                return Ok(Function {
-                                    function_name: fqfn.clone(),
-                                    function_type: ftype.clone(),
-                                });
-                            }
+                            if fqfn.package_name.as_ref() == Some(pkg) =>
+                        {
+                            return Ok(Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            });
+                        }
                         TypeParameter::FullyQualifiedInterface(fq_iface)
-                        if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
-                            && fqfn.interface_name.as_ref()
-                            == Some(&fq_iface.interface_name) =>
-                            {
-                                return Ok(Function {
-                                    function_name: fqfn.clone(),
-                                    function_type: ftype.clone(),
-                                });
-                            }
+                            if fqfn.package_name.as_ref() == Some(&fq_iface.package_name)
+                                && fqfn.interface_name.as_ref()
+                                    == Some(&fq_iface.interface_name) =>
+                        {
+                            return Ok(Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            });
+                        }
                         _ => continue,
                     }
                 }
-                Err(format!(
-                    "No function '{}' found for the given type parameter.",
-                    function_name
-                ))
+                Err(format!("No function '{}' found", function_name))
             }
             None => {
                 if functions.is_empty() {
@@ -279,9 +276,13 @@ pub struct FullyQualifiedFunctionName {
 
 impl Display for FullyQualifiedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(package_name) = &self.package_name { write!(f, "{}", package_name)? }
+        if let Some(package_name) = &self.package_name {
+            write!(f, "{}", package_name)?
+        }
 
-        if let Some(interface_name) = &self.interface_name { write!(f, "/{}.", interface_name)? }
+        if let Some(interface_name) = &self.interface_name {
+            write!(f, "/{}.", interface_name)?
+        }
 
         write!(f, "{{{}}}", self.function_name)
     }

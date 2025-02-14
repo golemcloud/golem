@@ -2352,7 +2352,6 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
-
         #[test]
         async fn test_first_class_worker_7() {
             let expr = r#"
@@ -2390,8 +2389,6 @@ mod interpreter_tests {
                 "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
             );
         }
-
-
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
@@ -2553,7 +2550,11 @@ mod interpreter_tests {
 
             let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
                 name: "amazon:shopping-cart/api1".to_string(),
-                functions: vec![analysed_function_in_api1, analysed_function_in_api1_and_api2.clone(), analysed_function_in_wasi_and_api1.clone()],
+                functions: vec![
+                    analysed_function_in_api1,
+                    analysed_function_in_api1_and_api2.clone(),
+                    analysed_function_in_wasi_and_api1.clone(),
+                ],
             });
 
             let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
@@ -2563,9 +2564,11 @@ mod interpreter_tests {
 
             let analysed_export3 = AnalysedExport::Instance(AnalysedInstance {
                 name: "wasi:clocks/monotonic-clock".to_string(),
-                functions: vec![analysed_function_in_wasi, analysed_function_in_wasi_and_api1],
+                functions: vec![
+                    analysed_function_in_wasi,
+                    analysed_function_in_wasi_and_api1,
+                ],
             });
-
 
             vec![analysed_export1, analysed_export2, analysed_export3]
         }

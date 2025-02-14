@@ -76,13 +76,8 @@ pub fn identify_instance_creation(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    
-    use crate::{
-        Expr,
-        ParsedFunctionReference,
-    };
-    
-    
+
+    use crate::{Expr, ParsedFunctionReference};
 
     pub(crate) fn get_instance_creation_details(
         call_type: &CallType,
