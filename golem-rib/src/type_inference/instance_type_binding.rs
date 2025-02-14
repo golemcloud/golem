@@ -1,6 +1,5 @@
-use std::collections::{HashMap, VecDeque};
 use crate::{Expr, InferredType};
-
+use std::collections::{HashMap, VecDeque};
 
 // This is about binding the `InstanceType` to the corresponding identifiers.
 //
@@ -28,7 +27,7 @@ pub fn bind_instance_types(expr: &mut Expr) {
         match expr {
             Expr::Let(variable_id, _, expr, _) => {
                 match expr.inferred_type() {
-                    InferredType::Instance {instance_type} => {
+                    InferredType::Instance { instance_type } => {
                         instance_variables.insert(variable_id.clone(), instance_type);
                     }
                     _ => {}
@@ -38,7 +37,9 @@ pub fn bind_instance_types(expr: &mut Expr) {
             }
             Expr::Identifier(variable_id, _, existing_type) => {
                 if let Some(new_inferred_type) = instance_variables.get(variable_id) {
-                    *existing_type = InferredType::Instance {instance_type: new_inferred_type.clone()};
+                    *existing_type = InferredType::Instance {
+                        instance_type: new_inferred_type.clone(),
+                    };
                 }
             }
 

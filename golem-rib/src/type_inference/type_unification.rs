@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ArmPattern, Expr};
 use crate::call_type::CallType;
+use crate::{ArmPattern, Expr};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
     let mut queue = vec![];
@@ -225,7 +225,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.extend(vec.iter_mut());
 
                 match function_call {
-                    CallType::InstanceCreation(_) => {},
+                    CallType::InstanceCreation(_) => {}
                     _ => {
                         let unified_inferred_type = inferred_type.unify();
 
@@ -240,7 +240,6 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                         }
                     }
                 }
-
             }
             Expr::SelectField(expr, _, _, inferred_type) => {
                 queue.push(expr);

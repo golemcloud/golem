@@ -18,8 +18,10 @@ pub use expr_visitor::*;
 pub use global_input_inference::*;
 pub use global_variable_type_binding::*;
 pub use identifier_inference::*;
+pub use identify_instance_creation::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
+pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
 pub(crate) use type_annotation_binding::*;
@@ -33,8 +35,6 @@ pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 pub use worker_function_invocation::*;
-pub use identify_instance_creation::*;
-pub use instance_type_binding::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
@@ -42,8 +42,10 @@ mod expr_visitor;
 mod global_input_inference;
 mod global_variable_type_binding;
 mod identifier_inference;
+mod identify_instance_creation;
 mod inference_fix_point;
 mod inferred_expr;
+mod instance_type_binding;
 pub(crate) mod kind;
 mod rib_input_type;
 mod rib_output_type;
@@ -58,8 +60,6 @@ mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 mod worker_function_invocation;
-mod identify_instance_creation;
-mod instance_type_binding;
 
 #[cfg(test)]
 mod type_inference_tests {

@@ -11,7 +11,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             lhs,
             function_name,
             generic_type_parameter,
-            args, ..
+            args,
+            ..
         } = expr
         {
             // This should be an instance type if instance_type_binding phase has been run.

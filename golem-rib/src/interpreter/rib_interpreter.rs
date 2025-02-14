@@ -1973,8 +1973,7 @@ mod interpreter_tests {
            "success"
         "#;
             let expr = Expr::from_text(expr).unwrap();
-            let component_metadata =
-                internal::get_metadata_with_resource_with_params();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2006,8 +2005,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata =
-                internal::get_metadata_with_resource_with_params();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2040,8 +2038,7 @@ mod interpreter_tests {
         "#,
             );
 
-            let component_metadata =
-                internal::get_metadata_with_resource_with_params();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let mut rib_executor = internal::static_test_interpreter(&result_value, None);
@@ -2061,8 +2058,7 @@ mod interpreter_tests {
         "#;
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata =
-                internal::get_metadata_with_resource_with_params();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2088,8 +2084,7 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let component_metadata =
-                internal::get_metadata_with_resource_with_params();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -2234,10 +2229,10 @@ mod interpreter_tests {
     }
 
     mod first_class_worker_tests {
-        use test_r::test;
-        use golem_wasm_rpc::IntoValueAndType;
-        use crate::{compiler, Expr};
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::{compiler, Expr};
+        use golem_wasm_rpc::IntoValueAndType;
+        use test_r::test;
 
         #[test]
         async fn test_first_class_worker_1() {
@@ -2251,10 +2246,8 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter = internal::static_test_interpreter(
-                &"success".into_value_and_type(),
-                None
-            );
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2273,10 +2266,8 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter = internal::static_test_interpreter(
-                &"success".into_value_and_type(),
-                None
-            );
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2313,10 +2304,8 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter = internal::static_test_interpreter(
-                &"success".into_value_and_type(),
-                None
-            );
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2335,10 +2324,8 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter = internal::static_test_interpreter(
-                &"success".into_value_and_type(),
-                None
-            );
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2348,8 +2335,14 @@ mod interpreter_tests {
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{RibFunctionInvoke, RibInput};
-        use golem_wasm_ast::analysis::analysed_type::{case, f32, field, handle, list, r#enum, record, result, s32, str, tuple, u32, u64, unit_case, variant};
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair};
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, f32, field, handle, list, r#enum, record, result, s32, str, tuple, u32, u64,
+            unit_case, variant,
+        };
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair,
+        };
         use golem_wasm_rpc::{Value, ValueAndType};
         use std::sync::Arc;
 
@@ -2433,8 +2426,7 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_metadata_with_resource_with_params(
-        ) -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<AnalysedExport> {
             get_metadata_with_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: str(),
@@ -2475,7 +2467,7 @@ mod interpreter_tests {
                 functions: vec![analysed_function_unique, analysed_function_common.clone()],
             });
 
-            let analysed_export2 =  AnalysedExport::Instance(AnalysedInstance {
+            let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api2".to_string(),
                 functions: vec![analysed_function_common],
             });

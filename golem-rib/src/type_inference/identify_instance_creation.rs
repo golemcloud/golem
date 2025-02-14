@@ -63,11 +63,7 @@ pub fn identify_instance_creation(
             // of the semantics of variables of "instance" or InstanceType creatio
             Expr::Identifier(variable_id, _, _) => {
                 if variable_id.name() == "instance" {
-                    *expr = Expr::call(
-                        DynamicParsedFunctionName::parse("instance")?,
-                        None,
-                        vec![],
-                    );
+                    *expr = Expr::call(DynamicParsedFunctionName::parse("instance")?, None, vec![]);
                 }
             }
 

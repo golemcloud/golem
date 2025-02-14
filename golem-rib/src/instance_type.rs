@@ -1,9 +1,11 @@
-use std::collections::HashSet;
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+use crate::{
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::HashSet;
 use std::fmt::Display;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
@@ -80,12 +82,24 @@ impl InstanceType {
             None => {
                 let unique_packages = functions
                     .iter()
-                    .filter_map(|(fqfn, _)| if fqfn.function_name == function_name { fqfn.package_name.as_ref() } else { None })
+                    .filter_map(|(fqfn, _)| {
+                        if fqfn.function_name == function_name {
+                            fqfn.package_name.as_ref()
+                        } else {
+                            None
+                        }
+                    })
                     .collect::<HashSet<_>>();
 
                 let unique_interfaces = functions
                     .iter()
-                    .filter_map(|(fqfn, _)| if fqfn.function_name == function_name { fqfn.interface_name.as_ref() } else { None })
+                    .filter_map(|(fqfn, _)| {
+                        if fqfn.function_name == function_name {
+                            fqfn.interface_name.as_ref()
+                        } else {
+                            None
+                        }
+                    })
                     .collect::<HashSet<_>>();
 
                 match functions.len() {
@@ -95,10 +109,8 @@ impl InstanceType {
                         function_type: functions[0].1.clone(),
                     }),
                     _ => {
-                        let mut error_msg = format!(
-                            "Multiple functions named '{}' found.",
-                            function_name
-                        );
+                        let mut error_msg =
+                            format!("Multiple functions named '{}' found.", function_name);
                         if unique_packages.len() > 1 && unique_interfaces.len() > 1 {
                             error_msg.push_str(&format!(
                                 " Conflicting locations. Specify any of the following type parameters {}.",
@@ -205,7 +217,10 @@ impl FunctionDictionary {
                                 function_name,
                             },
                             FunctionType {
-                                parameter_types: parameter_types.into_iter().map(|x| x.into()).collect(),
+                                parameter_types: parameter_types
+                                    .into_iter()
+                                    .map(|x| x.into())
+                                    .collect(),
                                 return_type: return_types.into_iter().map(|x| x.into()).collect(),
                             },
                         ));
@@ -227,7 +242,10 @@ impl FunctionDictionary {
                                 function_name,
                             },
                             FunctionType {
-                                parameter_types: parameter_types.into_iter().map(|x| x.into()).collect(),
+                                parameter_types: parameter_types
+                                    .into_iter()
+                                    .map(|x| x.into())
+                                    .collect(),
                                 return_type: return_types.into_iter().map(|x| x.into()).collect(),
                             },
                         ));

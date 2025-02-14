@@ -74,8 +74,10 @@ mod internal {
     use std::collections::VecDeque;
     use std::ops::Deref;
 
-
-    pub(crate) fn bind_global_variable_types(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Result<Expr, String> {
+    pub(crate) fn bind_global_variable_types(
+        expr: &Expr,
+        type_spec: &GlobalVariableTypeSpec,
+    ) -> Result<Expr, String> {
         let mut path = type_spec.path.clone();
 
         let mut expr_queue = VecDeque::new();
@@ -149,21 +151,11 @@ mod internal {
                 }
 
                 Expr::Result(Err(_), type_name, current_inferred_type) => {
-                    handle_result_error(
-                        expr,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        type_name,
-                    );
+                    handle_result_error(expr, current_inferred_type, &mut temp_stack, type_name);
                 }
 
                 Expr::Option(Some(expr), type_name, current_inferred_type) => {
-                    handle_option_some(
-                        expr,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        type_name,
-                    );
+                    handle_option_some(expr, current_inferred_type, &mut temp_stack, type_name);
                 }
 
                 Expr::Option(None, type_name, current_inferred_type) => {
@@ -386,7 +378,6 @@ mod internal {
             .map(|x| x.0)
             .ok_or("Failed type inference during pull up".to_string())
     }
-
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();
