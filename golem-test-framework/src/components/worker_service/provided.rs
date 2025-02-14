@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::components::worker_service::{
-    new_api_definition_client, new_worker_client, ApiDefinitionServiceClient, WorkerService,
-    WorkerServiceClient,
+    new_api_definition_client, new_api_deployment_client, new_api_security_client,
+    new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
@@ -27,6 +28,8 @@ pub struct ProvidedWorkerService {
     custom_request_port: u16,
     worker_client: WorkerServiceClient,
     api_definition_client: ApiDefinitionServiceClient,
+    api_deployment_client: ApiDeploymentServiceClient,
+    api_security_client: ApiSecurityServiceClient,
 }
 
 impl ProvidedWorkerService {
@@ -51,6 +54,20 @@ impl ProvidedWorkerService {
                 http_port,
             )
             .await,
+            api_deployment_client: new_api_deployment_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
+            api_security_client: new_api_security_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
         }
     }
 }
@@ -63,6 +80,14 @@ impl WorkerService for ProvidedWorkerService {
 
     fn api_definition_client(&self) -> ApiDefinitionServiceClient {
         self.api_definition_client.clone()
+    }
+
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
+        self.api_deployment_client.clone()
+    }
+
+    fn api_security_client(&self) -> ApiSecurityServiceClient {
+        self.api_security_client.clone()
     }
 
     fn private_host(&self) -> String {

@@ -73,8 +73,13 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
+use golem_client::api::ApiDeploymentClient as ApiDeploymentServiceHttpClient;
+use golem_client::api::ApiDeploymentClientLive as ApiDeploymentServiceHttpClientLive;
+use golem_client::api::ApiSecurityClient as ApiSecurityServiceHttpClient;
+use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive;
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
+use golem_client::model::{ApiDeployment, ApiDeploymentRequest, SecuritySchemeData};
 use golem_client::Context;
 use golem_common::model::{ComponentId, WorkerEvent};
 use golem_service_base::model::VersionedComponentId;
@@ -112,10 +117,24 @@ pub enum ApiDefinitionServiceClient {
     Http(Arc<ApiDefinitionServiceHttpClientLive>),
 }
 
+#[derive(Clone)]
+pub enum ApiDeploymentServiceClient {
+    Grpc, // no GRPC API
+    Http(Arc<ApiDeploymentServiceHttpClientLive>),
+}
+
+#[derive(Clone)]
+pub enum ApiSecurityServiceClient {
+    Grpc, // no GRPC API
+    Http(Arc<ApiSecurityServiceHttpClientLive>),
+}
+
 #[async_trait]
 pub trait WorkerService {
     fn worker_client(&self) -> WorkerServiceClient;
     fn api_definition_client(&self) -> ApiDefinitionServiceClient;
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
+    fn api_security_client(&self) -> ApiSecurityServiceClient;
 
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,
@@ -1049,6 +1068,83 @@ pub trait WorkerService {
         }
     }
 
+    async fn create_or_update_api_deployment(
+        &self,
+        request: ApiDeploymentRequest,
+    ) -> crate::Result<ApiDeployment> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("create_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .deploy(&request)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn get_api_deployment(&self, site: &str) -> crate::Result<ApiDeployment> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("get_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .get_deployment(site)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn list_api_deployments(
+        &self,
+        api_definition_id: &str,
+    ) -> crate::Result<Vec<ApiDeployment>> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .list_deployments(api_definition_id)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    // TODO: on the service side "site" is optional, how is that exposed on the client?
+    async fn delete_api_deployment(&self, site: &str) -> crate::Result<()> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => {
+                match client.delete_deployment(site).await {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn create_api_security_scheme(
+        &self,
+        request: SecuritySchemeData,
+    ) -> crate::Result<SecuritySchemeData> {
+        match self.api_security_client() {
+            ApiSecurityServiceClient::Grpc => {
+                not_available_on_grpc_api("create_api_security_scheme")
+            }
+            ApiSecurityServiceClient::Http(client) => client
+                .create(&request)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn get_api_security_scheme(
+        &self,
+        security_scheme_id: &str,
+    ) -> crate::Result<SecuritySchemeData> {
+        match self.api_security_client() {
+            ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
+            ApiSecurityServiceClient::Http(client) => client
+                .get(security_scheme_id)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -1153,6 +1249,60 @@ async fn new_api_definition_client(
         }
         GolemClientProtocol::Http => {
             ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port))
+        }
+    }
+}
+
+fn new_api_deployment_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<ApiDeploymentServiceHttpClientLive> {
+    Arc::new(ApiDeploymentServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_api_deployment_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    _grpc_port: u16,
+    http_port: u16,
+) -> ApiDeploymentServiceClient {
+    match protocol {
+        GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
+        GolemClientProtocol::Http => {
+            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port))
+        }
+    }
+}
+
+fn new_api_security_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<ApiSecurityServiceHttpClientLive> {
+    Arc::new(ApiSecurityServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_api_security_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    _grpc_port: u16,
+    http_port: u16,
+) -> ApiSecurityServiceClient {
+    match protocol {
+        GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
+        GolemClientProtocol::Http => {
+            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port))
         }
     }
 }
@@ -1624,6 +1774,18 @@ fn grpc_api_definition_request_to_http(
     }
 }
 
+fn to_grpc_rib_expr(expr: &str) -> Expr {
+    rib::Expr::from_text(expr).unwrap().into()
+}
+
+fn to_http_rib_expr(expr: Expr) -> String {
+    rib::Expr::try_from(expr).unwrap().to_string()
+}
+
+fn not_available_on_grpc_api<T>(endpoint: &str) -> crate::Result<T> {
+    Err(anyhow!("not available on GRPC API: {endpoint}"))
+}
+
 #[async_trait]
 pub trait WorkerLogEventStream: Send {
     async fn message(&mut self) -> crate::Result<Option<LogEvent>>;
@@ -1731,12 +1893,4 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
             None => Ok(None),
         }
     }
-}
-
-fn to_grpc_rib_expr(expr: &str) -> Expr {
-    rib::Expr::from_text(expr).unwrap().into()
-}
-
-fn to_http_rib_expr(expr: Expr) -> String {
-    rib::Expr::try_from(expr).unwrap().to_string()
 }

@@ -14,9 +14,7 @@
 
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::{
-    ApiDefinitionServiceClient, WorkerLogEventStream, WorkerService, WorkerServiceClient,
-};
+use crate::components::worker_service::{ApiDefinitionServiceClient, ApiDeploymentServiceClient, ApiSecurityServiceClient, WorkerLogEventStream, WorkerService, WorkerServiceClient};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -82,6 +80,15 @@ impl WorkerService for ForwardingWorkerService {
     fn api_definition_client(&self) -> ApiDefinitionServiceClient {
         panic!("There is no worker-service, cannot create api-definition client")
     }
+
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
+        panic!("There is no worker-service, cannot create api-deployment client")
+    }
+
+    fn api_security_client(&self) -> ApiSecurityServiceClient {
+        panic!("There is no worker-service, cannot create api-security client")
+    }
+
 
     async fn create_worker(
         &self,
