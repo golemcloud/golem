@@ -164,6 +164,7 @@ impl InstanceType {
 
 // TODO; This can be resource type too and not fully qualified function name
 // But we will add this as part of tests
+#[derive(Debug, Clone)]
 pub struct Function {
     pub function_name: FullyQualifiedFunctionName,
     pub function_type: FunctionType,
@@ -171,6 +172,7 @@ pub struct Function {
 impl Function {
     pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
         let name = self.function_name.to_string();
+        dbg!(name.clone());
         DynamicParsedFunctionName::parse(name)
     }
 }
@@ -248,7 +250,7 @@ pub struct FullyQualifiedFunctionName {
 impl Display for FullyQualifiedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.package_name {
-            Some(package_name) => write!(f, "{}:", package_name)?,
+            Some(package_name) => write!(f, "{}", package_name)?,
             None => {}
         }
 
@@ -257,7 +259,7 @@ impl Display for FullyQualifiedFunctionName {
             None => {}
         }
 
-        write!(f, ".{{{}}}", self.function_name)
+        write!(f, "{{{}}}", self.function_name)
     }
 }
 

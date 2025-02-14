@@ -27,6 +27,7 @@ pub fn infer_function_call_types(
     while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::Call(call_type, _, args, inferred_type) => {
+                dbg!(call_type.clone());
                 internal::resolve_call_argument_types(
                     call_type,
                     function_type_registry,

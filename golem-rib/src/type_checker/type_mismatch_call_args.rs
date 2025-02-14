@@ -3,6 +3,7 @@ use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use crate::call_type::CallType;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
 // we have this special phase to grab errors in the context function calls.
@@ -20,7 +21,12 @@ pub fn check_type_errors_in_function_call(
     while let Some(expr) = queue.pop_front() {
         match expr {
             Expr::Call(call_type, _, args, ..) => {
-                internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?;
+                match call_type {
+                    CallType::InstanceCreation(_) => {
+                    },
+                    call_type => internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?
+
+                }
             }
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }

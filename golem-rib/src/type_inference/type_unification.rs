@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{ArmPattern, Expr};
+use crate::call_type::CallType;
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
     let mut queue = vec![];
@@ -223,17 +224,23 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Call(function_call, _, vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
 
-                let unified_inferred_type = inferred_type.unify();
+                match function_call {
+                    CallType::InstanceCreation(_) => {},
+                    _ => {
+                        let unified_inferred_type = inferred_type.unify();
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(format!(
-                            "unable to infer the type of function return {}, {}",
-                            function_call, e
-                        ));
+                        match unified_inferred_type {
+                            Ok(unified_type) => *inferred_type = unified_type,
+                            Err(e) => {
+                                errors.push(format!(
+                                    "unable to infer the type of function return {}, {}",
+                                    function_call, e
+                                ));
+                            }
+                        }
                     }
                 }
+
             }
             Expr::SelectField(expr, _, _, inferred_type) => {
                 queue.push(expr);
