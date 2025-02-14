@@ -4,12 +4,14 @@ import {
   Power,
   PowerOff,
   Puzzle,
+  RefreshCw,
   Shield,
   Trash,
 } from "lucide-react";
 import { PluginInstall, Worker } from "../../../types/api";
+import React, { useState } from "react";
 
-import React from "react";
+import { UpdateVersionModal } from "./UpdateVersionModal";
 import { useInstalledPlugins } from "../../../api/plugins";
 
 interface AdvancedTabProps {
@@ -20,12 +22,14 @@ interface AdvancedTabProps {
       | "resume"
       | "delete"
       | "activate-plugin"
-      | "deactivate-plugin",
+      | "deactivate-plugin"
+      | "update-version",
     pluginID?: string,
   ) => void;
 }
 
 const AdvancedTab: React.FC<AdvancedTabProps> = ({ worker, onAction }) => {
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const {
     data: plugins,
     isLoading: isLoadingPlugins,
@@ -71,6 +75,21 @@ const AdvancedTab: React.FC<AdvancedTabProps> = ({ worker, onAction }) => {
                 <div className="font-medium">Resume Worker</div>
                 <div className="text-sm text-muted-foreground">
                   Resume worker execution
+                </div>
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setShowUpdateModal(true)}
+            className="w-full flex items-center justify-between p-4 bg-card/60 rounded-lg hover:bg-card/70 transition-colors disabled:opacity-50 group"
+          >
+            <div className="flex items-center gap-3">
+              <RefreshCw size={16} className="text-primary group-hover:rotate-180 transition-transform duration-300" />
+              <div className="text-left">
+                <div className="font-medium">Update Version</div>
+                <div className="text-sm text-muted-foreground">
+                  Change component version for this worker
                 </div>
               </div>
             </div>
@@ -167,6 +186,13 @@ const AdvancedTab: React.FC<AdvancedTabProps> = ({ worker, onAction }) => {
           </div>
         )}
       </div>
+
+      {/* Version Update Modal */}
+      <UpdateVersionModal
+        isOpen={showUpdateModal}
+        onClose={() => setShowUpdateModal(false)}
+        worker={worker}
+      />
     </div>
   );
 };

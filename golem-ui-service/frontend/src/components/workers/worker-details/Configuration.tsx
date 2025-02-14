@@ -4,11 +4,13 @@ import {
   FileText,
   Layers,
   Link2,
+  RefreshCw,
   Settings,
   Terminal,
 } from "lucide-react";
 
 import React from "react";
+import { UpdateVersionModal } from "./UpdateVersionModal";
 import { Worker } from "../../../types/api";
 
 interface ConfigTabProps {
@@ -16,6 +18,7 @@ interface ConfigTabProps {
 }
 
 const ConfigTab: React.FC<ConfigTabProps> = ({ worker }) => {
+  const [showUpdateModal, setShowUpdateModal] = React.useState(false);
   return (
     <div className="space-y-6">
       {/* Basic Configuration */}
@@ -33,12 +36,30 @@ const ConfigTab: React.FC<ConfigTabProps> = ({ worker }) => {
               {worker.workerId.workerName}
             </div>
           </div>
-          <div>
+          {/* <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">
               Component Version
             </label>
             <div className="p-3 bg-card/60 rounded-lg font-mono text-sm">
               {worker.componentVersion}
+            </div>
+          </div> */}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              Component Version
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="p-3 bg-card/60 rounded-lg font-mono text-sm flex-1">
+                {worker.componentVersion}
+              </div>
+              <button
+                onClick={() => setShowUpdateModal(true)}
+                className="p-2 text-muted-foreground hover:text-primary rounded-md 
+        hover:bg-card/60 transition-colors"
+                title="Update Version"
+              >
+                <RefreshCw size={16} />
+              </button>
             </div>
           </div>
         </div>
@@ -158,6 +179,14 @@ const ConfigTab: React.FC<ConfigTabProps> = ({ worker }) => {
             {worker.lastError}
           </div>
         </div>
+      )}
+
+      {showUpdateModal && (
+        <UpdateVersionModal
+          isOpen={showUpdateModal}
+          onClose={() => setShowUpdateModal(false)}
+          worker={worker}
+        />
       )}
     </div>
   );

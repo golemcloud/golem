@@ -7,6 +7,7 @@ import {
   Plus,
   Route as RouteIcon,
   Share2,
+  Tags,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -20,7 +21,9 @@ import {
 } from "../api/api-definitions";
 import { useEffect, useState } from "react";
 
+import ActionButtons from "../components/api/ActionButtons";
 import DeployModal from "../components/api/DeployModal";
+import NewVersionModal from "../components/api/NewVersionModal";
 import RouteModal from "../components/api/ApiRoutesModal";
 import toast from "react-hot-toast";
 
@@ -43,6 +46,7 @@ export const ApiDefinitionView = () => {
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [showVersionModal, setShowVersionModal] = useState(false);
   const [editingRoute, setEditingRoute] = useState<
     (Route & { index: number }) | null
   >(null);
@@ -193,88 +197,37 @@ export const ApiDefinitionView = () => {
           </button>
         </div>
 
-        {/* Action Buttons */}
-        <div
-          className={`flex flex-col sm:flex-row gap-2 ${showMobileMenu ? "block" : "hidden md:flex"}`}
-        >
-          {apiDefinition.draft && (
-            <button
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Are you sure you want to publish this API? This will disable API editing",
-                  )
-                ) {
-                  const updatedDefinition = {
-                    ...apiDefinition,
-                    draft: false,
-                  };
+        <NewVersionModal
+          isOpen={showVersionModal}
+          onClose={() => setShowVersionModal(false)}
+          currentDefinition={apiDefinition}
+        />
 
-                  updateDefinition.mutate(
-                    {
-                      id: id!,
-                      version: version!,
-                      definition: updatedDefinition,
-                    },
-                    {
-                      onSuccess: () =>
-                        toast.success("API published successfully"),
-                      onError: () => toast.error("Failed to publish API"),
-                      retry: 0,
-                    },
-                  );
+        <ActionButtons
+          apiDefinition={apiDefinition}
+          onPublish={() => {
+            if (window.confirm("Are you sure you want to publish this API? This will disable API editing")) {
+              const updatedDefinition = {
+                ...apiDefinition,
+                draft: false,
+              };
+
+              updateDefinition.mutate(
+                { id: id!, version: version!, definition: updatedDefinition },
+                {
+                  onSuccess: () => toast.success("API published successfully"),
+                  onError: () => toast.error("Failed to publish API"),
+                  retry: 0,
                 }
-              }}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600"
-            >
-              <Share2 size={18} />
-              <span>Publish</span>
-            </button>
-          )}
-          <button
-            onClick={() => setShowDeployModal(true)}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-          >
-            <Upload size={18} />
-            <span>Deploy</span>
-          </button>
-          {apiDefinition.draft && (
-            <button
-              onClick={() => setShowRouteModal(true)}
-              className="flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded hover:bg-blue-600"
-            >
-              <Plus size={18} />
-              <span>Add Route</span>
-            </button>
-          )}
-
-          <button
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Are you sure you want to delete this API definition? This action cannot be undone.`,
-                )
-              ) {
-                deleteApiDefinition.mutate(
-                  { id: id!, version: version! },
-                  {
-                    onSuccess: () => {
-                      toast.success("API definition deleted successfully");
-                      navigate("/apis");
-                    },
-                    onError: () =>
-                      toast.error("Failed to delete API definition"),
-                    retry: 0,
-                  },
-                );
-              }
-            }}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-          >
-            <Trash2 size={18} />
-            <span>Delete</span>
-          </button>
-        </div>
+              );
+            }
+          }}
+          onDeploy={() => setShowDeployModal(true)}
+          onAddRoute={() => setShowRouteModal(true)}
+          onNewVersion={() => setShowVersionModal(true)}
+          showMobileMenu={showMobileMenu}
+          className="justify-end"
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
@@ -317,8 +270,7 @@ export const ApiDefinitionView = () => {
                       <span
                         className={`
                         px-2 py-0.5 rounded text-xs md:text-sm font-medium
-                        ${
-                          route.method === "GET"
+                        ${route.method === "GET"
                             ? "bg-green-500/10 text-green-500"
                             : route.method === "POST"
                               ? "bg-primary/10 text-blue-500"
@@ -329,7 +281,7 @@ export const ApiDefinitionView = () => {
                                   : route.method === "PATCH"
                                     ? "bg-purple-500/10 text-purple-500"
                                     : "bg-gray-500/10 text-gray-500"
-                        }`}
+                          }`}
                       >
                         {route.method}
                       </span>

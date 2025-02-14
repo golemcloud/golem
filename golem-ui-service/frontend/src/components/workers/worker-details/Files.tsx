@@ -1,58 +1,41 @@
+import { Component, Worker } from "../../../types/api";
 import {
   Download,
-  File,
   FileText,
   Folder,
-  FolderOpen,
-  Loader2,
   Lock,
-  RefreshCcw,
   UnlockKeyhole,
 } from "lucide-react";
-import {
-  WorkerFile,
-  downloadWorkerFile,
-  useWorkerFiles,
-} from "../../../api/workers";
+import React, { useEffect } from "react";
+import { getComponentVersion, useComponent } from "../../../api/components";
 
-import React from "react";
-import { Worker } from "../../../types/api";
 import { displayError } from "../../../lib/error-utils";
+import { downloadWorkerFile } from "../../../api/workers";
 import toast from "react-hot-toast";
-import { useQueryClient } from "@tanstack/react-query";
 
 interface FilesTabProps {
   worker: Worker;
 }
 
 const FileRow: React.FC<{
-  file: WorkerFile;
+  file: {
+    path: string;
+    permissions: "read-only" | "read-write";
+    key: string;
+  };
   onDownload: (fileName: string) => void;
 }> = ({ file, onDownload }) => {
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return "0 Bytes";
-    const k = 1024;
-    const sizes = ["Bytes", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-  };
-
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString();
-  };
+  // Extract filename from path
+  const fileName = file.path.split("/").pop() || file.path;
 
   return (
     <div className="p-4 bg-card/60 rounded-lg hover:bg-card/70 transition-colors group">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {file.kind === "directory" ? (
-            <FolderOpen size={16} className="text-blue-400" />
-          ) : (
-            <FileText size={16} className="text-primary" />
-          )}
+          <FileText size={16} className="text-primary" />
           <div>
             <div className="font-medium flex items-center gap-2">
-              {file.name}
+              {fileName}
               {file.permissions === "read-only" ? (
                 <Lock size={12} className="text-muted-foreground" />
               ) : (
@@ -60,46 +43,37 @@ const FileRow: React.FC<{
               )}
             </div>
             <div className="text-sm text-muted-foreground">
-              {formatFileSize(file.size)} • Last modified{" "}
-              {formatDate(file.lastModified)}
+              {file.permissions} • ID: {file.key.slice(0, 8)}...
             </div>
           </div>
         </div>
-        {file.kind === "file" && (
-          <button
-            onClick={() => onDownload(file.name)}
-            className="p-2 text-primary hover:text-primary-accent rounded-md hover:bg-card/60 opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Download file"
-          >
-            <Download size={16} />
-          </button>
-        )}
       </div>
     </div>
   );
 };
 
 const FilesTab: React.FC<FilesTabProps> = ({ worker }) => {
-  const queryClient = useQueryClient();
-  const {
-    data: filesData,
-    isLoading,
-    error,
-  } = useWorkerFiles(worker.workerId.componentId, worker.workerId.workerName);
+  const [component, setComponent] = React.useState<Component>();
+  useEffect(() => {
+    getComponentVersion(worker.workerId.componentId!, worker.componentVersion).then(
+      (component) => setComponent(component),
+    );
+  }, [worker.workerId.componentId, worker.componentVersion]);
 
-  const handleDownload = async (fileName: string) => {
+
+  const handleDownload = async (filePath: string) => {
     try {
       const blob = await downloadWorkerFile(
         worker.workerId.componentId,
         worker.workerId.workerName,
-        fileName,
+        filePath
       );
 
       // Create download link
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = fileName;
+      a.download = filePath.split("/").pop() || filePath;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -112,29 +86,23 @@ const FilesTab: React.FC<FilesTabProps> = ({ worker }) => {
     }
   };
 
-  const handleRefresh = () => {
-    queryClient.invalidateQueries({
-      queryKey: [
-        "workers",
-        worker.workerId.componentId,
-        worker.workerId.workerName,
-        "files",
-      ],
-    });
-  };
-
-  if (error) {
+  if (!component) {
     return (
       <div className="bg-card/80 border border-border/10 rounded-lg p-6">
-        <div className="text-center py-8 text-destructive">
-          <File size={24} className="mx-auto mb-2 opacity-50" />
-          <p>Failed to load files</p>
-          <button
-            onClick={handleRefresh}
-            className="mt-2 text-sm text-primary hover:text-primary-accent"
-          >
-            Try again
-          </button>
+        <div className="text-center py-8 text-muted-foreground">
+          <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full mx-auto mb-2" />
+          <p>Loading files...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!component?.files || component.files.length === 0) {
+    return (
+      <div className="bg-card/80 border border-border/10 rounded-lg p-6">
+        <div className="text-center py-8 text-muted-foreground">
+          <Folder size={24} className="mx-auto mb-2 opacity-50" />
+          <p>No files available</p>
         </div>
       </div>
     );
@@ -145,32 +113,21 @@ const FilesTab: React.FC<FilesTabProps> = ({ worker }) => {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Folder size={20} className="text-primary" />
-          Worker Files
+          Component Files
+          <span className="text-sm text-muted-foreground font-normal">
+            ({component.files.length})
+          </span>
         </h3>
-        <button
-          className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-card/60 transition-colors"
-          onClick={handleRefresh}
-          disabled={isLoading}
-        >
-          <RefreshCcw size={16} className={isLoading ? "animate-spin" : ""} />
-        </button>
       </div>
 
       <div className="space-y-2">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 size={24} className="animate-spin" />
-          </div>
-        ) : filesData?.nodes && filesData.nodes.length > 0 ? (
-          filesData.nodes.map((file: WorkerFile) => (
-            <FileRow key={file.name} file={file} onDownload={handleDownload} />
-          ))
-        ) : (
-          <div className="text-center py-8 text-muted-foreground">
-            <Folder size={24} className="mx-auto mb-2 opacity-50" />
-            <p>No files available</p>
-          </div>
-        )}
+        {component.files.map((file) => (
+          <FileRow
+            key={file.key}
+            file={file}
+            onDownload={handleDownload}
+          />
+        ))}
       </div>
     </div>
   );
