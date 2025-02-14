@@ -17,7 +17,8 @@ use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    new_api_definition_client, new_worker_client, ApiDefinitionServiceClient, WorkerService,
+    WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::{GolemEnvVars, NETWORK};
 use crate::config::GolemClientProtocol;
@@ -37,7 +38,8 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
-    client: WorkerServiceClient,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
 }
 
 impl DockerWorkerService {
@@ -119,7 +121,14 @@ impl DockerWorkerService {
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
-            client: new_client(
+            worker_client: new_worker_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
+            api_definition_client: new_api_definition_client(
                 client_protocol,
                 "localhost",
                 public_grpc_port,
@@ -133,8 +142,12 @@ impl DockerWorkerService {
 
 #[async_trait]
 impl WorkerService for DockerWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
     }
 
     fn private_host(&self) -> String {

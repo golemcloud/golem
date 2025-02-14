@@ -16,7 +16,8 @@ use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, wait_for_startup, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    new_api_definition_client, new_worker_client, wait_for_startup, ApiDefinitionServiceClient,
+    WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::{ChildProcessLogger, GolemEnvVars};
 use crate::config::GolemClientProtocol;
@@ -34,7 +35,8 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    client: WorkerServiceClient,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
 }
 
 impl SpawnedWorkerService {
@@ -130,7 +132,15 @@ impl SpawnedWorkerService {
             custom_request_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            client: new_client(client_protocol, "localhost", grpc_port, http_port).await,
+            worker_client: new_worker_client(client_protocol, "localhost", grpc_port, http_port)
+                .await,
+            api_definition_client: new_api_definition_client(
+                client_protocol,
+                "localhost",
+                grpc_port,
+                http_port,
+            )
+            .await,
         }
     }
 
@@ -144,8 +154,12 @@ impl SpawnedWorkerService {
 
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
     }
 
     fn private_host(&self) -> String {

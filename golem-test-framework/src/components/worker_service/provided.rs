@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_service::{new_client, WorkerService, WorkerServiceClient};
+use crate::components::worker_service::{
+    new_api_definition_client, new_worker_client, ApiDefinitionServiceClient, WorkerService,
+    WorkerServiceClient,
+};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use tracing::info;
@@ -22,7 +25,8 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    client: WorkerServiceClient,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
 }
 
 impl ProvidedWorkerService {
@@ -39,15 +43,26 @@ impl ProvidedWorkerService {
             http_port,
             grpc_port,
             custom_request_port,
-            client: new_client(client_protocol, &host, grpc_port, http_port).await,
+            worker_client: new_worker_client(client_protocol, &host, grpc_port, http_port).await,
+            api_definition_client: new_api_definition_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
     }
 
     fn private_host(&self) -> String {

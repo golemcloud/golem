@@ -20,7 +20,8 @@ use crate::components::k8s::{
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, wait_for_startup, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    new_api_definition_client, new_worker_client, wait_for_startup, ApiDefinitionServiceClient,
+    WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::GolemEnvVars;
 use crate::config::GolemClientProtocol;
@@ -44,7 +45,8 @@ pub struct K8sWorkerService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
-    client: WorkerServiceClient,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
 }
 
 impl K8sWorkerService {
@@ -228,7 +230,14 @@ impl K8sWorkerService {
             service: Arc::new(Mutex::new(Some(managed_service))),
             grpc_routing: Arc::new(Mutex::new(Some(grpc_routing.routing))),
             http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
-            client: new_client(
+            worker_client: new_worker_client(
+                client_protocol,
+                &grpc_routing.hostname,
+                grpc_routing.port,
+                http_routing.port,
+            )
+            .await,
+            api_definition_client: new_api_definition_client(
                 client_protocol,
                 &grpc_routing.hostname,
                 grpc_routing.port,
@@ -241,8 +250,12 @@ impl K8sWorkerService {
 
 #[async_trait]
 impl WorkerService for K8sWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
     }
 
     fn private_host(&self) -> String {
