@@ -1,0 +1,9 @@
+/claim #1263 
+
+To deal with the problem of the present day Scala.Js binding generator no longer completely assisting WIT capabilities, we want to develop a sturdy binding generator that correctly maps all WIT functionalities to Scala.Js. This includes implementing support for imports, sources, and correcting type mappings.
+
+The proposed answer entails building upon the present wit-bindgen framework, making sure that the new generator is complete and well-examined. Integration with the sbt-wasm-factor plugin is important, because it will facilitate the technology of WIT from Scala code.
+
+While the improvement of the "scala to wit" macro is outside the scope of this price tag, it is essential that the modern model stays functional and reliable. By completing this mission, builders could be empowered to make use of all Golem functions from Scala.Js, paving the way for the advent of idiomatic Scala APIs that wrap low-level WIT functionalities, consisting of wasi-http.
+
+This enhancement will no longer best streamline the improvement manner however also foster a more cohesive surroundings for Scala developers running with Golem
