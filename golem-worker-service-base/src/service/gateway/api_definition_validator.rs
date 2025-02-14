@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_api_definition::ApiDefinitionId;
 use golem_common::SafeDisplay;
 use golem_service_base::model::Component;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,7 @@ pub trait ApiDefinitionValidatorService<ApiDefinition> {
         api: &ApiDefinition,
         components: &[Component],
     ) -> Result<(), ValidationErrors>;
+    fn validate_name(&self, id: &ApiDefinitionId) -> Result<(), ValidationErrors>;
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
