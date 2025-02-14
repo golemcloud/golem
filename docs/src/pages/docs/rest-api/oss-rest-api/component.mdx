@@ -80,7 +80,23 @@ Gets all components, optionally filtered by component name.
           "initial": 0,
           "maximum": 0
         }
-      ]
+      ],
+      "dynamicLinking": {
+        "property1": {
+          "type": "WasmRpc",
+          "targetInterfaceName": {
+            "property1": "string",
+            "property2": "string"
+          }
+        },
+        "property2": {
+          "type": "WasmRpc",
+          "targetInterfaceName": {
+            "property1": "string",
+            "property2": "string"
+          }
+        }
+      }
     },
     "createdAt": "2019-08-24T14:15:22Z",
     "componentType": "Durable",
@@ -144,6 +160,29 @@ If the component type is not specified, it will be considered as a `Durable` com
 ```
 
 **Field `files`**: string binary
+
+**Field `dynamicLinking`**: JSON
+
+```json copy
+{
+  "dynamicLinking": {
+    "property1": {
+      "type": "WasmRpc",
+      "targetInterfaceName": {
+        "property1": "string",
+        "property2": "string"
+      }
+    },
+    "property2": {
+      "type": "WasmRpc",
+      "targetInterfaceName": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  }
+}
+```
 
 **Example Response JSON**
 
@@ -210,7 +249,23 @@ If the component type is not specified, it will be considered as a `Durable` com
         "initial": 0,
         "maximum": 0
       }
-    ]
+    ],
+    "dynamicLinking": {
+      "property1": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      },
+      "property2": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    }
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "componentType": "Durable",
@@ -319,7 +374,23 @@ is used.
         "initial": 0,
         "maximum": 0
       }
-    ]
+    ],
+    "dynamicLinking": {
+      "property1": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      },
+      "property2": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    }
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "componentType": "Durable",
@@ -377,6 +448,29 @@ is used.
 ```
 
 **Field `files`**: string binary
+
+**Field `dynamicLinking`**: JSON
+
+```json copy
+{
+  "dynamicLinking": {
+    "property1": {
+      "type": "WasmRpc",
+      "targetInterfaceName": {
+        "property1": "string",
+        "property2": "string"
+      }
+    },
+    "property2": {
+      "type": "WasmRpc",
+      "targetInterfaceName": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  }
+}
+```
 
 **Example Response JSON**
 
@@ -443,7 +537,23 @@ is used.
         "initial": 0,
         "maximum": 0
       }
-    ]
+    ],
+    "dynamicLinking": {
+      "property1": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      },
+      "property2": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    }
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "componentType": "Durable",
@@ -567,7 +677,23 @@ This endpoint returns a list of all versions for the component id provided as pa
           "initial": 0,
           "maximum": 0
         }
-      ]
+      ],
+      "dynamicLinking": {
+        "property1": {
+          "type": "WasmRpc",
+          "targetInterfaceName": {
+            "property1": "string",
+            "property2": "string"
+          }
+        },
+        "property2": {
+          "type": "WasmRpc",
+          "targetInterfaceName": {
+            "property1": "string",
+            "property2": "string"
+          }
+        }
+      }
     },
     "createdAt": "2019-08-24T14:15:22Z",
     "componentType": "Durable",
@@ -667,7 +793,23 @@ Gets the version of a component.
         "initial": 0,
         "maximum": 0
       }
-    ]
+    ],
+    "dynamicLinking": {
+      "property1": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      },
+      "property2": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    }
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "componentType": "Durable",
@@ -766,7 +908,23 @@ Gets the latest version of a component.
         "initial": 0,
         "maximum": 0
       }
-    ]
+    ],
+    "dynamicLinking": {
+      "property1": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      },
+      "property2": {
+        "type": "WasmRpc",
+        "targetInterfaceName": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    }
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "componentType": "Durable",

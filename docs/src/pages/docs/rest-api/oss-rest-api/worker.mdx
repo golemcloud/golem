@@ -726,6 +726,29 @@ The plugin must be one of the installed plugins for the worker's current compone
 {}
 ```
 
+## Revert a worker
+
+| Path                                                         | Method | Protected |
+| ------------------------------------------------------------ | ------ | --------- |
+| `/v1/components/{component_id}/workers/{worker_name}/revert` | POST   | No        |
+
+Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+
+**Example Request JSON**
+
+```json copy
+{
+  "type": "revertToOplogIndex",
+  "lastOplogIndex": 0
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
 ## Worker API Errors
 
 | Status Code | Description | Body                                                          |

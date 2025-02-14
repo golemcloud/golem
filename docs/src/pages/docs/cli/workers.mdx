@@ -10,6 +10,7 @@ Using `golem-cli worker` command you can:
 - Get worker stdout, stderr and logs
 - Update workers
 - Search workers, get metadata, etc.
+- Revert a worker to a previous state
 
 <Callout>
   In all examples we are using component URN. You can use component URL or `--component-name`
@@ -268,4 +269,25 @@ For example to look for oplog entries that contain parameters or return values o
 
 ```bash
 golem-cli worker oplog --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --query 'exported-function AND (product-id:123 OR product-id:456)'
+```
+
+## Reverting a worker
+
+It is possible to revert a worker to its previous state. This can be useful if a worker got into a **failed** state to make it usable again, or to undo some accidental invocations or updates.
+
+There are two possible ways to specify which state to revert to:
+
+- **By index**: The index of the oplog entry to revert to. Use the **oplog query** command to check the worker's oplog and find the index of the desired state.
+- **By undoing the last invocations**: The given number is the number of invocations to revert.
+
+To revert to a given oplog, use the `worker revert` command:
+
+```bash
+golem-cli worker revert --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --last-oplog-index 42
+```
+
+To revert some of the last invocations, use the `--number-of-invocations` parameter instead:
+
+```bash
+golem-cli worker revert --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --number-of-invocations 3
 ```

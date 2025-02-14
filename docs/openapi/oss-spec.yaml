@@ -1462,6 +1462,80 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/revert:
+    post:
+      tags:
+      - Worker
+      summary: Revert a worker
+      description: Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+      operationId: revert_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/RevertWorkerTarget'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RevertWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -2317,6 +2391,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - name
               - component
@@ -2472,6 +2548,8 @@ paths:
                 files:
                   type: string
                   format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
               required:
               - component
         required: true
@@ -4058,6 +4136,7 @@ components:
       enum:
       - default
       - file-server
+      - http-handler
       - cors-preflight
     GetFilesResponse:
       type: object
@@ -4725,7 +4804,7 @@ components:
         response:
           $ref: '#/components/schemas/ValueAndType'
         wrapped_function_type:
-          $ref: '#/components/schemas/PublicWrappedFunctionType'
+          $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
       - function_name
@@ -4951,6 +5030,46 @@ components:
       - Facebook
       - Microsoft
       - Gitlab
+    PublicDurableFunctionType:
+      discriminator:
+        propertyName: type
+        mapping:
+          ReadLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+    PublicDurableFunctionType_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemote
+            type: string
+            enum:
+            - WriteRemote
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicDurableFunctionType_WriteRemoteBatchedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemoteBatched
+            type: string
+            enum:
+            - WriteRemoteBatched
+        required:
+        - type
+      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -4991,6 +5110,7 @@ components:
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5020,6 +5140,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5235,6 +5356,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ResourceParameters'
+    PublicOplogEntry_RevertParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revert
+            type: string
+            enum:
+            - Revert
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
       allOf:
       - type: object
@@ -5350,46 +5483,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
-    PublicWrappedFunctionType:
-      discriminator:
-        propertyName: type
-        mapping:
-          ReadLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          ReadRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
-    PublicWrappedFunctionType_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemote
-            type: string
-            enum:
-            - WriteRemote
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
-    PublicWrappedFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteBatched
-            type: string
-            enum:
-            - WriteRemoteBatched
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     ResourceMetadata:
       type: object
       properties:
@@ -5414,6 +5507,69 @@ components:
       - id
     ResumeResponse:
       type: object
+    RevertLastInvocations:
+      type: object
+      properties:
+        numberOfInvocations:
+          type: integer
+          format: uint64
+      required:
+      - numberOfInvocations
+    RevertParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        dropped_region:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - dropped_region
+    RevertToOplogIndex:
+      type: object
+      properties:
+        lastOplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - lastOplogIndex
+    RevertWorkerResponse:
+      type: object
+    RevertWorkerTarget:
+      discriminator:
+        propertyName: type
+        mapping:
+          revertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+          revertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+    RevertWorkerTarget_RevertLastInvocations:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertLastInvocations
+            type: string
+            enum:
+            - revertLastInvocations
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertLastInvocations'
+    RevertWorkerTarget_RevertToOplogIndex:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertToOplogIndex
+            type: string
+            enum:
+            - revertToOplogIndex
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertToOplogIndex'
     RibInputTypeInfo:
       type: object
       properties:
@@ -6305,10 +6461,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - exports
       - producers
       - memories
+      - dynamicLinking
     ComponentPluginScope:
       type: object
       properties:
@@ -6372,6 +6533,45 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedInstance:
+      discriminator:
+        propertyName: type
+        mapping:
+          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+    DynamicLinkedInstance_DynamicLinkedWasmRpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasmRpc
+            type: string
+            enum:
+            - WasmRpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
+    DynamicLinkedWasmRpc:
+      type: object
+      properties:
+        targetInterfaceName:
+          description: Maps resource names within the dynamic linked interface to target interfaces
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - targetInterfaceName
+    DynamicLinking:
+      type: object
+      properties:
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+      required:
+      - dynamicLinking
     InitialComponentFile:
       type: object
       properties:

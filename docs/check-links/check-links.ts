@@ -115,20 +115,26 @@ const checkLink = async (params: {
   headings: string[]
   ignorePatterns?: RegExp[]
 }): Promise<LinkCheckResult> => {
-  const { link, baseUrl, headings, ignorePatterns = [] } = params
+  let { link, baseUrl, headings, ignorePatterns = [] } = params
   // Check if link should be ignored
   if (ignorePatterns.some(pattern => pattern.test(link))) {
     return { link, status: "ignored" }
   }
 
   try {
-    // Handle anchor links
+    // Handle same page anchor links
     if (link.startsWith("#")) {
       const anchorId = link.slice(1)
       return {
         link,
         status: headings.includes(anchorId) ? "alive" : "dead",
       }
+    }
+
+    // For other page anchors links only check the base link
+    const anchorIdx = link.indexOf("#")
+    if (anchorIdx !== -1) {
+      link = link.substring(0, anchorIdx)
     }
 
     // Handle absolute links from `src/pages/docs/`
