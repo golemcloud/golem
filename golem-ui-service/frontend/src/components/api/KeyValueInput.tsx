@@ -5,12 +5,14 @@ interface KeyValueInputProps {
   label: string;
   value: Record<string, string>;
   onChange: (value: Record<string, string>) => void;
+  editableKeys?: boolean;
 }
 
 export const KeyValueInput = ({
   label,
   value,
   onChange,
+  editableKeys = true,
 }: KeyValueInputProps) => {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
@@ -52,6 +54,7 @@ export const KeyValueInput = ({
             <input
               type="text"
               value={key}
+              disabled={!editableKeys}
               onChange={(e) => handleKeyChange(key, e.target.value)}
               className="bg-gray-800 w-full p-2 rounded-md border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
             />

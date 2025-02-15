@@ -38,6 +38,14 @@ export interface Route {
     workerName: string;
     response?: string;
     bindingType: "default" | "file-server" | "cors-preflight";
+    corsPreflight?: {
+      allowOrigin: string,
+      allowMethods: string,
+      allowHeaders: string,
+      exposeHeaders: string,
+      allowCredentials: boolean,
+      maxAge: 0
+    }
   };
 }
 

@@ -207,7 +207,7 @@ export const ComponentDetail = () => {
       {/* Main Content Grid */}
       <div className="grid grid-cols-1 md:grid-cols-7 gap-4 md:gap-6">
         {/* Exports Section */}
-        <div className="md:col-span-3 bg-card rounded-lg p-4 md:p-6">
+        {/* <div className="md:col-span-3 bg-card rounded-lg p-4 md:p-6">
           <h2 className="text-lg md:text-xl font-semibold mb-4 md:mb-6 flex items-center gap-3">
             <Code2 size={20} className="text-primary" />
             Exports
@@ -246,6 +246,63 @@ export const ComponentDetail = () => {
             {component.metadata.exports.length === 0 && (
               <div className="text-center py-6 md:py-8 text-muted-foreground">
                 <Code2 size={32} className="mx-auto mb-2 text-gray-600" />
+                <p>No exports available</p>
+              </div>
+            )}
+          </div>
+        </div> */}
+
+        {/* Exports Section */}
+        <div className="md:col-span-3 bg-card rounded-lg p-4 md:p-6">
+          <h2 className="text-lg md:text-xl font-semibold mb-4 md:mb-6 flex items-center gap-3">
+            <Code2 size={20} className="text-primary" />
+            Exports
+          </h2>
+          <div className="space-y-3 md:space-y-4">
+            {component.metadata.exports.map((exp, index) => (
+              <div
+                key={index}
+                className="p-3 md:p-4 bg-card/50 rounded-lg hover:bg-card/80 transition-colors"
+              >
+                <div className="flex items-center gap-2 mb-2 md:mb-3">
+                  <ExternalLink size={16} className="text-primary" />
+                  <span className="font-medium text-sm md:text-base">
+                    {exp.name}
+                  </span>
+                  <span className="text-xs md:text-sm text-muted-foreground ml-auto">
+                    {exp.functions.length} functions
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {exp.functions.map((func, index) => (
+                    <div
+                      key={index}
+                      className={`flex items-center justify-between p-2 md:p-3 bg-card/50 rounded-lg
+                         hover:bg-card transition-colors group`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Terminal size={14} className="text-muted-foreground" />
+                        <span className="text-xs md:text-sm break-all">
+                          {`${exp.name}.${func.name}`}
+                        </span>
+                      </div>
+                      {component.componentType === "Ephemeral" && (
+                        <Link
+                          to={`/components/${component.versionedComponentId.componentId}/${component.versionedComponentId.version}/invoke?functionName=${exp.name}.{${func.name}}`}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-primary hover:text-primary-accent text-xs"
+                        >
+                          <Play size={14} />
+                          <span>Invoke</span>
+                        </Link>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {component.metadata.exports.length === 0 && (
+              <div className="text-center py-6 md:py-8 text-muted-foreground">
+                <Code2 size={32} className="mx-auto mb-2 opacity-50" />
                 <p>No exports available</p>
               </div>
             )}

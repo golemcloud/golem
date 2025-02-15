@@ -45,6 +45,10 @@ function App() {
               path="/components/:componentId/workers/:workerName/invoke"
               element={<FunctionInvoker />}
             />
+            <Route
+              path="/components/:componentId/:componentVersion/invoke"
+              element={<FunctionInvoker />}
+            />
 
             {/* <Route path="/api" */}
           </Routes>

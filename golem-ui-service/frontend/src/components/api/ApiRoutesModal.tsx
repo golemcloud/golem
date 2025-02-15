@@ -158,6 +158,7 @@ export const RouteModal = ({
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "*",
     "Access-Control-Max-Age": "86400",
+    "max-age": "86400",
   });
   const [contextVariables, setContextVariables] = useState(
     getContextVariables(getPathParams("")),
@@ -215,6 +216,15 @@ export const RouteModal = ({
           .map((pair) => pair.split(":").map((s) => s.replace(/['"]/g, "")));
         const headers = Object.fromEntries(corsPairs);
         setCorsHeaders(headers);
+      } else {
+        const corsResponse = existingRoute.binding.corsPreflight || {
+          "allowCredentials": true,
+          "allowHeaders": "*",
+          "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
+          "allowOrigin": "*",
+          "maxAge": 0,
+        };
+        setCorsHeaders(corsResponse);
       }
     }
   }, [existingRoute, components]);
@@ -264,6 +274,8 @@ export const RouteModal = ({
           .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
           .join(",\n  ")}
 }`;
+    } else {
+
     }
 
     const route = {
@@ -277,6 +289,7 @@ export const RouteModal = ({
         workerName: workerNameScript,
         response: finalResponse,
         bindingType,
+        corsPreflight: bindingType !== "cors-preflight" ? corsHeaders : undefined
       },
     };
 
@@ -431,25 +444,22 @@ export const RouteModal = ({
               />
             </label>
 
-            {bindingType === "cors-preflight" ? (
-              <KeyValueInput
-                label="CORS Headers"
-                value={corsHeaders}
-                onChange={setCorsHeaders}
+            {bindingType !== "cors-preflight" && path && selectedComponent && (
+              <RibEditorPanel
+                initialValue={responseScript}
+                onChange={setResponseScript}
+                contextVariables={contextVariables}
+                title="Response Transform"
+                summary="Define the response transformation using a Rib script"
               />
-            ) : (
-              <>
-                {path && selectedComponent && (
-                  <RibEditorPanel
-                    initialValue={responseScript}
-                    onChange={setResponseScript}
-                    contextVariables={contextVariables}
-                    title="Response Transform"
-                    summary="Define the response transformation using a Rib script"
-                  />
-                )}
-              </>
             )}
+
+            <KeyValueInput
+              label="CORS Headers"
+              value={corsHeaders}
+              onChange={setCorsHeaders}
+              editableKeys={false}
+            />
           </div>
 
           <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-700">

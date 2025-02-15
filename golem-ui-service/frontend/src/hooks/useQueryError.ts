@@ -11,12 +11,17 @@ interface ApiError {
 }
 
 export const useQueryError = <T>(
-  query: UseQueryResult<T, Error | ApiError>,
+  query: UseQueryResult<T, Error | ApiError>
 ) => {
+  console.log("Query error", query.error);
   if (!query.error) return null;
 
   if (query.error instanceof Error) {
     return query.error.message;
+  }
+
+  if (query.error instanceof String) {
+    return query.error;
   }
 
   const error = query.error as ApiError;

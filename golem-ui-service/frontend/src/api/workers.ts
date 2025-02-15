@@ -213,6 +213,7 @@ export const useWorker = (
     queryFn: () => getWorker(componentId, workerName),
     onError: (error: Error | GolemError) =>
       displayError(error, "Error fetching Worker"),
+    enabled: !!componentId && !!workerName,
   });
 };
 

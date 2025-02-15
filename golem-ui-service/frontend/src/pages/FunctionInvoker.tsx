@@ -7,246 +7,67 @@ import {
   SquareFunction,
   Terminal,
 } from "lucide-react";
+import { Component, TypeDefinition } from "../types/api";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 
-import { Component } from "../types/api";
+import RecursiveParameterInput from "../components/shared/RecursiveParameterInput";
 import { apiClient } from "../lib/api-client";
 import { getComponentVersion } from "../api/components";
 import toast from "react-hot-toast";
 import { useMutation } from "@tanstack/react-query";
 import { useWorker } from "../api/workers";
 
-const TypeBadge = ({ type }: { type: string }) => (
-  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400 font-mono">
-    {type}
-  </span>
-);
-
-interface TypeDefinition {
-  type: string;
-  fields?: Array<{
-    name: string;
-    typ: TypeDefinition;
-  }>;
-  cases?: Array<{
-    name: string;
-    typ: TypeDefinition;
-  }>;
-}
-
-const RecursiveParameterInput = ({
-  name,
-  typeDef,
-  value,
-  onChange,
-  path = "",
-}: {
-  name: string;
-  typeDef: TypeDefinition;
-  value: unknown;
-  onChange: (path: string, value: string) => void;
-  path?: string;
-}) => {
-  const currentPath = path ? `${path}.${name}` : name;
-
-  const handleValueChange = (newValue: unknown) => {
-    // Convert strings to appropriate types based on the type definition
-    let processedValue: unknown = newValue;
-    switch (typeDef.type.toLowerCase()) {
-      case "f32":
-      case "f64":
-        processedValue = parseFloat(newValue as string) || 0;
-        break;
-      case "i32":
-      case "i64":
-      case "u32":
-      case "u64":
-        processedValue = parseInt(newValue as string) || 0;
-        break;
-      case "bool":
-        processedValue = newValue === "true";
-        break;
-    }
-    onChange(currentPath, processedValue as string);
-  };
-
-  const renderInput = () => {
-    switch (typeDef.type) {
-      case "Record":
-        return (
-          <div className="space-y-4 bg-card/60 p-4 rounded-lg">
-            {typeDef.fields?.map((field) => (
-              <div key={field.name}>
-                <RecursiveParameterInput
-                  name={field.name}
-                  typeDef={field.typ}
-                  value={value?.[field.name]}
-                  onChange={onChange}
-                  path={currentPath}
-                />
-              </div>
-            ))}
-          </div>
-        );
-
-      case "Variant":
-        return (
-          <div className="space-y-4">
-            <select
-              className="w-full bg-card/70 border rounded-lg p-2 text-sm"
-              value={(value as { type: string })?.type || ""}
-              onChange={(e) => handleValueChange({ type: e.target.value })}
-            >
-              <option value="">Select variant...</option>
-              {typeDef.cases?.map((caseItem) => (
-                <option key={caseItem.name} value={caseItem.name}>
-                  {caseItem.name}
-                </option>
-              ))}
-            </select>
-            {(value as { type: string })?.type &&
-              typeDef.cases?.find(
-                (c) => c.name === (value as { type: string })?.type,
-              )?.typ && (
-                <RecursiveParameterInput
-                  name="value"
-                  typeDef={
-                    typeDef.cases.find(
-                      (c) => c.name === (value as { type: string })?.type,
-                    )!.typ
-                  }
-                  value={(value as { value: string }).value}
-                  onChange={(_, newValue) =>
-                    handleValueChange({
-                      type: (value as { type: string }).type,
-                      value: newValue,
-                    })
-                  }
-                  path={currentPath}
-                />
-              )}
-          </div>
-        );
-
-      case "List":
-      case "Array":
-        return (
-          <div className="space-y-2">
-            {Array.isArray(value) &&
-              value.map((item, index) => (
-                <div key={index} className="flex gap-2">
-                  <RecursiveParameterInput
-                    name={index.toString()}
-                    typeDef={typeDef.typ}
-                    value={item}
-                    onChange={(_, newValue) => {
-                      const newArray = [...(value || [])];
-                      newArray[index] = newValue;
-                      handleValueChange(newArray);
-                    }}
-                    path={currentPath}
-                  />
-                  <button
-                    onClick={() => {
-                      const newArray = value.filter((_, i) => i !== index);
-                      handleValueChange(newArray);
-                    }}
-                    className="p-2 text-destructive hover:text-destructive/80 text-sm rounded-lg"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            <button
-              onClick={() => handleValueChange([...(value || []), null])}
-              className="text-primary hover:text-primary/80 text-sm"
-            >
-              + Add Item
-            </button>
-          </div>
-        );
-
-      case "Bool":
-        return (
-          <select
-            className="w-full bg-card/90 border border-foreground rounded-lg p-2 text-sm"
-            value={value?.toString()}
-            onChange={(e) => handleValueChange(e.target.value === "true")}
-          >
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
-        );
-
-      default:
-        return (
-          <input
-            type={
-              typeDef.type.toLowerCase().includes("32") ||
-              typeDef.type.toLowerCase().includes("64")
-                ? "number"
-                : "text"
-            }
-            className="w-full bg-card/80 border border-foreground rounded-lg p-2 font-mono text-sm"
-            placeholder={`Enter ${name}...`}
-            value={(value as string) || ""}
-            onChange={(e) => handleValueChange(e.target.value)}
-            step={typeDef.type.toLowerCase().startsWith("f") ? "0.01" : "1"}
-          />
-        );
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      <label className="flex items-center gap-2 text-sm font-medium">
-        {name}
-        <TypeBadge type={typeDef.type} />
-      </label>
-      {renderInput()}
-    </div>
-  );
-};
-
 const FunctionInvoker = () => {
-  const { componentId, workerName } = useParams();
+  const { componentId, workerName, componentVersion } = useParams();
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
   const functionName = queryParams.get("functionName");
   const exportName = functionName?.split(".")[0];
   const navigate = useNavigate();
   const [component, setComponent] = useState<Component | null>(null);
+
   const {
     data: worker,
-    isLoading,
+    isLoading: isLoadingWorker,
     error: workerError,
   } = useWorker(componentId!, workerName!);
+  const version = worker?.componentVersion || componentVersion;
+
   useEffect(() => {
-    if (worker) {
+    if (componentId && version) {
+      getComponentVersion(componentId, version).then(
+        (component) => setComponent(component)
+      );
+    } else if (worker) {
       getComponentVersion(componentId!, worker.componentVersion).then(
         (component) => setComponent(component),
       );
     }
-  }, [worker, componentId]);
+  }, [componentId, version, worker]);
 
   useEffect(() => {
-    if (functionName && worker) {
-      document.title = `Invoke ${functionName} on ${worker.workerId.workerName} - Golem UI`;
+    if (functionName) {
+      document.title = workerName
+        ? `Invoke ${functionName} on ${workerName} - Golem UI`
+        : `Invoke ${functionName} - Golem UI`;
     }
-  }, [worker, functionName]);
+  }, [functionName, workerName]);
 
   const [parameters, setParameters] = useState<Record<string, string>>({});
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInvoking, setIsInvoking] = useState(false);
 
+
   const invokeMutation = useMutation({
     mutationFn: async (params: unknown) => {
-      const { data } = await apiClient.post(
-        `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`,
-        params,
-      );
+      // Choose endpoint based on whether we have a worker
+      const endpoint = workerName
+        ? `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`
+        : `/v1/components/${componentId}/invoke?function=${functionName}`;
+
+      const { data } = await apiClient.post(endpoint, params);
       return data;
     },
     onSuccess: (data: string) => {
@@ -258,11 +79,11 @@ const FunctionInvoker = () => {
     onError: (error: Error) => {
       setError(error.message);
       setIsInvoking(false);
-      toast.error(`Failed to invoke function: ${error.message}`);
+      toast.error(`Failed to invoke function: ${error}`);
     },
   });
 
-  if (isLoading) {
+  if (isLoadingWorker && workerName) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -273,15 +94,15 @@ const FunctionInvoker = () => {
     );
   }
 
-  if (workerError || !worker) {
+  if (workerError && workerName) {
     return (
       <div className="text-center py-12">
-        <AlertCircle className="mx-auto h-12 w-12 text-red-400 mb-4" />
+        <AlertCircle className="mx-auto h-12 w-12 text-destructive mb-4" />
         <h3 className="text-lg font-semibold mb-2">Worker Not Found</h3>
         <p className="text-muted-foreground">Failed to load worker details.</p>
         <button
           onClick={() => navigate(-1)}
-          className="mt-6 text-blue-400 hover:text-blue-300 flex items-center gap-2 mx-auto"
+          className="mt-6 text-primary hover:text-primary-accent flex items-center gap-2 mx-auto"
         >
           <ArrowLeft size={16} />
           Go Back
@@ -292,10 +113,6 @@ const FunctionInvoker = () => {
 
   const exportDef = component?.metadata?.exports.find(
     (e) => e.name === exportName,
-  );
-  console.log(
-    functionName?.split(".")[1].replace("{", "").replace("}", ""),
-    exportDef?.functions,
   );
   const functionDef = exportDef?.functions.find(
     (f) =>
@@ -341,11 +158,48 @@ const FunctionInvoker = () => {
     setParameters((prev) => updateNestedValue(prev, path.split("."), value));
   };
 
+  const transformValue = (value: unknown, typeDef: TypeDefinition): unknown => {
+    if (!value) return null;
+
+    switch (typeDef.type) {
+      case "List":
+        if (!Array.isArray(value)) return [];
+        return value.map(item => transformValue(item, typeDef.inner!));
+
+      case "Variant":
+        const variantValue = value as { type: string; value: unknown };
+        if (!variantValue?.type) return null;
+
+        const selectedCase = typeDef.cases?.find(c => c.name === variantValue.type);
+        if (!selectedCase) return null;
+
+        return {
+          [variantValue.type]: transformValue(variantValue.value, selectedCase.typ),
+        };
+
+      case "Record":
+        const recordValue: Record<string, unknown> = {};
+        typeDef.fields?.forEach(field => {
+          recordValue[field.name] = transformValue(
+            (value as Record<string, unknown>)?.[field.name],
+            field.typ
+          );
+        });
+        return recordValue;
+
+      case "Option":
+        return value === null ? null : transformValue(value, typeDef.inner!);
+
+      default:
+        return /f32|f64|u8|u16|u32|u64|i8|i16|i32|i64/i.test(typeDef.type) ? parseFloat(value as string) : value;
+    }
+  };
+
   const formatParamsForAPI = () => {
     return {
       params: functionDef.parameters.map((param) => ({
         typ: param.typ,
-        value: parameters[param.name],
+        value: transformValue(parameters[param.name], param.typ)
       })),
     };
   };
@@ -363,18 +217,27 @@ const FunctionInvoker = () => {
       <div className="bg-card/80 rounded-lg p-6">
         <div className="flex items-center gap-4">
           <Link
-            to={`/components/${componentId}/workers/${workerName}`}
-            className="p-2 text-muted-foreground hover:text-gray-300 rounded-lg hover:bg-gray-700/60"
+            to={workerName
+              ? `/components/${componentId}/workers/${workerName}`
+              : `/components/${componentId}/${version}`
+            }
+            className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-card/60"
           >
             <ArrowLeft size={20} />
           </Link>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <SquareFunction className="text-blue-400" size={24} />
+              <SquareFunction className="text-primary" size={24} />
               {functionName}
             </h1>
-            <div className="text-muted-foreground mt-1">
-              Export: {exportName}
+            <div className="text-muted-foreground mt-1 flex items-center gap-2">
+              <span>Export: {exportName}</span>
+              {workerName && (
+                <>
+                  <span>•</span>
+                  <span>Worker: {workerName}</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -430,9 +293,8 @@ const FunctionInvoker = () => {
       {/* Results */}
       {(result || error) && (
         <div
-          className={`bg-card/80 border rounded-lg p-6 ${
-            error ? "border-destructive/20" : "border-border/10"
-          }`}
+          className={`bg-card/80 border rounded-lg p-6 ${error ? "border-destructive/20" : "border-border/10"
+            }`}
         >
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
             <Code2

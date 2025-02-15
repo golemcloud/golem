@@ -35,11 +35,12 @@ export interface Result {
 }
 
 export interface TypeDefinition {
-  type: "Variant";
+  type: "Variant" | "Record" | "List" | "Option" | "f32" | "f64" | "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "String" | "Bool" | "Unit";
   cases: Array<{
     name: string;
     typ: Record<string, unknown>;
   }>;
+  inner?: TypeDefinition;
 }
 
 export interface Producer {
