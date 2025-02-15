@@ -12,24 +12,87 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::component::DefaultComponentOwner;
-use golem_common::model::ComponentId;
+use std::future::Future;
 
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::{ComponentError, GetComponentRequest, GetComponentsRequest};
+use golem_common::cache::{Cache, SimpleCache};
+use golem_common::client::GrpcClient;
+use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::{ComponentId, RetryConfig};
+use golem_common::retries::with_retries;
+use tonic::transport::Channel;
+use uuid::Uuid;
+use async_trait::async_trait;
 use crate::error::GolemError;
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable};
 
 
 /// Used to resolve a ComponentId from a user-supplied string.
+#[async_trait]
 pub trait ComponentResolver<ComponentOwner>: Send + Sync {
     /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
     /// `context` contains details about the current component in which the resolution is taking place.
-    fn resolve_component(&self, component_reference: String, context: ComponentOwner) -> Result<Option<ComponentId>, GolemError>;
+    async fn resolve_component(&self, component_reference: String, context: ComponentOwner) -> Result<Option<ComponentId>, GolemError>;
 }
 
-pub struct DefaultComponentResolver;
+pub struct DefaultComponentResolver {
+    cache: Cache<String, (), Option<ComponentId>, GolemError>,
+    client: GrpcClient<ComponentServiceClient<Channel>>,
+    retry_config: RetryConfig,
+    access_token: Uuid
+}
+
+impl DefaultComponentResolver {
+
+    fn resolve_component_remotely(&self, component_reference: String, context: DefaultComponentOwner) -> impl Future<Output = Result<Option<ComponentId>, GolemError>> + 'static {
+        let client = self.client.clone();
+        let retry_config = self.retry_config.clone();
+        let access_token = self.access_token.clone();
+
+        async move {
+            with_retries(
+                "component",
+                "get_by_name",
+                Some(component_reference.clone()),
+                &retry_config,
+                &(client, component_reference.clone(), access_token),
+                |(client, component_reference, access_token)| Box::pin(async move {
+                    let _ = client.call("lookup_component_by_name", move |client| {
+                        let request = authorised_grpc_request(
+                            GetComponentsRequest {
+                                project_id: None,
+                                component_name: Some(component_reference.clone())
+                            },
+                            access_token
+                        );
+                        Box::pin(client.get_components(request))
+                    })
+                    .await?
+                    .into_inner();
+
+                    todo!()
+                }),
+                is_grpc_retriable::<ComponentError>
+            ).await.map_err(|_| GolemError::unknown("foobar"))
+        }
+    }
+
+}
 
 /// Only supports resolving components based on the component name.
+#[async_trait]
 impl ComponentResolver<DefaultComponentOwner> for DefaultComponentResolver {
-    fn resolve_component(&self, component_reference: String, context: DefaultComponentOwner) -> Result<Option<ComponentId>, GolemError> {
+    async fn resolve_component(&self, component_reference: String, context: DefaultComponentOwner) -> Result<Option<ComponentId>, GolemError> {
+        if component_reference.contains("/") {
+            Err(GolemError::invalid_request("\"/\" are not allowed in component references"))?;
+        };
+
+        self.cache.get_or_insert_simple(
+            &component_reference.clone(),
+            || Box::pin(self.resolve_component_remotely(component_reference, context))
+        ).await;
+
         todo!()
     }
 }

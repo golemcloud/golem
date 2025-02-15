@@ -51,6 +51,7 @@ pub struct WorkerCreationResponse {
     pub component_version: ComponentVersion,
 }
 
+// TODO: Add validations (non-empty, no "/", no " ", ...)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct ComponentName(pub String);
 
