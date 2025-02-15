@@ -17,6 +17,7 @@ use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
+use chrono::{DateTime, Timelike, Utc};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
@@ -72,6 +73,21 @@ impl From<SerializableDateTime> for cap_std::time::SystemTime {
 impl From<cap_std::time::SystemTime> for SerializableDateTime {
     fn from(value: cap_std::time::SystemTime) -> Self {
         Self::from(value.into_std())
+    }
+}
+
+impl From<SerializableDateTime> for DateTime<Utc> {
+    fn from(value: SerializableDateTime) -> Self {
+        Self::from_timestamp(value.seconds as i64, value.nanoseconds).expect("not a valid datetime")
+    }
+}
+
+impl From<DateTime<Utc>> for SerializableDateTime {
+    fn from(value: DateTime<Utc>) -> Self {
+        Self {
+            seconds: value.timestamp() as u64,
+            nanoseconds: value.nanosecond(),
+        }
     }
 }
 

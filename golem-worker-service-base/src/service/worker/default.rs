@@ -26,10 +26,10 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ActivatePluginRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
-    UpdateWorkerRequest,
+    ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::oplog::OplogIndex;
@@ -131,6 +131,19 @@ pub trait WorkerService {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult>;
 
+    /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
+    /// returning it as a `TypeAnnotatedValue`. The input parameter JSONs cannot be converted to `Val`
+    /// without type information so they get forwarded to the executor.
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<TypeAnnotatedValue>;
+
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
     async fn validate_and_invoke(
@@ -162,6 +175,19 @@ pub trait WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()>;
+
+    /// Enqueues an invocation for the worker without awaiting its results, using JSON value
+    /// encoding represented as raw strings. Without type information these representations cannot
+    /// be converted to `Val` so they get forwarded as-is to the executor.
+    async fn invoke_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
@@ -272,6 +298,13 @@ pub trait WorkerService {
         target: RevertWorkerTarget,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<bool>;
 }
 
 pub struct TypedResult {
@@ -576,6 +609,69 @@ impl WorkerService for WorkerServiceDefault {
         Ok(invoke_response)
     }
 
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        let worker_id = worker_id.clone();
+        let worker_id_clone = worker_id.clone();
+        let function_name_clone = function_name.clone();
+
+        let invoke_response = self.call_worker_executor(
+            worker_id.clone(),
+            "invoke_and_await_worker_json",
+            move |worker_executor_client| {
+                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                Box::pin(worker_executor_client.invoke_and_await_worker_json(
+                    InvokeAndAwaitWorkerJsonRequest {
+                        worker_id: Some(worker_id_clone.clone().into()),
+                        name: function_name.clone(),
+                        input: params.clone(),
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    }
+                )
+                )
+            },
+            move |response| {
+                match response.into_inner() {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
+                                     output: Some(output),
+                                 },
+                             )),
+                    } => {
+                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
+                        output.type_annotated_value.ok_or("Empty response".into())
+                    }
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
+                    } => {
+                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
+                        Err(err.into())
+                    }
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
+                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
+                        Err("Empty response".into())
+                    }
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        ).await?;
+
+        Ok(invoke_response)
+    }
+
     async fn invoke(
         &self,
         worker_id: &TargetWorkerId,
@@ -594,6 +690,52 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::v1::InvokeWorkerRequest {
+                        worker_id: Some(worker_id.into()),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                        name: function_name.clone(),
+                        input: params.clone(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
+                } => {
+                    error!("Invoked function error: {err:?}");
+                    Err(err.into())
+                }
+                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn invoke_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<()> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "invoke_worker_json",
+            move |worker_executor_client| {
+                info!("Invoke function");
+                let worker_id = worker_id.clone();
+                Box::pin(worker_executor_client.invoke_worker_json(
+                    workerexecutor::v1::InvokeJsonWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
@@ -1277,6 +1419,41 @@ impl WorkerService for WorkerServiceDefault {
         )
         .await?;
         Ok(())
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<bool> {
+        let worker_id = worker_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        let canceled = self.call_worker_executor(
+            worker_id.clone(),
+            "cancel_invocation",
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                let idempotency_key = idempotency_key.clone();
+                Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
+                    worker_id: Some(worker_id.into()),
+                    idempotency_key: Some(idempotency_key.into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CancelInvocationResponse {
+                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Success(canceled)),
+                } => Ok(canceled),
+                workerexecutor::v1::CancelInvocationResponse {
+                    result: Some(workerexecutor::v1::cancel_invocation_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::CancelInvocationResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+        Ok(canceled)
     }
 }
 

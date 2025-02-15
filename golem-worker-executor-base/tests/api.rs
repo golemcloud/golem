@@ -35,6 +35,7 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
+use golem_wasm_rpc::IntoValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
 use std::collections::HashMap;
@@ -593,7 +594,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@0.2.1".to_string()),
+                                    package: Some("golem:api@0.2.2".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("worker-any-filter".to_string()),
                                 })
@@ -2880,4 +2881,125 @@ async fn stderr_returned_for_failed_component(
     check!(all.len() == 1);
     check!(all[0].1.is_some());
     check!(all[0].1.clone().unwrap().ends_with(&expected_stderr));
+}
+
+#[test]
+#[tracing::instrument]
+async fn cancelling_pending_invocations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("counters").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "cancel-pending-invocations")
+        .await;
+
+    let ik1 = IdempotencyKey::fresh();
+    let ik2 = IdempotencyKey::fresh();
+    let ik3 = IdempotencyKey::fresh();
+    let ik4 = IdempotencyKey::fresh();
+
+    let _ = executor
+        .invoke_and_await_with_key(
+            &worker_id,
+            &ik1,
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
+            vec![5u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let promise_id = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").create-promise}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .invoke(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").block-on-promise}",
+            vec![ValueAndType {
+                value: promise_id[0].clone(),
+                typ: PromiseId::get_type(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .invoke_with_key(
+            &worker_id,
+            &ik2,
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
+            vec![6u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .invoke_with_key(
+            &worker_id,
+            &ik3,
+            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
+            vec![7u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let cancel1 = executor.try_cancel_invocation(&worker_id, &ik1).await;
+    let cancel2 = executor.try_cancel_invocation(&worker_id, &ik2).await;
+    let cancel4 = executor.try_cancel_invocation(&worker_id, &ik4).await;
+
+    let Value::Record(fields) = &promise_id[0] else {
+        panic!("Expected a record")
+    };
+    let Value::U64(oplog_idx) = fields[1] else {
+        panic!("Expected a u64")
+    };
+
+    executor
+        .client()
+        .await
+        .expect("Failed to get client")
+        .complete_promise(CompletePromiseRequest {
+            promise_id: Some(
+                PromiseId {
+                    worker_id: worker_id.clone(),
+                    oplog_idx: OplogIndex::from_u64(oplog_idx),
+                }
+                .into(),
+            ),
+            data: vec![42],
+            account_id: Some(
+                AccountId {
+                    value: "test-account".to_string(),
+                }
+                .into(),
+            ),
+        })
+        .await
+        .unwrap();
+
+    let final_result = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
+    check!(cancel2.is_ok() && cancel2.unwrap());
+    check!(cancel4.is_err()); // cannot cancel a non-existing invocation
+    check!(final_result == vec![Value::U64(12)]);
 }

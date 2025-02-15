@@ -3,6 +3,8 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
+witDeps:
+- wit-deps
 tempDir: target/golem-temp
 templates:
   rust:
@@ -42,3 +44,6 @@ templates:
         clean:
         - src/bindings.rs
     defaultProfile: debug
+customCommands:
+  update-wit-deps:
+    - command: wit-deps -d wit-deps -m wit-deps/deps.toml -l wit-deps/deps.lock

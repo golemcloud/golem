@@ -34,9 +34,8 @@ use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::parse_type_annotated_value;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use itertools::Itertools;
 use serde_json::Value;
 use std::sync::Arc;
@@ -213,6 +212,13 @@ pub trait WorkerService {
         target: RevertWorkerTarget,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_uri: WorkerUri,
+        idempotency_key: IdempotencyKey,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
@@ -244,10 +250,13 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     }
 }
 
-fn parse_parameter(wave: &str, typ: &AnalysedType) -> Result<TypeAnnotatedValue, GolemError> {
+fn parse_parameter(
+    wave: &str,
+    typ: &AnalysedType,
+) -> Result<OptionallyTypeAnnotatedValueJson, GolemError> {
     // Avoid converting from typ to AnalysedType
     match parse_type_annotated_value(typ, wave) {
-        Ok(value) => Ok(value),
+        Ok(value) => value.try_into().map_err(GolemError),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
         ))),
@@ -283,56 +292,36 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     parameters: Option<Value>,
     wave: Vec<String>,
     function: &str,
-) -> Result<
-    (
-        Vec<golem_client::model::TypeAnnotatedValue>,
-        Option<Component>,
-    ),
-    GolemError,
-> {
+) -> Result<(Vec<OptionallyTypeAnnotatedValueJson>, Option<Component>), GolemError> {
     if let Some(parameters) = parameters {
-        // A JSON parameter was provided. It is either an array of serialized TypeAnnotatedValues
-        // or an array of the JSON representation of the parameters with no type information.
+        // A JSON parameter was provided. It is an array of serialized OptionallyTypeAnnotatedValueJson values
         let parameters = parameters
             .as_array()
             .ok_or_else(|| GolemError("Parameters must be an array".to_string()))?;
 
-        let attempt1 = parameters
+        if let Ok(values) = parameters
             .iter()
-            .map(|v| serde_json::from_value::<TypeAnnotatedValue>(v.clone()))
-            .collect::<Result<Vec<_>, _>>();
-
-        if let Ok(type_annotated_values) = attempt1 {
-            // All elements were valid TypeAnnotatedValues, we don't need component metadata to do the invocation
-            Ok((type_annotated_values, None))
+            .map(|v| serde_json::from_value::<OptionallyTypeAnnotatedValueJson>(v.clone()))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            // The JSON was a valid array of OptionallyTypeAnnotatedValueJson
+            Ok((values, None))
         } else {
-            // Some elements were not valid TypeAnnotatedValues, we need component metadata to interpret them
-            let component =
-                get_component_metadata_for_worker(client, components, worker_urn).await?;
-            let types = function_params_types(&component, function)?;
+            // The JSON was not a valid array of OptionallyTypeAnnotatedValueJson, we assume that it is an array
+            // of values only (without the { "value": ... } object around them)
+            let values = parameters
+                .iter()
+                .map(|v| {
+                    serde_json::from_value::<OptionallyTypeAnnotatedValueJson>(
+                        serde_json::json!({ "value": v.clone() }),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| {
+                    GolemError(format!("Invalid JSON format used for parameters: {err}"))
+                })?;
 
-            if types.len() != parameters.len() {
-                return Err(GolemError(format!(
-                    "Unexpected number of parameters: got {}, expected {}",
-                    parameters.len(),
-                    types.len()
-                )));
-            }
-
-            let mut type_annotated_values = Vec::new();
-            for (json_param, typ) in parameters.iter().zip(types) {
-                match TypeAnnotatedValue::parse_with_type(json_param, typ) {
-                    Ok(tav) => type_annotated_values.push(tav),
-                    Err(err) => {
-                        return Err(GolemError(format!(
-                            "Failed to parse parameter: {}",
-                            err.join(", ")
-                        )))
-                    }
-                }
-            }
-
-            Ok((type_annotated_values, Some(component)))
+            Ok((values, None))
         }
     } else {
         // No JSON parameters, we use the WAVE ones
@@ -862,5 +851,25 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
         self.client.revert(worker_urn, target).await?;
         Ok(GolemResult::Str("Reverted".to_string()))
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_uri: WorkerUri,
+        idempotency_key: IdempotencyKey,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        if self
+            .client
+            .cancel_invocation(worker_urn, idempotency_key)
+            .await?
+        {
+            Ok(GolemResult::Str("Cancelled".to_string()))
+        } else {
+            Err(GolemError(
+                "Could not cancel invocation, it has been already performed".to_string(),
+            ))
+        }
     }
 }

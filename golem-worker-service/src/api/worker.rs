@@ -12,6 +12,7 @@ use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
+use golem_worker_service_base::service::worker::InvocationParameters;
 use payload::Binary;
 use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
@@ -146,20 +147,36 @@ impl WorkerApi {
             function = function.0
         );
 
-        let response = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0.params,
-                None,
-                empty_worker_metadata(),
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|result| Json(InvokeResult { result }));
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service.validate_and_invoke_and_await_typed(
+                    &worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    vals,
+                    None,
+                    empty_worker_metadata(),
+                )
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service.invoke_and_await_json(
+                    &worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    jsons,
+                    None,
+                    empty_worker_metadata(),
+                )
+            }
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|result| Json(InvokeResult { result }));
 
         record.result(response)
     }
@@ -189,20 +206,36 @@ impl WorkerApi {
             function = function.0
         );
 
-        let response = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0.params,
-                None,
-                empty_worker_metadata(),
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|result| Json(InvokeResult { result }));
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service.validate_and_invoke_and_await_typed(
+                    &worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    vals,
+                    None,
+                    empty_worker_metadata(),
+                )
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service.invoke_and_await_json(
+                    &worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    jsons,
+                    None,
+                    empty_worker_metadata(),
+                )
+            }
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|result| Json(InvokeResult { result }));
         record.result(response)
     }
 
@@ -231,20 +264,32 @@ impl WorkerApi {
             function = function.0
         );
 
-        let response = self
-            .worker_service
-            .validate_and_invoke(
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                vals,
                 None,
                 empty_worker_metadata(),
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(InvokeResponse {}));
+            ),
+            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
+                &worker_id,
+                idempotency_key.0,
+                function.0,
+                jsons,
+                None,
+                empty_worker_metadata(),
+            ),
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|_| Json(InvokeResponse {}));
 
         record.result(response)
     }
@@ -274,20 +319,32 @@ impl WorkerApi {
             function = function.0
         );
 
-        let response = self
-            .worker_service
-            .validate_and_invoke(
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                vals,
                 None,
                 empty_worker_metadata(),
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(InvokeResponse {}));
+            ),
+            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
+                &worker_id,
+                idempotency_key.0,
+                function.0,
+                jsons,
+                None,
+                empty_worker_metadata(),
+            ),
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|_| Json(InvokeResponse {}));
 
         record.result(response)
     }
@@ -830,6 +887,39 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|_| Json(RevertWorkerResponse {}));
+
+        record.result(response)
+    }
+
+    /// Cancels a pending invocation if it has not started yet
+    ///
+    /// The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/invocations/:idempotency_key",
+        method = "delete",
+        operation_id = "cancel_invocation"
+    )]
+    async fn cancel_invocation(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        idempotency_key: Path<IdempotencyKey>,
+    ) -> Result<Json<CancelInvocationResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "cancel_invocation",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.to_string(),
+        );
+
+        let response = self
+            .worker_service
+            .cancel_invocation(&worker_id, &idempotency_key.0, empty_worker_metadata())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|canceled| Json(CancelInvocationResponse { canceled }));
 
         record.result(response)
     }

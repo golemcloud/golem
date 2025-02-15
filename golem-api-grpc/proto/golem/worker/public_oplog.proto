@@ -40,6 +40,7 @@ message OplogEntry {
     ActivatePluginParameters ActivatePlugin = 26;
     DeactivatePluginParameters DeactivatePlugin = 27;
     RevertParameters Revert = 28;
+    CancelInvocationParameters CancelInvocation = 29;
   }
 }
 
@@ -219,6 +220,11 @@ message RevertParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start = 2;
   uint64 end = 3;
+}
+
+message CancelInvocationParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  IdempotencyKey idempotency_key = 2;
 }
 
 enum OplogLogLevel {
