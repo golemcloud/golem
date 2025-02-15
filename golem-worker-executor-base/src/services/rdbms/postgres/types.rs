@@ -15,6 +15,8 @@
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use itertools::Itertools;
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -471,6 +473,16 @@ impl Display for DbColumnType {
     }
 }
 
+impl IntoValue for DbColumnType {
+    fn into_value(self) -> Value {
+        todo!()
+    }
+
+    fn get_type() -> AnalysedType {
+        todo!()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum DbValue {
     Character(i8),
@@ -670,10 +682,40 @@ impl DbValue {
     }
 }
 
+impl IntoValue for DbValue {
+    fn into_value(self) -> Value {
+        todo!()
+    }
+
+    fn get_type() -> AnalysedType {
+        todo!()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
     pub db_type: DbColumnType,
     pub db_type_name: String,
+}
+
+impl IntoValue for DbColumn {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.ordinal.into_value(),
+            self.name.into_value(),
+            self.db_type.into_value(),
+            self.db_type_name.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("ordinal", analysed_type::u64()),
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("db-type", DbColumnType::get_type()),
+            analysed_type::field("db-type-name", analysed_type::str()),
+        ])
+    }
 }

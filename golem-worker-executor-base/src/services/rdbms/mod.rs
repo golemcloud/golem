@@ -28,6 +28,8 @@ use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
@@ -43,6 +45,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
+        + IntoValue
         + 'static;
     type DbValue: Clone
         + Send
@@ -52,6 +55,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
+        + IntoValue
         + 'static;
 }
 
@@ -251,9 +255,32 @@ impl Display for RdbmsPoolKey {
     }
 }
 
+impl IntoValue for RdbmsPoolKey {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.address.to_string().into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field("address", analysed_type::str())])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct DbRow<T: 'static> {
     pub values: Vec<T>,
+}
+
+impl<T: IntoValue + 'static> IntoValue for DbRow<T> {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.values.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field(
+            "values",
+            analysed_type::list(T::get_type()),
+        )])
+    }
 }
 
 #[async_trait]
@@ -289,6 +316,19 @@ impl<T: RdbmsType> DbResult<T> {
             rows.extend(vs);
         }
         Ok(DbResult::new(columns, rows))
+    }
+}
+
+impl<T: RdbmsType> IntoValue for DbResult<T> {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.columns.into_value(), self.rows.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("columns", analysed_type::list(T::DbColumn::get_type())),
+            analysed_type::field("rows", analysed_type::list(DbRow::<T::DbValue>::get_type())),
+        ])
     }
 }
 

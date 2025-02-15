@@ -19,6 +19,7 @@ use crate::durable_host::http::serialized::{
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
     SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
 };
+use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
@@ -31,6 +32,8 @@ use crate::model::InterruptKind;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
+use crate::services::rdbms::mysql::types as mysql_types;
+use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use async_trait::async_trait;
@@ -1039,6 +1042,15 @@ fn encode_host_function_request_as_value(
         "golem::rpc::wasm-rpc::invoke idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => no_payload(),
+        "rdbms::mysql::db-connection::query"
+        | "rdbms::mysql::db-connection::execute"
+        | "rdbms::mysql::db-transaction::query"
+        | "rdbms::mysql::db-transaction::execute" => {
+            let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-result-stream::get-columns"
+        | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         f if f.starts_with("rdbms::") => no_payload(), // TODO add payloads
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
@@ -1363,6 +1375,38 @@ fn encode_host_function_response_as_value(
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => {
             let payload = try_deserialize::<Result<(u64, u64), SerializableError>>(bytes)?
                 .map(|pair| Uuid::from_u64_pair(pair.0, pair.1));
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-connection::query" | "rdbms::mysql::db-transaction::query" => {
+            let payload: Result<
+                Vec<crate::services::rdbms::DbResult<MysqlType>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-transaction::query-stream" => {
+            let payload: Result<RdbmsRequest<MysqlType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-result-stream::get-columns" => {
+            let payload: Result<Vec<mysql_types::DbColumn>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::mysql::db-result-stream::get-next" => {
+            let payload: Result<
+                Option<Vec<crate::services::rdbms::DbRow<mysql_types::DbValue>>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
         f if f.starts_with("rdbms::") => no_payload(), // TODO add payloads

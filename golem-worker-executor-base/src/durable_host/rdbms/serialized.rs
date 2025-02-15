@@ -14,6 +14,8 @@
 
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use bincode::{Decode, Encode};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct RdbmsRequest<T: RdbmsType + 'static> {
@@ -29,5 +31,23 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             statement,
             params,
         }
+    }
+}
+
+impl<T: RdbmsType + 'static> IntoValue for RdbmsRequest<T> {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.pool_key.into_value(),
+            self.statement.into_value(),
+            self.params.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("pool-key", RdbmsPoolKey::get_type()),
+            analysed_type::field("statement", analysed_type::str()),
+            analysed_type::field("params", analysed_type::list(T::DbValue::get_type())),
+        ])
     }
 }
