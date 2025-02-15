@@ -14,8 +14,8 @@
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::postgres::types::{
-    Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enum, EnumType,
-    Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
+    Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enumeration,
+    EnumerationType, Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
@@ -133,14 +133,14 @@ impl<'q> QueryParamsBinder<'q, PostgresType, sqlx::Postgres>
 }
 
 fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result<(), String> {
-    let column_type = value.get_type();
+    let column_type = value.get_column_type();
     match &column_type {
         DbColumnType::Array(t) => {
             let base_type: DbColumnType = *t.clone();
             match base_type {
-                DbColumnType::Enum(_) => {
+                DbColumnType::Enumeration(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Enum(r))
+                        try_match!(v, DbValue::Enumeration(r))
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgEnums(values))
@@ -357,8 +357,9 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
                 Err(get_unexpected_value_error(column_type))
             }
         }),
-        DbColumnType::Enum(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Enum(r)).map_err(|_| get_unexpected_value_error(column_type))
+        DbColumnType::Enumeration(_) => setter.try_set_db_value(value, value_category, |v| {
+            try_match!(v, DbValue::Enumeration(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Composite(_) => setter.try_set_db_value(value, value_category, |v| {
             try_match!(v, DbValue::Composite(r))
@@ -576,7 +577,9 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Oid => {
             getter.try_get_db_value::<Oid>(value_category, |v| DbValue::Oid(v.0))?
         }
-        DbColumnType::Enum(_) => getter.try_get_db_value::<Enum>(value_category, DbValue::Enum)?,
+        DbColumnType::Enumeration(_) => {
+            getter.try_get_db_value::<Enumeration>(value_category, DbValue::Enumeration)?
+        }
         DbColumnType::Composite(_) => {
             getter.try_get_db_value::<Composite>(value_category, DbValue::Composite)?
         }
@@ -694,7 +697,7 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
         pg_type_name::TSTZRANGE_ARRAY => Ok(DbColumnType::Tstzrange.into_array()),
         pg_type_name::DATERANGE_ARRAY => Ok(DbColumnType::Daterange.into_array()),
         _ => match type_kind {
-            PgTypeKind::Enum(_) => Ok(DbColumnType::Enum(EnumType::new(type_name))),
+            PgTypeKind::Enum(_) => Ok(DbColumnType::Enumeration(EnumerationType::new(type_name))),
             PgTypeKind::Composite(attributes) => {
                 let attributes = get_db_column_type_attributes(attributes.to_vec())?;
                 Ok(DbColumnType::Composite(CompositeType::new(
@@ -976,7 +979,7 @@ impl PgValueGetter for PgValueRefValueGetter<'_> {
     }
 }
 
-impl sqlx::types::Type<sqlx::Postgres> for Enum {
+impl sqlx::types::Type<sqlx::Postgres> for Enumeration {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
     }
@@ -986,7 +989,7 @@ impl sqlx::types::Type<sqlx::Postgres> for Enum {
     }
 }
 
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enum {
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enumeration {
     fn decode(
         value: sqlx::postgres::PgValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
@@ -994,14 +997,14 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enum {
         let name = type_info.name().to_string();
         if matches!(type_info.kind(), PgTypeKind::Enum(_)) {
             let v = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-            Ok(Enum::new(name, v))
+            Ok(Enumeration::new(name, v))
         } else {
             Err(format!("Type '{}' is not supported", name).into())
         }
     }
 }
 
-impl sqlx::Encode<'_, sqlx::Postgres> for Enum {
+impl sqlx::Encode<'_, sqlx::Postgres> for Enumeration {
     fn encode_by_ref(
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -1016,17 +1019,17 @@ impl sqlx::Encode<'_, sqlx::Postgres> for Enum {
     }
 }
 
-impl sqlx::postgres::PgHasArrayType for Enum {
+impl sqlx::postgres::PgHasArrayType for Enumeration {
     fn array_type_info() -> sqlx::postgres::PgTypeInfo {
         sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type array
     }
 
     fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enumeration as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
     }
 }
 
-struct PgEnums(Vec<Enum>);
+struct PgEnums(Vec<Enumeration>);
 
 impl sqlx::Type<sqlx::Postgres> for PgEnums {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
@@ -1034,7 +1037,7 @@ impl sqlx::Type<sqlx::Postgres> for PgEnums {
     }
 
     fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enum as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enumeration as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
     }
 }
 
@@ -1043,7 +1046,7 @@ impl sqlx::Encode<'_, sqlx::Postgres> for PgEnums {
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,
     ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        <Vec<Enum> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+        <Vec<Enumeration> as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
     }
 
     fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {

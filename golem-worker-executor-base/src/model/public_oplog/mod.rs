@@ -34,6 +34,8 @@ use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
+use crate::services::rdbms::postgres::types as postgres_types;
+use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use async_trait::async_trait;
@@ -1051,6 +1053,15 @@ fn encode_host_function_request_as_value(
         }
         "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
+        "rdbms::postgres::db-connection::query"
+        | "rdbms::postgres::db-connection::execute"
+        | "rdbms::postgres::db-transaction::query"
+        | "rdbms::postgres::db-transaction::execute" => {
+            let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-result-stream::get-columns"
+        | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         f if f.starts_with("rdbms::") => no_payload(), // TODO add payloads
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
@@ -1405,6 +1416,38 @@ fn encode_host_function_response_as_value(
         "rdbms::mysql::db-result-stream::get-next" => {
             let payload: Result<
                 Option<Vec<crate::services::rdbms::DbRow<mysql_types::DbValue>>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-connection::query" | "rdbms::postgres::db-transaction::query" => {
+            let payload: Result<
+                Vec<crate::services::rdbms::DbResult<PostgresType>>,
+                SerializableError,
+            > = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-transaction::query-stream" => {
+            let payload: Result<RdbmsRequest<PostgresType>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-result-stream::get-columns" => {
+            let payload: Result<Vec<postgres_types::DbColumn>, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "rdbms::postgres::db-result-stream::get-next" => {
+            let payload: Result<
+                Option<Vec<crate::services::rdbms::DbRow<postgres_types::DbValue>>>,
                 SerializableError,
             > = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())

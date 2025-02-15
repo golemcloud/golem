@@ -513,7 +513,7 @@ async fn postgres_create_insert_select_test(
             );
 
             params.append(&mut vec![
-                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
                     "test_enum".to_string(),
                     "regular".to_string(),
                 )),
@@ -659,9 +659,9 @@ async fn postgres_create_insert_select_test(
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Enum(postgres_types::EnumType::new(
-                "test_enum".to_string(),
-            )),
+            db_type: postgres_types::DbColumnType::Enumeration(
+                postgres_types::EnumerationType::new("test_enum".to_string()),
+            ),
             db_type_name: "test_enum".to_string(),
         },
         postgres_types::DbColumn {
@@ -1243,11 +1243,11 @@ async fn postgres_create_insert_select_array_test(
 
             params.append(&mut vec![
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                    postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
                         "a_test_enum".to_string(),
                         "second".to_string(),
                     )),
-                    postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                    postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
                         "a_test_enum".to_string(),
                         "third".to_string(),
                     )),
@@ -1511,9 +1511,9 @@ async fn postgres_create_insert_select_array_test(
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Enum(postgres_types::EnumType::new(
-                "a_test_enum".to_string(),
-            ))
+            db_type: postgres_types::DbColumnType::Enumeration(
+                postgres_types::EnumerationType::new("a_test_enum".to_string()),
+            )
             .into_array(),
             db_type_name: "a_test_enum[]".to_string(),
         },

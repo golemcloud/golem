@@ -932,7 +932,7 @@ impl From<postgres_types::TimeTz> for Timetz {
     }
 }
 
-impl From<Enumeration> for postgres_types::Enum {
+impl From<Enumeration> for postgres_types::Enumeration {
     fn from(v: Enumeration) -> Self {
         Self {
             name: v.name,
@@ -941,7 +941,7 @@ impl From<Enumeration> for postgres_types::Enum {
     }
 }
 
-impl From<EnumerationType> for postgres_types::EnumType {
+impl From<EnumerationType> for postgres_types::EnumerationType {
     fn from(v: EnumerationType) -> Self {
         Self { name: v.name }
     }
@@ -957,8 +957,8 @@ impl From<postgres_types::Interval> for Interval {
     }
 }
 
-impl From<postgres_types::Enum> for Enumeration {
-    fn from(v: postgres_types::Enum) -> Self {
+impl From<postgres_types::Enumeration> for Enumeration {
+    fn from(v: postgres_types::Enumeration) -> Self {
         Self {
             name: v.name,
             value: v.value,
@@ -966,8 +966,8 @@ impl From<postgres_types::Enum> for Enumeration {
     }
 }
 
-impl From<postgres_types::EnumType> for EnumerationType {
-    fn from(v: postgres_types::EnumType) -> Self {
+impl From<postgres_types::EnumerationType> for EnumerationType {
+    fn from(v: postgres_types::EnumerationType) -> Self {
         Self { name: v.name }
     }
 }
@@ -1534,7 +1534,7 @@ fn to_db_value(
             postgres_types::DbValue::Money(v),
         )),
         DbValue::Enumeration(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Enum(v.into()),
+            postgres_types::DbValue::Enumeration(v.into()),
         )),
         DbValue::Array(vs) => {
             let mut values: Vec<postgres_types::DbValue> = Vec::with_capacity(vs.len());
@@ -1727,7 +1727,7 @@ fn from_db_value(
         }
         postgres_types::DbValue::Oid(v) => Ok((DbValue::Oid(v), DbValueResourceRep::None)),
         postgres_types::DbValue::Money(v) => Ok((DbValue::Money(v), DbValueResourceRep::None)),
-        postgres_types::DbValue::Enum(v) => {
+        postgres_types::DbValue::Enumeration(v) => {
             Ok((DbValue::Enumeration(v.into()), DbValueResourceRep::None))
         }
         postgres_types::DbValue::Composite(v) => {
@@ -1969,7 +1969,7 @@ fn from_db_column_type(
         postgres_types::DbColumnType::Money => {
             Ok((DbColumnType::Money, DbColumnTypeResourceRep::None))
         }
-        postgres_types::DbColumnType::Enum(v) => Ok((
+        postgres_types::DbColumnType::Enumeration(v) => Ok((
             DbColumnType::Enumeration(v.into()),
             DbColumnTypeResourceRep::None,
         )),
@@ -2170,7 +2170,7 @@ fn to_db_column_type(
             postgres_types::DbColumnType::Money,
         )),
         DbColumnType::Enumeration(v) => Ok(DbColumnTypeWithResourceRep::new_resource_none(
-            postgres_types::DbColumnType::Enum(v.into()),
+            postgres_types::DbColumnType::Enumeration(v.into()),
         )),
         DbColumnType::Composite(v) => {
             let mut attributes: Vec<(String, postgres_types::DbColumnType)> =
@@ -2323,11 +2323,11 @@ pub mod tests {
 
         let params = vec![
             postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
                     "a_test_enum".to_string(),
                     "second".to_string(),
                 )),
-                postgres_types::DbValue::Enum(postgres_types::Enum::new(
+                postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
                     "a_test_enum".to_string(),
                     "third".to_string(),
                 )),

@@ -30,25 +30,35 @@ pub trait NamedType {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
-pub struct EnumType {
+pub struct EnumerationType {
     pub name: String,
 }
 
-impl EnumType {
+impl EnumerationType {
     pub fn new(name: String) -> Self {
-        EnumType { name }
+        EnumerationType { name }
     }
 }
 
-impl NamedType for EnumType {
+impl NamedType for EnumerationType {
     fn name(&self) -> String {
         self.name.clone()
     }
 }
 
-impl Display for EnumType {
+impl Display for EnumerationType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+impl IntoValue for EnumerationType {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field("name", analysed_type::str())])
     }
 }
 
@@ -84,6 +94,25 @@ impl NamedType for CompositeType {
     }
 }
 
+impl IntoValue for CompositeType {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), self.attributes.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field(
+                "attributes",
+                analysed_type::list(analysed_type::tuple(vec![
+                    analysed_type::str(),
+                    DbColumnType::get_type(),
+                ])),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DomainType {
     pub name: String,
@@ -111,6 +140,19 @@ impl NamedType for DomainType {
     }
 }
 
+impl IntoValue for DomainType {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), (*self.base_type).into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("base-type", DbColumnType::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct RangeType {
     pub name: String,
@@ -135,6 +177,19 @@ impl Display for RangeType {
 impl NamedType for RangeType {
     fn name(&self) -> String {
         self.name.clone()
+    }
+}
+
+impl IntoValue for RangeType {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), (*self.base_type).into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("base-type", DbColumnType::get_type()),
+        ])
     }
 }
 
@@ -198,6 +253,19 @@ impl<T: Debug> Display for ValuesRange<T> {
     }
 }
 
+impl<T: IntoValue> IntoValue for ValuesRange<T> {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.start.into_value(), self.end.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("start", Bound::<T>::get_type()),
+            analysed_type::field("end", Bound::<T>::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Interval {
     pub months: i32,
@@ -218,6 +286,24 @@ impl Interval {
 impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}m {}d {}us", self.months, self.days, self.microseconds)
+    }
+}
+
+impl IntoValue for Interval {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.months.into_value(),
+            self.days.into_value(),
+            self.microseconds.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("months", analysed_type::s32()),
+            analysed_type::field("days", analysed_type::s32()),
+            analysed_type::field("microseconds", analysed_type::s64()),
+        ])
     }
 }
 
@@ -243,27 +329,56 @@ impl Display for TimeTz {
     }
 }
 
+impl IntoValue for TimeTz {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.time.to_string().into_value(),
+            self.offset.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("time", analysed_type::str()),
+            analysed_type::field("offset", analysed_type::s32()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub struct Enum {
+pub struct Enumeration {
     pub name: String,
     pub value: String,
 }
 
-impl Enum {
+impl Enumeration {
     pub fn new(name: String, value: String) -> Self {
-        Enum { name, value }
+        Enumeration { name, value }
     }
 }
 
-impl NamedType for Enum {
+impl NamedType for Enumeration {
     fn name(&self) -> String {
         self.name.clone()
     }
 }
 
-impl Display for Enum {
+impl Display for Enumeration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({})", self.name, self.value)
+    }
+}
+
+impl IntoValue for Enumeration {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("value", analysed_type::str()),
+        ])
     }
 }
 
@@ -296,6 +411,19 @@ impl NamedType for Composite {
     }
 }
 
+impl IntoValue for Composite {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), self.values.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("values", analysed_type::str()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Domain {
     pub name: String,
@@ -323,6 +451,19 @@ impl Display for Domain {
     }
 }
 
+impl IntoValue for Domain {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("value", DbValue::get_type()),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Range {
     pub name: String,
@@ -347,6 +488,19 @@ impl NamedType for Range {
 impl Display for Range {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({})", self.name, self.value)
+    }
+}
+
+impl IntoValue for Range {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), (*self.value).into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("value", ValuesRange::<DbValue>::get_type()),
+        ])
     }
 }
 
@@ -388,7 +542,7 @@ pub enum DbColumnType {
     Daterange,
     Money,
     Oid,
-    Enum(EnumType),
+    Enumeration(EnumerationType),
     Composite(CompositeType),
     Domain(DomainType),
     Range(RangeType),
@@ -419,7 +573,7 @@ impl DbColumnType {
 impl Display for DbColumnType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbColumnType::Character => write!(f, "char"),
+            DbColumnType::Character => write!(f, "character"),
             DbColumnType::Int2 => write!(f, "int2"),
             DbColumnType::Int4 => write!(f, "int4"),
             DbColumnType::Int8 => write!(f, "int8"),
@@ -453,8 +607,9 @@ impl Display for DbColumnType {
             DbColumnType::Tsrange => write!(f, "tsrange"),
             DbColumnType::Tstzrange => write!(f, "tstzrange"),
             DbColumnType::Daterange => write!(f, "daterange"),
+            DbColumnType::Money => write!(f, "money"),
             DbColumnType::Oid => write!(f, "oid"),
-            DbColumnType::Enum(v) => write!(f, "enum: {}", v),
+            DbColumnType::Enumeration(v) => write!(f, "enumeration: {}", v),
             DbColumnType::Composite(v) => {
                 write!(f, "composite: {}", v)
             }
@@ -467,7 +622,6 @@ impl Display for DbColumnType {
             DbColumnType::Range(v) => {
                 write!(f, "range: {}", v)
             }
-            DbColumnType::Money => write!(f, "money"),
             DbColumnType::Null => write!(f, "null"),
         }
     }
@@ -475,11 +629,232 @@ impl Display for DbColumnType {
 
 impl IntoValue for DbColumnType {
     fn into_value(self) -> Value {
-        todo!()
+        match self {
+            DbColumnType::Character => Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            DbColumnType::Int2 => Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            DbColumnType::Int4 => Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            DbColumnType::Int8 => Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            DbColumnType::Float4 => Value::Variant {
+                case_idx: 4,
+                case_value: None,
+            },
+            DbColumnType::Float8 => Value::Variant {
+                case_idx: 5,
+                case_value: None,
+            },
+            DbColumnType::Numeric => Value::Variant {
+                case_idx: 6,
+                case_value: None,
+            },
+            DbColumnType::Boolean => Value::Variant {
+                case_idx: 7,
+                case_value: None,
+            },
+            DbColumnType::Text => Value::Variant {
+                case_idx: 8,
+                case_value: None,
+            },
+            DbColumnType::Varchar => Value::Variant {
+                case_idx: 9,
+                case_value: None,
+            },
+            DbColumnType::Bpchar => Value::Variant {
+                case_idx: 10,
+                case_value: None,
+            },
+            DbColumnType::Timestamp => Value::Variant {
+                case_idx: 11,
+                case_value: None,
+            },
+            DbColumnType::Timestamptz => Value::Variant {
+                case_idx: 12,
+                case_value: None,
+            },
+            DbColumnType::Date => Value::Variant {
+                case_idx: 13,
+                case_value: None,
+            },
+            DbColumnType::Time => Value::Variant {
+                case_idx: 14,
+                case_value: None,
+            },
+            DbColumnType::Timetz => Value::Variant {
+                case_idx: 15,
+                case_value: None,
+            },
+            DbColumnType::Interval => Value::Variant {
+                case_idx: 16,
+                case_value: None,
+            },
+            DbColumnType::Bytea => Value::Variant {
+                case_idx: 17,
+                case_value: None,
+            },
+            DbColumnType::Uuid => Value::Variant {
+                case_idx: 18,
+                case_value: None,
+            },
+            DbColumnType::Xml => Value::Variant {
+                case_idx: 19,
+                case_value: None,
+            },
+            DbColumnType::Json => Value::Variant {
+                case_idx: 20,
+                case_value: None,
+            },
+            DbColumnType::Jsonb => Value::Variant {
+                case_idx: 21,
+                case_value: None,
+            },
+            DbColumnType::Jsonpath => Value::Variant {
+                case_idx: 22,
+                case_value: None,
+            },
+            DbColumnType::Inet => Value::Variant {
+                case_idx: 23,
+                case_value: None,
+            },
+            DbColumnType::Cidr => Value::Variant {
+                case_idx: 24,
+                case_value: None,
+            },
+            DbColumnType::Macaddr => Value::Variant {
+                case_idx: 25,
+                case_value: None,
+            },
+            DbColumnType::Bit => Value::Variant {
+                case_idx: 26,
+                case_value: None,
+            },
+            DbColumnType::Varbit => Value::Variant {
+                case_idx: 27,
+                case_value: None,
+            },
+            DbColumnType::Int4range => Value::Variant {
+                case_idx: 28,
+                case_value: None,
+            },
+            DbColumnType::Int8range => Value::Variant {
+                case_idx: 29,
+                case_value: None,
+            },
+            DbColumnType::Numrange => Value::Variant {
+                case_idx: 30,
+                case_value: None,
+            },
+            DbColumnType::Tsrange => Value::Variant {
+                case_idx: 31,
+                case_value: None,
+            },
+            DbColumnType::Tstzrange => Value::Variant {
+                case_idx: 32,
+                case_value: None,
+            },
+            DbColumnType::Daterange => Value::Variant {
+                case_idx: 33,
+                case_value: None,
+            },
+            DbColumnType::Money => Value::Variant {
+                case_idx: 34,
+                case_value: None,
+            },
+            DbColumnType::Oid => Value::Variant {
+                case_idx: 35,
+                case_value: None,
+            },
+            DbColumnType::Enumeration(v) => Value::Variant {
+                case_idx: 36,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbColumnType::Composite(v) => Value::Variant {
+                case_idx: 37,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbColumnType::Domain(v) => Value::Variant {
+                case_idx: 38,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbColumnType::Array(v) => Value::Variant {
+                case_idx: 39,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbColumnType::Range(v) => Value::Variant {
+                case_idx: 40,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbColumnType::Null => Value::Variant {
+                case_idx: 41,
+                case_value: None,
+            },
+        }
     }
 
     fn get_type() -> AnalysedType {
-        todo!()
+        fn get_tpe(root: bool) -> AnalysedType {
+            let array_type = if root {
+                analysed_type::case("array", get_tpe(false))
+            } else {
+                analysed_type::unit_case("array")
+            };
+
+            analysed_type::variant(vec![
+                analysed_type::unit_case("character"),
+                analysed_type::unit_case("int2"),
+                analysed_type::unit_case("int4"),
+                analysed_type::unit_case("int8"),
+                analysed_type::unit_case("float4"),
+                analysed_type::unit_case("float8"),
+                analysed_type::unit_case("numeric"),
+                analysed_type::unit_case("boolean"),
+                analysed_type::unit_case("text"),
+                analysed_type::unit_case("varchar"),
+                analysed_type::unit_case("bpchar"),
+                analysed_type::unit_case("timestamp"),
+                analysed_type::unit_case("timestamptz"),
+                analysed_type::unit_case("date"),
+                analysed_type::unit_case("time"),
+                analysed_type::unit_case("timetz"),
+                analysed_type::unit_case("interval"),
+                analysed_type::unit_case("bytea"),
+                analysed_type::unit_case("uuid"),
+                analysed_type::unit_case("xml"),
+                analysed_type::unit_case("json"),
+                analysed_type::unit_case("jsonb"),
+                analysed_type::unit_case("jsonpath"),
+                analysed_type::unit_case("inet"),
+                analysed_type::unit_case("cidr"),
+                analysed_type::unit_case("macaddr"),
+                analysed_type::unit_case("bit"),
+                analysed_type::unit_case("varbit"),
+                analysed_type::unit_case("int4range"),
+                analysed_type::unit_case("int8range"),
+                analysed_type::unit_case("numrange"),
+                analysed_type::unit_case("tsrange"),
+                analysed_type::unit_case("tstzrange"),
+                analysed_type::unit_case("daterange"),
+                analysed_type::unit_case("money"),
+                analysed_type::unit_case("oid"),
+                analysed_type::case("enumeration", EnumerationType::get_type()),
+                analysed_type::case("composite", CompositeType::get_type()),
+                analysed_type::case("domain", DomainType::get_type()),
+                array_type,
+                analysed_type::case("range", RangeType::get_type()),
+                analysed_type::unit_case("null"),
+            ])
+        }
+        get_tpe(true)
     }
 }
 
@@ -521,7 +896,7 @@ pub enum DbValue {
     Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),
     Money(i64),
     Oid(u32),
-    Enum(Enum),
+    Enumeration(Enumeration),
     Composite(Composite),
     Domain(Domain),
     Range(Range),
@@ -568,7 +943,7 @@ impl Display for DbValue {
             DbValue::Daterange(v) => write!(f, "{}", v),
             DbValue::Oid(v) => write!(f, "{}", v),
             DbValue::Money(v) => write!(f, "{}", v),
-            DbValue::Enum(v) => write!(f, "{}", v),
+            DbValue::Enumeration(v) => write!(f, "{}", v),
             DbValue::Composite(v) => write!(f, "{}", v),
             DbValue::Domain(v) => write!(f, "{}", v),
             DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
@@ -600,7 +975,7 @@ impl DbValue {
         )
     }
 
-    pub(crate) fn get_type(&self) -> DbColumnType {
+    pub(crate) fn get_column_type(&self) -> DbColumnType {
         match self {
             DbValue::Character(_) => DbColumnType::Character,
             DbValue::Int2(_) => DbColumnType::Int2,
@@ -638,22 +1013,24 @@ impl DbValue {
             DbValue::Daterange(_) => DbColumnType::Daterange,
             DbValue::Money(_) => DbColumnType::Money,
             DbValue::Oid(_) => DbColumnType::Oid,
-            DbValue::Enum(v) => DbColumnType::Enum(EnumType::new(v.name.clone())),
+            DbValue::Enumeration(v) => {
+                DbColumnType::Enumeration(EnumerationType::new(v.name.clone()))
+            }
             DbValue::Composite(v) => {
                 DbColumnType::Composite(CompositeType::new(v.name.clone(), vec![]))
             }
             DbValue::Domain(v) => {
-                let t = v.value.get_type();
+                let t = v.value.get_column_type();
                 DbColumnType::Domain(DomainType::new(v.name.clone(), t))
             }
             DbValue::Range(r) => {
                 let v = (*r.value).start_value().or((*r.value).end_value());
-                let t = v.map(|v| v.get_type()).unwrap_or(DbColumnType::Null);
+                let t = v.map(|v| v.get_column_type()).unwrap_or(DbColumnType::Null);
                 DbColumnType::Range(RangeType::new(r.name.clone(), t))
             }
             DbValue::Array(vs) => {
                 let t = if !vs.is_empty() {
-                    let t = vs[0].get_type();
+                    let t = vs[0].get_column_type();
                     match t {
                         DbColumnType::Range(r) if *r.base_type == DbColumnType::Null => {
                             let v = vs
@@ -667,7 +1044,7 @@ impl DbValue {
                                 })
                                 .find(|v| v.is_some())
                                 .flatten();
-                            let t = v.map(|v| v.get_type()).unwrap_or(DbColumnType::Null);
+                            let t = v.map(|v| v.get_column_type()).unwrap_or(DbColumnType::Null);
                             DbColumnType::Range(RangeType::new(r.name, t))
                         }
                         _ => t,
@@ -684,11 +1061,232 @@ impl DbValue {
 
 impl IntoValue for DbValue {
     fn into_value(self) -> Value {
-        todo!()
+        match self {
+            DbValue::Character(v) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Int2(v) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Int4(v) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Int8(v) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Float4(v) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Float8(v) => Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Numeric(v) => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Boolean(v) => Value::Variant {
+                case_idx: 7,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Text(v) => Value::Variant {
+                case_idx: 8,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Varchar(v) => Value::Variant {
+                case_idx: 9,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Bpchar(v) => Value::Variant {
+                case_idx: 10,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Timestamp(v) => Value::Variant {
+                case_idx: 11,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Timestamptz(v) => Value::Variant {
+                case_idx: 12,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Date(v) => Value::Variant {
+                case_idx: 13,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Time(v) => Value::Variant {
+                case_idx: 14,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Timetz(v) => Value::Variant {
+                case_idx: 15,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Interval(v) => Value::Variant {
+                case_idx: 16,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Bytea(v) => Value::Variant {
+                case_idx: 17,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Json(v) => Value::Variant {
+                case_idx: 18,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Jsonb(v) => Value::Variant {
+                case_idx: 19,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Jsonpath(v) => Value::Variant {
+                case_idx: 20,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Xml(v) => Value::Variant {
+                case_idx: 21,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Uuid(v) => Value::Variant {
+                case_idx: 22,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Inet(v) => Value::Variant {
+                case_idx: 23,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Cidr(v) => Value::Variant {
+                case_idx: 24,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Macaddr(v) => Value::Variant {
+                case_idx: 25,
+                case_value: Some(Box::new(v.to_string().into_value())),
+            },
+            DbValue::Bit(v) => Value::Variant {
+                case_idx: 26,
+                case_value: Some(Box::new(v.iter().collect::<Vec<bool>>().into_value())),
+            },
+            DbValue::Varbit(v) => Value::Variant {
+                case_idx: 27,
+                case_value: Some(Box::new(v.iter().collect::<Vec<bool>>().into_value())),
+            },
+            DbValue::Int4range(v) => Value::Variant {
+                case_idx: 28,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Int8range(v) => Value::Variant {
+                case_idx: 29,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Numrange(v) => Value::Variant {
+                case_idx: 30,
+                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
+            },
+            DbValue::Tsrange(v) => Value::Variant {
+                case_idx: 31,
+                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
+            },
+            DbValue::Tstzrange(v) => Value::Variant {
+                case_idx: 32,
+                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
+            },
+            DbValue::Daterange(v) => Value::Variant {
+                case_idx: 33,
+                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
+            },
+            DbValue::Money(v) => Value::Variant {
+                case_idx: 34,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Oid(v) => Value::Variant {
+                case_idx: 35,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Enumeration(v) => Value::Variant {
+                case_idx: 36,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Composite(v) => Value::Variant {
+                case_idx: 37,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Domain(v) => Value::Variant {
+                case_idx: 38,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Array(v) => Value::Variant {
+                case_idx: 39,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Range(v) => Value::Variant {
+                case_idx: 40,
+                case_value: Some(Box::new(v.into_value())),
+            },
+            DbValue::Null => Value::Variant {
+                case_idx: 41,
+                case_value: None,
+            },
+        }
     }
 
     fn get_type() -> AnalysedType {
-        todo!()
+        fn get_tpe(root: bool) -> AnalysedType {
+            let array_type = if root {
+                analysed_type::case("array", get_tpe(false))
+            } else {
+                analysed_type::unit_case("array")
+            };
+
+            analysed_type::variant(vec![
+                analysed_type::case("character", analysed_type::s8()),
+                analysed_type::case("int2", analysed_type::s16()),
+                analysed_type::case("int4", analysed_type::s32()),
+                analysed_type::case("int8", analysed_type::s64()),
+                analysed_type::case("float4", analysed_type::f32()),
+                analysed_type::case("float8", analysed_type::f64()),
+                analysed_type::case("numeric", analysed_type::str()),
+                analysed_type::case("boolean", analysed_type::bool()),
+                analysed_type::case("text", analysed_type::str()),
+                analysed_type::case("varchar", analysed_type::str()),
+                analysed_type::case("bpchar", analysed_type::str()),
+                analysed_type::case("timestamp", analysed_type::str()),
+                analysed_type::case("timestamptz", analysed_type::str()),
+                analysed_type::case("time", analysed_type::str()),
+                analysed_type::case("timetz", analysed_type::str()),
+                analysed_type::case("date", analysed_type::str()),
+                analysed_type::case("interval", analysed_type::str()),
+                analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
+                analysed_type::case("json", analysed_type::str()),
+                analysed_type::case("jsonb", analysed_type::str()),
+                analysed_type::case("jsonpath", analysed_type::str()),
+                analysed_type::case("xml", analysed_type::str()),
+                analysed_type::case("uuid", analysed_type::str()),
+                analysed_type::case("inet", analysed_type::str()),
+                analysed_type::case("cidr", analysed_type::str()),
+                analysed_type::case("macaddr", analysed_type::str()),
+                analysed_type::case("bit", analysed_type::list(analysed_type::bool())),
+                analysed_type::case("varbit", analysed_type::list(analysed_type::bool())),
+                analysed_type::case("int4range", ValuesRange::<i32>::get_type()),
+                analysed_type::case("int8range", ValuesRange::<i64>::get_type()),
+                analysed_type::case("numrange", ValuesRange::<String>::get_type()),
+                analysed_type::case("tsrange", ValuesRange::<String>::get_type()),
+                analysed_type::case("tstzrange", ValuesRange::<String>::get_type()),
+                analysed_type::case("daterange", ValuesRange::<String>::get_type()),
+                analysed_type::case("money", analysed_type::s64()),
+                analysed_type::case("oid", analysed_type::u32()),
+                analysed_type::case("enumeration", Enumeration::get_type()),
+                analysed_type::case("composite", Composite::get_type()),
+                analysed_type::case("domain", Domain::get_type()),
+                analysed_type::case("range", Range::get_type()),
+                array_type,
+                analysed_type::case("null", analysed_type::str()),
+            ])
+        }
+        get_tpe(true)
     }
 }
 
