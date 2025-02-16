@@ -79,22 +79,33 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        self.observe_function_call("rdbms::mysql::db-connection", "query-stream");
-
         let begin_oplog_idx = self
             .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
             .await?;
-
-        let pool_key = self
-            .as_wasi_view()
-            .table()
-            .get::<MysqlDbConnection>(&self_)?
-            .pool_key
-            .clone();
-
-        match to_db_values(params) {
-            Ok(params) => {
-                let request = RdbmsRequest::<MysqlType>::new(pool_key, statement, params);
+        let durability = Durability::<RdbmsRequest<MysqlType>, SerializableError>::new(
+            self,
+            "rdbms::mysql::db-connection",
+            "query-stream",
+            DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let pool_key = self
+                .as_wasi_view()
+                .table()
+                .get::<MysqlDbConnection>(&self_)?
+                .pool_key
+                .clone();
+            let result = match to_db_values(params) {
+                Ok(params) => Ok(RdbmsRequest::<MysqlType>::new(pool_key, statement, params)),
+                Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+            };
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        };
+        match result {
+            Ok(request) => {
                 let entry = DbResultStreamEntry::new(request, DbResultStreamState::New, None);
                 let resource = self.as_wasi_view().table().push(entry)?;
                 let handle = resource.rep();
@@ -110,7 +121,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     false,
                 )
                 .await?;
-                Ok(Err(Error::QueryParameterFailure(error)))
+                Ok(Err(error.into()))
             }
         }
     }
@@ -137,7 +148,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 .get::<MysqlDbConnection>(&self_)?
                 .pool_key
                 .clone();
-
             let (input, result) = match to_db_values(params) {
                 Ok(params) => {
                     let result = self
