@@ -2230,7 +2230,6 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr};
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
