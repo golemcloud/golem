@@ -37,15 +37,13 @@ mod internal {
     use crate::{Expr, InferredType, ParsedFunctionReference};
     use std::collections::VecDeque;
 
-    pub(crate) fn search_for_invalid_instance_declarations(
-        expr: &mut Expr,
-    ) -> Result<(), String> {
+    pub(crate) fn search_for_invalid_instance_declarations(expr: &mut Expr) -> Result<(), String> {
         let mut queue = VecDeque::new();
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
                 Expr::Identifier(variable_id, _, _) => {
-                    if variable_id.name() == "instance" &&variable_id.is_global() {
+                    if variable_id.name() == "instance" && variable_id.is_global() {
                         return Err(concat!(
                         "`instance` is a reserved keyword and cannot be used as a global input.\n ",
                         "note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n ",
