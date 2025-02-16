@@ -34,7 +34,7 @@ mod internal {
     use crate::instance_type::InstanceType;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{DynamicParsedFunctionName, Expr, InferredType};
+    use crate::{DynamicParsedFunctionName, Expr, InferredType, ParsedFunctionReference};
     use std::collections::VecDeque;
 
     pub(crate) fn identify_instance_creation_without_worker(
@@ -128,38 +128,30 @@ mod internal {
         Ok(())
     }
 
-    mod internal {
-        use crate::call_type::{CallType, InstanceCreationType};
-
-        use crate::{Expr, ParsedFunctionReference};
-
-        pub(crate) fn get_instance_creation_details(
-            call_type: &CallType,
-            args: Vec<Expr>,
-        ) -> Option<InstanceCreationType> {
-            match call_type {
-                CallType::Function(function_name) => {
-                    let function_name = function_name.to_parsed_function_name().function;
-                    match function_name {
-                        ParsedFunctionReference::Function { function }
-                            if function == "instance" =>
-                        {
-                            let optional_worker_name_expression = args.first();
-                            Some(InstanceCreationType::Worker {
-                                component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
-                                worker_name: optional_worker_name_expression
-                                    .map(|x| Box::new(x.clone())),
-                            })
-                        }
-
-                        _ => None,
+    pub(crate) fn get_instance_creation_details(
+        call_type: &CallType,
+        args: Vec<Expr>,
+    ) -> Option<InstanceCreationType> {
+        match call_type {
+            CallType::Function(function_name) => {
+                let function_name = function_name.to_parsed_function_name().function;
+                match function_name {
+                    ParsedFunctionReference::Function { function } if function == "instance" => {
+                        let optional_worker_name_expression = args.first();
+                        Some(InstanceCreationType::Worker {
+                            component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
+                            worker_name: optional_worker_name_expression
+                                .map(|x| Box::new(x.clone())),
+                        })
                     }
+
+                    _ => None,
                 }
-                CallType::VariantConstructor(_) => None,
-                CallType::EnumConstructor(_) => None,
-                CallType::InstanceCreation(instance_creation_type) => {
-                    Some(instance_creation_type.clone())
-                }
+            }
+            CallType::VariantConstructor(_) => None,
+            CallType::EnumConstructor(_) => None,
+            CallType::InstanceCreation(instance_creation_type) => {
+                Some(instance_creation_type.clone())
             }
         }
     }
