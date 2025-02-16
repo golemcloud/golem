@@ -11,11 +11,11 @@ where
     >,
 {
     many1(
-        alpha_num() // Alphanumeric characters
-            .or(char_('.')) // Period
-            .or(char_('-')) // Hyphen
-            .or(char_('@')) // At symbol
-            .or(char_(':')) // Colon
+        alpha_num()
+            .or(char_('.'))
+            .or(char_('-'))
+            .or(char_('@'))
+            .or(char_(':'))
             .or(char_('/')),
     )
     .map(|chars: Vec<char>| GenericTypeParameter {
