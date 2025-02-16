@@ -34,7 +34,7 @@ where
 }
 
 mod internal {
-    
+
     use crate::{Expr, InferredType};
     use std::collections::VecDeque;
 
