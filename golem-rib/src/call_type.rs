@@ -67,7 +67,7 @@ impl Display for CallType {
             CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
-            CallType::InstanceCreation(instance_creation_type) => {
+            CallType::InstanceCreation(_) => {
                 write!(f, "{}", "InstanceCreation")
             }
         }

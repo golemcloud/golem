@@ -34,7 +34,7 @@ where
 }
 
 mod internal {
-    use crate::type_inference::inference_fix_point::internal;
+    
     use crate::{Expr, InferredType};
     use std::collections::VecDeque;
 

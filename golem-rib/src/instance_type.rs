@@ -1,8 +1,8 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
-    RegistryKey, RegistryValue, SemVer,
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType,
+    RegistryKey, RegistryValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;

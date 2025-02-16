@@ -1,11 +1,10 @@
 use crate::call_type::CallType;
-use crate::parser::call::call;
 use crate::parser::identifier::identifier;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::RibParseError;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
-use combine::{attempt, ParseError, Parser};
+use combine::{ParseError, Parser};
 
 pub fn worker_function_invoke<Input>() -> impl Parser<Input, Output = Expr>
 where
