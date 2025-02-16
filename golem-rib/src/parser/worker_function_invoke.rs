@@ -15,18 +15,15 @@ where
 {
     (identifier().skip(spaces()), char('.'), rib_expr())
         .and_then(|(worker_variable, _, call)| match call {
-            Expr::Call(call_type, generic_type_parameter, args, _) => match call_type {
-                CallType::Function(name) => {
-                    let function_name = name.to_string();
-                    Ok(Expr::invoke_worker_function(
-                        worker_variable,
-                        function_name,
-                        generic_type_parameter,
-                        args,
-                    ))
-                }
-                _ => Err(RibParseError::Message("Invalid function call".to_string())),
-            },
+            Expr::Call(CallType::Function(name) , generic_type_parameter, args, _) => {
+                let function_name = name.to_string();
+                Ok(Expr::invoke_worker_function(
+                    worker_variable,
+                    function_name,
+                    generic_type_parameter,
+                    args,
+                ))
+            }
             _ => Err(RibParseError::Message("Invalid function call".to_string())),
         })
         .message("Invalid function call")

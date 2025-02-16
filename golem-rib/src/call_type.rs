@@ -68,7 +68,7 @@ impl Display for CallType {
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
             CallType::InstanceCreation(_) => {
-                write!(f, "{}", "InstanceCreation")
+                write!(f, "InstanceCreation")
             }
         }
     }

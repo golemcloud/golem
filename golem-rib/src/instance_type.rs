@@ -77,17 +77,13 @@ impl InstanceType {
 
         let mut resource_method_dict = vec![];
         for (f, function_type) in self.function_dict().map.iter() {
-            match f {
-                FunctionName::ResourceMethod(resource_method) => {
-                    if resource_method.resource_name == resource_constructor_name
-                        && resource_method.interface_name == interface_name
-                        && resource_method.package_name == package_name
-                    {
-                        resource_method_dict.push((resource_method.clone(), function_type.clone()));
-                    }
+            if let FunctionName::ResourceMethod(resource_method) = f {
+                if resource_method.resource_name == resource_constructor_name
+                    && resource_method.interface_name == interface_name
+                    && resource_method.package_name == package_name
+                {
+                    resource_method_dict.push((resource_method.clone(), function_type.clone()));
                 }
-
-                _ => {}
             }
         }
 
@@ -439,7 +435,7 @@ fn resolve_function_name(
     interface_name: Option<InterfaceName>,
     function_name: &str,
 ) -> FunctionName {
-    match get_resource_name(&function_name) {
+    match get_resource_name(function_name) {
         Some(resource_name) => {
             FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
                 package_name,
@@ -447,7 +443,7 @@ fn resolve_function_name(
                 resource_name,
             })
         }
-        None => match get_resource_method_name(&function_name) {
+        None => match get_resource_method_name(function_name) {
             Ok(Some((constructor, method))) => {
                 FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
                     package_name,
@@ -570,7 +566,7 @@ impl FullyQualifiedResourceMethod {
         }
 
         // Start the dynamic function name with resource
-        dynamic_parsed_str.push_str("{");
+        dynamic_parsed_str.push('{');
         dynamic_parsed_str.push_str(&self.resource_name);
 
         // If arguments exist, format them inside parentheses
@@ -627,7 +623,7 @@ fn search_function_in_instance(
         .function_dict()
         .map
         .into_iter()
-        .filter(|(f, _)| f.name() == function_name.to_string())
+        .filter(|(f, _)| f.name() == *function_name)
         .collect();
 
     let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
@@ -636,7 +632,7 @@ fn search_function_in_instance(
     for (fqfn, _) in &functions {
         package_map
             .entry(fqfn.package_name())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(fqfn.interface_name());
     }
 
