@@ -2230,11 +2230,10 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr};
+        use crate::{compiler, Expr, FunctionTypeRegistry};
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
 
-        #[ignore] //TODO
         #[test]
         async fn test_first_class_worker_0() {
             let expr = r#"
@@ -2242,7 +2241,9 @@ mod interpreter_tests {
               let result = x.foo("bar");
               result
             "#;
-            let expr = Expr::from_text(expr).unwrap();
+            let mut expr = Expr::from_text(expr).unwrap();
+            let registry = FunctionTypeRegistry::from_export_metadata(&internal::get_metadata());
+            expr.infer_types(&registry, &vec![]).unwrap();
             let component_metadata = internal::get_metadata();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();

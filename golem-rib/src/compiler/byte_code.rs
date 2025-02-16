@@ -440,7 +440,9 @@ mod internal {
                     }
 
                     // There is nothing to do as such for instance creation
-                    CallType::InstanceCreation(_) => {}
+                    CallType::InstanceCreation(instance_creation) => {
+                        instructions.push(RibIR::PushLit(instance_creation.component_id().into_value_and_type()));
+                    }
 
                     CallType::VariantConstructor(variant_name) => {
                         instructions.push(RibIR::PushVariant(

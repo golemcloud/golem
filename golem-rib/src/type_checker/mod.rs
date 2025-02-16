@@ -13,7 +13,6 @@ mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
-
 use crate::type_checker::check_number_types::check_number_types;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::math::check_types_in_math_expr;

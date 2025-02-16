@@ -25,7 +25,7 @@ pub fn identify_instance_creation(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
-    internal::identify_instance_creation_without_worker(expr, function_type_registry)?;
+    internal::search_for_invalid_instance_declarations(expr)?;
     internal::identify_instance_creation_with_worker(expr, function_type_registry)
 }
 
@@ -34,39 +34,23 @@ mod internal {
     use crate::instance_type::InstanceType;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{DynamicParsedFunctionName, Expr, InferredType, ParsedFunctionReference};
+    use crate::{Expr, InferredType, ParsedFunctionReference};
     use std::collections::VecDeque;
 
-    pub(crate) fn identify_instance_creation_without_worker(
+    pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
-        function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
         let mut queue = VecDeque::new();
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                // While `instance("worker-name")` will be parsed as a function call,
-                // `instance` will be regarded as an identifier, while that itself should also be a function call.
-                // Such that, all function calls of `instance` and `instance("worker-name")` will be inferred
-                // as an InstanceType creation. In other words, the Rib parser is kept devoid of the knowledge
-                // of the semantics of variables of "instance" or InstanceType creatio
                 Expr::Identifier(variable_id, _, _) => {
-                    if variable_id.name() == "instance" {
-                        let instance_type = InstanceCreationType::Worker {
-                            component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
-                            worker_name: None,
-                        };
-
-                        *expr =
-                            Expr::call(DynamicParsedFunctionName::parse("instance")?, None, vec![]);
-                        expr.override_type_type_mut(InferredType::Instance {
-                            instance_type: Box::new(InstanceType::from(
-                                instance_type.component_id(),
-                                function_type_registry.clone(),
-                                None,
-                                None,
-                            )?),
-                        });
+                    if variable_id.name() == "instance" &&variable_id.is_global() {
+                        return Err(concat!(
+                        "`instance` is a reserved keyword and cannot be used as a global input.\n ",
+                        "note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n ",
+                        "note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name"
+                        ).to_string());
                     }
                 }
 
