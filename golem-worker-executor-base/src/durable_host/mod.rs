@@ -153,6 +153,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -162,8 +163,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 + Send
                 + Sync,
         >,
-        component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
-        component_owner: Ctx::ComponentOwner,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -234,8 +233,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 last_oplog_index,
                 component_metadata,
                 worker_config.total_linear_memory_size,
-                component_resolver,
-                component_owner
+                component_resolver
             )
             .await,
             _temp_dir: temp_dir,
@@ -1836,8 +1834,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     component_service: Arc<dyn ComponentService + Send + Sync>,
-    component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
-    component_owner: Ctx::ComponentOwner,
+    component_resolver: Arc<dyn ComponentResolver>,
     plugins: Arc<dyn Plugins<Ctx::PluginOwner, Ctx::PluginScope> + Send + Sync>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
@@ -1885,8 +1882,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata,
         total_linear_memory_size: u64,
-        component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
-        component_owner: Ctx::ComponentOwner,
+        component_resolver: Arc<dyn ComponentResolver>
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -1924,7 +1920,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             component_metadata,
             total_linear_memory_size,
             replay_state,
-            component_owner,
             component_resolver
         }
     }

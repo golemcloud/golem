@@ -1,0 +1,13 @@
+package golem:it;
+
+interface component-resolve-api {
+  use golem:api/host@1.1.5.{worker-id, component-id};
+
+  run: func() -> tuple<option<component-id>, option<worker-id>, option<worker-id>>;
+}
+
+world component-resolve {
+  import golem:api/host@1.1.5;
+
+  export component-resolve-api;
+}

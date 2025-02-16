@@ -55,6 +55,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All, HasConfig};
+use crate::services::component_resolver::ComponentResolver;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -183,6 +184,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,

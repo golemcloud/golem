@@ -23,6 +23,7 @@ use crate::model::{
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component_resolver::ComponentResolver;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -126,13 +127,14 @@ pub trait WorkerCtx:
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<
-            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
+            dyn Plugins<Self::PluginOwner, Self::PluginScope>
                 + Send
                 + Sync,
         >,

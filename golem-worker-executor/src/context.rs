@@ -40,7 +40,7 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::component_resolver::DefaultComponentResolver;
+use golem_worker_executor_base::services::component_resolver::{self, ComponentResolver};
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
@@ -328,6 +328,7 @@ impl WorkerCtx for Context {
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -355,13 +356,12 @@ impl WorkerCtx for Context {
             rpc,
             worker_proxy,
             component_service,
+            component_resolver,
             config,
             worker_config,
             execution_status,
             file_loader,
-            plugins,
-            Arc::new(DefaultComponentResolver),
-            DefaultComponentOwner,
+            plugins
         )
         .await?;
         Ok(Self {

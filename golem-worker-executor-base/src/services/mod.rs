@@ -23,6 +23,8 @@ use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
 use tokio::runtime::Handle;
 
+use self::component_resolver::ComponentResolver;
+
 pub mod active_workers;
 pub mod blob_store;
 pub mod compiled_component;
@@ -54,6 +56,10 @@ pub trait HasActiveWorkers<Ctx: WorkerCtx> {
 
 pub trait HasComponentService {
     fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync>;
+}
+
+pub trait HasComponentResolver {
+    fn component_resolver(&self) -> Arc<dyn ComponentResolver>;
 }
 
 pub trait HasShardManagerService {
@@ -158,6 +164,7 @@ pub trait HasOplogProcessorPlugin {
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
     + HasComponentService
+    + HasComponentResolver
     + HasConfig
     + HasWorkerForkService
     + HasWorkerService
@@ -188,6 +195,7 @@ impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
             + HasComponentService
+            + HasComponentResolver
             + HasConfig
             + HasWorkerForkService
             + HasWorkerService
@@ -223,6 +231,7 @@ pub struct All<Ctx: WorkerCtx> {
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    component_resolver: Arc<dyn ComponentResolver>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -258,6 +267,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
+            component_resolver: self.component_resolver.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
@@ -290,6 +300,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -325,6 +336,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             linker,
             runtime,
             component_service,
+            component_resolver,
             shard_manager_service,
             worker_fork,
             worker_service,
@@ -355,6 +367,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.linker(),
             this.runtime(),
             this.component_service(),
+            this.component_resolver(),
             this.shard_manager_service(),
             this.worker_fork_service(),
             this.worker_service(),
@@ -402,6 +415,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService for T {
     fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
         self.all().component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentResolver for T {
+    fn component_resolver(&self) -> Arc<dyn ComponentResolver> {
+        self.all().component_resolver.clone()
     }
 }
 

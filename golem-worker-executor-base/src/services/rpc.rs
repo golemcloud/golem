@@ -23,7 +23,9 @@ use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
 
+use super::component_resolver::ComponentResolver;
 use super::file_loader::FileLoader;
+use super::HasComponentResolver;
 use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -275,6 +277,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    component_resolver: Arc<dyn ComponentResolver>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -309,6 +312,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
+            component_resolver: self.component_resolver.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
@@ -346,6 +350,12 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
     fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
         self.component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasComponentResolver  for DirectWorkerInvocationRpc<Ctx> {
+    fn component_resolver(&self) -> Arc<dyn ComponentResolver> {
+        self.component_resolver.clone()
     }
 }
 
@@ -499,6 +509,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -533,6 +544,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             linker,
             runtime,
             component_service,
+            component_resolver,
             shard_manager_service,
             worker_fork,
             worker_service,

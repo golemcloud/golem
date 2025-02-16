@@ -23,7 +23,9 @@ use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use std::sync::Arc;
 
+use super::component_resolver::ComponentResolver;
 use super::file_loader::FileLoader;
+use super::HasComponentResolver;
 use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -63,6 +65,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
     pub component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    pub component_resolver: Arc<dyn ComponentResolver>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     pub worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -104,6 +107,12 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasComponentService for DefaultWorkerFork<Ctx> {
     fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
         self.component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasComponentResolver for DefaultWorkerFork<Ctx> {
+    fn component_resolver(&self) -> Arc<dyn ComponentResolver> {
+        self.component_resolver.clone()
     }
 }
 
@@ -257,6 +266,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
+            component_resolver: self.component_resolver.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_proxy: self.worker_proxy.clone(),
@@ -288,6 +298,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -322,6 +333,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             linker,
             runtime,
             component_service,
+            component_resolver,
             shard_manager_service,
             worker_service,
             worker_proxy,

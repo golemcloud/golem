@@ -650,10 +650,12 @@ impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
     type ComponentOwner = DefaultComponentOwner;
     type PluginScope = DefaultPluginScope;
+    type PluginOwner = DefaultPluginOwner;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
+        component_owner: DefaultComponentOwner,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -668,6 +670,7 @@ impl WorkerCtx for TestWorkerCtx {
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -682,6 +685,7 @@ impl WorkerCtx for TestWorkerCtx {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
             component_metadata,
+            component_owner,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -695,6 +699,7 @@ impl WorkerCtx for TestWorkerCtx {
             rpc,
             worker_proxy,
             component_service,
+            component_resolver,
             config,
             worker_config,
             execution_status,

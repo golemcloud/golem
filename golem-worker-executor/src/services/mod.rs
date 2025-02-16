@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod config;
+pub mod component_resolver;
 
 #[derive(Clone)]
 pub struct AdditionalDeps {}

@@ -28,6 +28,7 @@ use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
+use golem_worker_executor_base::services::component_resolver::ComponentResolver;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
@@ -92,6 +93,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         linker: Arc<Linker<Context>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,

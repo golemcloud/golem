@@ -262,7 +262,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         component_slug: String
     ) -> anyhow::Result<Option<ComponentId>> {
-        let result = self.state.component_resolver.resolve_component(component_slug, self.state.component_owner.clone()).await?;
+        let result = self.state.component_resolver.resolve_component(component_slug, self.state.owned_worker_id.component_id()).await?;
         Ok(result.map(ComponentId::from))
      }
 
@@ -280,12 +280,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         component_slug: String,
         worker_name: String
     ) -> anyhow::Result<Option<WorkerId>> {
-        let component_id =  self.state.component_resolver.resolve_component(component_slug, self.state.component_owner.clone()).await?;
+        let component_id =  self.state.component_resolver.resolve_component(component_slug, self.state.owned_worker_id.component_id()).await?;
         let worker_id = component_id.map(|component_id| WorkerId { component_id: ComponentId::from(component_id), worker_name });
 
         if let Some(worker_id) = worker_id.clone() {
             let owned_id = OwnedWorkerId {
-                account_id: self.state.component_owner.account_id().clone(),
+                account_id: self.state.owned_worker_id.account_id(),
                 worker_id: worker_id.into()
             };
 

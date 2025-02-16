@@ -36,7 +36,7 @@ use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
     HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps, HasComponentResolver,
 };
 use crate::worker::function_result_interpreter::interpret_function_results;
 use crate::worker::invocation::{find_first_available_function, invoke_worker, InvokeResult};
@@ -1524,6 +1524,7 @@ impl RunningWorker {
             parent.rpc(),
             parent.worker_proxy(),
             parent.component_service(),
+            parent.component_resolver(),
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(
