@@ -1,4 +1,4 @@
-import * as Yup from 'yup';
+import * as Yup from "yup";
 
 import { FileJson, Globe, Loader2, Plus, Upload, X } from "lucide-react";
 import {
@@ -7,7 +7,7 @@ import {
 } from "../../api/api-definitions";
 
 import FormInput from "../shared/FormInput";
-import { Formik } from 'formik';
+import { Formik } from "formik";
 import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 import { useState } from "react";
@@ -15,15 +15,17 @@ import { useState } from "react";
 // Validation schema
 const validationSchema = Yup.object().shape({
   name: Yup.string()
-    .required('Name is required')
-    .max(50, 'Name must not exceed 50 characters')
+    .required("Name is required")
+    .max(50, "Name must not exceed 50 characters")
     .matches(
       /^[a-zA-Z0-9-_]+$/,
-      'Name can only contain letters, numbers, hyphens and underscores'
+      "Name can only contain letters, numbers, hyphens and underscores"
     ),
   version: Yup.string()
-    .required('Version is required')
-    .max(10, 'Version must not exceed 10 characters')
+    .required("Version is required")
+    .max(10, "Version must not exceed 10 characters")
+    // no whitespace allowed
+    .matches(/^\S+$/, "Version cannot contain whitespace"),
 });
 interface ApiDefinitionModalProps {
   isOpen: boolean;
@@ -48,67 +50,67 @@ const TabButton = ({
                    ${active
         ? "bg-primary/10 text-primary"
         : "text-muted-foreground hover:text-gray-300 hover:bg-card/50"
-      }`}
-  >
+      }`}>
     {children}
   </button>
 );
 
-const ManualCreationForm = ({ isSubmitting, onSubmit, onClose }: {
+const ManualCreationForm = ({
+  isSubmitting,
+  onSubmit,
+  onClose,
+}: {
   isSubmitting: boolean;
   onSubmit: (values: { name: string; version: string }) => void;
   onClose: () => void;
 }) => (
   <Formik
-    initialValues={{ name: '', version: '' }}
+    initialValues={{ name: "", version: "" }}
     validationSchema={validationSchema}
-    onSubmit={onSubmit}
-  >
+    onSubmit={onSubmit}>
     {({ errors, touched, handleSubmit, handleChange, handleBlur, values }) => (
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className='space-y-6'>
         <FormInput
-          label="Name"
-          name="name"
+          label='Name'
+          name='name'
           value={values.name}
           onChange={handleChange}
           onBlur={handleBlur}
           error={errors.name}
           touched={touched.name}
-          placeholder="Enter API name"
+          placeholder='Enter API name'
           disabled={isSubmitting}
         />
 
         <FormInput
-          label="Version"
-          name="version"
+          label='Version'
+          name='version'
           value={values.version}
           onChange={handleChange}
           onBlur={handleBlur}
           error={errors.version}
           touched={touched.version}
-          placeholder="e.g., 1.0.0"
+          placeholder='e.g., 1.0.0'
           disabled={isSubmitting}
         />
 
-        <div className="flex justify-end items-center gap-3 pt-2">
+        <div className='flex justify-end items-center gap-3 pt-2'>
           <button
-            type="button"
+            type='button'
             onClick={onClose}
-            className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
-                     transition-colors disabled:opacity-50"
-            disabled={isSubmitting}
-          >
+            className='px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
+                     transition-colors disabled:opacity-50'
+            disabled={isSubmitting}>
             Cancel
           </button>
           <button
-            type="submit"
+            type='submit'
             disabled={isSubmitting || Object.keys(errors).length > 0}
-            className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-primary/90 
-                     disabled:opacity-50 transition-colors flex items-center gap-2"
-          >
+            className='px-4 py-2 text-sm bg-primary rounded-lg hover:bg-primary/90 
+                     disabled:opacity-50 transition-colors flex items-center gap-2'>
             {isSubmitting ? (
               <>
-                <Loader2 size={16} className="animate-spin" />
+                <Loader2 size={16} className='animate-spin' />
                 <span>Creating...</span>
               </>
             ) : (
@@ -163,7 +165,10 @@ export const ApiDefinitionModal = ({
     }
   };
 
-  const handleManualCreation = async (values: { name: string; version: string }) => {
+  const handleManualCreation = async (values: {
+    name: string;
+    version: string;
+  }) => {
     const apiDefinition = {
       id: values.name,
       version: values.version,
@@ -172,7 +177,8 @@ export const ApiDefinitionModal = ({
     };
 
     try {
-      const createdDefinition = await createDefinition.mutateAsync(apiDefinition);
+      const createdDefinition =
+        await createDefinition.mutateAsync(apiDefinition);
       toast.success("API definition created successfully");
       onApiDefinitionCreated(createdDefinition.id);
       onClose();
@@ -253,47 +259,44 @@ export const ApiDefinitionModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed -top-8 inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48">
-      <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl">
-        <div className="flex justify-between items-start mb-6">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-md bg-primary/10 text-primary">
+    <div className='fixed -top-8 inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48'>
+      <div className='bg-card rounded-xl p-6 max-w-md w-full shadow-xl'>
+        <div className='flex justify-between items-start mb-6'>
+          <div className='flex items-center gap-3'>
+            <div className='p-2 rounded-md bg-primary/10 text-primary'>
               <Globe size={24} />
             </div>
             <div>
-              <h2 className="text-xl font-semibold">Create API Definition</h2>
-              <p className="text-sm text-muted-foreground mt-1">
+              <h2 className='text-xl font-semibold'>Create API Definition</h2>
+              <p className='text-sm text-muted-foreground mt-1'>
                 Define your API endpoints
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
-                                 rounded-md transition-colors"
-          >
+            className='text-muted-foreground hover:text-gray-300 p-1 hover:bg-card/50 
+                                 rounded-md transition-colors'>
             <X size={20} />
           </button>
         </div>
 
-        <div className="flex gap-2 mb-6">
+        <div className='flex gap-2 mb-6'>
           <TabButton
             active={creationMethod === "manual"}
-            onClick={() => setCreationMethod("manual")}
-          >
+            onClick={() => setCreationMethod("manual")}>
             <Plus size={18} />
             Create Manually
           </TabButton>
           <TabButton
             active={creationMethod === "upload"}
-            onClick={() => setCreationMethod("upload")}
-          >
+            onClick={() => setCreationMethod("upload")}>
             <Upload size={18} />
             Upload Spec
           </TabButton>
         </div>
 
-        <div className="space-y-6">
+        <div className='space-y-6'>
           {creationMethod === "manual" ? (
             <ManualCreationForm
               isSubmitting={isSubmitting}
@@ -312,83 +315,80 @@ export const ApiDefinitionModal = ({
               onDrop={handleFileDrop}
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-all
                                 ${isSubmitting ? "cursor-not-allowed opacity-60" : "cursor-pointer"} 
-                                ${dragActive ? "border-blue-500 bg-primary/10" : "border-gray-600"}`}
-            >
+                                ${dragActive ? "border-blue-500 bg-primary/10" : "border-gray-600"}`}>
               {file ? (
-                <div className="flex items-center justify-center gap-3">
-                  <FileJson className="h-6 w-6 text-primary" />
+                <div className='flex items-center justify-center gap-3'>
+                  <FileJson className='h-6 w-6 text-primary' />
                   <span>{file.name}</span>
                   {!isSubmitting && (
                     <button
                       onClick={() => setFile(null)}
-                      className="p-1 text-muted-foreground hover:text-red-400 rounded-md
-                     hover:bg-red-500/10 transition-colors"
-                    >
+                      className='p-1 text-muted-foreground hover:text-red-400 rounded-md
+                     hover:bg-red-500/10 transition-colors'>
                       <X size={16} />
                     </button>
                   )}
                 </div>
               ) : (
                 <div
-                  className="space-y-2"
+                  className='space-y-2'
                   onClick={() =>
                     document.getElementById("file-upload")?.click()
-                  }
-                >
-                  <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
+                  }>
+                  <Upload className='h-8 w-8 mx-auto text-muted-foreground' />
                   <div>
-                    <p className="text-sm text-gray-300">
+                    <p className='text-sm text-gray-300'>
                       Upload your OpenAPI specification
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className='text-xs text-muted-foreground mt-1'>
                       Drag and drop or click to browse
                     </p>
                   </div>
                 </div>
               )}
               <input
-                type="file"
-                accept=".json,.yaml"
+                type='file'
+                accept='.json,.yaml'
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="hidden"
+                className='hidden'
                 disabled={isSubmitting}
-                id="file-upload"
+                id='file-upload'
               />
             </div>
           )}
 
-          <div className="flex justify-end items-center gap-3 pt-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
-                                     transition-colors disabled:opacity-50"
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={
-                (creationMethod === "manual" && (!name || !version)) ||
-                (creationMethod === "upload" && !file) ||
-                isSubmitting
-              }
-              className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
-                                     disabled:opacity-50 transition-colors flex items-center gap-2"
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Creating...</span>
-                </>
-              ) : (
-                <>
-                  <Plus size={16} />
-                  <span>Create Definition</span>
-                </>
-              )}
-            </button>
-          </div>
+          {creationMethod == "upload" && (
+            <div className='flex justify-end items-center gap-3 pt-2'>
+              <button
+                onClick={onClose}
+                className='px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
+                                     transition-colors disabled:opacity-50'
+                disabled={isSubmitting}>
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={
+                  (creationMethod === "manual" && (!name || !version)) ||
+                  (creationMethod === "upload" && !file) ||
+                  isSubmitting
+                }
+                className='px-4 py-2 text-sm bg-primary rounded-lg hover:bg-blue-600 
+                                     disabled:opacity-50 transition-colors flex items-center gap-2'>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={16} className='animate-spin' />
+                    <span>Creating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus size={16} />
+                    <span>Create Definition</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
