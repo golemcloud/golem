@@ -2235,7 +2235,6 @@ mod interpreter_tests {
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
 
-        #[test]
         async fn test_first_class_worker_0() {
             // Ephemeral worker. Equivalent to:
             // let worker = instance;
@@ -2260,7 +2259,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_1() {
+        async fn test_first_class_worker_simple_ephemeral() {
             // Ephemeral worker. Equivalent to:
             // let worker = instance;
             // let result worker.foo("bar");
@@ -2283,7 +2282,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_2() {
+        async fn test_first_class_ephemeral_worker_ambiguous_interface() {
             let expr = r#"
                 let result = instance.bar("bar");
                 result
@@ -2301,7 +2300,7 @@ mod interpreter_tests {
 
         /// Durable worker
         #[test]
-        async fn test_first_class_worker_3() {
+        async fn test_first_class_durable_worker_simple() {
             let expr = r#"
                 let worker = instance("my-worker");
                 let result = worker.foo("bar");
@@ -2321,7 +2320,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_4() {
+        async fn test_first_class_durable_worker_type_parameterised() {
             let expr = r#"
                 let my_worker = instance("my-worker");
                 let result = my_worker.foo[api1]("bar");
@@ -2341,7 +2340,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_5() {
+        async fn test_first_class_durable_worker_ambiguous_interface() {
             let expr = r#"
                 let worker = instance("my-worker");
                 let result = worker.bar("bar");
@@ -2359,7 +2358,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_6() {
+        async fn test_first_class_durable_worker_unambiguous_type_parameter() {
             let expr = r#"
                 let worker = instance("my-worker");
                 let result = worker.bar[api1]("bar");
