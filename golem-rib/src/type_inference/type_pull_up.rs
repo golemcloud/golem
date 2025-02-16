@@ -812,8 +812,8 @@ mod internal {
                 if let Some(worker_name) = worker_name {
                     let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
 
-                    let new_instance_creation = InstanceCreationType::Durable {
-                        worker_name: Box::new(worker_name),
+                    let new_instance_creation = InstanceCreationType::Worker {
+                        worker_name: Some(Box::new(worker_name)),
                         component_id: instance_creation.component_id().clone(),
                     };
 

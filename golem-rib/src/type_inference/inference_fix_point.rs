@@ -62,7 +62,7 @@ mod internal {
             let right = right_stack.pop();
 
             if let Some(right) = right {
-                if internal::non_equivalent_types(&left.inferred_type(), &right.inferred_type()) {
+                if non_equivalent_types(&left.inferred_type(), &right.inferred_type()) {
                     return false;
                 }
             }

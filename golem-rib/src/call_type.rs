@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use crate::{DynamicParsedFunctionName, Expr};
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::ops::Deref;
-use crate::instance_type::FullyQualifiedResourceConstructor;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
     Function(DynamicParsedFunctionName), // This will handle the actual resource method calls too
     VariantConstructor(String),
     EnumConstructor(String),
-    InstanceCreation(InstanceCreationType)
+    InstanceCreation(InstanceCreationType),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
@@ -31,24 +30,20 @@ pub enum InstanceCreationType {
         component_id: String,
         worker_name: Option<Box<Expr>>, // Making it ephemeral if no specific worker instance
     },
-    ResourceConstruction {
-        worker_name: Box<Expr>,
-        component_id: String,
-    }
 }
 
 impl InstanceCreationType {
     pub fn component_id(&self) -> String {
         match self {
             InstanceCreationType::Worker { component_id, .. } => component_id.clone(),
-            InstanceCreationType::ResourceConstruction { component_id, .. } => component_id.clone(),
         }
     }
 
     pub fn worker_name(&self) -> Option<Expr> {
         match self {
-            InstanceCreationType::Worker { worker_name, .. } => worker_name.clone().map(|w| w.deref().clone()),
-            InstanceCreationType::ResourceConstruction { worker_name, .. } => Some(worker_name.deref().clone()),
+            InstanceCreationType::Worker { worker_name, .. } => {
+                worker_name.clone().map(|w| w.deref().clone())
+            }
         }
     }
 }
@@ -73,7 +68,7 @@ impl Display for CallType {
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
             CallType::InstanceCreation(instance_creation_type) => {
-                write!(f, "{}", instance_creation_type)
+                write!(f, "{}", "InstanceCreation")
             }
         }
     }

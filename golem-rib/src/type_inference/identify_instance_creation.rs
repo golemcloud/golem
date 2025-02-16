@@ -32,10 +32,10 @@ pub fn identify_instance_creation(
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::InstanceType;
+    use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{DynamicParsedFunctionName, Expr, InferredType};
     use std::collections::VecDeque;
-    use crate::type_parameter::TypeParameter;
 
     pub(crate) fn identify_instance_creation_without_worker(
         expr: &mut Expr,
@@ -57,13 +57,14 @@ mod internal {
                             worker_name: None,
                         };
 
-                        *expr = Expr::call(DynamicParsedFunctionName::parse("instance")?, None, vec![]);
+                        *expr =
+                            Expr::call(DynamicParsedFunctionName::parse("instance")?, None, vec![]);
                         expr.override_type_type_mut(InferredType::Instance {
                             instance_type: InstanceType::from(
                                 instance_type.component_id(),
                                 function_type_registry.clone(),
                                 None,
-                                None
+                                None,
                             )?,
                         });
                     }
@@ -98,9 +99,10 @@ mod internal {
                 //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-duration}(when: u64) -> handle<0> // Function from a different package-interface
                 //   app:component-b-exports/app-component-b-inline-functions.{run}() -> u64 // A top level function but part of a package and a generated interface
                 Expr::Call(call_type, generic_type_parameter, args, inferred_type) => {
-                    let type_parameter = generic_type_parameter.clone().map(|type_parameter| {
-                        TypeParameter::from_str(&type_parameter.value)
-                    }).transpose()?;
+                    let type_parameter = generic_type_parameter
+                        .clone()
+                        .map(|type_parameter| TypeParameter::from_str(&type_parameter.value))
+                        .transpose()?;
 
                     let instance_creation_details =
                         internal::get_instance_creation_details(call_type, args.clone());
@@ -111,7 +113,7 @@ mod internal {
                             instance_creation_details.component_id(),
                             function_type_registry.clone(),
                             instance_creation_details.worker_name(),
-                            type_parameter
+                            type_parameter,
                         )?;
                         *inferred_type = InferredType::Instance {
                             instance_type: new_instance_type,
@@ -139,11 +141,14 @@ mod internal {
                 CallType::Function(function_name) => {
                     let function_name = function_name.to_parsed_function_name().function;
                     match function_name {
-                        ParsedFunctionReference::Function { function } if function == "instance" => {
+                        ParsedFunctionReference::Function { function }
+                            if function == "instance" =>
+                        {
                             let optional_worker_name_expression = args.first();
                             Some(InstanceCreationType::Worker {
                                 component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
-                                worker_name: optional_worker_name_expression.map(|x| Box::new(x.clone())),
+                                worker_name: optional_worker_name_expression
+                                    .map(|x| Box::new(x.clone())),
                             })
                         }
 

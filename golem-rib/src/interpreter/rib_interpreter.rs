@@ -2230,10 +2230,10 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{compiler, Expr};
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
-        use crate::interpreter::rib_interpreter::Interpreter;
 
         #[test]
         async fn test_first_class_worker_0() {
@@ -2298,7 +2298,6 @@ mod interpreter_tests {
                 "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
             );
         }
-
 
         /// Durable worker
         #[test]
@@ -2517,7 +2516,6 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
-
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;

@@ -1,8 +1,7 @@
+use crate::instance_type::{FunctionName, InstanceType};
 use crate::type_parameter::TypeParameter;
 use crate::{DynamicParsedFunctionName, Expr, InferredType, TypeName};
 use std::collections::VecDeque;
-use crate::call_type::CallType;
-use crate::instance_type::{FunctionName, InstanceType};
 
 // This phase is responsible for identifying the worker function invocations
 // worker.foo("x, y, z")
@@ -20,7 +19,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             function_name,
             generic_type_parameter,
             args,
-            inferred_type
+            ..
         } = expr
         {
             // This should be an instance type if instance_type_binding phase has been run.
@@ -28,59 +27,99 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             // m.cart("x, y, z") // m is o the type instance-type
             let inferred_type = lhs.clone().inferred_type();
 
-            match inferred_type {
+            match &inferred_type {
                 InferredType::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
                         .clone()
                         .map(|gtp| TypeParameter::from_str(&gtp.value))
                         .transpose()?;
 
-                    // If the function is of the type resource then we need to update the expr to
-                    // resource type
-                    let function =
-                        instance_type.get_function(function_name, type_parameter)?;
+                    // resource.cart("x, y, z")
+                    // resource is of the type instance type
+                    let function = instance_type.get_function(function_name, type_parameter)?;
 
-                    // if the function name is some sort of a resource constructor
-                    // then  we update the inferred type of new Expr call to be a resource type
                     match function.function_name {
                         FunctionName::Function(function_name) => {
                             let dynamic_parsed_function_name = function_name.to_string();
                             let dynamic_parsed_function_name =
                                 DynamicParsedFunctionName::parse(dynamic_parsed_function_name)?;
 
-                            let new_call = Expr::call(dynamic_parsed_function_name, None, args.clone());
+                            let new_call =
+                                Expr::call(dynamic_parsed_function_name, None, args.clone());
                             *expr = new_call;
                         }
                         // We are yet to be able to create a call_type
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
-                            let new_call_type = CallType::ResourceConstruction {
-                                resource_constructor: fully_qualified_resource_constructor,
-                                resource_args: args.clone(),
-                            };
                             // If this is a resource constructor
                             // then we make sure to have a new inferred type
-                            let resource_instance_type = instance_type.get_function()
-                            let new_call = Expr::Call(new_call_type, None, args.clone(), InferredType::Instance {
-                                instance_type: InstanceType::Resource {
-                                    worker_name: None,
-                                    component_id: fully_qualified_resource_constructor.component_id().clone(),
-                                },
-                            });
+                            let resource_instance_type = instance_type.get_resource_instance_type(
+                                fully_qualified_resource_constructor,
+                                args.clone(),
+                                instance_type.component_id().clone(),
+                                instance_type.worker_name(),
+                            );
+
+                            let new_inferred_type = InferredType::Instance {
+                                instance_type: resource_instance_type,
+                            };
+
+                            // This implies, lazy invoke is resolved to another lazy invoke
+                            // that it has to go further resolution phase to convert
+                            // to strict Expr::Call
+                            *expr = Expr::InvokeLazy {
+                                lhs: lhs.clone(),
+                                function_name: function_name.clone(),
+                                generic_type_parameter: generic_type_parameter.clone(),
+                                args: args.clone(),
+                                inferred_type: new_inferred_type,
+                            };
                         }
-                        // If this is resource method
-                        FunctionName::ResourceMethod(resource_method) => {}
+                        // If resource method is called, we could convert to strict call
+                        // however it can only be possible if the instance type of LHS is
+                        // a resource type
+                        FunctionName::ResourceMethod(resource_method) => match instance_type {
+                            InstanceType::Resource {
+                                resource_args,
+                                component_id,
+                                resource_method_dict,
+                                ..
+                            } => {
+                                let resource_method = resource_method_dict
+                                    .map
+                                    .iter()
+                                    .find(|(k, _)| k == &resource_method)
+                                    .map(|(k, _)| k.clone())
+                                    .ok_or(format!(
+                                        "Resource method {:?} not found in resource {}",
+                                        resource_method, component_id
+                                    ))?;
+
+                                let dynamic_parsed_function_name = resource_method
+                                    .dynamic_parsed_function_name(resource_args.clone())?;
+
+                                let method_args = args.clone();
+
+                                let new_call =
+                                    Expr::call(dynamic_parsed_function_name, None, method_args);
+
+                                *expr = new_call
+                            }
+
+                            _ => {
+                                return Err(format!(
+                                        "Invalid worker function invoke. Expected to be a resource type, found {}",
+                                        TypeName::try_from(inferred_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
+                                    ));
+                            }
+                        },
                     }
-
-                    let new_call = Expr::call(function_name, None, args.clone());
-
-                    *expr = new_call;
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
                 // This would
                 inferred_type => {
                     return Err(format!(
                         "Invalid worker function invoke. Expected {} to be an instance type, found {}",
-                        lhs, TypeName::try_from(inferred_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
+                        lhs, TypeName::try_from(inferred_type.clone()).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
                     ));
                 }
             }
@@ -89,33 +128,4 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-
-pub fn call_type(function: &FunctionName, resource_args: &mut Vec<Expr>, lhs_instance_type: InstanceType) -> Result<CallType, String> {
-    match function {
-        FunctionName::Function(fqn) => {
-            let dynamic_parsed_function_name = fqn.to_string()?;
-            DynamicParsedFunctionName::parse(fqn.to_string())?;
-            Ok(CallType::Function(dynamic_parsed_function_name))
-        }
-        FunctionName::ResourceConstructor(resource_constructor) => {
-            let new_instance_type = InstanceType::from(
-                resource_constructor.component_id(),
-                lhs_instance_type.function_type_registry.clone(),
-                None,
-            )?;
-
-            Ok(CallType::ResourceConstruction {
-                resource_args: resource_args.clone(),
-                resource_constructor: resource_constructor.clone(),
-            })
-        }
-        FunctionName::ResourceMethod(method_name) => {
-
-        }
-    }
-
-    let name = self.function_name.to_string();
-    DynamicParsedFunctionName::parse(name)
 }
