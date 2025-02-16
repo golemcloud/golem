@@ -5,6 +5,7 @@ use crate::parser::RibParseError;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{attempt, ParseError, Parser};
+use crate::parser::rib_expr::rib_expr;
 
 pub fn worker_function_invoke<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -13,7 +14,7 @@ where
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    (identifier().skip(spaces()), char('.'), attempt(call()))
+    (identifier().skip(spaces()), char('.'), rib_expr())
         .and_then(|(worker_variable, _, call)| match call {
             Expr::Call(call_type, generic_type_parameter, args, _) => match call_type {
                 CallType::Function(name) => {

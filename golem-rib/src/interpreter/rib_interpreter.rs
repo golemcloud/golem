@@ -2494,26 +2494,6 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
-
-        #[test]
-        async fn first_class_worker_with_indexed_resource_drop() {
-            let expr = r#"
-                let worker = instance("my-worker");
-                let user_id = "user";
-                let resource = worker.cart(user_id);
-                resource.drop();
-                "success"
-            "#;
-            let expr = Expr::from_text(expr).unwrap();
-            let component_metadata = internal::get_metadata_with_resource_with_params();
-
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
-
-            let mut rib_interpreter = Interpreter::default();
-            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
-
-            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
-        }
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;

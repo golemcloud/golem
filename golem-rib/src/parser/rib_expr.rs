@@ -84,10 +84,10 @@ mod internal {
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
-    use crate::parser::worker_function_invoke::worker_function_invoke;
     use crate::Expr;
     use combine::parser::char::spaces;
     use combine::{attempt, choice, many, parser, ParseError, Parser, Stream};
+    use crate::parser::worker_function_invoke::worker_function_invoke;
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -102,7 +102,7 @@ mod internal {
                 list_comprehension(),
                 list_aggregation(),
                 pattern_match(),
-                attempt(worker_function_invoke()),
+                //attempt(worker_function_invoke()),
                 let_binding(),
                 conditional(),
                 selection_expr(),
