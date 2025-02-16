@@ -21,7 +21,7 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_common::model::{ComponentId, IdempotencyKey, WorkerId, WorkerStatus};
+use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbsConnections;
@@ -397,6 +397,11 @@ async fn rdbms_postgres_idempotency(
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = serde_json::to_string(&oplog);
+    check!(oplog.is_ok());
+    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
 
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
@@ -918,6 +923,11 @@ async fn rdbms_mysql_idempotency(
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = serde_json::to_string(&oplog);
+    check!(oplog.is_ok());
+    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
 
     let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(

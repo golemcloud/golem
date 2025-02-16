@@ -2269,6 +2269,7 @@ pub mod tests {
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
+    use golem_wasm_rpc::IntoValueAndType;
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
@@ -2303,6 +2304,10 @@ pub mod tests {
 
         check!(result.value == value);
         check!(result2.value == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
     }
 
     #[test]
@@ -2612,6 +2617,10 @@ pub mod tests {
 
         check!(result.value == value);
         check!(result2.value == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
     }
 
     #[test]

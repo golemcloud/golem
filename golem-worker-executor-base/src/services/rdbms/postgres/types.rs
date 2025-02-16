@@ -1126,7 +1126,10 @@ impl DbValue {
             analysed_type::unit_case("domain")
         };
         let array_type = if root {
-            analysed_type::case("array", DbValue::get_analysed_type(false))
+            analysed_type::case(
+                "array",
+                analysed_type::list(DbValue::get_analysed_type(false)),
+            )
         } else {
             analysed_type::unit_case("array")
         };

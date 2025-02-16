@@ -986,6 +986,7 @@ pub mod tests {
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
+    use golem_wasm_rpc::IntoValueAndType;
     use serde_json::json;
     use std::str::FromStr;
     use test_r::test;
@@ -1000,6 +1001,10 @@ pub mod tests {
         let wit: DbValue = value.clone().into();
         let value2: mysql_types::DbValue = wit.try_into().unwrap();
         check!(value2 == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
     }
 
     #[test]
@@ -1074,6 +1079,10 @@ pub mod tests {
         let wit: DbColumnType = value.clone().into();
         let value2: mysql_types::DbColumnType = wit.into();
         check!(value2 == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
     }
 
     #[test]
