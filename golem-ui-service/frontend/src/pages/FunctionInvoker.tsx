@@ -189,9 +189,12 @@ const FunctionInvoker = () => {
 
       case "Option":
         return value === null ? null : transformValue(value, typeDef.inner!);
+      // case "Tuple":
+      // case "Enum"
+      // case "Result"
 
       default:
-        return /f32|f64|u8|u16|u32|u64|i8|i16|i32|i64/i.test(typeDef.type) ? parseFloat(value as string) : value;
+        return /f32|f64|s8|s16|s32|s64|u8|u16|u32|u64|i8|i16|i32|i64/i.test(typeDef.type) ? parseFloat(value as string) : value;
     }
   };
 

@@ -1,8 +1,10 @@
 import * as monaco from "monaco-editor";
 
-import { ChevronLeft, Code2, Maximize2, Minimize2, X } from "lucide-react";
+import { AlertCircle, ChevronLeft, Code2, Maximize2, Minimize2, X } from "lucide-react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import React, { useEffect, useState } from "react";
+
+import { apiClient } from "../../lib/api-client";
 
 // Types
 interface ContextVariable {
@@ -18,7 +20,58 @@ interface RibEditorPanelProps {
   title?: string;
   summary?: string;
   contextVariables?: ContextVariable[];
+  exports?: Record<string, unknown>;
 }
+
+interface ValidationErrorProps {
+  message: string;
+  onClose: () => void;
+  onCloseWithError?: () => void;
+}
+const ValidationError = ({ message, onClose, onCloseWithError }: ValidationErrorProps) => {
+  const [hasSeenError, setHasSeenError] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setHasSeenError(true);
+    }, 1500); // Consider error seen after 1.5 seconds
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="absolute bottom-4 left-4 right-4 z-50">
+      <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 
+                    rounded-lg shadow-lg flex items-center justify-between gap-3 
+                    animate-in slide-in-from-bottom">
+        <div className="flex items-center gap-2 flex-1">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          <span className="text-sm">{message}</span>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {onCloseWithError && (
+            <button
+              onClick={onCloseWithError}
+              className="px-3 py-1.5 text-xs font-medium rounded-md
+                       border border-destructive/20 hover:bg-destructive/20
+                       transition-colors"
+            >
+              Close with Error
+            </button>
+          )}
+          
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors"
+            aria-label="Dismiss error"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Language Provider
 class RibLanguageProvider {
@@ -27,7 +80,7 @@ class RibLanguageProvider {
   private monaco: Monaco | null = null;
   private disposables: monaco.IDisposable[] = [];
 
-  private constructor() {}
+  private constructor() { }
 
   public static getInstance(): RibLanguageProvider {
     if (!RibLanguageProvider.instance) {
@@ -241,10 +294,13 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
   title = "Script Editor",
   summary = "Edit your script",
   contextVariables = [],
+  exports = {}
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [currentValue, setCurrentValue] = useState(initialValue);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
 
   const handleEditorWillMount = (monaco: Monaco) => {
     const provider = RibLanguageProvider.getInstance();
@@ -255,6 +311,32 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
   const handleChange = (value: string | undefined) => {
     setCurrentValue(value || "");
     onChange?.(value);
+    // Clear any existing validation errors when content changes
+    setValidationError(null);
+    validateContent();
+  };
+
+  const validateContent = async (): Promise<boolean> => {
+    setIsValidating(true);
+    try {
+      await apiClient.post('http://localhost:3000/rib-validator', {
+        rib: currentValue,
+        exports: exports
+      });
+      setValidationError(null);
+      return true;
+    } catch (error: any) {
+      setValidationError('Validation failed: ' + error)
+      return false;
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const handleClose = async () => {
+    if (await validateContent()) {
+      setIsOpen(false);
+    }
   };
 
   const toggleMaximize = (e: React.MouseEvent) => {
@@ -264,9 +346,7 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      RibLanguageProvider.getInstance().updateContextVariables(
-        contextVariables,
-      );
+      RibLanguageProvider.getInstance().updateContextVariables(contextVariables);
     }
   }, [contextVariables, isOpen]);
 
@@ -321,17 +401,18 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
       {isOpen && (
         <>
           <div
-            className={`fixed ${
-              isMaximized ? "inset-4" : "inset-y-12 right-4 w-2/3"
-            } bg-card border border-border rounded-lg shadow-2xl 
+            className={`fixed ${isMaximized ? "inset-4" : "inset-y-12 right-4 w-2/3"
+              } bg-card border border-border rounded-lg shadow-2xl 
               transform transition-all duration-300 ease-in-out z-50`}
           >
             <div className="flex items-center justify-between p-3 border-b border-border">
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setIsOpen(false)}
+                  onClick={handleClose}
+                  disabled={isValidating}
                   className="p-2 text-muted-foreground hover:text-primary 
-                             rounded-md hover:bg-primary/10 transition-colors"
+                             rounded-md hover:bg-primary/10 transition-colors
+                             disabled:opacity-50"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
@@ -355,9 +436,11 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
                   )}
                 </button>
                 <button
-                  onClick={() => setIsOpen(false)}
+                  onClick={handleClose}
+                  disabled={isValidating}
                   className="p-2 text-muted-foreground hover:text-destructive 
-                             rounded-md hover:bg-destructive/10 transition-colors"
+                             rounded-md hover:bg-destructive/10 transition-colors
+                             disabled:opacity-50"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -393,13 +476,21 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
                   formatOnType: true,
                 }}
               />
+
+              {validationError && (
+                <ValidationError
+                  message={validationError}
+                  onClose={() => setValidationError(null)}
+                  onCloseWithError={() => setIsOpen(false)}
+                />
+              )}
             </div>
           </div>
 
           {/* Backdrop */}
           <div
             className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40"
-            onClick={() => setIsOpen(false)}
+            onClick={handleClose}
           />
         </>
       )}

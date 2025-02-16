@@ -7,8 +7,10 @@ use axum::{
     http::{header, HeaderMap, Method, Request, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
+    routing::post,
     Router,
 };
+// use rib::
 use clap::Parser;
 use hyper::{client::HttpConnector, Client};
 use mime_guess::from_path;
@@ -82,7 +84,107 @@ impl UiService {
             }
         }
     }
+    async fn validate_rib(body: Bytes) -> impl IntoResponse {
+        // Parse the request body to get both rib and exports
+        let request_body = match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(json) => json,
+            Err(e) => {
+                error!("Failed to parse request body: {}", e);
+                return (StatusCode::BAD_REQUEST, "Failed to parse request body").into_response();
+            }
+        };
 
+        // Extract rib text
+        let rib_text = match request_body.get("rib") {
+            Some(rib) => match rib.as_str() {
+                Some(text) => text,
+                None => {
+                    error!("rib field must be a string");
+                    return (StatusCode::BAD_REQUEST, "rib field must be a string").into_response();
+                }
+            },
+            None => {
+                error!("rib field not found in request body");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "rib field not found in request body",
+                )
+                    .into_response();
+            }
+        };
+
+        // Extract exports metadata
+        let exports_metadata = match request_body.get("exports") {
+            Some(exports) => match serde_json::from_value::<
+                Vec<golem_wasm_ast::analysis::AnalysedExport>,
+            >(exports.clone())
+            {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    error!("Failed to parse exports metadata: {}", e);
+                    return (StatusCode::BAD_REQUEST, "Failed to parse exports metadata")
+                        .into_response();
+                }
+            },
+            None => {
+                error!("exports field not found in request body");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "exports field not found in request body",
+                )
+                    .into_response();
+            }
+        };
+
+        // Parse the RIB expression
+        let expr = match rib::Expr::from_text(rib_text) {
+            Ok(expr) => expr,
+            Err(e) => {
+                error!("Failed to parse RIB expression: {}", e);
+                return (StatusCode::BAD_REQUEST, e).into_response();
+            }
+        };
+
+        // Define global variable type specs for request object
+        let global_vars = vec![
+            rib::GlobalVariableTypeSpec {
+                variable_id: rib::VariableId::global("request".to_string()),
+                path: rib::Path::from_elems(vec!["path"]),
+                inferred_type: rib::InferredType::Str,
+            },
+            rib::GlobalVariableTypeSpec {
+                variable_id: rib::VariableId::global("request".to_string()),
+                path: rib::Path::from_elems(vec!["headers"]),
+                inferred_type: rib::InferredType::Str,
+            },
+        ];
+
+        // Validate RIB with restricted global variables
+        match rib::compile_with_restricted_global_variables(
+            &expr,
+            &exports_metadata,
+            Some(vec!["request".to_string()]),
+            &global_vars,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                error!("RIB validation failed: {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("RIB validation failed: {}", e),
+                )
+                    .into_response();
+            }
+        };
+
+        // Return success response
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("true"))
+            .unwrap()
+            .into_response()
+    }
     async fn serve_static(uri: Uri) -> impl IntoResponse {
         let path = uri.path().trim_start_matches('/');
 
@@ -190,6 +292,7 @@ impl UiService {
             )
             // Static assets route
             .route("/assets/*path", get(Self::serve_static))
+            .route("/rib-validator", post(Self::validate_rib))
             // SPA fallback
             .fallback(get(Self::serve_index))
             .with_state(state)

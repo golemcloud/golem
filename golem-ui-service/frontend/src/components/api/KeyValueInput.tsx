@@ -45,7 +45,7 @@ export const KeyValueInput = ({
 
   return (
     <div className="space-y-4">
-      <label className="block text-sm font-medium">{label}</label>
+      <label className="block text-sm font-medium text-foreground/90">{label}</label>
 
       {/* Existing key-value pairs */}
       <div className="space-y-2">
@@ -56,17 +56,22 @@ export const KeyValueInput = ({
               value={key}
               disabled={!editableKeys}
               onChange={(e) => handleKeyChange(key, e.target.value)}
-              className="bg-gray-800 w-full p-2 rounded-md border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              className="bg-card/80 w-full p-2 rounded-lg border border-border 
+                         focus:border-primary focus:ring-1 focus:ring-primary 
+                         outline-none transition-colors disabled:opacity-50"
             />
             <input
               type="text"
               value={val}
-              onChange={(e) => handleValueChange(key, e.target.value)}
-              className="bg-gray-800 w-full p-2 rounded-md border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              onChange={(e) => handleValueValue(key, e.target.value)}
+              className="bg-card/80 w-full p-2 rounded-lg border border-border 
+                         focus:border-primary focus:ring-1 focus:ring-primary 
+                         outline-none transition-colors"
             />
             <button
               onClick={() => handleRemove(key)}
-              className="p-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded-md transition-colors"
+              className="p-2 text-muted-foreground hover:text-destructive 
+                         hover:bg-destructive/10 rounded-lg transition-colors"
               title="Remove"
             >
               <X size={16} />
@@ -82,19 +87,25 @@ export const KeyValueInput = ({
           value={newKey}
           onChange={(e) => setNewKey(e.target.value)}
           placeholder="Key"
-          className="bg-gray-800 w-full p-2 rounded-md border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          className="bg-card/80 w-full p-2 rounded-lg border border-border 
+                     focus:border-primary focus:ring-1 focus:ring-primary 
+                     outline-none transition-colors"
         />
         <input
           type="text"
           value={newValue}
           onChange={(e) => setNewValue(e.target.value)}
           placeholder="Value"
-          className="bg-gray-800 w-full p-2 rounded-md border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          className="bg-card/80 w-full p-2 rounded-lg border border-border 
+                     focus:border-primary focus:ring-1 focus:ring-primary 
+                     outline-none transition-colors"
         />
         <button
           onClick={handleAdd}
           disabled={!newKey || !newValue}
-          className="p-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:hover:bg-blue-500"
+          className="p-2 bg-primary text-primary-foreground rounded-lg 
+                     hover:bg-primary/90 disabled:opacity-50 
+                     transition-colors"
           title="Add"
         >
           <Plus size={16} />

@@ -16,6 +16,9 @@ hyper = { version = "0.14"}
 rust-embed = "8.5.0"
 mime_guess = "2.0"
 clap = { version = "4.0", features = ["derive"] }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 
 [build-dependencies]
 embed-resource = "3.0.1"

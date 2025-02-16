@@ -7,10 +7,10 @@ import {
   Webhook,
   X,
 } from "lucide-react";
+import { Component, Parameter, TypeDefinition } from "../../types/api";
 import { TOOLTIP_CONTENT, Tooltip } from "../shared/Tooltip";
 import { useEffect, useState } from "react";
 
-import { Component } from "../../types/api";
 import KeyValueInput from "./KeyValueInput";
 import RibEditorPanel from "../shared/RibEditorPanel";
 import { Route } from "../../pages/ApiDefinitionDetail";
@@ -169,13 +169,63 @@ export const RouteModal = ({
   const [exportSuggestions, setExportSuggestions] = useState<
     {
       name: string;
-      parameters: { name: string; type: string }[];
+      parameters: Parameter[];
     }[]
   >([]);
 
   const { data: workersData } = useWorkers(
     selectedComponent?.versionedComponentId.componentId || "",
   );
+
+  const processWitType = (type, depth = 0): string => {
+    if (depth >= 1) return type.type || 'unknown';
+
+    if (!type) return 'unknown';
+
+    // Handle basic types
+    if (type.type && !type.fields && !type.cases && !type.inner && !type.items) {
+      return type.type;
+    }
+
+    // Handle Record type
+    if (type.type === 'Record') {
+      if (depth >= 1) return 'Record';
+      const fields = type.fields.map(field =>
+        `${field.name}: ${processWitType(field.typ, depth + 1)}`
+      ).join(', ');
+      return `{ ${fields} }`;
+    }
+
+    // Handle Variant type
+    if (type.type === 'Variant') {
+      if (depth >= 1) return 'Variant';
+      const cases = type.cases.map(c =>
+        `${c.name}${c.typ ? `(${processWitType(c.typ, depth + 1)})` : ''}`
+      ).join(' | ');
+      return cases;
+    }
+
+    // Handle List type
+    if (type.type === 'List') {
+      return `${processWitType(type.inner, depth)}[]`;
+    }
+
+    // Handle Option type
+    if (type.type === 'Option') {
+      return `${processWitType(type.inner, depth)}?`;
+    }
+
+    // Handle Tuple type
+    if (type.type === 'Tuple') {
+      if (depth >= 1) return 'Tuple';
+      const items = type.items.map(item =>
+        processWitType(item, depth + 1)
+      ).join(', ');
+      return `[${items}]`;
+    }
+
+    return 'unknown';
+  };
 
   useEffect(() => {
     const pathParams = getPathParams(path);
@@ -184,7 +234,9 @@ export const RouteModal = ({
         ...workerSuggestions,
         ...exportSuggestions.map(
           (exp) =>
-            `${exp.name}(${exp.parameters.map((p) => `${p.name}: ${p.type}`).join(", ")})`,
+            `${exp.name}(${exp.parameters
+              .map((p) => `${p.name}: ${processWitType(p.typ)}`)
+              .join(", ")})`,
         ),
       ]),
     );
@@ -240,10 +292,11 @@ export const RouteModal = ({
       const exports = selectedComponent.metadata.exports.flatMap((exp) =>
         exp.functions.map((func) => ({
           name: `${exp.name}.{${func.name}}`,
-          parameters: func.parameters.map((x) => ({
-            name: x.name,
-            type: x.typ.type,
-          })),
+          parameters: func.parameters
+          // parameters: func.parameters.map((x) => ({
+          //   name: x.name,
+          //   type: x.typ,
+          // })),
         })),
       );
       setExportSuggestions(exports);
@@ -300,7 +353,7 @@ export const RouteModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="-top-8 fixed overflow-y-scroll inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+    <div className="-top-8 pt-48 fixed overflow-y-scroll inset-0 bg-card bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
       <div className="bg-card rounded-lg p-6 max-w-4xl w-full shadow-xl border border-card/85">
         <div className="flex justify-between items-start mb-6">
           <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -433,6 +486,7 @@ export const RouteModal = ({
                 contextVariables={contextVariables}
                 title="Worker Name"
                 summary="Define the worker name using a Rib script"
+                exports={selectedComponent.metadata.exports}
               />
             )}
 
@@ -451,6 +505,7 @@ export const RouteModal = ({
                 contextVariables={contextVariables}
                 title="Response Transform"
                 summary="Define the response transformation using a Rib script"
+                exports={selectedComponent.metadata.exports}
               />
             )}
 
@@ -495,5 +550,5 @@ export const RouteModal = ({
     </div>
   );
 };
-
+// compile_with_restricted_global_variables
 export default RouteModal;

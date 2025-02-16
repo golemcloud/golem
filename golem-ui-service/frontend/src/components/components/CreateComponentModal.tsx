@@ -13,6 +13,8 @@ import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
 
 import { Component } from "../../types/api";
+import FileSystemManager from "./FileSystemManager";
+import HierarchicalFileDropzone from "./FileSystemManager";
 import JSZip from "jszip";
 import toast from "react-hot-toast";
 
@@ -195,15 +197,32 @@ const CreateComponentModal = ({
     }
   };
 
-  const handleAdditionalFiles = (fileList: FileList) => {
+  const handleAdditionalFiles = (fileList: FileList, parentId: string | null = null) => {
     const newFiles = Array.from(fileList).map((file) => ({
       id: Math.random().toString(36).substring(7),
       name: file.name,
       type: "file" as const,
-      parentId: null,
+      parentId,
       fileObject: file,
+      isLocked: false
     }));
     setFiles((prev) => [...prev, ...newFiles]);
+  };
+
+  const handleToggleLock = (id: string) => {
+    setFiles(prev => prev.map(file =>
+      file.id === id ? { ...file, isLocked: !file.isLocked } : file
+    ));
+  };
+
+  const handleCreateFolder = (name: string, parentId: string | null = null) => {
+    const newFolder = {
+      id: Math.random().toString(36).substring(7),
+      name,
+      type: "folder" as const,
+      parentId,
+    };
+    setFiles(prev => [...prev, newFolder]);
   };
 
   const removeFile = (id: string) => {
@@ -226,14 +245,50 @@ const CreateComponentModal = ({
       // Create zip file containing additional files
       if (files.length > 0) {
         const zip = new JSZip();
-        await addFilesToZip(zip, null);
+
+        const addFileToZip = async (file: FileItem, parentPath: string = '') => {
+          const filePath = parentPath ? `${parentPath}/${file.name}` : file.name;
+
+          if (file.type === 'folder') {
+            const folder = zip.folder(filePath);
+            const children = files.filter(f => f.parentId === file.id);
+            for (const child of children) {
+              await addFileToZip(child, filePath);
+            }
+          } else if (file.fileObject) {
+            zip.file(filePath, file.fileObject);
+          }
+        };
+
+        // First add all root level files
+        const rootFiles = files.filter(f => f.parentId === null);
+        for (const file of rootFiles) {
+          await addFileToZip(file);
+        }
+
+        // Generate the zip file
         const blob = await zip.generateAsync({ type: "blob" });
         formData.append("files", blob, "files.zip");
 
-        // Add file permissions metadata
+        // Create file permissions metadata
+        const filePermissions = files
+          .filter(file => file.type === 'file')
+          .map(file => {
+            const getFilePath = (fileItem: FileItem): string => {
+              const parent = files.find(f => f.id === fileItem.parentId);
+              if (!parent) return fileItem.name;
+              return `/${getFilePath(parent)}/${fileItem.name}`;
+            };
+
+            return {
+              path: getFilePath(file),
+              permissions: file.isLocked ? "read-only" : "read-write"
+            };
+          });
+
         formData.append(
           "filesPermissions",
-          JSON.stringify(captureFileMetadata(files)),
+          JSON.stringify({ values: filePermissions })
         );
       }
 
@@ -321,10 +376,9 @@ const CreateComponentModal = ({
                     setComponentType(option.value as ComponentType)
                   }
                   className={`flex items-center gap-3 p-4 rounded-lg border-2 transition-all
-                    ${
-                      componentType === option.value
-                        ? "border-primary bg-primary/10"
-                        : "border-input hover:border-muted"
+                    ${componentType === option.value
+                      ? "border-primary bg-primary/10"
+                      : "border-input hover:border-muted"
                     }`}
                   disabled={isSubmitting}
                 >
@@ -352,14 +406,14 @@ const CreateComponentModal = ({
                 files={
                   mainFile
                     ? [
-                        {
-                          id: "main",
-                          name: mainFile.name,
-                          type: "file",
-                          parentId: null,
-                          fileObject: mainFile,
-                        },
-                      ]
+                      {
+                        id: "main",
+                        name: mainFile.name,
+                        type: "file",
+                        parentId: null,
+                        fileObject: mainFile,
+                      },
+                    ]
                     : []
                 }
                 onRemove={() => setMainFile(null)}
@@ -373,12 +427,10 @@ const CreateComponentModal = ({
               <label className="block text-sm font-medium mb-1.5">
                 Additional Files
               </label>
-              <FileDropzone
-                onDrop={handleAdditionalFiles}
+              <FileSystemManager
                 files={files}
-                onRemove={removeFile}
+                onFilesChange={setFiles}
                 isSubmitting={isSubmitting}
-                placeholder="Add additional files"
               />
             </div>
           </div>
