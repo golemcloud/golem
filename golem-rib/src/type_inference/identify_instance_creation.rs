@@ -105,7 +105,7 @@ mod internal {
                         .transpose()?;
 
                     let instance_creation_details =
-                        internal::get_instance_creation_details(call_type, args.clone());
+                        get_instance_creation_details(call_type, args.clone());
                     // We change the call_type to instance creation which hardly does anything during interpretation
                     if let Some(instance_creation_details) = instance_creation_details {
                         *call_type = CallType::InstanceCreation(instance_creation_details.clone());
@@ -128,7 +128,7 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn get_instance_creation_details(
+    fn get_instance_creation_details(
         call_type: &CallType,
         args: Vec<Expr>,
     ) -> Option<InstanceCreationType> {
