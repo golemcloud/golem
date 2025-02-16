@@ -72,6 +72,19 @@ impl CompositeType {
     pub fn new(name: String, attributes: Vec<(String, DbColumnType)>) -> Self {
         CompositeType { name, attributes }
     }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field(
+                "attributes",
+                analysed_type::list(analysed_type::tuple(vec![
+                    analysed_type::str(),
+                    DbColumnType::get_analysed_type(root),
+                ])),
+            ),
+        ])
+    }
 }
 
 impl Display for CompositeType {
@@ -100,16 +113,7 @@ impl IntoValue for CompositeType {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field(
-                "attributes",
-                analysed_type::list(analysed_type::tuple(vec![
-                    analysed_type::str(),
-                    DbColumnType::get_type(),
-                ])),
-            ),
-        ])
+        CompositeType::get_analysed_type(true)
     }
 }
 
@@ -125,6 +129,13 @@ impl DomainType {
             name,
             base_type: Box::new(base_type),
         }
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("base-type", DbColumnType::get_analysed_type(root)),
+        ])
     }
 }
 
@@ -146,10 +157,7 @@ impl IntoValue for DomainType {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", DbColumnType::get_type()),
-        ])
+        DbColumnType::get_analysed_type(true)
     }
 }
 
@@ -165,6 +173,13 @@ impl RangeType {
             name,
             base_type: Box::new(base_type),
         }
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("base-type", DbColumnType::get_analysed_type(root)),
+        ])
     }
 }
 
@@ -186,10 +201,7 @@ impl IntoValue for RangeType {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", DbColumnType::get_type()),
-        ])
+        RangeType::get_analysed_type(true)
     }
 }
 
@@ -392,6 +404,16 @@ impl Composite {
     pub fn new(name: String, values: Vec<DbValue>) -> Self {
         Composite { name, values }
     }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field(
+                "values",
+                analysed_type::list(DbValue::get_analysed_type(root)),
+            ),
+        ])
+    }
 }
 
 impl Display for Composite {
@@ -417,10 +439,7 @@ impl IntoValue for Composite {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("values", analysed_type::str()),
-        ])
+        CompositeType::get_analysed_type(true)
     }
 }
 
@@ -436,6 +455,13 @@ impl Domain {
             name,
             value: Box::new(value),
         }
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("value", DbValue::get_analysed_type(root)),
+        ])
     }
 }
 
@@ -457,10 +483,7 @@ impl IntoValue for Domain {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", DbValue::get_type()),
-        ])
+        Domain::get_analysed_type(true)
     }
 }
 
@@ -476,6 +499,26 @@ impl Range {
             name,
             value: Box::new(value),
         }
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        fn get_bound_type(root: bool) -> AnalysedType {
+            analysed_type::variant(vec![
+                analysed_type::case("included", DbValue::get_analysed_type(root)),
+                analysed_type::case("excluded", DbValue::get_analysed_type(root)),
+                analysed_type::unit_case("unbounded"),
+            ])
+        }
+
+        let value_type = analysed_type::record(vec![
+            analysed_type::field("start", get_bound_type(root)),
+            analysed_type::field("end", get_bound_type(root)),
+        ]);
+
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("value", value_type),
+        ])
     }
 }
 
@@ -497,10 +540,7 @@ impl IntoValue for Range {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", ValuesRange::<DbValue>::get_type()),
-        ])
+        RangeType::get_analysed_type(true)
     }
 }
 
@@ -545,8 +585,8 @@ pub enum DbColumnType {
     Enumeration(EnumerationType),
     Composite(CompositeType),
     Domain(DomainType),
-    Range(RangeType),
     Array(Box<DbColumnType>),
+    Range(RangeType),
     Null,
 }
 
@@ -567,6 +607,74 @@ impl DbColumnType {
                 | DbColumnType::Array(_)
                 | DbColumnType::Range(_)
         )
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        let composite_type = if root {
+            analysed_type::case("composite", CompositeType::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("composite")
+        };
+        let domain_type = if root {
+            analysed_type::case("domain", DomainType::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("domain")
+        };
+        let array_type = if root {
+            analysed_type::case("array", DbColumnType::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("array")
+        };
+        let range_type = if root {
+            analysed_type::case("range", RangeType::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("range")
+        };
+
+        analysed_type::variant(vec![
+            analysed_type::unit_case("character"),
+            analysed_type::unit_case("int2"),
+            analysed_type::unit_case("int4"),
+            analysed_type::unit_case("int8"),
+            analysed_type::unit_case("float4"),
+            analysed_type::unit_case("float8"),
+            analysed_type::unit_case("numeric"),
+            analysed_type::unit_case("boolean"),
+            analysed_type::unit_case("text"),
+            analysed_type::unit_case("varchar"),
+            analysed_type::unit_case("bpchar"),
+            analysed_type::unit_case("timestamp"),
+            analysed_type::unit_case("timestamptz"),
+            analysed_type::unit_case("date"),
+            analysed_type::unit_case("time"),
+            analysed_type::unit_case("timetz"),
+            analysed_type::unit_case("interval"),
+            analysed_type::unit_case("bytea"),
+            analysed_type::unit_case("uuid"),
+            analysed_type::unit_case("xml"),
+            analysed_type::unit_case("json"),
+            analysed_type::unit_case("jsonb"),
+            analysed_type::unit_case("jsonpath"),
+            analysed_type::unit_case("inet"),
+            analysed_type::unit_case("cidr"),
+            analysed_type::unit_case("macaddr"),
+            analysed_type::unit_case("bit"),
+            analysed_type::unit_case("varbit"),
+            analysed_type::unit_case("int4range"),
+            analysed_type::unit_case("int8range"),
+            analysed_type::unit_case("numrange"),
+            analysed_type::unit_case("tsrange"),
+            analysed_type::unit_case("tstzrange"),
+            analysed_type::unit_case("daterange"),
+            analysed_type::unit_case("money"),
+            analysed_type::unit_case("oid"),
+            analysed_type::case("enumeration", EnumerationType::get_type()),
+            composite_type,
+            domain_type,
+            array_type,
+            range_type,
+            analysed_type::unit_case("null"),
+        ])
     }
 }
 
@@ -802,59 +910,7 @@ impl IntoValue for DbColumnType {
     }
 
     fn get_type() -> AnalysedType {
-        fn get_tpe(root: bool) -> AnalysedType {
-            let array_type = if root {
-                analysed_type::case("array", get_tpe(false))
-            } else {
-                analysed_type::unit_case("array")
-            };
-
-            analysed_type::variant(vec![
-                analysed_type::unit_case("character"),
-                analysed_type::unit_case("int2"),
-                analysed_type::unit_case("int4"),
-                analysed_type::unit_case("int8"),
-                analysed_type::unit_case("float4"),
-                analysed_type::unit_case("float8"),
-                analysed_type::unit_case("numeric"),
-                analysed_type::unit_case("boolean"),
-                analysed_type::unit_case("text"),
-                analysed_type::unit_case("varchar"),
-                analysed_type::unit_case("bpchar"),
-                analysed_type::unit_case("timestamp"),
-                analysed_type::unit_case("timestamptz"),
-                analysed_type::unit_case("date"),
-                analysed_type::unit_case("time"),
-                analysed_type::unit_case("timetz"),
-                analysed_type::unit_case("interval"),
-                analysed_type::unit_case("bytea"),
-                analysed_type::unit_case("uuid"),
-                analysed_type::unit_case("xml"),
-                analysed_type::unit_case("json"),
-                analysed_type::unit_case("jsonb"),
-                analysed_type::unit_case("jsonpath"),
-                analysed_type::unit_case("inet"),
-                analysed_type::unit_case("cidr"),
-                analysed_type::unit_case("macaddr"),
-                analysed_type::unit_case("bit"),
-                analysed_type::unit_case("varbit"),
-                analysed_type::unit_case("int4range"),
-                analysed_type::unit_case("int8range"),
-                analysed_type::unit_case("numrange"),
-                analysed_type::unit_case("tsrange"),
-                analysed_type::unit_case("tstzrange"),
-                analysed_type::unit_case("daterange"),
-                analysed_type::unit_case("money"),
-                analysed_type::unit_case("oid"),
-                analysed_type::case("enumeration", EnumerationType::get_type()),
-                analysed_type::case("composite", CompositeType::get_type()),
-                analysed_type::case("domain", DomainType::get_type()),
-                array_type,
-                analysed_type::case("range", RangeType::get_type()),
-                analysed_type::unit_case("null"),
-            ])
-        }
-        get_tpe(true)
+        DbColumnType::get_analysed_type(true)
     }
 }
 
@@ -899,8 +955,8 @@ pub enum DbValue {
     Enumeration(Enumeration),
     Composite(Composite),
     Domain(Domain),
-    Range(Range),
     Array(Vec<DbValue>),
+    Range(Range),
     Null,
 }
 
@@ -1056,6 +1112,74 @@ impl DbValue {
             }
             DbValue::Null => DbColumnType::Null,
         }
+    }
+
+    fn get_analysed_type(root: bool) -> AnalysedType {
+        let composite_type = if root {
+            analysed_type::case("composite", Composite::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("composite")
+        };
+        let domain_type = if root {
+            analysed_type::case("domain", Domain::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("domain")
+        };
+        let array_type = if root {
+            analysed_type::case("array", DbValue::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("array")
+        };
+        let range_type = if root {
+            analysed_type::case("range", Range::get_analysed_type(false))
+        } else {
+            analysed_type::unit_case("range")
+        };
+
+        analysed_type::variant(vec![
+            analysed_type::case("character", analysed_type::s8()),
+            analysed_type::case("int2", analysed_type::s16()),
+            analysed_type::case("int4", analysed_type::s32()),
+            analysed_type::case("int8", analysed_type::s64()),
+            analysed_type::case("float4", analysed_type::f32()),
+            analysed_type::case("float8", analysed_type::f64()),
+            analysed_type::case("numeric", analysed_type::str()),
+            analysed_type::case("boolean", analysed_type::bool()),
+            analysed_type::case("text", analysed_type::str()),
+            analysed_type::case("varchar", analysed_type::str()),
+            analysed_type::case("bpchar", analysed_type::str()),
+            analysed_type::case("timestamp", analysed_type::str()),
+            analysed_type::case("timestamptz", analysed_type::str()),
+            analysed_type::case("time", analysed_type::str()),
+            analysed_type::case("timetz", analysed_type::str()),
+            analysed_type::case("date", analysed_type::str()),
+            analysed_type::case("interval", analysed_type::str()),
+            analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
+            analysed_type::case("json", analysed_type::str()),
+            analysed_type::case("jsonb", analysed_type::str()),
+            analysed_type::case("jsonpath", analysed_type::str()),
+            analysed_type::case("xml", analysed_type::str()),
+            analysed_type::case("uuid", analysed_type::str()),
+            analysed_type::case("inet", analysed_type::str()),
+            analysed_type::case("cidr", analysed_type::str()),
+            analysed_type::case("macaddr", analysed_type::str()),
+            analysed_type::case("bit", analysed_type::list(analysed_type::bool())),
+            analysed_type::case("varbit", analysed_type::list(analysed_type::bool())),
+            analysed_type::case("int4range", ValuesRange::<i32>::get_type()),
+            analysed_type::case("int8range", ValuesRange::<i64>::get_type()),
+            analysed_type::case("numrange", ValuesRange::<String>::get_type()),
+            analysed_type::case("tsrange", ValuesRange::<String>::get_type()),
+            analysed_type::case("tstzrange", ValuesRange::<String>::get_type()),
+            analysed_type::case("daterange", ValuesRange::<String>::get_type()),
+            analysed_type::case("money", analysed_type::s64()),
+            analysed_type::case("oid", analysed_type::u32()),
+            analysed_type::case("enumeration", Enumeration::get_type()),
+            composite_type,
+            domain_type,
+            array_type,
+            range_type,
+            analysed_type::unit_case("null"),
+        ])
     }
 }
 
@@ -1234,59 +1358,7 @@ impl IntoValue for DbValue {
     }
 
     fn get_type() -> AnalysedType {
-        fn get_tpe(root: bool) -> AnalysedType {
-            let array_type = if root {
-                analysed_type::case("array", get_tpe(false))
-            } else {
-                analysed_type::unit_case("array")
-            };
-
-            analysed_type::variant(vec![
-                analysed_type::case("character", analysed_type::s8()),
-                analysed_type::case("int2", analysed_type::s16()),
-                analysed_type::case("int4", analysed_type::s32()),
-                analysed_type::case("int8", analysed_type::s64()),
-                analysed_type::case("float4", analysed_type::f32()),
-                analysed_type::case("float8", analysed_type::f64()),
-                analysed_type::case("numeric", analysed_type::str()),
-                analysed_type::case("boolean", analysed_type::bool()),
-                analysed_type::case("text", analysed_type::str()),
-                analysed_type::case("varchar", analysed_type::str()),
-                analysed_type::case("bpchar", analysed_type::str()),
-                analysed_type::case("timestamp", analysed_type::str()),
-                analysed_type::case("timestamptz", analysed_type::str()),
-                analysed_type::case("time", analysed_type::str()),
-                analysed_type::case("timetz", analysed_type::str()),
-                analysed_type::case("date", analysed_type::str()),
-                analysed_type::case("interval", analysed_type::str()),
-                analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
-                analysed_type::case("json", analysed_type::str()),
-                analysed_type::case("jsonb", analysed_type::str()),
-                analysed_type::case("jsonpath", analysed_type::str()),
-                analysed_type::case("xml", analysed_type::str()),
-                analysed_type::case("uuid", analysed_type::str()),
-                analysed_type::case("inet", analysed_type::str()),
-                analysed_type::case("cidr", analysed_type::str()),
-                analysed_type::case("macaddr", analysed_type::str()),
-                analysed_type::case("bit", analysed_type::list(analysed_type::bool())),
-                analysed_type::case("varbit", analysed_type::list(analysed_type::bool())),
-                analysed_type::case("int4range", ValuesRange::<i32>::get_type()),
-                analysed_type::case("int8range", ValuesRange::<i64>::get_type()),
-                analysed_type::case("numrange", ValuesRange::<String>::get_type()),
-                analysed_type::case("tsrange", ValuesRange::<String>::get_type()),
-                analysed_type::case("tstzrange", ValuesRange::<String>::get_type()),
-                analysed_type::case("daterange", ValuesRange::<String>::get_type()),
-                analysed_type::case("money", analysed_type::s64()),
-                analysed_type::case("oid", analysed_type::u32()),
-                analysed_type::case("enumeration", Enumeration::get_type()),
-                analysed_type::case("composite", Composite::get_type()),
-                analysed_type::case("domain", Domain::get_type()),
-                analysed_type::case("range", Range::get_type()),
-                array_type,
-                analysed_type::case("null", analysed_type::str()),
-            ])
-        }
-        get_tpe(true)
+        DbValue::get_analysed_type(true)
     }
 }
 
