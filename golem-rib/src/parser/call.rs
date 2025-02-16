@@ -35,18 +35,18 @@ where
 {
     (
         function_name().skip(spaces()),
-        // optional(between(
-        //     char('[').skip(spaces()),
-        //     char(']').skip(spaces()),
-        //     generic_type_parameter().skip(spaces()),
-        // )),
+        optional(between(
+            char('[').skip(spaces()),
+            char(']').skip(spaces()),
+            generic_type_parameter().skip(spaces()),
+        )),
         between(
             char('(').skip(spaces()),
             char(')').skip(spaces()),
             sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
         ),
     )
-        .map(|(name, args)| Expr::call(name, None, args))
+        .map(|(name, tp, args)| Expr::call(name, tp, args))
         .message("Invalid function call")
 }
 

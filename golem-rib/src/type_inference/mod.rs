@@ -2164,94 +2164,92 @@ mod type_inference_tests {
         }
 
         #[test]
-        fn test_record_type_inference_identifier_x() {
+        fn test_record_type_inference_identifier() {
             let rib_expr = r#"
           let x: u64 = if true then 1u64 else 20u64;
           let y = {
-             let z = {x: 1};
+             let z = {x: x};
              z
           };
           y
           "#;
 
             let function_type_registry = internal::get_function_type_registry();
-            dbg!(function_type_registry.clone());
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            dbg!("damn");
-            //expr.infer_types(&function_type_registry, &vec![]).unwrap();
+            expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            // let expected = Expr::ExprBlock(
-            //     vec![
-            //         Expr::Let(
-            //             VariableId::local("x", 0),
-            //             Some(TypeName::U64),
-            //             Box::new(Expr::Cond(
-            //                 Box::new(Expr::boolean(true)),
-            //                 Box::new(Expr::Number(
-            //                     Number {
-            //                         value: BigDecimal::from(1),
-            //                     },
-            //                     Some(TypeName::U64),
-            //                     InferredType::U64,
-            //                 )),
-            //                 Box::new(Expr::Number(
-            //                     Number {
-            //                         value: BigDecimal::from(20),
-            //                     },
-            //                     Some(TypeName::U64),
-            //                     InferredType::U64,
-            //                 )),
-            //                 InferredType::U64,
-            //             )),
-            //             InferredType::Unknown,
-            //         ),
-            //         Expr::Let(
-            //             VariableId::local("y", 0),
-            //             None,
-            //             Box::new(Expr::ExprBlock(
-            //                 vec![
-            //                     Expr::Let(
-            //                         VariableId::local("z", 0),
-            //                         None,
-            //                         Box::new(Expr::Record(
-            //                             vec![(
-            //                                 "x".to_string(),
-            //                                 Box::new(Expr::Identifier(
-            //                                     VariableId::local("x", 0),
-            //                                     None,
-            //                                     InferredType::U64,
-            //                                 )),
-            //                             )],
-            //                             InferredType::Record(vec![(
-            //                                 "x".to_string(),
-            //                                 InferredType::U64,
-            //                             )]),
-            //                         )),
-            //                         InferredType::Unknown,
-            //                     ),
-            //                     Expr::Identifier(
-            //                         VariableId::local("z", 0),
-            //                         None,
-            //                         InferredType::Record(vec![(
-            //                             "x".to_string(),
-            //                             InferredType::U64,
-            //                         )]),
-            //                     ),
-            //                 ],
-            //                 InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
-            //             )),
-            //             InferredType::Unknown,
-            //         ),
-            //         Expr::Identifier(
-            //             VariableId::local("y", 0),
-            //             None,
-            //             InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
-            //         ),
-            //     ],
-            //     InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
-            // );
+            let expected = Expr::ExprBlock(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Cond(
+                            Box::new(Expr::boolean(true)),
+                            Box::new(Expr::Number(
+                                Number {
+                                    value: BigDecimal::from(1),
+                                },
+                                Some(TypeName::U64),
+                                InferredType::U64,
+                            )),
+                            Box::new(Expr::Number(
+                                Number {
+                                    value: BigDecimal::from(20),
+                                },
+                                Some(TypeName::U64),
+                                InferredType::U64,
+                            )),
+                            InferredType::U64,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("y", 0),
+                        None,
+                        Box::new(Expr::ExprBlock(
+                            vec![
+                                Expr::Let(
+                                    VariableId::local("z", 0),
+                                    None,
+                                    Box::new(Expr::Record(
+                                        vec![(
+                                            "x".to_string(),
+                                            Box::new(Expr::Identifier(
+                                                VariableId::local("x", 0),
+                                                None,
+                                                InferredType::U64,
+                                            )),
+                                        )],
+                                        InferredType::Record(vec![(
+                                            "x".to_string(),
+                                            InferredType::U64,
+                                        )]),
+                                    )),
+                                    InferredType::Unknown,
+                                ),
+                                Expr::Identifier(
+                                    VariableId::local("z", 0),
+                                    None,
+                                    InferredType::Record(vec![(
+                                        "x".to_string(),
+                                        InferredType::U64,
+                                    )]),
+                                ),
+                            ],
+                            InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Identifier(
+                        VariableId::local("y", 0),
+                        None,
+                        InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+                    ),
+                ],
+                InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+            );
 
-            assert!(false);
+            assert_eq!(expr, expected);
         }
 
         #[test]

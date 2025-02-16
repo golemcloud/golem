@@ -2235,14 +2235,12 @@ mod interpreter_tests {
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
 
+        #[ignore] //TODO
+        #[test]
         async fn test_first_class_worker_0() {
-            // Ephemeral worker. Equivalent to:
-            // let worker = instance;
-            // let result worker.foo("bar");
-            // result
             let expr = r#"
-              let worker = instance;
-              let result = worker.foo("bar");
+              let x = instance();
+              let result = x.foo("bar");
               result
             "#;
             let expr = Expr::from_text(expr).unwrap();

@@ -52,7 +52,7 @@ pub enum InferredType {
         resource_mode: u8,
     },
     Instance {
-        instance_type: InstanceType,
+        instance_type: Box<InstanceType>,
     },
     OneOf(Vec<InferredType>),
     AllOf(Vec<InferredType>),

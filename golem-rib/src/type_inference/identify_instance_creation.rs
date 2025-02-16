@@ -60,12 +60,12 @@ mod internal {
                         *expr =
                             Expr::call(DynamicParsedFunctionName::parse("instance")?, None, vec![]);
                         expr.override_type_type_mut(InferredType::Instance {
-                            instance_type: InstanceType::from(
+                            instance_type: Box::new(InstanceType::from(
                                 instance_type.component_id(),
                                 function_type_registry.clone(),
                                 None,
                                 None,
-                            )?,
+                            )?),
                         });
                     }
                 }
@@ -116,7 +116,7 @@ mod internal {
                             type_parameter,
                         )?;
                         *inferred_type = InferredType::Instance {
-                            instance_type: new_instance_type,
+                            instance_type: Box::new(new_instance_type),
                         }
                     }
                 }
