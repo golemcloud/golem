@@ -1,5 +1,6 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_worker_executor_base::services::component_resolver::ComponentResolver;
 use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -655,7 +656,6 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata,
-        component_owner: DefaultComponentOwner,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -685,7 +685,6 @@ impl WorkerCtx for TestWorkerCtx {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
             component_metadata,
-            component_owner,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -926,6 +925,13 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
+    fn create_component_resolver(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> Arc<dyn ComponentResolver> {
+        todo!()
+    }
+
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
@@ -949,6 +955,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_resolver: Arc<dyn ComponentResolver>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -977,6 +984,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            component_resolver.clone(),
             shard_manager_service.clone(),
             worker_service.clone(),
             worker_proxy.clone(),
@@ -1007,6 +1015,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            component_resolver.clone(),
             worker_fork.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
@@ -1032,6 +1041,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             linker,
             runtime,
             component_service,
+            component_resolver,
             shard_manager_service,
             worker_fork,
             worker_service,

@@ -70,6 +70,10 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
+    fn create_component_resolver(&self, golem_config: &GolemConfig) -> Arc<dyn ComponentResolver> {
+        todo!();
+    }
+
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
@@ -124,6 +128,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            component_resolver.clone(),
             shard_manager_service.clone(),
             worker_service.clone(),
             worker_proxy.clone(),
@@ -154,6 +159,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             linker.clone(),
             runtime.clone(),
             component_service.clone(),
+            component_resolver.clone(),
             worker_fork.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
@@ -180,6 +186,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             linker,
             runtime.clone(),
             component_service,
+            component_resolver.clone(),
             shard_manager_service,
             worker_fork,
             worker_service,

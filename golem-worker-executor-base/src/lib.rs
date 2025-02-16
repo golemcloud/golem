@@ -109,6 +109,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
+    fn create_component_resolver(&self, golem_config: &GolemConfig) -> Arc<dyn ComponentResolver>;
+
     async fn run_server(
         &self,
         service_dependencies: All<Ctx>,
@@ -412,6 +414,8 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     )
     .await;
 
+    let component_resolver = bootstrap.create_component_resolver(&golem_config);
+
     let golem_config = Arc::new(golem_config.clone());
     let promise_service: Arc<dyn PromiseService + Send + Sync> =
         Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
@@ -542,6 +546,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             linker,
             runtime.clone(),
             component_service,
+            component_resolver,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
