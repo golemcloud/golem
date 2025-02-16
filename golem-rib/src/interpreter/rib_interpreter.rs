@@ -2478,10 +2478,9 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_12() {
             let expr = r#"
-                let worker = instance("shopping-cart");
-                worker.bing(1, 2, 3);
-                instance.bing[foo:bar](1, 2, 3);
-
+                let worker = instance("my-worker");
+                let result = worker.qux[wasi:clocks]("bar");
+                result
             "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();

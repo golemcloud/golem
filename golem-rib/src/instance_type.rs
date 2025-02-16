@@ -156,7 +156,9 @@ impl InstanceType {
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| f.interface_name() == Some(iface.clone()) && f.name() == function_name)
+                        .filter(|(f, _)| {
+                            f.interface_name() == Some(iface.clone()) && f.name() == function_name
+                        })
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
@@ -184,15 +186,13 @@ impl InstanceType {
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| f.package_name() == Some(pkg.clone()) && f.name() == function_name)
+                        .filter(|(f, _)| {
+                            f.package_name() == Some(pkg.clone()) && f.name() == function_name
+                        })
                         .collect::<Vec<_>>();
 
-
                     if functions.is_empty() {
-                        return Err(format!(
-                            "Package '{}' not found",
-                            pkg
-                        ));
+                        return Err(format!("Package '{}' not found", pkg));
                     }
 
                     if functions.len() == 1 {
