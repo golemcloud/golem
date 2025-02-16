@@ -1051,13 +1051,12 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "rdbms::mysql::db-connection::query-stream"
+        "rdbms::mysql::db-transaction::rollback"
+        | "rdbms::mysql::db-transaction::commit"
+        | "rdbms::mysql::db-connection::query-stream"
         | "rdbms::mysql::db-transaction::query-stream"
         | "rdbms::mysql::db-result-stream::get-columns"
-        | "rdbms::mysql::db-result-stream::get-next" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
+        | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         "rdbms::postgres::db-connection::query"
         | "rdbms::postgres::db-connection::execute"
         | "rdbms::postgres::db-transaction::query"
@@ -1065,14 +1064,12 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "rdbms::postgres::db-connection::query-stream"
+        "rdbms::postgres::db-transaction::rollback"
+        | "rdbms::postgres::db-transaction::commit"
+        | "rdbms::postgres::db-connection::query-stream"
         | "rdbms::postgres::db-transaction::query-stream"
         | "rdbms::postgres::db-result-stream::get-columns"
-        | "rdbms::postgres::db-result-stream::get-next" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        f if f.starts_with("rdbms::") => no_payload(), // TODO add payloads
+        | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
 }
@@ -1464,7 +1461,6 @@ fn encode_host_function_response_as_value(
             > = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        f if f.starts_with("rdbms::") => no_payload(), // TODO add payloads
         _ => Err(format!("Unsupported host function name: {}", function_name)),
     }
 }

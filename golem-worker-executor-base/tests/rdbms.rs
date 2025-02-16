@@ -398,17 +398,28 @@ async fn rdbms_postgres_idempotency(
 
     check!(result2 == result1);
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog = serde_json::to_string(&oplog);
-    check!(oplog.is_ok());
-    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
-
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
         vec![],
         Some(expected),
     );
+
+    let test = RdbmsTest::new(vec![select_test1.clone()], None);
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    check!(result2 == result1);
 
     let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
 
@@ -427,6 +438,11 @@ async fn rdbms_postgres_idempotency(
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = serde_json::to_string(&oplog);
+    check!(oplog.is_ok());
+    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
 
     drop(executor);
 }
@@ -924,17 +940,25 @@ async fn rdbms_mysql_idempotency(
 
     check!(result2 == result1);
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog = serde_json::to_string(&oplog);
-    check!(oplog.is_ok());
-    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
-
     let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
         vec![],
         Some(expected),
     );
+
+    let test = RdbmsTest::new(vec![select_test1.clone()], None);
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    let result2 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+    check!(result2 == result1);
 
     let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
 
@@ -953,6 +977,11 @@ async fn rdbms_mysql_idempotency(
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = serde_json::to_string(&oplog);
+    check!(oplog.is_ok());
+    // println!("worker {} oplog: {}", worker_id.clone(), oplog.unwrap());
 
     drop(executor);
 }
