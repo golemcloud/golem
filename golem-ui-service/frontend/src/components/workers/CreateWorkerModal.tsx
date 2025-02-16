@@ -95,7 +95,7 @@ export const CreateWorkerModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+    <div className="-top-8 fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
       <div className="bg-card rounded-xl shadow-xl w-full max-w-2xl">
         {/* Header */}
         <div className="p-6 border-b border-gray-700">

@@ -454,6 +454,7 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
                 defaultLanguage="rib"
                 theme="vs-dark"
                 onChange={handleChange}
+                className="z-100"
                 beforeMount={handleEditorWillMount}
                 options={{
                   minimap: { enabled: false },

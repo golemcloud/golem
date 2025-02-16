@@ -32,11 +32,10 @@ const NavLink = ({
     <Link
       to={item.path}
       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
-                 transition-all duration-200 group ${
-                   isActive
-                     ? "bg-primary/10 text-primary"
-                     : "text-muted-foreground hover:text-muted-foreground/80 hover:bg-card"
-                 }`}
+                 transition-all duration-200 group ${isActive
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:text-muted-foreground/80 hover:bg-card"
+        }`}
     >
       <Icon
         size={18}
@@ -54,13 +53,13 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen  text-foreground/90">
+    <div className="min-h-screen text-foreground/90">
       {/* Header */}
       <header
-        className="sticky top-0 z-50 bg-card/80 border-b border-gray-700/50 
+        className="top-0 bg-card/80 border-b border-gray-700/50 
                         backdrop-blur supports-[backdrop-filter]:bg-card/60"
       >
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="px-4">
           <div className="flex h-16 items-center justify-between">
             {/* Logo */}
             <Link to="/" className="flex items-center gap-3 group">

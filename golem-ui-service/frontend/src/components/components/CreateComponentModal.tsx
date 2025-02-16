@@ -14,7 +14,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { Component } from "../../types/api";
 import FileSystemManager from "./FileSystemManager";
-import HierarchicalFileDropzone from "./FileSystemManager";
 import JSZip from "jszip";
 import toast from "react-hot-toast";
 
@@ -159,20 +158,6 @@ const CreateComponentModal = ({
     return `${getFullPath(parent, allFiles)}/${file.name}`;
   };
 
-  // Function to capture file metadata
-  const captureFileMetadata = (allFiles: FileItem[]) => {
-    const filesPath: { path: string; permissions: string }[] = [];
-    allFiles.forEach((file) => {
-      if (file.type !== "folder") {
-        filesPath.push({
-          path: getFullPath(file, allFiles),
-          permissions: file.isLocked ? "read-only" : "read-write",
-        });
-      }
-    });
-    return { values: filesPath };
-  };
-
   // Function to add files to zip
   const addFilesToZip = async (zipFolder: JSZip, parentId: string | null) => {
     const children = files.filter((file) => file.parentId === parentId);
@@ -197,38 +182,6 @@ const CreateComponentModal = ({
     }
   };
 
-  const handleAdditionalFiles = (fileList: FileList, parentId: string | null = null) => {
-    const newFiles = Array.from(fileList).map((file) => ({
-      id: Math.random().toString(36).substring(7),
-      name: file.name,
-      type: "file" as const,
-      parentId,
-      fileObject: file,
-      isLocked: false
-    }));
-    setFiles((prev) => [...prev, ...newFiles]);
-  };
-
-  const handleToggleLock = (id: string) => {
-    setFiles(prev => prev.map(file =>
-      file.id === id ? { ...file, isLocked: !file.isLocked } : file
-    ));
-  };
-
-  const handleCreateFolder = (name: string, parentId: string | null = null) => {
-    const newFolder = {
-      id: Math.random().toString(36).substring(7),
-      name,
-      type: "folder" as const,
-      parentId,
-    };
-    setFiles(prev => [...prev, newFolder]);
-  };
-
-  const removeFile = (id: string) => {
-    setFiles((prev) => prev.filter((file) => file.id !== id));
-  };
-
   const handleSubmit = async () => {
     if (!name || (!mainFile && !isUpdateMode)) return;
 
@@ -250,7 +203,7 @@ const CreateComponentModal = ({
           const filePath = parentPath ? `${parentPath}/${file.name}` : file.name;
 
           if (file.type === 'folder') {
-            const folder = zip.folder(filePath);
+            zip.folder(filePath);
             const children = files.filter(f => f.parentId === file.id);
             for (const child of children) {
               await addFileToZip(child, filePath);
@@ -319,8 +272,8 @@ const CreateComponentModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-background/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-      <div className="bg-card rounded-xl p-6 max-w-xl w-full shadow-xl">
+    <div className="fixed -top-8 inset-0 bg-background/60 flex items-center justify-center p-4 z-100 backdrop-blur-sm">
+      <div className="bg-card  rounded-xl p-6 max-w-xl w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-md bg-primary/10 text-primary">

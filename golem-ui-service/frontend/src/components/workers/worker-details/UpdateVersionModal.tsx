@@ -51,7 +51,7 @@ export const UpdateVersionModal: React.FC<UpdateVersionModalProps> = ({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-background/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+        <div className="-top-8 fixed inset-0 bg-background/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
             <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl border border-border">
                 <div className="flex justify-between items-start mb-6">
                     <div className="flex items-center gap-3">

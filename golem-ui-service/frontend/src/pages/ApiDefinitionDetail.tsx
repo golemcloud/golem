@@ -430,7 +430,7 @@ export const ApiDefinitionView = () => {
       </div>
 
       {/* Modals */}
-      <RouteModal
+      {showRouteModal && <RouteModal
         isOpen={showRouteModal}
         onClose={() => {
           setShowRouteModal(false);
@@ -439,7 +439,7 @@ export const ApiDefinitionView = () => {
         onSave={editingRoute ? handleUpdateRoute : handleAddRoute}
         existingRoute={editingRoute}
         isLoading={updateDefinition.isPending}
-      />
+      />}
 
       <DeployModal
         isOpen={showDeployModal}
