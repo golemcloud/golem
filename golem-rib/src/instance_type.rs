@@ -159,8 +159,6 @@ impl InstanceType {
                         .filter(|(f, _)| f.interface_name() == Some(iface.clone()) && f.name() == function_name)
                         .collect::<Vec<_>>();
 
-                    dbg!(functions.clone());
-
                     if functions.is_empty() {
                         return Err(format!(
                             "Function '{}' not found in interface '{}'",
@@ -186,8 +184,9 @@ impl InstanceType {
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
+                        .filter(|(f, _)| f.package_name() == Some(pkg.clone()) && f.name() == function_name)
                         .collect::<Vec<_>>();
+
 
                     if functions.is_empty() {
                         return Err(format!(
@@ -196,8 +195,15 @@ impl InstanceType {
                         ));
                     }
 
-
-                    search_function_in_instance(self, function_name)
+                    if functions.len() == 1 {
+                        let (fqfn, ftype) = &functions[0];
+                        Ok(Function {
+                            function_name: fqfn.clone(),
+                            function_type: ftype.clone(),
+                        })
+                    } else {
+                        search_function_in_instance(self, function_name)
+                    }
                 }
 
                 TypeParameter::FullyQualifiedInterface(fq_iface) => {
@@ -208,6 +214,7 @@ impl InstanceType {
                         .filter(|(f, _)| {
                             f.package_name() == Some(fq_iface.package_name.clone())
                                 && f.interface_name() == Some(fq_iface.interface_name.clone())
+                                && f.name() == function_name
                         })
                         .collect::<Vec<_>>();
 
@@ -218,7 +225,15 @@ impl InstanceType {
                         ));
                     }
 
-                    search_function_in_instance(self, function_name)
+                    if functions.len() == 1 {
+                        let (fqfn, ftype) = &functions[0];
+                        Ok(Function {
+                            function_name: fqfn.clone(),
+                            function_type: ftype.clone(),
+                        })
+                    } else {
+                        search_function_in_instance(self, function_name)
+                    }
                 }
             },
             None => search_function_in_instance(self, function_name),
