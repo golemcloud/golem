@@ -36,7 +36,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::DurableFunctionType;
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::{HasAccountId, OwnedWorkerId};
 use golem_common::model::RetryConfig;
 use std::time::Duration;
 use wasmtime::component::Resource;
@@ -261,24 +261,51 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn resolve_component_id(
         &mut self,
         component_slug: String
-    ) -> anyhow::Result<Option<ComponentId>> { todo!() }
+    ) -> anyhow::Result<Option<ComponentId>> {
+        let result = self.state.component_resolver.resolve_component(component_slug, self.state.component_owner.clone()).await?;
+        Ok(result.map(ComponentId::from))
+     }
 
     async fn resolve_worker_id(
         &mut self,
         component_slug: String,
         worker_name: String
-    ) -> anyhow::Result<Option<WorkerId>> { todo!() }
+    ) -> anyhow::Result<Option<WorkerId>> {
+        let component_id = self.resolve_component_id(component_slug).await?;
+        Ok(component_id.map(|component_id| WorkerId { component_id, worker_name }))
+    }
 
     async fn resolve_worker_id_strict(
         &mut self,
         component_slug: String,
         worker_name: String
-    ) -> anyhow::Result<Option<WorkerId>> { todo!() }
+    ) -> anyhow::Result<Option<WorkerId>> {
+        let component_id =  self.state.component_resolver.resolve_component(component_slug, self.state.component_owner.clone()).await?;
+        let worker_id = component_id.map(|component_id| WorkerId { component_id: ComponentId::from(component_id), worker_name });
+
+        if let Some(worker_id) = worker_id.clone() {
+            let owned_id = OwnedWorkerId {
+                account_id: self.state.component_owner.account_id().clone(),
+                worker_id: worker_id.into()
+            };
+
+            let metadata = self.state.worker_service.get(&owned_id).await;
+
+            if metadata.is_none() {
+                return Ok(None);
+            };
+        };
+        Ok(worker_id)
+    }
 
     async fn worker_uri(
         &mut self,
         worker_id: WorkerId
-    ) -> anyhow::Result<Uri> { todo!() }
+    ) -> anyhow::Result<Uri> {
+        let Uuid { high_bits, low_bits } = worker_id.component_id.uuid;
+        let component_id = uuid::Uuid::from_u64_pair(high_bits, low_bits);
+        Ok(Uri { value: format!("urn:worker:{}/{}", component_id, worker_id.worker_name) })
+    }
 }
 
 #[async_trait]

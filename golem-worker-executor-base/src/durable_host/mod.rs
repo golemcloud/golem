@@ -213,7 +213,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 promise_service: promise_service.clone(),
                 event_service,
                 invocation_queue,
-                oplog: oplog.clone(),
+                oplog: oplog.clone()
             },
             state: PrivateDurableWorkerState::new(
                 oplog_service,
@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 component_resolver,
-                component_owner,
+                component_owner
             )
             .await,
             _temp_dir: temp_dir,
@@ -1836,14 +1836,14 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     component_service: Arc<dyn ComponentService + Send + Sync>,
+    component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
+    component_owner: Ctx::ComponentOwner,
     plugins: Arc<dyn Plugins<Ctx::PluginOwner, Ctx::PluginScope> + Send + Sync>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc + Send + Sync>,
     worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-    component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
-    component_owner: Ctx::ComponentOwner,
     resources: HashMap<WorkerResourceId, ResourceAny>,
     last_resource_id: WorkerResourceId,
     replay_state: ReplayState,
@@ -1886,7 +1886,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         component_metadata: ComponentMetadata,
         total_linear_memory_size: u64,
         component_resolver: Arc<dyn ComponentResolver<Ctx::ComponentOwner>>,
-        component_owner: Ctx::ComponentOwner
+        component_owner: Ctx::ComponentOwner,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -1924,8 +1924,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             component_metadata,
             total_linear_memory_size,
             replay_state,
-            component_resolver,
-            component_owner
+            component_owner,
+            component_resolver
         }
     }
 
@@ -2166,7 +2166,7 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     invocation_queue: Weak<Worker<Ctx>>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog: Arc<dyn Oplog + Send + Sync>
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
@@ -2175,7 +2175,7 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
             promise_service: self.promise_service.clone(),
             event_service: self.event_service.clone(),
             invocation_queue: self.invocation_queue.clone(),
-            oplog: self.oplog.clone(),
+            oplog: self.oplog.clone()
         }
     }
 }
