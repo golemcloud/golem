@@ -506,7 +506,7 @@ impl<Ctx: WorkerCtx> golem_api_0_2_x::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
         self.observe_function_call("golem::api", "get_self_metadata");
-        let metadata = self.public_state.worker().get_metadata().await?;
+        let metadata = self.public_state.worker().get_metadata()?;
         Ok(metadata.into())
     }
 

@@ -39,6 +39,77 @@ struct TypeAnnotatedValueJson {
     value: serde_json::Value,
 }
 
+/// A representation that optionally pairs type definition with a JSON represented value.
+///
+/// It can only be converted to any of the typed value representations if the type information
+/// is present (or provided externally).
+///
+/// The JSON format is backward compatible with `TypeAnnotatedValueJson`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionallyTypeAnnotatedValueJson {
+    typ: Option<AnalysedType>,
+    value: serde_json::Value,
+}
+
+impl OptionallyTypeAnnotatedValueJson {
+    pub fn has_type(&self) -> bool {
+        self.typ.is_some()
+    }
+
+    pub fn into_type_annotated_value(
+        self,
+        typ: AnalysedType,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+        TypeAnnotatedValue::parse_with_type(&self.value, &typ)
+    }
+
+    pub fn into_json_value(self) -> serde_json::Value {
+        self.value
+    }
+
+    pub fn into_value_and_type(self, typ: AnalysedType) -> Result<ValueAndType, Vec<String>> {
+        let tav = self.into_type_annotated_value(typ)?;
+        tav.try_into().map_err(|err| vec![err])
+    }
+
+    pub fn try_into_type_annotated_value(self) -> Result<Option<TypeAnnotatedValue>, Vec<String>> {
+        match self.typ {
+            Some(typ) => TypeAnnotatedValue::parse_with_type(&self.value, &typ).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub fn try_into_value_and_type(self) -> Result<Option<ValueAndType>, Vec<String>> {
+        match self.try_into_type_annotated_value()? {
+            Some(tav) => tav.try_into().map_err(|err| vec![err]).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+impl TryFrom<TypeAnnotatedValue> for OptionallyTypeAnnotatedValueJson {
+    type Error = String;
+
+    fn try_from(tav: TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let typ: AnalysedType = (&tav).try_into()?;
+        let value = tav.to_json_value();
+        Ok(OptionallyTypeAnnotatedValueJson {
+            typ: Some(typ),
+            value,
+        })
+    }
+}
+
+impl TryFrom<ValueAndType> for OptionallyTypeAnnotatedValueJson {
+    type Error = String;
+    fn try_from(vat: ValueAndType) -> Result<Self, Self::Error> {
+        let tav: TypeAnnotatedValue = vat.try_into().map_err(|errors: Vec<String>| {
+            format!("Invalid type-annotated JSON value: {}", errors.join(", "))
+        })?;
+        tav.try_into()
+    }
+}
+
 impl Serialize for TypeAnnotatedValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

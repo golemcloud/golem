@@ -249,6 +249,7 @@ fn calculate_latest_worker_status(
             OplogEntry::ActivatePlugin { .. } => {}
             OplogEntry::DeactivatePlugin { .. } => {}
             OplogEntry::Revert { .. } => {}
+            OplogEntry::CancelPendingInvocation { .. } => {}
         }
     }
     result
@@ -403,6 +404,21 @@ fn calculate_pending_invocations(
                 } => version != target_version,
                 _ => true,
             }),
+            OplogEntry::CancelPendingInvocation {
+                idempotency_key, ..
+            } => {
+                result.retain(|invocation| match invocation {
+                    TimestampedWorkerInvocation {
+                        invocation:
+                            WorkerInvocation::ExportedFunction {
+                                idempotency_key: key,
+                                ..
+                            },
+                        ..
+                    } => key != idempotency_key,
+                    _ => true,
+                });
+            }
             _ => {}
         }
     }
@@ -952,6 +968,28 @@ mod test {
         run_test_case(test_case).await;
     }
 
+    #[test]
+    async fn cancel_pending_invocation() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .pending_invocation(WorkerInvocation::ExportedFunction {
+                idempotency_key: k1.clone(),
+                full_function_name: "a".to_string(),
+                function_input: vec![Value::Bool(true)],
+            })
+            .pending_invocation(WorkerInvocation::ExportedFunction {
+                idempotency_key: k2.clone(),
+                full_function_name: "b".to_string(),
+                function_input: vec![],
+            })
+            .cancel_pending_invocation(k1)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
     struct TestCaseBuilder {
         entries: Vec<TestEntry>,
         previous_status_record: WorkerStatusRecord,
@@ -1141,6 +1179,28 @@ mod test {
                     .push(TimestampedWorkerInvocation {
                         timestamp: entry.timestamp(),
                         invocation,
+                    });
+                status
+            })
+        }
+
+        pub fn cancel_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
+            let entry = rounded(OplogEntry::cancel_pending_invocation(
+                idempotency_key.clone(),
+            ));
+            self.add(entry.clone(), move |mut status| {
+                status
+                    .pending_invocations
+                    .retain(|invocation| match invocation {
+                        TimestampedWorkerInvocation {
+                            invocation:
+                                WorkerInvocation::ExportedFunction {
+                                    idempotency_key: key,
+                                    ..
+                                },
+                            ..
+                        } => key != &idempotency_key,
+                        _ => true,
                     });
                 status
             })

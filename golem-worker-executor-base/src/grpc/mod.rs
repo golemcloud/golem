@@ -12,21 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod invocation;
+
 use crate::error::*;
 use futures_util::Stream;
 use futures_util::StreamExt;
 use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ActivatePluginRequest, ActivatePluginResponse, ConnectWorkerRequest, DeactivatePluginRequest,
+    ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
+    CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
     DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
     GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
-    InvokeAndAwaitWorkerSuccess, ListDirectoryRequest, ListDirectoryResponse, RevertWorkerRequest,
+    GetWorkersMetadataResponse, InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest,
+    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, InvokeJsonWorkerRequest,
+    InvokeWorkerResponse, ListDirectoryRequest, ListDirectoryResponse, RevertWorkerRequest,
     RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
     UpdateWorkerResponse,
 };
@@ -39,8 +42,8 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation,
-    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    PluginInstallationId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
+    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -60,6 +63,7 @@ use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 
+use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -471,6 +475,56 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn cancel_invocation_internal(
+        &self,
+        request: CancelInvocationRequest,
+    ) -> Result<bool, GolemError> {
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or(GolemError::invalid_request("idempotency_key not found"))?
+            .into();
+
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?;
+
+        match metadata {
+            Some(metadata) => {
+                if metadata
+                    .last_known_status
+                    .pending_invocations
+                    .iter()
+                    .any(|invocation| {
+                        invocation.invocation.idempotency_key() == Some(&idempotency_key)
+                    })
+                {
+                    let worker = Worker::get_or_create_suspended(
+                        self,
+                        &owned_worker_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    worker.cancel_invocation(idempotency_key).await?;
+                    Ok(true)
+                } else if metadata
+                    .last_known_status
+                    .invocation_results
+                    .contains_key(&idempotency_key)
+                {
+                    Ok(false)
+                } else {
+                    Err(GolemError::invalid_request("Invocation not found"))
+                }
+            }
+            None => Err(GolemError::worker_not_found(owned_worker_id.worker_id())),
+        }
+    }
+
     async fn interrupt_worker_internal(
         &self,
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
@@ -663,7 +717,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
-        let params_val = request.input();
+        let params_val = request.input(&worker).await?;
 
         let function_input = params_val
             .into_iter()
@@ -746,7 +800,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .unwrap_or(IdempotencyKey::fresh());
 
         let function_input = request
-            .input()
+            .input(&worker)
+            .await?
             .iter()
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
@@ -992,7 +1047,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                         let mut skipped_regions =
                             metadata.last_known_status.skipped_regions.clone();
-                        let (pending_updates, temporary_skipped_regions) = worker.pending_updates();
+                        let (pending_updates, temporary_skipped_regions) =
+                            worker.pending_updates().await;
                         skipped_regions.set_override(temporary_skipped_regions);
                         metadata.last_known_status.pending_updates = pending_updates;
                         metadata.last_known_status.skipped_regions = skipped_regions;
@@ -1682,7 +1738,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker_json_typed",
+            "invoke_and_await_worker_typed",
             worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
@@ -1726,6 +1782,91 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker",
+            worker_id = proto_target_worker_id_string(&request.worker_id),
+            function = request.name,
+            account_id = proto_account_id_string(&request.account_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+        );
+
+        match self
+            .invoke_worker_internal(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::invoke_worker_response::Result::Success(
+                            golem::common::Empty {},
+                        ),
+                    ),
+                },
+            ))),
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::InvokeWorkerResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::invoke_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn invoke_and_await_worker_json(
+        &self,
+        request: Request<InvokeAndAwaitWorkerJsonRequest>,
+    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_and_await_worker_json",
+            worker_id = proto_target_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            account_id = proto_account_id_string(&request.account_id),
+        );
+
+        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
+            Ok(type_annotated_value) => {
+                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
+                    output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(type_annotated_value),
+                    })
+                };
+
+                record.succeed(Ok(Response::new(
+                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
+                        ),
+                    },
+                )))
+            }
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn invoke_worker_json(
+        &self,
+        request: Request<InvokeJsonWorkerRequest>,
+    ) -> Result<Response<InvokeWorkerResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_worker_json",
             worker_id = proto_target_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id),
@@ -2306,6 +2447,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn cancel_invocation(
+        &self,
+        request: Request<CancelInvocationRequest>,
+    ) -> Result<Response<CancelInvocationResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "cancel_invocation",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+        );
+
+        let result = self
+            .cancel_invocation_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(canceled) => record.succeed(Ok(Response::new(CancelInvocationResponse {
+                result: Some(
+                    golem::workerexecutor::v1::cancel_invocation_response::Result::Success(
+                        canceled,
+                    ),
+                ),
+            }))),
+            Err(err) => record.fail(
+                Ok(Response::new(CancelInvocationResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::cancel_invocation_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
     async fn list_directory(
         &self,
         request: Request<ListDirectoryRequest>,
@@ -2447,197 +2626,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &err,
             ),
         }
-    }
-}
-
-trait CanStartWorker {
-    fn account_id(&self) -> Result<AccountId, GolemError>;
-    fn account_limits(&self) -> Option<GrpcResourceLimits>;
-    fn worker_id(&self) -> Result<TargetWorkerId, GolemError>;
-    fn args(&self) -> Option<Vec<String>>;
-    fn env(&self) -> Option<Vec<(String, String)>>;
-    fn parent(&self) -> Option<WorkerId>;
-}
-
-trait GrpcInvokeRequest: CanStartWorker {
-    fn input(&self) -> Vec<Val>;
-    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
-    fn name(&self) -> String;
-}
-
-impl CanStartWorker for golem::workerexecutor::v1::ListDirectoryRequest {
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits
-    }
-
-    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        None
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        None
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        None
-    }
-}
-
-impl CanStartWorker for golem::workerexecutor::v1::GetFileContentsRequest {
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits
-    }
-
-    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        None
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        None
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        None
-    }
-}
-
-impl CanStartWorker for golem::workerexecutor::v1::InvokeWorkerRequest {
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits
-    }
-
-    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.context.as_ref().map(|ctx| ctx.args.clone())
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        self.context
-            .as_ref()
-            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        self.context.as_ref().and_then(|ctx| {
-            ctx.parent
-                .as_ref()
-                .and_then(|worker_id| worker_id.clone().try_into().ok())
-        })
-    }
-}
-
-impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeWorkerRequest {
-    fn input(&self) -> Vec<Val> {
-        self.input.clone()
-    }
-
-    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-}
-
-impl CanStartWorker for golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits
-    }
-
-    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.context.as_ref().map(|ctx| ctx.args.clone())
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        self.context
-            .as_ref()
-            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        self.context.as_ref().and_then(|ctx| {
-            ctx.parent
-                .as_ref()
-                .and_then(|worker_id| worker_id.clone().try_into().ok())
-        })
-    }
-}
-
-impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-    fn input(&self) -> Vec<Val> {
-        self.input.clone()
-    }
-
-    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
     }
 }
 

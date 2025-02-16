@@ -59,7 +59,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn get_by_id(
         &self,
         namespace: &Namespace,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_id: Option<ApiDefinitionId>,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn get_by_site(
@@ -474,14 +474,22 @@ where
     async fn get_by_id(
         &self,
         namespace: &Namespace,
-        definition_id: &ApiDefinitionId,
+        definition_id: Option<ApiDefinitionId>,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
 
-        let existing_deployment_records = self
-            .deployment_repo
-            .get_by_id(namespace.to_string().as_str(), definition_id.0.as_str())
-            .await?;
+        let existing_deployment_records = match definition_id {
+            Some(definition_id) => {
+                self.deployment_repo
+                    .get_by_id(namespace.to_string().as_str(), definition_id.0.as_str())
+                    .await?
+            }
+            None => {
+                self.deployment_repo
+                    .get_all(namespace.to_string().as_str())
+                    .await?
+            }
+        };
 
         let mut values: Vec<ApiDeployment<Namespace>> = vec![];
 

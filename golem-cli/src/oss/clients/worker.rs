@@ -596,6 +596,24 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .await?;
         Ok(())
     }
+
+    async fn cancel_invocation(
+        &self,
+        worker_urn: WorkerUrn,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<bool, GolemError> {
+        info!("Cancelling enqueued invocation {idempotency_key} for {worker_urn}");
+
+        let response = self
+            .client
+            .cancel_invocation(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+                &idempotency_key.0,
+            )
+            .await?;
+        Ok(response.canceled)
+    }
 }
 
 fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {

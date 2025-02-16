@@ -20,9 +20,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::{
-    revert_worker_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest,
-    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    revert_worker_response, CancelInvocationRequest, CancelInvocationResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
+    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
@@ -911,9 +912,54 @@ impl WorkerService for ForwardingWorkerService {
             }
             Some(workerexecutor::v1::revert_worker_response::Result::Failure(error)) => {
                 Ok(RevertWorkerResponse {
-                    result: Some(revert_worker_response::Result::Failure(WorkerError {
+                    result: Some(revert_worker_response::Result::Error(WorkerError {
                         error: Some(worker::v1::worker_error::Error::InternalError(error)),
                     })),
+                })
+            }
+        }
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: CancelInvocationRequest,
+    ) -> crate::Result<CancelInvocationResponse> {
+        let result = self
+            .worker_executor
+            .client()
+            .await?
+            .cancel_invocation(workerexecutor::v1::CancelInvocationRequest {
+                worker_id: request.worker_id.clone(),
+                idempotency_key: request.idempotency_key.clone(),
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+            })
+            .await;
+
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor cancel-invocation call"
+            )),
+            Some(workerexecutor::v1::cancel_invocation_response::Result::Success(canceled)) => {
+                Ok(CancelInvocationResponse {
+                    result: Some(worker::v1::cancel_invocation_response::Result::Success(
+                        canceled,
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::cancel_invocation_response::Result::Failure(error)) => {
+                Ok(CancelInvocationResponse {
+                    result: Some(worker::v1::cancel_invocation_response::Result::Error(
+                        WorkerError {
+                            error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
                 })
             }
         }

@@ -15,11 +15,13 @@
 pub use connect_proxy::*;
 pub use default::*;
 pub use error::*;
+pub use invocation_parameters::*;
 pub use routing_logic::*;
 pub use worker_stream::*;
 
 mod connect_proxy;
 mod default;
 mod error;
+mod invocation_parameters;
 mod routing_logic;
 mod worker_stream;

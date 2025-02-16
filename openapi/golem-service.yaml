@@ -1536,6 +1536,82 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
+    delete:
+      tags:
+      - Worker
+      summary: Cancels a pending invocation if it has not started yet
+      description: The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+      operationId: cancel_invocation
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: idempotency_key
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CancelInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -1999,7 +2075,6 @@ paths:
       parameters:
       - in: query
         name: api-definition-id
-        required: true
         deprecated: false
         schema:
           type: string
@@ -3824,6 +3899,24 @@ components:
           type: string
       required:
       - host
+    CancelInvocationParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+      required:
+      - timestamp
+      - idempotency_key
+    CancelInvocationResponse:
+      type: object
+      properties:
+        canceled:
+          type: boolean
+      required:
+      - canceled
     ChangeRetryPolicyParameters:
       type: object
       properties:
@@ -4831,7 +4924,7 @@ components:
         params:
           type: array
           items:
-            $ref: '#/components/schemas/TypeAnnotatedValue'
+            $ref: '#/components/schemas/ValueAndOptionalType'
       required:
       - params
     InvokeResponse:
@@ -5111,6 +5204,7 @@ components:
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
           Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
+          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5141,6 +5235,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5164,6 +5259,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ActivatePluginParameters'
+    PublicOplogEntry_CancelInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CancelInvocation
+            type: string
+            enum:
+            - CancelInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/CancelInvocationParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
@@ -5902,6 +6009,14 @@ components:
             type: string
       required:
       - errors
+    ValueAndOptionalType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - value
     ValueAndType:
       type: object
       properties:
