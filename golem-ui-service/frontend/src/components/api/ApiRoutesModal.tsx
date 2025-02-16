@@ -165,13 +165,6 @@ export const RouteModal = ({
   );
   const [useWorkerName, setUseWorkerName] = useState(true);
   const { data: components } = useComponents();
-  const [workerSuggestions, setWorkerSuggestions] = useState<string[]>([]);
-  const [exportSuggestions, setExportSuggestions] = useState<
-    {
-      name: string;
-      parameters: Parameter[];
-    }[]
-  >([]);
 
   const { data: workersData } = useWorkers(
     selectedComponent?.versionedComponentId.componentId || "",
@@ -228,11 +221,29 @@ export const RouteModal = ({
   };
 
   useEffect(() => {
+    let workerNames: string[] = [];
+    let exports: {
+      name: string;
+      parameters: Parameter[];
+    }[] = [];
+    if (selectedComponent && workersData) {
+      // Extract worker names from active workers
+      workerNames =
+        workersData.workers?.map((w) => `"${w.workerId.workerName}"`) || [];
+
+      // Process exports into suggestions with parameters
+      exports = selectedComponent.metadata.exports.flatMap((exp) =>
+        exp.functions.map((func) => ({
+          name: `${exp.name}.{${func.name}}`,
+          parameters: func.parameters
+        })),
+      );
+    }
     const pathParams = getPathParams(path);
     setContextVariables(
       getContextVariables(pathParams, [
-        ...workerSuggestions,
-        ...exportSuggestions.map(
+        ...workerNames,
+        ...exports.map(
           (exp) =>
             `${exp.name}(${exp.parameters
               .map((p) => `${p.name}: ${processWitType(p.typ)}`)
@@ -240,7 +251,7 @@ export const RouteModal = ({
         ),
       ]),
     );
-  }, [path, workerSuggestions, exportSuggestions]);
+  }, [path, selectedComponent,workersData]);
 
   useEffect(() => {
     if (existingRoute) {
@@ -280,28 +291,6 @@ export const RouteModal = ({
       }
     }
   }, [existingRoute, components]);
-
-  useEffect(() => {
-    if (selectedComponent && workersData) {
-      // Extract worker names from active workers
-      const workerNames =
-        workersData.workers?.map((w) => `"${w.workerId.workerName}"`) || [];
-      setWorkerSuggestions(workerNames);
-
-      // Process exports into suggestions with parameters
-      const exports = selectedComponent.metadata.exports.flatMap((exp) =>
-        exp.functions.map((func) => ({
-          name: `${exp.name}.{${func.name}}`,
-          parameters: func.parameters
-          // parameters: func.parameters.map((x) => ({
-          //   name: x.name,
-          //   type: x.typ,
-          // })),
-        })),
-      );
-      setExportSuggestions(exports);
-    }
-  }, [selectedComponent, workersData]);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, boolean> = {};
