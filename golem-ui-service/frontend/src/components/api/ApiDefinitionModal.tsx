@@ -1,13 +1,30 @@
+import * as Yup from 'yup';
+
 import { FileJson, Globe, Loader2, Plus, Upload, X } from "lucide-react";
 import {
   useCreateApiDefinition,
   useImportOpenApiDefinition,
 } from "../../api/api-definitions";
 
+import FormInput from "../shared/FormInput";
+import { Formik } from 'formik';
 import { displayError } from "../../lib/error-utils";
 import toast from "react-hot-toast";
 import { useState } from "react";
 
+// Validation schema
+const validationSchema = Yup.object().shape({
+  name: Yup.string()
+    .required('Name is required')
+    .max(50, 'Name must not exceed 50 characters')
+    .matches(
+      /^[a-zA-Z0-9-_]+$/,
+      'Name can only contain letters, numbers, hyphens and underscores'
+    ),
+  version: Yup.string()
+    .required('Version is required')
+    .max(10, 'Version must not exceed 10 characters')
+});
 interface ApiDefinitionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -28,14 +45,83 @@ const TabButton = ({
   <button
     onClick={onClick}
     className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors 
-                   ${
-                     active
-                       ? "bg-primary/10 text-primary"
-                       : "text-muted-foreground hover:text-gray-300 hover:bg-card/50"
-                   }`}
+                   ${active
+        ? "bg-primary/10 text-primary"
+        : "text-muted-foreground hover:text-gray-300 hover:bg-card/50"
+      }`}
   >
     {children}
   </button>
+);
+
+const ManualCreationForm = ({ isSubmitting, onSubmit, onClose }: {
+  isSubmitting: boolean;
+  onSubmit: (values: { name: string; version: string }) => void;
+  onClose: () => void;
+}) => (
+  <Formik
+    initialValues={{ name: '', version: '' }}
+    validationSchema={validationSchema}
+    onSubmit={onSubmit}
+  >
+    {({ errors, touched, handleSubmit, handleChange, handleBlur, values }) => (
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <FormInput
+          label="Name"
+          name="name"
+          value={values.name}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          error={errors.name}
+          touched={touched.name}
+          placeholder="Enter API name"
+          disabled={isSubmitting}
+        />
+
+        <FormInput
+          label="Version"
+          name="version"
+          value={values.version}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          error={errors.version}
+          touched={touched.version}
+          placeholder="e.g., 1.0.0"
+          disabled={isSubmitting}
+        />
+
+        <div className="flex justify-end items-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm bg-card/80 rounded-lg hover:bg-gray-600 
+                     transition-colors disabled:opacity-50"
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={isSubmitting || Object.keys(errors).length > 0}
+            className="px-4 py-2 text-sm bg-primary rounded-lg hover:bg-primary/90 
+                     disabled:opacity-50 transition-colors flex items-center gap-2"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Creating...</span>
+              </>
+            ) : (
+              <>
+                <Plus size={16} />
+                <span>Create Definition</span>
+              </>
+            )}
+          </button>
+        </div>
+      </form>
+    )}
+  </Formik>
 );
 
 export const ApiDefinitionModal = ({
@@ -61,7 +147,7 @@ export const ApiDefinitionModal = ({
 
     try {
       if (creationMethod === "manual") {
-        await handleManualCreation();
+        await handleManualCreation({ name, version });
       } else {
         if (!file) {
           toast.error("File is required for import");
@@ -77,25 +163,24 @@ export const ApiDefinitionModal = ({
     }
   };
 
-  const handleManualCreation = async () => {
+  const handleManualCreation = async (values: { name: string; version: string }) => {
     const apiDefinition = {
-      id: name,
-      version,
+      id: values.name,
+      version: values.version,
       draft: true,
       routes: [],
     };
 
     try {
-      const createdDefinition =
-        await createDefinition.mutateAsync(apiDefinition);
+      const createdDefinition = await createDefinition.mutateAsync(apiDefinition);
       toast.success("API definition created successfully");
       onApiDefinitionCreated(createdDefinition.id);
+      onClose();
     } catch (error) {
       displayError(error, "Failed to create API definition");
       console.error(error);
     }
   };
-
   const handleFileImport = (file: File) => {
     return new Promise<void>((resolve, reject) => {
       const reader = new FileReader();
@@ -168,7 +253,7 @@ export const ApiDefinitionModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48">
+    <div className="fixed -top-8 inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm pt-48">
       <div className="bg-card rounded-xl p-6 max-w-md w-full shadow-xl">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
@@ -210,36 +295,11 @@ export const ApiDefinitionModal = ({
 
         <div className="space-y-6">
           {creationMethod === "manual" ? (
-            <>
-              <div>
-                <label className="block text-sm font-medium mb-1.5 text-gray-300">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
-                                             focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                  placeholder="Enter API name"
-                  disabled={isSubmitting}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1.5 text-gray-300">
-                  Version
-                </label>
-                <input
-                  type="text"
-                  value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-gray-600 
-                                             focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                  placeholder="e.g., 1.0.0"
-                  disabled={isSubmitting}
-                />
-              </div>
-            </>
+            <ManualCreationForm
+              isSubmitting={isSubmitting}
+              onSubmit={handleManualCreation}
+              onClose={onClose}
+            />
           ) : (
             <div
               onDragOver={(e) => {
