@@ -156,8 +156,10 @@ impl InstanceType {
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| f.interface_name() == Some(iface.clone()))
+                        .filter(|(f, _)| f.interface_name() == Some(iface.clone()) && f.name() == function_name)
                         .collect::<Vec<_>>();
+
+                    dbg!(functions.clone());
 
                     if functions.is_empty() {
                         return Err(format!(
@@ -166,7 +168,17 @@ impl InstanceType {
                         ));
                     }
 
-                    search_function_in_instance(self, function_name)
+                    // There is only 1 interface, and there cannot exist any more conflicts
+                    // with an interface
+                    if functions.len() == 1 {
+                        let (fqfn, ftype) = &functions[0];
+                        Ok(Function {
+                            function_name: fqfn.clone(),
+                            function_type: ftype.clone(),
+                        })
+                    } else {
+                        search_function_in_instance(self, function_name)
+                    }
                 }
 
                 TypeParameter::PackageName(pkg) => {
@@ -179,10 +191,11 @@ impl InstanceType {
 
                     if functions.is_empty() {
                         return Err(format!(
-                            "Function '{}' not found in package '{}'",
-                            function_name, pkg
+                            "Package '{}' not found",
+                            pkg
                         ));
                     }
+
 
                     search_function_in_instance(self, function_name)
                 }
