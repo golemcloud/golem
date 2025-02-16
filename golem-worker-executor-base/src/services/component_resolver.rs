@@ -25,7 +25,7 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 use async_trait::async_trait;
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, is_grpc_retriable};
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 
 
 /// Used to resolve a ComponentId from a user-supplied string.
@@ -45,7 +45,9 @@ pub struct DefaultComponentResolver {
 
 impl DefaultComponentResolver {
 
-    fn resolve_component_remotely(&self, component_reference: String, context: DefaultComponentOwner) -> impl Future<Output = Result<Option<ComponentId>, GolemError>> + 'static {
+    fn resolve_component_remotely(&self, component_reference: String, _context: DefaultComponentOwner) -> impl Future<Output = Result<Option<ComponentId>, GolemError>> + 'static {
+        use golem_api_grpc::proto::golem::component::v1::{get_components_response, ComponentError};
+
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
         let access_token = self.access_token.clone();
@@ -58,7 +60,7 @@ impl DefaultComponentResolver {
                 &retry_config,
                 &(client, component_reference.clone(), access_token),
                 |(client, component_reference, access_token)| Box::pin(async move {
-                    let _ = client.call("lookup_component_by_name", move |client| {
+                    let response = client.call("lookup_component_by_name", move |client| {
                         let request = authorised_grpc_request(
                             GetComponentsRequest {
                                 project_id: None,
@@ -71,10 +73,16 @@ impl DefaultComponentResolver {
                     .await?
                     .into_inner();
 
-                    todo!()
+                    match response.result.expect("Didn't receive expected field result") {
+                        get_components_response::Result::Success(payload) => {
+                            let component_id = payload.components.first().map(|c| c.versioned_component_id.expect("didn't receive expected versioned component id").component_id.expect("didn't receive expected component id"));
+                            Ok(component_id.map(|c| ComponentId::try_from(c).expect("failed to convert component id")))
+                        },
+                        get_components_response::Result::Error(err) => Err(GrpcError::Domain(err))?
+                    }
                 }),
                 is_grpc_retriable::<ComponentError>
-            ).await.map_err(|_| GolemError::unknown("foobar"))
+            ).await.map_err(|err| GolemError::unknown(format!("Failed to get component: {err}")))
         }
     }
 
@@ -91,8 +99,6 @@ impl ComponentResolver<DefaultComponentOwner> for DefaultComponentResolver {
         self.cache.get_or_insert_simple(
             &component_reference.clone(),
             || Box::pin(self.resolve_component_remotely(component_reference, context))
-        ).await;
-
-        todo!()
+        ).await
     }
 }
