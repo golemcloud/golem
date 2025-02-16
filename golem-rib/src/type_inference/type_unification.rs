@@ -433,7 +433,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(left);
                 queue.push(right);
             }
-            Expr::Invoke { .. } => {}
+            Expr::InvokeLazy { .. } => {}
         }
     }
 

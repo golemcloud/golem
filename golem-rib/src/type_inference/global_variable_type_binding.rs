@@ -317,7 +317,7 @@ mod internal {
                     );
                 }
 
-                Expr::Invoke { .. } => {
+                Expr::InvokeLazy { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
 

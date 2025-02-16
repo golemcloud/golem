@@ -81,7 +81,7 @@ pub enum Expr {
     // such that `my-worker-variable-expr` will be of the type `InferredType::InstanceType`
     // As part of a separate type inference phase this will be converted back to `Expr::Call` with fully
     // qualified function names (the complex version) which further takes part in all other type inference phases.
-    Invoke {
+    InvokeLazy {
         lhs: Box<Expr>,
         function_name: String,
         generic_type_parameter: Option<GenericTypeParameter>,
@@ -291,7 +291,7 @@ impl Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
     ) -> Self {
-        Expr::Invoke {
+        Expr::InvokeLazy {
             lhs: Box::new(lhs),
             function_name,
             generic_type_parameter,
@@ -635,7 +635,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type)
-            | Expr::Invoke { inferred_type, .. } => inferred_type.clone(),
+            | Expr::InvokeLazy { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -804,7 +804,7 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Invoke { inferred_type, .. }
+            | Expr::InvokeLazy { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -853,7 +853,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Invoke { inferred_type, .. }
+            | Expr::InvokeLazy { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -1806,7 +1806,7 @@ mod protobuf {
                         yield_expr: Some(Box::new((*yield_expr).into())),
                     }),
                 )),
-                Expr::Invoke { .. } => {
+                Expr::InvokeLazy { .. } => {
                     todo!("Invoke is not supported in protobuf serialization")
                 }
             };

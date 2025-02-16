@@ -525,7 +525,7 @@ mod internal {
             }
 
             // Invoke is always handled by the CallType::Function branch
-            Expr::Invoke { .. } => {}
+            Expr::InvokeLazy { .. } => {}
 
             Expr::ListReduce {
                 reduce_variable,

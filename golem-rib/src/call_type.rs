@@ -15,49 +15,40 @@
 use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use crate::instance_type::FullyQualifiedResourceConstructor;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
-    Function(DynamicParsedFunctionName),
+    Function(DynamicParsedFunctionName), // This will handle the actual resource method calls too
     VariantConstructor(String),
     EnumConstructor(String),
-    InstanceCreation(InstanceCreationType),
+    InstanceCreation(InstanceCreationType)
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum InstanceCreationType {
-    Ephemeral {
+    Worker {
         component_id: String,
+        worker_name: Option<Box<Expr>>, // Making it ephemeral if no specific worker instance
     },
-    Durable {
+    ResourceConstruction {
         worker_name: Box<Expr>,
         component_id: String,
-    },
-}
-
-impl Display for InstanceCreationType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstanceCreationType::Ephemeral { .. } => write!(f, "instance"),
-            InstanceCreationType::Durable { worker_name, .. } => {
-                write!(f, "instance({})", worker_name)
-            }
-        }
     }
 }
 
 impl InstanceCreationType {
     pub fn component_id(&self) -> String {
         match self {
-            InstanceCreationType::Ephemeral { component_id } => component_id.clone(),
-            InstanceCreationType::Durable { component_id, .. } => component_id.clone(),
+            InstanceCreationType::Worker { component_id, .. } => component_id.clone(),
+            InstanceCreationType::ResourceConstruction { component_id, .. } => component_id.clone(),
         }
     }
 
     pub fn worker_name(&self) -> Option<Expr> {
         match self {
-            InstanceCreationType::Ephemeral { .. } => None,
-            InstanceCreationType::Durable { worker_name, .. } => Some(worker_name.deref().clone()),
+            InstanceCreationType::Worker { worker_name, .. } => worker_name.clone().map(|w| w.deref().clone()),
+            InstanceCreationType::ResourceConstruction { worker_name, .. } => Some(worker_name.deref().clone()),
         }
     }
 }

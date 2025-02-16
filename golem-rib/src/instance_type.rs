@@ -1,8 +1,6 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
-};
+use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
@@ -12,17 +10,50 @@ use std::fmt::Display;
 // with better lookups in terms of namespace:package and interfaces.
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
+// The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
-    Durable {
-        worker_name: Box<Expr>,
+    // Holds functions across every package and interface in the component
+    Global {
+        worker_name: Option<Box<Expr>>,
         component_id: String,
         function_dict: FunctionDictionary,
     },
 
-    Ephemeral {
+    // Holds functions across every interface in the package
+    Package {
+        worker_name: Option<Box<Expr>>,
+        package_name: PackageName,
         component_id: String,
         function_dict: FunctionDictionary,
+    },
+
+    // Holds all functions across (may be across packages) for a specific interface
+    Interface {
+        worker_name: Option<Box<Expr>>,
+        interface_name: InterfaceName,
+        component_id: String,
+        function_dict: FunctionDictionary,
+    },
+
+    // Most granular level, holds functions for a specific package and interface
+    PackageInterface {
+        worker_name: Option<Box<Expr>>,
+        package_name: PackageName,
+        interface_name: InterfaceName,
+        component_id: String,
+        function_dict: FunctionDictionary,
+    },
+
+    // Holds the resource creation and the functions in the resource
+    // that may or may not be addressed
+    Resource {
+        worker_name: Option<Box<Expr>>,
+        package_name: Option<PackageName>,
+        interface_name: Option<InterfaceName>,
+        resource_args: Vec<Expr>,
+        component_id: String,
+        function_dict: ResourceMethodDictionary,
     }
 }
 
@@ -32,84 +63,80 @@ impl InstanceType {
         function_name: &str,
         type_parameter: Option<TypeParameter>,
     ) -> Result<Function, String> {
-        let functions: Vec<&(FunctionName, FunctionType)> = self
-            .function_dict()
-            .map
-            .iter()
-            .filter(|(f, _)| f.name() == function_name.to_string())
-            .collect();
-
         match type_parameter {
-            Some(param) => {
-                for (fqfn, ftype) in &functions {
-                    match &param {
-                        TypeParameter::Interface(iface)
-                            if fqfn.interface_name().as_ref() == Some(iface) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
-                        TypeParameter::PackageName(pkg)
-                            if fqfn.package_name() == Some(pkg.clone()) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
-                        TypeParameter::FullyQualifiedInterface(fq_iface)
-                            if fqfn.package_name() == Some(fq_iface.package_name.clone())
-                                && fqfn.interface_name()
-                                    == Some(fq_iface.interface_name.clone()) =>
-                        {
-                            return Ok(Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            });
-                        }
-                        TypeParameter::Interface(_) => {}
-                        TypeParameter::PackageName(_) => {}
-                        TypeParameter::FullyQualifiedInterface(_) => {}
-                    }
-                }
-                Err(format!("No function '{}' found", function_name))
-            }
-            None => {
-                if functions.is_empty() {
-                    return Err(format!("Function '{}' not found.", function_name));
-                }
+            Some(tp) => {
+                match tp {
+                    TypeParameter::Interface(iface) => {
+                        let functions = self
+                            .function_dict()
+                            .map
+                            .iter()
+                            .filter(|(f, _)| f.interface_name() == Some(iface.clone()))
+                            .collect::<Vec<_>>();
 
-                let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
-                    HashMap::new();
+                        if functions.is_empty() {
+                            return Err(format!("Function '{}' not found in interface '{}'", function_name, iface));
+                        }
 
-                for (fqfn, _) in &functions {
-                    package_map
-                        .entry(fqfn.package_name())
-                        .or_insert_with(HashSet::new)
-                        .insert(fqfn.interface_name());
-                }
-
-                match package_map.len() {
-                    1 => {
-                        let interfaces = package_map.values().flatten().cloned().collect();
-                        handle_single_package_multiple_interfaces(
-                            interfaces,
-                            functions,
+                        search_function_in_instance(
+                            self,
                             function_name,
                         )
                     }
-                    _ => handle_multiple_packages_multiple_interfaces(function_name, package_map),
+
+                    TypeParameter::PackageName(pkg) => {
+                        let functions = self
+                            .function_dict()
+                            .map
+                            .iter()
+                            .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
+                            .collect::<Vec<_>>();
+
+                        if functions.is_empty() {
+                            return Err(format!("Function '{}' not found in package '{}'", function_name, pkg));
+                        }
+
+                        search_function_in_instance(
+                            self,
+                            function_name,
+                        )
+                    }
+
+                    TypeParameter::FullyQualifiedInterface(fq_iface) => {
+                        let functions = self
+                            .function_dict()
+                            .map
+                            .iter()
+                            .filter(|(f, _)| f.package_name() == Some(fq_iface.package_name.clone()) && f.interface_name() == Some(fq_iface.interface_name.clone()))
+                            .collect::<Vec<_>>();
+
+                        if functions.is_empty() {
+                            return Err(format!("Function '{}' not found in interface '{}'", function_name, fq_iface));
+                        }
+
+                        search_function_in_instance(
+                            self,
+                            function_name,
+                        )
+                    }
                 }
+            }
+            None => {
+                search_function_in_instance(
+                    self,
+                    function_name,
+                )
             }
         }
     }
 
     fn function_dict(&self) -> &FunctionDictionary {
         match self {
-            InstanceType::Durable { function_dict, .. } => function_dict,
-            InstanceType::Ephemeral { function_dict, .. } => function_dict,
+            InstanceType::Global { function_dict, .. } => function_dict,
+            InstanceType::Package { function_dict, .. } => function_dict,
+            InstanceType::Interface { function_dict, .. } => function_dict,
+            InstanceType::PackageInterface { function_dict, .. } => function_dict,
+            InstanceType::Resource { function_dict, .. } => function_dict.into(),
         }
     }
 
@@ -117,22 +144,60 @@ impl InstanceType {
         component_id: String,
         registry: FunctionTypeRegistry,
         worker_name: Option<Expr>,
+        type_parameter: Option<TypeParameter>,
     ) -> Result<InstanceType, String> {
-        let function_dict = FunctionDictionary::from_function_type_registry(registry)?;
+        let function_dict =
+            FunctionDictionary::from_function_type_registry(registry)?;
 
-        match worker_name {
-            Some(worker_name) => Ok(InstanceType::Durable {
-                component_id,
-                worker_name: Box::new(worker_name),
-                function_dict,
-            }),
+        match type_parameter {
+            None => {
+                Ok(InstanceType::Global {
+                    component_id,
+                    worker_name: worker_name.map(Box::new),
+                    function_dict,
+                })
+            }
+            Some(type_parameter) => {
+                match type_parameter {
+                    TypeParameter::Interface(interface_name) => {
+                        let function_dict =
+                            function_dict.map.iter().filter(|(f, _)| f.interface_name() == Some(interface_name.clone())).collect();
 
-            None => Ok(InstanceType::Ephemeral {
-                component_id,
-                function_dict,
-            }),
+                        Ok(InstanceType::Interface {
+                            component_id,
+                            worker_name: worker_name.map(Box::new),
+                            interface_name,
+                            function_dict,
+                        })
+                    }
+                    TypeParameter::PackageName(package_name) => {
+                        let function_dict =
+                            function_dict.map.iter().filter(|(f, _)| f.package_name() == Some(package_name.clone())).collect();
+
+                        Ok(InstanceType::Package {
+                            component_id,
+                            worker_name: worker_name.map(Box::new),
+                            package_name,
+                            function_dict,
+                        })
+                    }
+                    TypeParameter::FullyQualifiedInterface(fq_interface) => {
+                        let function_dict = function_dict.map.iter().filter(|(f, _)| f.package_name() == Some(fq_interface.package_name.clone()) && f.interface_name() == Some(fq_interface.interface_name.clone())).collect();
+
+                        Ok(InstanceType::PackageInterface {
+                            component_id,
+                            worker_name: worker_name.map(Box::new),
+                            package_name: fq_interface.package_name,
+                            interface_name: fq_interface.interface_name,
+                            function_dict,
+                        })
+                    }
+                }
+            }
         }
     }
+
+
 }
 
 // TODO; This can be resource type too and not fully qualified function name
@@ -142,18 +207,29 @@ pub struct Function {
     pub function_name: FunctionName,
     pub function_type: FunctionType,
 }
-impl Function {
-    pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
-        let name = self.function_name.to_string();
-        DynamicParsedFunctionName::parse(name)
-    }
-}
 
-// FunctionDictionary is a map of function names (not variant or any enums)
-// to their respective function details
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionDictionary {
     pub map: Vec<(FunctionName, FunctionType)>,
+}
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ResourceMethodDictionary {
+    map: Vec<(FullyQualifiedResourceMethod, FunctionType)>,
+}
+
+impl From<ResourceMethodDictionary> for FunctionDictionary {
+    fn from(value: ResourceMethodDictionary) -> Self {
+        FunctionDictionary {
+            map: value.map.into_iter().map(|(k, v)| (FunctionName::ResourceMethod(k), v)).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ResourceMethod {
+    constructor_name: String,
+    resource_name: String
 }
 
 impl FunctionDictionary {
@@ -192,7 +268,8 @@ impl FunctionDictionary {
                         let interface_name = type_parameter.get_interface_name();
                         let package_name = type_parameter.get_package_name();
 
-                        let function_name = resolve_function_name(package_name, interface_name, &function_name);
+                        let function_name =
+                            resolve_function_name(package_name, interface_name, &function_name);
 
                         map.push((
                             function_name,
@@ -215,18 +292,24 @@ impl FunctionDictionary {
     }
 }
 
+
 fn resolve_function_name(package_name: Option<PackageName>,  interface_name: Option<InterfaceName>, function_name: &str) -> FunctionName {
     match get_resource_name(&function_name) {
-        Some(resource_name) => FunctionName::ResourceConstructor(FullyQualifiedResourceName {
-            package_name: None,
-            interface_name: None,
+        Some(resource_name) => FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+            package_name,
+            interface_name,
             resource_name,
         }),
         None => match get_resource_method_name(&function_name) {
-            Some(resource_method_name) => FunctionName::ResourceMethod(resource_method_name),
+            Ok(Some((constructor, method))) => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                package_name,
+                interface_name,
+                resource_name: constructor,
+                method_name: method,
+            }),
             None => FunctionName::Function(FullyQualifiedFunctionName {
-                package_name: None,
-                interface_name: None,
+                package_name,
+                interface_name,
                 function_name: function_name.to_string(),
             }),
         }
@@ -241,11 +324,20 @@ fn get_resource_name(function_name: &str) -> Option<String> {
     }
 }
 
-fn get_resource_method_name(function_name: &str) -> Option<String> {
+fn get_resource_method_name(function_name: &str) -> Result<Option<(String, String)> , String> {
     if function_name.starts_with("[method]") {
-        Some(function_name.trim_start_matches("[method]").to_string())
+        let constructor_and_method = function_name.trim_start_matches("[method]").to_string();
+        let mut constructor_and_method = constructor_and_method.split('.');
+        let constructor = constructor_and_method.next();
+        let method = constructor_and_method.next();
+
+        match (constructor, method) {
+            (Some(constructor), Some(method)) => Ok(Some((constructor.to_string(), method.to_string()))),
+            _ => Err(format!("Invalid resource method name: {}", function_name))
+        }
+
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -253,8 +345,8 @@ fn get_resource_method_name(function_name: &str) -> Option<String> {
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum FunctionName {
    Function(FullyQualifiedFunctionName),
-   ResourceConstructor(FullyQualifiedResourceName),
-   ResourceMethod(String)
+   ResourceConstructor(FullyQualifiedResourceConstructor),
+   ResourceMethod(FullyQualifiedResourceMethod)
 }
 
 impl FunctionName {
@@ -262,7 +354,7 @@ impl FunctionName {
         match self {
             FunctionName::Function(fqfn) => fqfn.interface_name.clone(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.interface_name.clone(),
-            FunctionName::ResourceMethod(_) => None,
+            FunctionName::ResourceMethod(resource_method) => resource_method.interface_name.clone(),
         }
     }
 
@@ -270,7 +362,7 @@ impl FunctionName {
         match self {
             FunctionName::Function(fqfn) => fqfn.package_name.clone(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.package_name.clone(),
-            FunctionName::ResourceMethod(_) => None,
+            FunctionName::ResourceMethod(fqfn) => fqfn.package_name.clone(),
         }
     }
 
@@ -278,24 +370,31 @@ impl FunctionName {
         match self {
             FunctionName::Function(fqfn) => fqfn.function_name.to_string(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.resource_name.to_string(),
-            FunctionName::ResourceMethod(name) => name.to_string(),
+            FunctionName::ResourceMethod(fqfn) => fqfn.method_name.to_string(),
         }
     }
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct FullyQualifiedResourceName {
+pub struct FullyQualifiedResourceConstructor {
     package_name: Option<PackageName>,
     interface_name: Option<InterfaceName>,
     resource_name: String,
 }
-
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedFunctionName {
     package_name: Option<PackageName>,
     interface_name: Option<InterfaceName>,
     function_name: String,
+}
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct FullyQualifiedResourceMethod {
+    package_name: Option<PackageName>,
+    interface_name: Option<InterfaceName>,
+    resource_name: String,
+    method_name: String,
 }
 
 impl Display for FullyQualifiedFunctionName {
@@ -318,13 +417,46 @@ pub struct FunctionType {
     return_type: Vec<InferredType>,
 }
 
-fn handle_single_package_multiple_interfaces(
+fn search_function_in_instance(
+    instance: &InstanceType,
+    function_name: &str
+) -> Result<Function, String> {
+    let functions: Vec<&(FunctionName, FunctionType)> = instance
+        .function_dict()
+        .map
+        .iter()
+        .filter(|(f, _)| f.name() == function_name.to_string())
+        .collect();
+
+    let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
+        HashMap::new();
+
+    for (fqfn, _) in &functions {
+        package_map
+            .entry(fqfn.package_name())
+            .or_insert_with(HashSet::new)
+            .insert(fqfn.interface_name());
+    }
+
+    match package_map.len() {
+        1 => {
+            let interfaces = package_map.values().flatten().cloned().collect();
+            search_function_in_single_package(
+                interfaces,
+                functions,
+                function_name,
+            )
+        }
+        _ => search_function_in_multiple_packages(function_name, package_map),
+    }
+}
+
+fn search_function_in_single_package(
     interfaces: HashSet<Option<InterfaceName>>,
     functions: Vec<&(FunctionName, FunctionType)>,
     function_name: &str,
 ) -> Result<Function, String> {
     if interfaces.len() == 1 {
-        // Single package, single interface -> Return the function
         let (fqfn, ftype) = functions[0];
         Ok(Function {
             function_name: fqfn.clone(),
@@ -348,7 +480,7 @@ fn handle_single_package_multiple_interfaces(
     }
 }
 
-fn handle_multiple_packages_multiple_interfaces(
+fn search_function_in_multiple_packages(
     function_name: &str,
     package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>,
 ) -> Result<Function, String> {

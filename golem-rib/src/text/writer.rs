@@ -385,7 +385,7 @@ impl<W: Write> Writer<W> {
                 self.write_display(" } ")
             }
 
-            Expr::Invoke { .. } => {
+            Expr::InvokeLazy { .. } => {
                 todo!("Invoke write back not yet supported")
             }
         }

@@ -2480,9 +2480,10 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_worker_12() {
             let expr = r#"
-                let worker = instance("my-worker");
-                let result = worker.qux[wasi:clocks]("bar");
-                result
+                let worker = instance("shopping-cart");
+                worker.bing(1, 2, 3);
+                instance.bing[foo:bar](1, 2, 3);
+
             "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
@@ -2500,10 +2501,8 @@ mod interpreter_tests {
         #[test]
         async fn first_class_worker_with_indexed_resource_drop() {
             let expr = r#"
-                //CallType::InstanceCreation
                 let worker = instance("my-worker");
                 let user_id = "user";
-                //CallType::ResourceCreation instead of CallType::DynamicParsedFunctionName
                 let resource = worker.cart(user_id);
                 resource.drop();
                 "success"
