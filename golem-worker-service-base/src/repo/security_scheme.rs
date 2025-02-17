@@ -226,7 +226,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                     redirect_url,
                     scopes,
                     security_scheme_metadata
-                FROM security_schemes as c
+                FROM security_schemes
                 WHERE security_scheme_id = $1
                 "#,
         )
