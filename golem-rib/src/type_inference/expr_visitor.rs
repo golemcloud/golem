@@ -478,7 +478,7 @@ mod internal {
     use crate::Expr;
 
     // (args, worker in calls, worker in inferred type)
-    pub(crate) fn get_expressions_in_call_type_mut<'a>(
+    pub(crate) fn get_expressions_in_call_type_mut(
         call_type: &mut CallType,
     ) -> (Option<&mut Vec<Expr>>, Option<&mut Box<Expr>>) {
         match call_type {

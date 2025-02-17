@@ -17,6 +17,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::Display;
+use std::ops::Deref;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -108,13 +109,13 @@ impl InstanceType {
         }
     }
 
-    pub fn worker(&self) -> Option<&Box<Expr>> {
+    pub fn worker(&self) -> Option<&Expr> {
         match self {
-            InstanceType::Global { worker_name, .. } => worker_name.as_ref(),
-            InstanceType::Package { worker_name, .. } => worker_name.as_ref(),
-            InstanceType::Interface { worker_name, .. } => worker_name.as_ref(),
-            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_ref(),
-            InstanceType::Resource { worker_name, .. } => worker_name.as_ref(),
+            InstanceType::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Resource { worker_name, .. } =>worker_name.as_ref().map(|v| v.deref())
         }
     }
 

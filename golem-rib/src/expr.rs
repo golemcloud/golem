@@ -1493,7 +1493,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let args: Vec<Expr> = lazy_invoke
                     .args
                     .into_iter()
-                    .map(|expr| Expr::try_from(expr))
+                    .map(Expr::try_from)
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Expr::InvokeMethodLazy {
