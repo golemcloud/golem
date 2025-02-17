@@ -50,7 +50,6 @@ pub fn start_router(
     let worker_service_api = Arc::new(started_components.worker_service.api_endpoint);
     let component_service_api = Arc::new(started_components.component_service.endpoint);
 
-    // poem only has limited support for regexes (no nest + regex), so type
     let app = Route::new()
         .at(
             "/v1/components/:component_id/invoke",
