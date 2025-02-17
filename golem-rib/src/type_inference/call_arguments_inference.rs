@@ -61,14 +61,14 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(_) => Ok(()),
-            CallType::Function(dynamic_parsed_function_name) => {
+            CallType::Function { function_name , ..} => {
                 let resource_constructor_registry_key =
-                    RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
+                    RegistryKey::resource_constructor_registry_key(function_name);
 
                 match resource_constructor_registry_key {
                     Some(resource_constructor_name) => handle_function_with_resource(
                         &resource_constructor_name,
-                        dynamic_parsed_function_name,
+                        function_name,
                         function_type_registry,
                         function_result_inferred_type,
                         args,
@@ -76,11 +76,11 @@ mod internal {
                     None => {
                         let registry_key = RegistryKey::from_call_type(&cloned).ok_or(format!(
                             "Invalid function call: `{}`",
-                            dynamic_parsed_function_name
+                            function_name
                         ))?;
 
                         infer_args_and_result_type(
-                            &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),
+                            &FunctionDetails::Fqn(function_name.to_string()),
                             function_type_registry,
                             &registry_key,
                             args,
@@ -529,7 +529,7 @@ mod function_parameters_inference_tests {
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
         let call_expr = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),

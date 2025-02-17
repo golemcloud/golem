@@ -125,7 +125,7 @@ mod internal {
         args: Vec<Expr>,
     ) -> Option<InstanceCreationType> {
         match call_type {
-            CallType::Function(function_name) => {
+            CallType::Function { function_name, ..} => {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {

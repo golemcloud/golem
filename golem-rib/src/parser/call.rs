@@ -46,7 +46,7 @@ where
             sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
         ),
     )
-        .map(|(name, tp, args)| Expr::call(name, tp, args))
+        .map(|(name, tp, args)| Expr::call(name, tp, None, args))
         .message("Invalid function call")
 }
 
@@ -259,6 +259,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![],
             ),
             "",
@@ -281,6 +282,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::identifier("bar", None)],
             ),
             "",
@@ -301,6 +303,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
             ),
             "",
@@ -320,6 +323,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::identifier("bar", None),
@@ -344,6 +348,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::identifier("bar", None),
@@ -370,6 +375,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![
                     Expr::identifier("bar", None),
                     Expr::identifier("baz", None),
@@ -395,6 +401,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::identifier("bar", None),
@@ -423,6 +430,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::record(vec![(
                     "bar".to_string(),
                     Expr::identifier("baz", None),
@@ -445,6 +453,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
@@ -469,6 +478,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![
                     Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
                     Expr::record(vec![("qux".to_string(), Expr::identifier("quux", None))]),
@@ -491,6 +501,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
@@ -516,6 +527,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::sequence(
                     vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
                     None,
@@ -538,6 +550,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::sequence(
@@ -564,6 +577,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::sequence(
@@ -597,6 +611,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::tuple(vec![
                     Expr::identifier("bar", None),
                     Expr::identifier("baz", None),
@@ -619,6 +634,7 @@ mod function_call_tests {
                         function: "foo".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![
                     Expr::tuple(vec![
@@ -646,6 +662,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -667,6 +684,7 @@ mod function_call_tests {
                         function: "fn1".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -693,6 +711,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -717,6 +736,7 @@ mod function_call_tests {
                         function: "run".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -743,6 +763,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -767,6 +788,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -793,6 +815,7 @@ mod function_call_tests {
                         resource_params: vec![],
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -825,6 +848,7 @@ mod function_call_tests {
                         ],
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -859,6 +883,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -884,6 +909,7 @@ mod function_call_tests {
                 },
             },
             None,
+            None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
         );
         assert_eq!(result, expected);
@@ -907,6 +933,7 @@ mod function_call_tests {
                         method: "do-something".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -935,6 +962,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -961,6 +989,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -985,6 +1014,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -1011,6 +1041,7 @@ mod function_call_tests {
                         resource_params: vec![],
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -1041,6 +1072,7 @@ mod function_call_tests {
                         ],
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
@@ -1075,6 +1107,7 @@ mod function_call_tests {
                     },
                 },
                 None,
+                None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
@@ -1099,6 +1132,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
+                None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),

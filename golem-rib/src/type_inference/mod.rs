@@ -346,7 +346,7 @@ mod type_inference_tests {
             );
 
             let call_expr = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
@@ -409,7 +409,7 @@ mod type_inference_tests {
             );
 
             let call_expr1 = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
@@ -425,7 +425,7 @@ mod type_inference_tests {
             );
 
             let call_expr2 = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "baz".to_string(),
@@ -1484,7 +1484,7 @@ mod type_inference_tests {
                             InferredType::U64,
                         ))),
                         Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
@@ -1508,7 +1508,7 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "baz".to_string(),
@@ -2732,7 +2732,7 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "process".to_string(),
@@ -3250,7 +3250,7 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),

@@ -68,8 +68,13 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Result(Ok(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Result(Err(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Call(call_type, _, arguments, _) => {
-            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+            let (exprs, worker) =  internal::get_expressions_in_call_mut(call_type);
+            if let Some(exprs) = exprs {
                 queue.extend(exprs.iter_mut())
+            }
+
+            if let Some(worker) = worker {
+                queue.push_back(worker);
             }
 
             queue.extend(arguments.iter_mut())
@@ -188,9 +193,13 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Result(Ok(expr), _, _) => queue.push_back(expr),
         Expr::Result(Err(expr), _, _) => queue.push_back(expr),
         Expr::Call(call_type, _, arguments, _) => {
-            if let CallType::Function(dynamic) = call_type {
-                if let Some(params) = dynamic.function.raw_resource_params() {
+            if let CallType::Function { function_name, worker } = call_type {
+                if let Some(params) = function_name.function.raw_resource_params() {
                     queue.extend(params.iter())
+                }
+
+                if let Some(worker) = worker {
+                    queue.push_back(worker);
                 }
             }
 
@@ -350,10 +359,16 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Result(Ok(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Result(Err(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Call(call_type, _, arguments, _) => {
-            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+            let (exprs, worker) = internal::get_expressions_in_call_mut(call_type);
+
+            if let Some(exprs) = exprs {
                 for expr in exprs.iter_mut() {
                     queue.push_front(expr);
                 }
+            }
+
+            if let Some(worker) = worker {
+                queue.push_front(worker);
             }
 
             for expr in arguments.iter_mut() {
@@ -400,16 +415,19 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType};
     use crate::Expr;
 
-    pub(crate) fn get_expressions_in_call_mut(call_type: &mut CallType) -> Option<&mut Vec<Expr>> {
+    pub(crate) fn get_expressions_in_call_mut<'a>(call_type: &mut CallType) -> (Option<&mut Vec<Expr>>, Option<&mut Box<Expr>>) {
         match call_type {
-            CallType::Function(dynamic_parsed_function_name) => dynamic_parsed_function_name
+            CallType::Function { function_name, worker} => (function_name
                 .function
-                .raw_resource_params_mut(),
+                .raw_resource_params_mut(), worker.as_mut()),
 
-            _ => None,
+            _ => {
+                (None, None)
+            },
         }
     }
+
 }

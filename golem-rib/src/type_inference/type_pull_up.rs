@@ -775,8 +775,8 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
-            CallType::Function(fun_name) => {
-                let mut function_name = fun_name.clone();
+            CallType::Function { function_name, worker } => {
+                let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
 
@@ -797,12 +797,31 @@ mod internal {
                         });
                 }
 
-                let new_call = Expr::Call(
-                    CallType::Function(function_name),
-                    None,
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+
+                let new_call = if let Some(worker) = worker {
+                    let worker = inferred_type_stack.pop_front().unwrap_or(worker.deref().clone());
+
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: Some(Box::new(worker)),
+                        },
+                        None,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    )
+                } else {
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: None,
+                        },
+                        None,
+                        new_arg_exprs,
+                        inferred_type.clone()
+                    )
+                };
+
                 inferred_type_stack.push_front(new_call);
             }
 
@@ -812,9 +831,20 @@ mod internal {
                 if let Some(worker_name) = worker_name {
                     let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
 
-                    let new_instance_creation = InstanceCreationType::Worker {
-                        worker_name: Some(Box::new(worker_name)),
-                        component_id: instance_creation.component_id().clone(),
+                    let new_instance_creation = match instance_creation {
+                        InstanceCreationType::Worker { component_id, .. } => {
+                            InstanceCreationType::Worker {
+                                component_id: component_id.clone(),
+                                worker_name: Some(Box::new(worker_name.clone())),
+                            }
+                        }
+                        InstanceCreationType::Resource { component_id, resource_name, .. } => {
+                            InstanceCreationType::Resource {
+                                worker_name: Some(Box::new(worker_name.clone())),
+                                component_id: component_id.clone(),
+                                resource_name: resource_name.clone(),
+                            }
+                        }
                     };
 
                     let new_call = Expr::Call(
@@ -1324,6 +1354,7 @@ mod type_pull_up_tests {
         let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             None,
+            None,
             vec![Expr::untyped_number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();
@@ -1368,7 +1399,7 @@ mod type_pull_up_tests {
                     InferredType::Unknown,
                 ),
                 Expr::Call(
-                    CallType::Function(DynamicParsedFunctionName {
+                    CallType::function_without_worker(DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "golem".to_string(),
                             package: "it".to_string(),

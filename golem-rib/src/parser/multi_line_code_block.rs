@@ -92,10 +92,12 @@ mod tests {
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
+                None,
                 vec![Expr::identifier("x", None)],
             ),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
+                None,
                 None,
                 vec![Expr::identifier("y", None)],
             ),
@@ -125,10 +127,12 @@ mod tests {
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
+                    None,
                     vec![Expr::identifier("x", None)],
                 ),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
+                    None,
                     None,
                     vec![Expr::identifier("y", None)],
                 ),
@@ -167,10 +171,12 @@ mod tests {
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
+                        None,
                         vec![Expr::identifier("x", None)],
                     ),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
+                        None,
                         None,
                         vec![Expr::identifier("y", None)],
                     ),
@@ -216,10 +222,12 @@ mod tests {
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,
+                            None,
                             vec![Expr::identifier("x", None)],
                         ),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
+                            None,
                             None,
                             vec![Expr::identifier("y", None)],
                         ),

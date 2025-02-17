@@ -310,7 +310,7 @@ mod internal {
                 }
 
                 match call_type {
-                    CallType::Function(parsed_function_name) => {
+                    CallType::Function { function_name, ..} => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -324,10 +324,10 @@ mod internal {
                         instructions
                             .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
-                        let site = parsed_function_name.site.clone();
+                        let site = function_name.site.clone();
 
                         // Resolve the function name and update stack
-                        match &parsed_function_name.function {
+                        match &function_name.function {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(
                                     site,

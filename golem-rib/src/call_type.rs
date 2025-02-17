@@ -19,7 +19,10 @@ use std::ops::Deref;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
-    Function(DynamicParsedFunctionName), // This will handle the actual resource method calls too
+    Function {
+        worker: Option<Box<Expr>>,
+        function_name: DynamicParsedFunctionName,
+    },
     VariantConstructor(String),
     EnumConstructor(String),
     InstanceCreation(InstanceCreationType),
@@ -59,9 +62,15 @@ impl InstanceCreationType {
 }
 
 impl CallType {
+    pub fn function_without_worker(function: DynamicParsedFunctionName) -> CallType {
+        CallType::Function {
+            worker: None,
+            function_name: function,
+        }
+    }
     pub fn is_resource_method(&self) -> bool {
         match self {
-            CallType::Function(parsed_fn_name) => parsed_fn_name
+            CallType::Function{function_name, ..} => function_name
                 .to_parsed_function_name()
                 .function
                 .resource_method_name()
@@ -74,7 +83,7 @@ impl CallType {
 impl Display for CallType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
+            CallType::Function{function_name, ..}=> write!(f, "{}", function_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
             CallType::InstanceCreation(_) => {
@@ -97,7 +106,10 @@ mod protobuf {
             let invocation = value.name.ok_or("Missing name of invocation")?;
             match invocation {
                 golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => Ok(
-                    CallType::Function(DynamicParsedFunctionName::try_from(name)?),
+                    CallType::Function {
+                        function_name: DynamicParsedFunctionName::try_from(name)?,
+                        worker: todo!(),
+                    },
                 ),
                 golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
                     Ok(CallType::VariantConstructor(name))
@@ -112,9 +124,9 @@ mod protobuf {
     impl From<CallType> for golem_api_grpc::proto::golem::rib::CallType {
         fn from(value: CallType) -> Self {
             match value {
-                CallType::Function(parsed_name) => golem_api_grpc::proto::golem::rib::CallType {
+                CallType::Function{worker, function_name} => golem_api_grpc::proto::golem::rib::CallType {
                     name: Some(golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(
-                        parsed_name.into(),
+                        function_name.into(),
                     )),
                 },
                 CallType::VariantConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
@@ -148,9 +160,11 @@ mod protobuf {
             let invocation = value.name.ok_or("Missing name of invocation")?;
             match invocation {
                 golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
-                    Ok(CallType::Function(DynamicParsedFunctionName::parse(
+                    Ok(CallType::Function{
+                        worker: todo!("Worker not supported in protobuf"),
+                        function_name: DynamicParsedFunctionName::parse(
                         ParsedFunctionName::try_from(name)?.to_string(),
-                    )?))
+                    )?})
                 }
                 golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                     name,

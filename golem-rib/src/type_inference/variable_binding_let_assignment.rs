@@ -103,7 +103,7 @@ mod name_binding_tests {
         );
 
         let call_expr = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
@@ -152,7 +152,7 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
@@ -168,7 +168,7 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
@@ -217,7 +217,7 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
@@ -233,7 +233,7 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),

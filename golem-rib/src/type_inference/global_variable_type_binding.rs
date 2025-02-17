@@ -66,12 +66,13 @@ pub fn bind_global_variable_types(
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::type_checker::{Path, PathElem};
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
+    use crate::generic_type_parameter::GenericTypeParameter;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
@@ -321,8 +322,8 @@ mod internal {
                     temp_stack.push_front((expr.clone(), false));
                 }
 
-                Expr::Call(call_type, _, exprs, inferred_type) => {
-                    handle_call(call_type, exprs, inferred_type, &mut temp_stack);
+                Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
+                    handle_call(call_type, exprs, generic_type_parameter, inferred_type, &mut temp_stack);
                 }
 
                 Expr::Unwrap(expr, inferred_type) => {
@@ -805,6 +806,7 @@ mod internal {
     pub(crate) fn handle_call(
         call_type: &CallType,
         arguments: &[Expr],
+        generic_type_parameter: &Option<GenericTypeParameter>,
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
     ) {
@@ -820,19 +822,51 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(instance_creation_type) => {
-                // TODO; Need to retrieve the resource params from the stack
-                let new_call = Expr::Call(
-                    CallType::InstanceCreation(instance_creation_type.clone()),
-                    None,
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
-                temp_stack.push_front((new_call, false));
-            }
-            CallType::Function(fun_name) => {
-                let mut function_name = fun_name.clone();
+                if let Some(worker) = instance_creation_type.worker_name() {
+                    let new_worker = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker.clone());
+                    match instance_creation_type {
+                        InstanceCreationType::Resource {
+                            component_id,
+                            resource_name,
+                            ..
+                        }  => {
+                            let new_call = Expr::Call(
+                                CallType::InstanceCreation(InstanceCreationType::Resource {
+                                    component_id: component_id.clone(),
+                                    resource_name: resource_name.clone(),
+                                    worker_name: Some(Box::new(new_worker)),
+                                }),
+                                generic_type_parameter.clone(),
+                                new_arg_exprs,
+                                inferred_type.clone(),
+                            );
+                            temp_stack.push_front((new_call, false));
+                        }
+                        _ => {
+                            let new_call = Expr::Call(
+                                CallType::InstanceCreation(instance_creation_type.clone()),
+                                generic_type_parameter.clone(),
+                                new_arg_exprs,
+                                inferred_type.clone(),
+                            );
+                            temp_stack.push_front((new_call, false));
+                        }
+                    }
 
-                // The resource params in the function name was also in stack and need to be retrieved back
+                } else {
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(instance_creation_type.clone()),
+                        generic_type_parameter.clone(),
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+                    temp_stack.push_front((new_call, false));
+                }
+            }
+
+            CallType::Function{function_name, worker} => {
+                let mut function_name = function_name.clone();
+
                 let resource_params = function_name.function.raw_resource_params_mut();
 
                 if let Some(resource_params) = resource_params {
@@ -852,12 +886,31 @@ mod internal {
                         });
                 }
 
-                let new_call = Expr::Call(
-                    CallType::Function(function_name),
-                    None,
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+
+                let new_call = if let Some(worker) = worker {
+                    let worker = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker.deref().clone());
+
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: Some(Box::new(worker)),
+                        },
+                        None,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    )
+                } else {
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: None,
+                        },
+                        None,
+                        new_arg_exprs,
+                        inferred_type.clone()
+                    )
+                };
+
                 temp_stack.push_front((new_call, false));
             }
 

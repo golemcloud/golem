@@ -43,7 +43,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                 DynamicParsedFunctionName::parse(dynamic_parsed_function_name)?;
 
                             let new_call =
-                                Expr::call(dynamic_parsed_function_name, None, args.clone());
+                                Expr::call(dynamic_parsed_function_name, None, None, args.clone());
                             *expr = new_call;
                         }
                         // We are yet to be able to create a call_type
@@ -96,7 +96,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                     let method_args = args.clone();
 
                                     let new_call =
-                                        Expr::call(dynamic_parsed_function_name, None, method_args);
+                                        Expr::call(dynamic_parsed_function_name, None, None,  method_args);
 
                                     *expr = new_call
                                 }

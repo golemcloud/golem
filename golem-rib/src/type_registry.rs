@@ -55,9 +55,9 @@ impl FunctionTypeRegistry {
 
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
         match key {
-            CallType::Function(parsed_fn_name) => self
+            CallType::Function{ function_name, ..} => self
                 .types
-                .get(&RegistryKey::fqn_registry_key(parsed_fn_name)),
+                .get(&RegistryKey::fqn_registry_key(function_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),
@@ -271,7 +271,7 @@ impl RegistryKey {
             CallType::EnumConstructor(enum_name) => {
                 Some(RegistryKey::FunctionName(enum_name.clone()))
             }
-            CallType::Function(function_name) => match function_name.site.interface_name() {
+            CallType::Function { function_name, ..} => match function_name.site.interface_name() {
                 None => Some(RegistryKey::FunctionName(
                     function_name.function_name_with_prefix_identifiers(),
                 )),

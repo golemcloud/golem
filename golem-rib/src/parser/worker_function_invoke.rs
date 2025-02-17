@@ -15,8 +15,8 @@ where
 {
     (identifier().skip(spaces()), char('.'), rib_expr())
         .and_then(|(worker_variable, _, call)| match call {
-            Expr::Call(CallType::Function(name), generic_type_parameter, args, _) => {
-                let function_name = name.to_string();
+            Expr::Call(CallType::Function {function_name, .. }, generic_type_parameter, args, _) => {
+                let function_name = function_name.to_string();
                 Ok(Expr::invoke_worker_function(
                     worker_variable,
                     function_name,
@@ -121,6 +121,7 @@ mod tests {
                 Expr::call(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
                     None,
+                    None,
                     vec![Expr::literal("my-worker")],
                 ),
                 None,
@@ -157,6 +158,7 @@ mod tests {
                 "worker",
                 Expr::call(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
+                    None,
                     None,
                     vec![Expr::literal("my-worker")],
                 ),
@@ -199,6 +201,7 @@ mod tests {
                 Expr::call(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
                     Some(type_parameter1),
+                    None,
                     vec![Expr::literal("my-worker")],
                 ),
                 None,
