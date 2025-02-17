@@ -227,7 +227,7 @@ export default function SecondaryHeader({
           </Box>
         )}
 
-        {pathname === `/components/${compId}/overview` && (
+        {(pathname === `/components/${compId}/durableoverview` || pathname === `/components/${compId}/ephemeraloverview`) && (
           <Box className="flex items-center justify-between w-full h-1/5">
             <ComponentVersionFilter showFilter={true} />
            <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
