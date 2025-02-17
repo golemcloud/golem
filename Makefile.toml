@@ -327,7 +327,7 @@ cargo test \
 -- --nocapture --test-threads=1
 '''
 
-[tasks.api-test-http]
+[tasks.api-tests-http]
 description = "Runs API HTTP tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
@@ -335,7 +335,7 @@ script = '''
 cargo test --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[tasks.api-test-grpc]
+[tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
