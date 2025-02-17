@@ -5,6 +5,7 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -761,4 +762,138 @@ fn search_function_in_multiple_packages(
 
     error_msg.push_str(&package_interface_list.join(", "));
     Err(error_msg)
+}
+
+
+use std::convert::TryFrom;
+use combine::parser::combinator::Try;
+use golem_api_grpc::proto::golem::rib::{InstanceType as ProtoInstanceType, GlobalInstance, PackageInstance, InterfaceInstance, PackageInterfaceInstance, ResourceInstance, FunctionDictionary as ProtoFunctionDictionary, FunctionEntry, ResourceMethodDictionary as ProtoResourceMethodDictionary, ResourceMethodEntry, FunctionType as ProtoFunctionType, FunctionNameType as ProtoFunctionName, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName, FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor, FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod, PackageName as ProtoPackageName, InterfaceName as ProtoInterfaceName, Expr as ProtoExpr, function_name_type};
+use golem_wasm_ast::analysis::AnalysedType;
+
+// Convert ProtoFunctionType -> FunctionType
+impl TryFrom<ProtoFunctionType> for FunctionType {
+    type Error = String;
+
+    fn try_from(proto: ProtoFunctionType) -> Result<Self, Self::Error> {
+        let mut parameter_types = Vec::new();
+        for param in proto.parameter_types {
+            parameter_types.push(InferredType::from(AnalysedType::try_from(&param)?));
+        }
+
+        let mut return_type = Vec::new();
+        for ret in proto.return_type {
+            return_type.push( InferredType::from(AnalysedType::try_from(&ret)?));
+        }
+
+        Ok(Self {
+            parameter_types,
+            return_type,
+        })
+    }
+}
+
+impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
+    type Error = String;
+
+    fn try_from(proto: ProtoFunctionDictionary) -> Result<Self, Self::Error> {
+        let mut map = Vec::new();
+        for function_entry in proto.map {
+            let function_name = function_entry.key.ok_or("Function name not found")?;
+            let function_type = function_entry.value.ok_or("Function type not found")?;
+
+            let function_name = FunctionName::try_from(function_name)?;
+            let function_type = FunctionType::try_from(function_type)?;
+            map.push((function_name, function_type));
+        }
+        Ok(FunctionDictionary { map })
+    }
+}
+
+impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
+    type Error = String;
+
+    fn try_from(proto: ProtoResourceMethodDictionary) -> Result<Self, Self::Error> {
+        let mut map = Vec::new();
+        for resource_method_entry in proto.map {
+            let resource_method = resource_method_entry.key.ok_or("Resource method not found")?;
+            let function_type = resource_method_entry.value.ok_or("Function type not found")?;
+            let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
+            let function_type = FunctionType::try_from(function_type)?;
+            map.push((resource_method, function_type));
+        }
+        Ok(ResourceMethodDictionary { map })
+    }
+}
+
+impl TryFrom<ProtoPackageName> for PackageName {
+    type Error = String;
+
+    fn try_from(proto: ProtoPackageName) -> Result<Self, Self::Error> {
+        Ok(PackageName {
+            namespace: proto.namespace,
+            package_name: proto.package_name,
+            version: proto.version,
+        })
+    }
+}
+
+impl TryFrom<ProtoInterfaceName> for InterfaceName {
+    type Error = String;
+
+    fn try_from(value: ProtoInterfaceName) -> Result<Self, Self::Error> {
+        Ok(InterfaceName {
+            name: value.name,
+            version: value.version,
+        })
+    }
+}
+
+impl TryFrom<ProtoFullyQualifiedFunctionName> for FullyQualifiedFunctionName {
+    type Error = String;
+
+    fn try_from(proto: ProtoFullyQualifiedFunctionName) -> Result<Self, Self::Error> {
+        Ok(FullyQualifiedFunctionName {
+            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+            function_name: proto.function_name,
+        })
+    }
+}
+
+impl TryFrom<ProtoFullyQualifiedResourceMethod> for FullyQualifiedResourceMethod {
+    type Error = String;
+
+    fn try_from(proto: ProtoFullyQualifiedResourceMethod) -> Result<Self, Self::Error> {
+        Ok(FullyQualifiedResourceMethod {
+            resource_name: proto.resource_name,
+            method_name: proto.method_name,
+            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+        })
+    }
+}
+
+impl TryFrom<ProtoFullyQualifiedResourceConstructor> for FullyQualifiedResourceConstructor {
+    type Error = String;
+
+    fn try_from(proto: ProtoFullyQualifiedResourceConstructor) -> Result<Self, Self::Error> {
+        Ok(FullyQualifiedResourceConstructor {
+            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+            resource_name: proto.resource_name,
+        })
+    }
+}
+
+impl TryFrom<ProtoFunctionName> for FunctionName {
+    type Error = String;
+
+    fn try_from(proto: ProtoFunctionName) -> Result<Self, Self::Error> {
+        let proto_function_name = proto.function_name.ok_or("Function name not found")?;
+        match proto_function_name {
+            function_name_type::FunctionName::Function(fqfn) => Ok(FunctionName::Function(TryFrom::try_from(fqfn)?)),
+            function_name_type::FunctionName::ResourceConstructor(fqfn) => Ok(FunctionName::ResourceConstructor(TryFrom::try_from(fqfn)?)),
+            function_name_type::FunctionName::ResourceMethod(fqfn) => Ok(FunctionName::ResourceMethod(TryFrom::try_from(fqfn)?)),
+        }
+    }
 }

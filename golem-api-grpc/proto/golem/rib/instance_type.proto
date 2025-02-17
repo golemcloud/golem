@@ -95,11 +95,14 @@ message FullyQualifiedResourceMethod {
 }
 
 message PackageName {
-  string name = 1;
+  string namespace = 1;
+  string package_name = 2;
+  optional string version = 3;
 }
 
 message InterfaceName {
   string name = 1;
+  optional string version = 2;
 }
 
 message FunctionType {
