@@ -248,9 +248,7 @@ impl InstanceType {
                     }
                 }
             },
-            None => {
-                search_function_in_instance(self, function_name)
-            },
+            None => search_function_in_instance(self, function_name),
         }
     }
 
@@ -506,6 +504,9 @@ fn get_resource_method_name(function_name: &str) -> Result<Option<(String, Strin
             }
             _ => Err(format!("Invalid resource method name: {}", function_name)),
         }
+    } else if function_name.starts_with("[drop]") {
+        let constructor = function_name.trim_start_matches("[drop]").to_string();
+        Ok(Some((constructor, "drop".to_string())))
     } else {
         Ok(None)
     }
@@ -608,7 +609,6 @@ impl FullyQualifiedResourceMethod {
         dynamic_parsed_str.push('}');
 
         DynamicParsedFunctionName::parse(dynamic_parsed_str)
-
     }
 
     pub fn method_name(&self) -> &String {

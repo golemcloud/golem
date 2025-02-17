@@ -2540,7 +2540,6 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
-
         #[test]
         async fn test_first_class_worker_14() {
             let expr = r#"
@@ -2576,7 +2575,6 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
             assert_eq!(compiled, "Function 'add-items' not found".to_string());
-
         }
 
         #[test]
@@ -2592,8 +2590,10 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(compiled, "Function 'carts' not found in package golem:it".to_string());
-
+            assert_eq!(
+                compiled,
+                "Function 'carts' not found in package golem:it".to_string()
+            );
         }
 
         #[test]
@@ -2694,6 +2694,7 @@ mod interpreter_tests {
                 cart.remove-item(a);
                 cart.update-item-quantity(a, 2);
                 let result = cart.get-cart-contents();
+                cart.drop();
                 result
             "#;
             let expr = Expr::from_text(expr).unwrap();

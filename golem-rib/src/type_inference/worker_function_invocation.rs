@@ -118,7 +118,9 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                 _ => {
                     return Err(format!(
                         "Invalid worker function invoke. Expected to be an instance type, found {}",
-                        TypeName::try_from(inferred_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
+                        TypeName::try_from(inferred_type)
+                            .map(|x| x.to_string())
+                            .unwrap_or("Unknown".to_string())
                     ));
                 }
             }
