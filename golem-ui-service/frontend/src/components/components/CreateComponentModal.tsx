@@ -1,13 +1,12 @@
 import {
-  AlertCircle,
-  Cloud,
-  FileIcon,
-  Folder,
-  Loader2,
-  Plus,
-  Server,
-  Upload,
-  X,
+Cloud,
+FileIcon,
+Folder,
+Loader2,
+Plus,
+Server,
+Upload,
+X,
 } from "lucide-react";
 import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
