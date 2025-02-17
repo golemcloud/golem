@@ -272,6 +272,7 @@ impl UiService {
         } else {
             CorsLayer::new()
                 .allow_methods(Any)
+                .allow_origin([format!("http://localhost:{}", self.addr.port()).parse()?])
                 .allow_headers(["content-type".parse()?, "authorization".parse()?])
         };
 
