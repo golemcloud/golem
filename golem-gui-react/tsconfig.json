@@ -7,12 +7,12 @@
   "compilerOptions": {
     "baseUrl": "./src",
     "paths": {
-      "@components/*": ["./components/*"],
-      "@pages/*": ["./pages/*"],
-      "@ui/*": ["./components/ui/*"],
-      "@lib/*": ["./lib/*"],
-      "@services/*": ["./services/*"],
-      "@utils/*": ["./utils/*"],
+      "@components/*": ["components/*"],
+      "@pages/*": ["pages/*"],
+      "@ui/*": ["components/ui/*"],
+      "@lib/*": ["lib/*"],
+      "@services/*": ["services/*"],
+      "@utils/*": ["utils/*"]
     }
   }
 }
