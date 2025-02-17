@@ -30,7 +30,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
           maxHeight: "calc(100vh - 120px)",
           overflowY: "auto",
         }}
-        className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333] border"
+        className="bg-card_secondary text-foreground border border-border"
       >
         {heading && (
           <Box
@@ -41,7 +41,7 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               px: 2,
               py:1,
             }}
-            className="dark:bg-[#1e1e1e] bg-[#fff] dark:text-[#fff] text-[#333] border-b border-border dark:border-[#333]"
+            className="bg-card_secondary text-foreground border-b border-border"
           >
             <Box
               sx={{
@@ -53,8 +53,8 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               <Typography className="md:text-2xl sm:text-xl text-lg">
                 {heading}
               </Typography>
-              <IconButton onClick={onClose} className="text-muted-foreground">
-                <CloseIcon />
+              <IconButton onClick={onClose}>
+                <CloseIcon  className="text-muted-foreground"/>
               </IconButton>
             </Box>
             {subheading && (

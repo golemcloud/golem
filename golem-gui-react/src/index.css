@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 body {
   margin: 0;
@@ -10,7 +12,6 @@ body {
     text-wrap: balance;
   }
 }
-
 
 @layer base {
   :root {
@@ -42,10 +43,9 @@ body {
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
     --radius: 0.5rem;
-    --button-background: 224, 100%, 97%;
-    --button-border: 225, 51%, 29%;
+    --button-background :224, 100%, 97%;
+    --button-border:225, 51%, 29%;
   }
-
   .dark {
     --background: 0 0% 8.5%;
     --primary-background: 0 0% 4%;
@@ -73,65 +73,24 @@ body {
     --chart-3: 30 80% 55%;
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
-    --button-background: 228, 43%, 18%;
-    --button-border: 226, 50%, 24%;
+    --button-background : 228, 43%, 18%;
+    --button-border:226, 50%, 24%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 }
 
 
-@theme {
-  --color-background: hsl(var(--background));
-  --color-primary-background: hsl(var(--primary-background));
-  --color-foreground: hsl(var(--foreground));
+/* ------------------------------------------------------------------------------------------------ */
+/* Dark mode focused input styles */
 
-  --color-card: hsl(var(--card));
-  --color-card-secondary: hsl(var(--card-secondary));
-  --color-card-foreground: hsl(var(--card-foreground));
-
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-
-  --color-silver: hsl(var(--silver));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-
-  --color-chart-1: hsl(var(--chart-1));
-  --color-chart-2: hsl(var(--chart-2));
-  --color-chart-3: hsl(var(--chart-3));
-  --color-chart-4: hsl(var(--chart-4));
-  --color-chart-5: hsl(var(--chart-5));
-
-  --color-button-bg: hsl(var(--button-background));
-  --color-button-border: hsl(var(--button-border));
-
-  /* Border Radius */
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
-
-  /* Box Shadows */
-  --shadow-custom: 0px 3px 10px 1px #666;
-}
-
-
-
-/* ----------------- Custom styling for material ui components ----------------------*/
 
 
 .dark {
@@ -141,14 +100,13 @@ body {
   }
 
   .MuiPaper-root {
-    @apply bg-card-secondary text-foreground border border-border;
+    @apply bg-[#222] text-foreground border;
   }
 
   /* outline for input border initially */
   .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline {
     @apply border-border;
   }
-
   /* outline color on focus */
   .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
     border-color:#888;
@@ -171,6 +129,8 @@ body {
 
 
 
+/* ------------------------------------------------------------------------------------------------ */
+/* Light mode focused input styles */
 
 
 
@@ -182,14 +142,9 @@ body {
     border:1px solid #888;
   }
   .MuiPaper-root {
-    @apply bg-card-secondary text-foreground border border-border;
+    background-color: white;
   }
 }
-
-
-
-
-/* ----------------- Custom styling for react-paginate ----------------------*/
 
 /* Dark Mode Styles */
 .dark .pagination .MuiPaginationItem-root {

@@ -33,7 +33,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({
         "&:hover": { boxShadow: "0px 5px 10px 0px #555" },
       }}
       onClick={onClick}
-      className="flex-1 border rounded-md"
+      className="flex-1 border border-border rounded-md"
     >
       <Box
         sx={{

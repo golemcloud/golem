@@ -38,7 +38,7 @@ export default function Navbar() {
   return (
     <Box
       position="static"
-      className="bg-primary-background border-b border-border"
+      className="bg-primary-background border-b"
     >
       <Toolbar className="flex justify-between items-center">
         <Logo />

@@ -124,7 +124,7 @@ const ProjectDashboard = () => {
           <Grid size={{ xs: 12, md: 12, lg: 8 }}>
             <Paper
               elevation={3}
-              className='p-2 min-h-auto lg:min-h-[calc(100vh-200px)] rounded-md flex flex-col border'
+              className='p-2 min-h-auto lg:min-h-[calc(100vh-200px)] rounded-md flex flex-col'
             >
               <Box className='flex justify-between'>
                 <Typography variant='h5'>Components</Typography>
