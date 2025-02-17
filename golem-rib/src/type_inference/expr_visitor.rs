@@ -1,4 +1,4 @@
-use crate::call_type::CallType;
+use crate::call_type::{CallType, InstanceCreationType};
 use crate::Expr;
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -193,6 +193,23 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
                     queue.extend(params.iter())
                 }
             }
+
+            if let CallType::InstanceCreation(instance_creation) = call_type {
+                match instance_creation {
+                    InstanceCreationType::Worker { worker_name, .. } => {
+                        if let Some(worker_name) = worker_name {
+                            queue.push_back(worker_name);
+                        }
+                    }
+
+                    InstanceCreationType::Resource { worker_name, .. } => {
+                        if let Some(worker_name) = worker_name {
+                            queue.push_back(worker_name);
+                        }
+                    }
+                }
+            }
+
             queue.extend(arguments.iter())
         }
         Expr::Unwrap(expr, _) => queue.push_back(expr),

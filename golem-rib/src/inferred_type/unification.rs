@@ -713,7 +713,7 @@ mod internal {
                 }
                 Ok(Unified(inferred_type.clone()))
             }
-            InferredType::Instance { .. } => Err("Instance type cannot be unified".to_string()),
+            instance @ InferredType::Instance { .. } => Ok(Unified(instance.clone())),
             resource @ InferredType::Resource { .. } => Ok(Unified(resource.clone())),
             InferredType::OneOf(possibilities) => Err(format!(
                 "Conflicting types: {}",

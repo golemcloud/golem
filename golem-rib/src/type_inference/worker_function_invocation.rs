@@ -1,3 +1,4 @@
+use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::type_parameter::TypeParameter;
 use crate::{DynamicParsedFunctionName, Expr, InferredType, TypeName};
@@ -51,10 +52,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                         }
                         // We are yet to be able to create a call_type
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
-                            // If this is a resource constructor
-                            // then we make sure to have a new inferred type
                             let resource_instance_type = instance_type.get_resource_instance_type(
-                                fully_qualified_resource_constructor,
+                                fully_qualified_resource_constructor.clone(),
                                 args.clone(),
                                 instance_type.component_id().clone(),
                                 instance_type.worker_name(),
@@ -64,16 +63,15 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                 instance_type: Box::new(resource_instance_type),
                             };
 
-                            // This implies, lazy invoke is resolved to another lazy invoke
-                            // that it has to go further resolution phase to convert
-                            // to strict Expr::Call
-                            *expr = Expr::InvokeLazy {
-                                lhs: lhs.clone(),
-                                function_name: function_name.clone(),
-                                generic_type_parameter: generic_type_parameter.clone(),
-                                args: args.clone(),
-                                inferred_type: new_inferred_type,
-                            };
+                            let new_call_type =
+                                CallType::InstanceCreation(InstanceCreationType::Resource {
+                                    component_id: instance_type.component_id().clone(),
+                                    worker_name: instance_type.worker_name(),
+                                    resource_name: fully_qualified_resource_constructor.clone(),
+                                });
+
+                            *expr =
+                                Expr::Call(new_call_type, None, args.clone(), new_inferred_type);
                         }
                         // If resource method is called, we could convert to strict call
                         // however it can only be possible if the instance type of LHS is

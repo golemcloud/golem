@@ -648,12 +648,14 @@ impl Expr {
         self.bind_instance_types();
         self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         // This has to go through some fix point iterations
-        self.bind_instance_types();
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        //self.bind_instance_types();
+        //self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
+
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
+
         self.check_types(function_type_registry)
             .map_err(|x| vec![x])?;
         self.unify_types()?;

@@ -147,13 +147,20 @@ impl InstanceType {
         match type_parameter {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
-                    let functions = self
+                    let interfaces = self
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| {
-                            f.interface_name() == Some(iface.clone()) && f.name() == function_name
-                        })
+                        .filter(|(f, _)| f.interface_name() == Some(iface.clone()))
+                        .collect::<Vec<_>>();
+
+                    if interfaces.is_empty() {
+                        return Err(format!("Interface '{}' not found", iface));
+                    }
+
+                    let functions = interfaces
+                        .into_iter()
+                        .filter(|(f, _)| f.name() == function_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
@@ -177,17 +184,27 @@ impl InstanceType {
                 }
 
                 TypeParameter::PackageName(pkg) => {
-                    let functions = self
+                    let packages = self
                         .function_dict()
                         .map
                         .into_iter()
-                        .filter(|(f, _)| {
-                            f.package_name() == Some(pkg.clone()) && f.name() == function_name
-                        })
+                        .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
+                        .collect::<Vec<_>>();
+
+                    if packages.is_empty() {
+                        return Err(format!("Package '{}' not found", pkg));
+                    }
+
+                    let functions = packages
+                        .into_iter()
+                        .filter(|(f, _)| f.name() == function_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(format!("Package '{}' not found", pkg));
+                        return Err(format!(
+                            "Function '{}' not found in package {}",
+                            function_name, pkg
+                        ));
                     }
 
                     if functions.len() == 1 {

@@ -39,20 +39,30 @@ mod internal {
 
     pub(crate) fn search_for_invalid_instance_declarations(expr: &mut Expr) -> Result<(), String> {
         let mut queue = VecDeque::new();
-        queue.push_back(expr);
-        while let Some(expr) = queue.pop_back() {
+        queue.push_front(expr);
+        while let Some(expr) = queue.pop_front() {
             match expr {
+                Expr::Let(variable_id, _, expr, _) => {
+                    queue.push_front(expr);
+
+                    if variable_id.name() == "instance" {
+                        return Err(
+                            "`instance` is a reserved keyword and cannot be used as a variable."
+                                .to_string(),
+                        );
+                    }
+                }
                 Expr::Identifier(variable_id, _, _) => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         return Err(concat!(
-                        "`instance` is a reserved keyword and cannot be used as a global input.\n ",
+                        "`instance` is a reserved keyword.\n ",
                         "note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n ",
                         "note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name"
                         ).to_string());
                     }
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => expr.visit_children_mut_top_down(&mut queue),
             }
         }
 

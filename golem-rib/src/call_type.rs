@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::instance_type::FullyQualifiedResourceConstructor;
 use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
 use std::ops::Deref;
@@ -30,18 +31,27 @@ pub enum InstanceCreationType {
         component_id: String,
         worker_name: Option<Box<Expr>>, // Making it ephemeral if no specific worker instance
     },
+    Resource {
+        worker_name: Option<Box<Expr>>,
+        component_id: String,
+        resource_name: FullyQualifiedResourceConstructor,
+    },
 }
 
 impl InstanceCreationType {
     pub fn component_id(&self) -> String {
         match self {
             InstanceCreationType::Worker { component_id, .. } => component_id.clone(),
+            InstanceCreationType::Resource { component_id, .. } => component_id.clone(),
         }
     }
 
     pub fn worker_name(&self) -> Option<Expr> {
         match self {
             InstanceCreationType::Worker { worker_name, .. } => {
+                worker_name.clone().map(|w| w.deref().clone())
+            }
+            InstanceCreationType::Resource { worker_name, .. } => {
                 worker_name.clone().map(|w| w.deref().clone())
             }
         }

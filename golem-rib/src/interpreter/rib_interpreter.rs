@@ -2230,7 +2230,7 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr, FunctionTypeRegistry};
+        use crate::{compiler, Expr};
         use golem_wasm_rpc::IntoValueAndType;
         use test_r::test;
 
@@ -2241,9 +2241,8 @@ mod interpreter_tests {
               let result = x.foo("bar");
               result
             "#;
-            let mut expr = Expr::from_text(expr).unwrap();
-            let registry = FunctionTypeRegistry::from_export_metadata(&internal::get_metadata());
-            expr.infer_types(&registry, &vec![]).unwrap();
+            let expr = Expr::from_text(expr).unwrap();
+
             let component_metadata = internal::get_metadata();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
@@ -2257,11 +2256,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_first_class_worker_simple_ephemeral() {
-            // Ephemeral worker. Equivalent to:
-            // let worker = instance;
-            // let result worker.foo("bar");
-            // result
+        async fn test_first_class_worker_error_ambiguous_instance1() {
             let expr = r#"
               let result = instance.foo("bar");
               result
@@ -2269,20 +2264,33 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            let mut rib_interpreter =
-                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+            assert_eq!(compiled, "`instance` is a reserved keyword.\n note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name".to_string());
+        }
 
-            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+        #[test]
+        async fn test_first_class_worker_error_ambiguous_instance2() {
+            let expr = r#"
+              let instance = instance.foo("bar");
+              instance
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
 
-            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(
+                compiled,
+                "`instance` is a reserved keyword and cannot be used as a variable.".to_string()
+            );
         }
 
         #[test]
         async fn test_first_class_ephemeral_worker_ambiguous_interface() {
             let expr = r#"
-                let result = instance.bar("bar");
+                let x = instance();
+                let result = x.bar("bar");
                 result
             "#;
             let expr = Expr::from_text(expr).unwrap();
@@ -2482,6 +2490,26 @@ mod interpreter_tests {
             "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_13() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                worker.cart[golem:it]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
