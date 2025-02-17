@@ -117,12 +117,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
                 // This would
-                inferred_type => {
-                    return Err(format!(
-                        "Invalid worker function invoke. Expected {} to be an instance type, found {}",
-                        lhs, TypeName::try_from(inferred_type.clone()).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
-                    ));
-                }
+                _ => {}
             }
         }
         expr.visit_children_mut_bottom_up(&mut queue);

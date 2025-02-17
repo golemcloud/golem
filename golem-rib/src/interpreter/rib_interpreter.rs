@@ -2518,7 +2518,8 @@ mod interpreter_tests {
             );
         }
 
-        // This is a noop infact
+        // This resource construction is a Noop, and compiler can give warnings
+        // once we support warnings in the compiler
         #[test]
         async fn test_first_class_worker_13() {
             let expr = r#"
@@ -2538,6 +2539,29 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
+
+
+        #[test]
+        async fn test_first_class_worker_14() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+                let result = cart.add-item("mac");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;

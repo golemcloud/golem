@@ -646,10 +646,18 @@ impl Expr {
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.bind_instance_types();
+
+        // Identifying the first fix point with method calls to infer all
+        // worker function invocations as this forms the foundation for the rest of the
+        // compilation. This is compiler doing its best to infer all the calls such
+        // as worker invokes or instance calls etc.
+        type_inference::type_inference_fix_point(Self::resolve_method_calls, self)
+            .map_err(|x| vec![x])?;
+
         self.infer_worker_function_invokes().map_err(|x| vec![x])?;
-        // This has to go through some fix point iterations
-        //self.bind_instance_types();
-        //self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+
+        self.bind_instance_types();
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
 
@@ -681,6 +689,11 @@ impl Expr {
         self.infer_enums(function_type_registry);
 
         Ok(())
+    }
+
+    pub fn resolve_method_calls(&mut self) -> Result<(), String> {
+        self.bind_instance_types();
+        self.infer_worker_function_invokes()
     }
 
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
