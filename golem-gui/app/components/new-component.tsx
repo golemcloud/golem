@@ -218,7 +218,7 @@ export default function ComponentForm({
           rules={{
             required: "WASM file is mandatory!",
             validate: (value) =>
-              value?.type === "application/wasm" || "Invalid file type!",
+              value?.name.endsWith('.wasm') || "Invalid file type!",
           }}
           control={control}
           render={({ field }) => (

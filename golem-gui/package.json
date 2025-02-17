@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
@@ -31,6 +32,9 @@
     "@radix-ui/react-slot": "^1.1.2",
     "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.6",
+    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-http": "^2.3.0",
+    "@tauri-apps/plugin-websocket": "^2.3.0",
     "@xyflow/react": "^12.3.6",
     "axios": "^1.7.9",
     "class-variance-authority": "^0.7.1",
@@ -60,6 +64,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.2.7",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

@@ -1,26 +1,28 @@
+import { GolemError } from '@/types/api';
 import { EventMessage } from '@/types/api';
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { getErrorMessage } from '../utils';
+import WebSocket, { Message } from '@tauri-apps/plugin-websocket';
 
+type TauriWebSocket = Awaited<ReturnType<typeof WebSocket.connect>>;
 
-
-const websocketFetcher = (url: string) => {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => resolve(ws);
-    ws.onerror = (err) =>{ 
-      console.log("error occurred while connection to backend", err)
-      return reject("something went wrong!");}
-  });
+const websocketFetcher = async (url: string) => {
+  try {
+    const ws = await WebSocket.connect(url);
+    return ws;
+  } catch (err) {
+    console.error("Error connecting to WebSocket:", err);
+    throw new Error(getErrorMessage(err as GolemError | string));
+  }
 };
 
 export const useWebSocket = (url: string) => {
-  const { data: socket, error } = useSWR<WebSocket>(url, websocketFetcher, {
+  const { data: socket, error } = useSWR<TauriWebSocket>(url, websocketFetcher, {
     suspense: false,
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
+    shouldRetryOnError: false,
   });
 
   const [messages, setMessages] = useState<EventMessage[]>([]);
@@ -29,34 +31,55 @@ export const useWebSocket = (url: string) => {
   useEffect(() => {
     if (!socket) return;
 
-    const handleOpen = () => {
+    const handleMessage = (msg: Message) => {
+      if (typeof msg.data === 'string') {
+        try {
+          const parsedData = JSON.parse(msg.data) as EventMessage;
+          setMessages((prev) => [parsedData, ...prev].slice(0, 60));
+        } catch (err) {
+          console.error('Error parsing WebSocket message:', err);
+        }
+      } else {
+        console.warn('Received non-text message:', msg);
+      }
+    };
+
+    try {
+      socket.addListener(handleMessage);
       setIsConnected(true);
       console.log('WebSocket connection established');
-    };
-
-    const handleMessage = (event: MessageEvent) => {
-      setMessages((prev)=>[JSON.parse(event.data),...prev].slice(0, 60))
-    };
-
-    const handleClose = () => {
+    } catch (err) {
+      console.error('Error adding WebSocket listener:', err);
       setIsConnected(false);
-      console.log('WebSocket connection closed');
-    };
-
-    socket.onopen = handleOpen;
-    socket.onmessage = handleMessage;
-    socket.onclose = handleClose;
+    }
 
     return () => {
-      socket.close();
+      try {
+        socket.disconnect();
+        console.log('WebSocket disconnected');
+      } catch (err) {
+        console.error('Error during WebSocket cleanup:', err);
+      }
     };
   }, [socket]);
 
-  const sendMessage = (message: EventMessage) => {
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
+  const sendMessage = async (message: EventMessage) => {
+    if (socket && isConnected) {
+      try {
+        const payload = JSON.stringify(message);
+        if (typeof payload === 'string') {
+          await socket.send(payload);
+        } else {
+          console.error('Invalid message payload:', payload);
+        }
+      } catch (err) {
+        console.error('Error sending WebSocket message:', err);
+        setIsConnected(false);
+        throw err;
+      }
     } else {
-      console.error('WebSocket is not open');
+      console.error('WebSocket is not connected');
+      throw new Error('WebSocket is not connected');
     }
   };
 
@@ -64,26 +87,28 @@ export const useWebSocket = (url: string) => {
     messages,
     sendMessage,
     isConnected,
-    error,
+    error: error ? getErrorMessage(error) : undefined,
   };
 };
 
 function getBaseUrl() {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  const isSecure = window.location.protocol === 'https:';
-  //For demonstration purposes, if we use ngrok or port forwarding, the protocol might be set to https. Therefore, we use NEXT_PUBLIC_IS_LOCAL to implicitly treat it as a local environment.
-  const protocol = process.env.NEXT_PUBLIC_IS_LOCAL!== "true" && isSecure ? 'wss://' : 'ws://';
-  const host = process.env.NEXT_PUBLIC_BACKEND_API_URL?.replace(/^https?:\/\//, '');
-  return process.env.NEXT_PUBLIC_WEB_SOCKET_URL || `${protocol}${host}`;
+  const protocol = 'ws://';
+  const host = process.env.NEXT_PUBLIC_BACKEND_API_URL?.replace(/^https?:\/\//, '').replace(/\/$/, '') 
+    || 'localhost:9881';
+  return process.env.NEXT_PUBLIC_WEB_SOCKET_URL?.replace(/\/$/, '') || `${protocol}${host}`;
 }
 
 export const useWebSocketWithPath = (path: string) => {
   const baseUrl = getBaseUrl();
-  const fullUrl = `${baseUrl}/${path}`;
+  const cleanPath = path.replace(/^\//, '');
+  const fullUrl = `${baseUrl}/${cleanPath}`;
 
   const { messages, sendMessage, isConnected, error } = useWebSocket(fullUrl);
 
-  return { messages, sendMessage, isConnected, error: getErrorMessage(error) };
+  return { 
+    messages, 
+    sendMessage, 
+    isConnected, 
+    error 
+  };
 };

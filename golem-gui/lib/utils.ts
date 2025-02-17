@@ -4,14 +4,15 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { BACKEND_URL } from "@/lib/config";
 import { FieldErrors } from "react-hook-form";
+import { fetch } from '@tauri-apps/plugin-http';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export const getErrorMessage = (error: GolemError | string): string => {
+export const getErrorMessage = (error: GolemError | string | undefined): string => {
   if (!error) {
-    return "";
+    return "Unknown error";
   }
   if (typeof error === "string") {
     return error;
@@ -49,34 +50,32 @@ export function calculateSizeInMB(sizeInBytes: number): string {
 
 export const fetcher = async (url: string, options?: RequestInit) => {
   try {
-    const res = await fetch(`/api-backend/${url}`, options);
-    const isJson = res.headers
-      .get("content-type")
-      ?.includes("application/json");
-      const result = isJson ? await res.json() : await res.text();
+    const response= await fetch(`${BACKEND_URL}/${url}`,options);
+    const isJson = response.headers.get('content-type')?.includes('application/json');
+    const result = isJson ? await response.json() : await response.text();
 
-    if (res.status === 500) {
-      // throw getErrorMessage(result);
-      throw new Error(getErrorMessage(result))
+    if(response.status===500){
+      throw new Error(getErrorMessage(result));
     }
-
-
-    if (!res.ok) {
+    
+    if (!response.ok) {
       return {
         success: false,
         error: getErrorMessage(result),
-      };
+      }
     }
 
     return {
       success: true,
       data: result,
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (err: any) {
+  } catch (err) {
+    const errorMessage = err instanceof Error
+      ? err.message
+      : getErrorMessage(err as GolemError);
     return {
       success: false,
-      error: err?.message || "Error connecting to backend!",
+      error: errorMessage || "Error connecting to backend!",
     };
   }
 };
