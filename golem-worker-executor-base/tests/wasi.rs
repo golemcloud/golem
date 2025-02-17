@@ -16,7 +16,6 @@ use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -30,8 +29,8 @@ use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures_util::stream;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, IdempotencyKey, InitialComponentFile, WorkerStatus,
+    AccountId, ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
+    IdempotencyKey, WorkerStatus,
 };
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
@@ -226,35 +225,25 @@ async fn initial_file_read_write(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let account_id = AccountId {
-        value: "test-account".to_string(),
-    };
-
-    let file1_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/foo.txt"),
+    let component_files = executor
+        .add_initial_component_files(
+            &AccountId {
+                value: "test-account".to_string(),
+            },
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/baz.txt"),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key,
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = executor
         .component("initial-file-read-write")
@@ -297,40 +286,30 @@ async fn initial_file_listing_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let account_id = AccountId {
-        value: "test-account".to_string(),
-    };
-
-    let file1_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/foo.txt"),
+    let component_files = executor
+        .add_initial_component_files(
+            &AccountId {
+                value: "test-account".to_string(),
+            },
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt".into(),
+                    "/foo.txt".try_into().unwrap(),
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt".into(),
+                    "/bar/baz.txt".try_into().unwrap(),
+                    ComponentFilePermissions::ReadWrite,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt".into(),
+                    "/baz.txt".try_into().unwrap(),
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/baz.txt"),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-        InitialComponentFile {
-            key: file2_key,
-            path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = executor
         .component("initial-file-read-write")
@@ -396,35 +375,25 @@ async fn initial_file_reading_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let account_id = AccountId {
-        value: "test-account".to_string(),
-    };
-
-    let file1_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/foo.txt"),
+    let component_files = executor
+        .add_initial_component_files(
+            &AccountId {
+                value: "test-account".to_string(),
+            },
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt".into(),
+                    "/foo.txt".try_into().unwrap(),
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt".into(),
+                    "/bar/baz.txt".try_into().unwrap(),
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = executor
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/baz.txt"),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = executor
         .component("initial-file-read-write")

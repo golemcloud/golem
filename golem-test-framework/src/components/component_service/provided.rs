@@ -18,9 +18,11 @@ use crate::components::component_service::{
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 pub struct ProvidedComponentService {
+    component_directory: PathBuf,
     host: String,
     http_port: u16,
     grpc_port: u16,
@@ -31,6 +33,7 @@ pub struct ProvidedComponentService {
 
 impl ProvidedComponentService {
     pub async fn new(
+        component_directory: PathBuf,
         host: String,
         http_port: u16,
         grpc_port: u16,
@@ -38,6 +41,7 @@ impl ProvidedComponentService {
     ) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
+            component_directory,
             host: host.clone(),
             http_port,
             grpc_port,
@@ -61,6 +65,10 @@ impl ComponentService for ProvidedComponentService {
 
     fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
+    }
+
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn private_host(&self) -> String {

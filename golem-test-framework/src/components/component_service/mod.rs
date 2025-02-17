@@ -17,7 +17,7 @@ use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder, GolemEnvVars,
 };
 use crate::config::GolemClientProtocol;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -88,6 +88,8 @@ pub trait ComponentService {
     fn client_protocol(&self) -> GolemClientProtocol;
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
+
+    fn component_directory(&self) -> &Path;
 
     fn handles_ifs_upload(&self) -> bool {
         match self.client_protocol() {
@@ -194,7 +196,7 @@ pub trait ComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
     ) -> Component {
@@ -300,7 +302,7 @@ pub trait ComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         _unverified: bool,
     ) -> Result<Component, AddComponentError> {
@@ -313,7 +315,7 @@ pub trait ComponentService {
                 let component_type: golem_api_grpc::proto::golem::component::ComponentType =
                     component_type.into();
 
-                let files = files.iter().map(|f| f.clone().into()).collect();
+                let files = files.iter().map(|(_, f)| f.clone().into()).collect();
 
                 let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
                     data: Some(create_component_request::Data::Header(
@@ -381,7 +383,7 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
-                let archive = build_ifs_archive(Some(files)).await.map_err(|error| {
+                let archive = build_ifs_archive(self.component_directory(), Some(files)).await.map_err(|error| {
                     AddComponentError::Other(format!(
                         "Failed to build IFS archive golem-component-service add component: {error:?}"
                     ))
@@ -432,7 +434,7 @@ pub trait ComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let mut file = File::open(local_path)
@@ -450,7 +452,7 @@ pub trait ComponentService {
                     files
                         .into_iter()
                         .flatten()
-                        .map(|f| f.clone().into())
+                        .map(|(_, f)| f.clone().into())
                         .collect::<Vec<_>>();
 
                 let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
@@ -509,7 +511,7 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
-                let archive = match build_ifs_archive(files).await {
+                let archive = match build_ifs_archive(self.component_directory(), files).await {
                     Ok(archive) => archive,
                     Err(error) => panic!(
                         "Failed to build IFS archive in golem-component-service update component: {error:?}"
@@ -937,7 +939,7 @@ impl Display for AddComponentError {
 }
 
 fn to_http_file_permissions(
-    files: &[InitialComponentFile],
+    files: &[(PathBuf, InitialComponentFile)],
 ) -> Option<golem_common::model::ComponentFilePathWithPermissionsList> {
     if files.is_empty() {
         None
@@ -945,7 +947,7 @@ fn to_http_file_permissions(
         Some(golem_client::model::ComponentFilePathWithPermissionsList {
             values: files
                 .iter()
-                .map(|file| ComponentFilePathWithPermissions {
+                .map(|(_source, file)| ComponentFilePathWithPermissions {
                     path: file.path.clone(),
                     permissions: file.permissions,
                 })
@@ -1017,7 +1019,8 @@ fn to_grpc_component(component: golem_client::model::Component) -> Component {
 }
 
 async fn build_ifs_archive(
-    files: Option<&[InitialComponentFile]>,
+    component_directory: &Path,
+    files: Option<&[(PathBuf, InitialComponentFile)]>,
 ) -> crate::Result<Option<(TempDir, PathBuf)>> {
     static ARCHIVE_NAME: &str = "ifs.zip";
 
@@ -1032,11 +1035,13 @@ async fn build_ifs_archive(
     let temp_file = File::create(temp_dir.path().join(ARCHIVE_NAME)).await?;
     let mut zip_writer = ZipFileWriter::with_tokio(temp_file);
 
-    for file in files {
+    for (source_file, ifs_file) in files {
         zip_writer
             .write_entry_whole(
-                ZipEntryBuilder::new(file.key.0.clone().into(), Compression::Deflate),
-                &(fs::read(Path::new(file.path.as_path())).await?),
+                ZipEntryBuilder::new(ifs_file.path.to_string().into(), Compression::Deflate),
+                &(fs::read(&component_directory.join(source_file))
+                    .await
+                    .with_context(|| format!("source file path: {}", source_file.display()))?),
             )
             .await?;
     }

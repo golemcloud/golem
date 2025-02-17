@@ -276,6 +276,7 @@ impl EnvBasedTestDependencies {
         if config.golem_docker_services {
             Arc::new(
                 DockerComponentService::new(
+                    config.golem_test_components.clone(),
                     Some((
                         DockerComponentCompilationService::NAME,
                         DockerComponentCompilationService::GRPC_PORT.as_u16(),
@@ -290,6 +291,7 @@ impl EnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedComponentService::new(
+                    config.golem_test_components.clone(),
                     Path::new("../target/debug/golem-component-service"),
                     Path::new("../golem-component-service"),
                     8081,
@@ -517,8 +519,8 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.shard_manager.clone()
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.config.golem_test_components.clone()
+    fn component_directory(&self) -> &Path {
+        &self.config.golem_test_components
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {

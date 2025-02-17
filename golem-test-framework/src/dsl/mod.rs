@@ -42,7 +42,8 @@ use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope, Plugin
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, PluginInstallationId, WorkerStatus, WorkerStatusRecordExtensions,
+    AccountId, ComponentFilePermissions, PluginInstallationId, WorkerStatus,
+    WorkerStatusRecordExtensions,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
@@ -53,7 +54,7 @@ use golem_common::model::{
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -67,7 +68,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     component_type: ComponentType,
     unique: bool,
     unverified: bool,
-    files: Vec<InitialComponentFile>,
+    files: Vec<(PathBuf, InitialComponentFile)>,
     dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
 }
 
@@ -121,14 +122,14 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     }
 
     /// Set the initial files for the component
-    pub fn with_files(mut self, files: &[InitialComponentFile]) -> Self {
+    pub fn with_files(mut self, files: &[(PathBuf, InitialComponentFile)]) -> Self {
         self.files = files.to_vec();
         self
     }
 
     /// Adds an initial file to the component
-    pub fn add_file(mut self, file: InitialComponentFile) -> Self {
-        self.files.push(file);
+    pub fn add_file(mut self, source: PathBuf, file: InitialComponentFile) -> Self {
+        self.files.push((source, file));
         self
     }
 
@@ -182,7 +183,7 @@ pub trait TestDsl {
         component_type: ComponentType,
         unique: bool,
         unverified: bool,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
     ) -> (ComponentId, ComponentName);
 
@@ -194,7 +195,7 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
@@ -202,6 +203,27 @@ pub trait TestDsl {
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey;
+
+    async fn add_initial_component_files(
+        &self,
+        account_id: &AccountId,
+        files: &[(&str, &str, ComponentFilePermissions)],
+    ) -> Vec<(PathBuf, InitialComponentFile)> {
+        let mut added_files = Vec::<(PathBuf, InitialComponentFile)>::with_capacity(files.len());
+        for (source, target, permissions) in files {
+            added_files.push((
+                source.into(),
+                InitialComponentFile {
+                    key: self
+                        .add_initial_component_file(account_id, Path::new(source))
+                        .await,
+                    path: (*target).try_into().unwrap(),
+                    permissions: *permissions,
+                },
+            ))
+        }
+        added_files
+    }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -389,7 +411,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         component_type: ComponentType,
         unique: bool,
         unverified: bool,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
     ) -> (ComponentId, ComponentName) {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
@@ -460,10 +482,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey {
-        if self.component_service().handles_ifs_upload() {
-            return InitialComponentFileKey("dummy-ifs-key".to_string());
-        }
-
         let source_path = self.component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await
@@ -492,7 +510,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
@@ -1638,7 +1656,7 @@ pub trait TestDslUnsafe {
         component_type: ComponentType,
         unique: bool,
         unverified: bool,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
     ) -> (ComponentId, ComponentName);
 
@@ -1649,13 +1667,19 @@ pub trait TestDslUnsafe {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion;
+
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
         path: &Path,
     ) -> InitialComponentFileKey;
+    async fn add_initial_component_files(
+        &self,
+        account_id: &AccountId,
+        files: &[(&str, &str, ComponentFilePermissions)],
+    ) -> Vec<(PathBuf, InitialComponentFile)>;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -1818,7 +1842,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         component_type: ComponentType,
         unique: bool,
         unverified: bool,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
@@ -1845,7 +1869,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
@@ -1856,6 +1880,14 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         path: &Path,
     ) -> InitialComponentFileKey {
         <T as TestDsl>::add_initial_component_file(self, account_id, path).await
+    }
+
+    async fn add_initial_component_files(
+        &self,
+        account_id: &AccountId,
+        files: &[(&str, &str, ComponentFilePermissions)],
+    ) -> Vec<(PathBuf, InitialComponentFile)> {
+        <T as TestDsl>::add_initial_component_files(self, account_id, files).await
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {

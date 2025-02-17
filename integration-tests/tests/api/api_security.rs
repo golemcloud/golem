@@ -1,5 +1,5 @@
 use crate::{http_only, Tracing};
-use assert2::{assert, check};
+use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, GolemClientProtocol, TestDependencies,
@@ -17,14 +17,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
     http_only!(deps);
 
-    let security_scheme = SecuritySchemeData {
-        provider_type: Provider::Google,
-        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
-        client_id: "client_id".to_string(),
-        client_secret: "super_secret".to_string(),
-        redirect_url: "http://localhost/redirect-url".to_string(),
-        scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
-    };
+    let security_scheme = new_security_scheme();
 
     let created_security_scheme = deps
         .worker_service()
@@ -40,14 +33,7 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
 async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
     http_only!(deps);
 
-    let security_scheme = SecuritySchemeData {
-        provider_type: Provider::Google,
-        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
-        client_id: "client_id".to_string(),
-        client_secret: "super_secret".to_string(),
-        redirect_url: "http://localhost/redirect-url".to_string(),
-        scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
-    };
+    let security_scheme = new_security_scheme();
 
     deps.worker_service()
         .create_api_security_scheme(security_scheme.clone())
@@ -61,4 +47,15 @@ async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
         .unwrap();
 
     assert!(get_result == security_scheme);
+}
+
+fn new_security_scheme() -> SecuritySchemeData {
+    SecuritySchemeData {
+        provider_type: Provider::Google,
+        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
+        client_id: "client_id".to_string(),
+        client_secret: "super_secret".to_string(),
+        redirect_url: "http://localhost/redirect-url".to_string(),
+        scopes: vec!["custom-scope-1".to_string(), "custom-scope-2".to_string()],
+    }
 }

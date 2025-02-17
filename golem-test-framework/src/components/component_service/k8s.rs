@@ -29,12 +29,14 @@ use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct K8sComponentService {
+    component_directory: PathBuf,
     namespace: K8sNamespace,
     local_host: String,
     local_grpc_port: u16,
@@ -54,6 +56,7 @@ impl K8sComponentService {
     const NAME: &'static str = "golem-component-service";
 
     pub async fn new(
+        component_directory: PathBuf,
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
@@ -64,6 +67,7 @@ impl K8sComponentService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
+            component_directory,
             Box::new(GolemEnvVars()),
             namespace,
             routing_type,
@@ -78,6 +82,7 @@ impl K8sComponentService {
     }
 
     pub async fn new_base(
+        component_directory: PathBuf,
         env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
@@ -206,6 +211,7 @@ impl K8sComponentService {
         info!("Golem Component Service pod started");
 
         Self {
+            component_directory,
             local_host: grpc_routing.hostname.clone(),
             local_grpc_port: grpc_routing.port,
             local_http_port: http_routing.port,
@@ -245,6 +251,10 @@ impl ComponentService for K8sComponentService {
 
     fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
+    }
+
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn private_host(&self) -> String {

@@ -51,7 +51,7 @@ impl FileSystemComponentService {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> Result<Component, AddComponentError> {
@@ -99,7 +99,7 @@ impl FileSystemComponentService {
         let metadata = FilesystemComponentMetadata {
             version: component_version,
             component_type,
-            files: files.to_owned(),
+            files: files.iter().map(|(_source, file)| file.clone()).collect(),
             size,
             memories: memories.clone(),
             exports: exports.clone(),
@@ -131,7 +131,10 @@ impl FileSystemComponentService {
             project_id: None,
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
-            files: files.iter().map(|file| file.clone().into()).collect(),
+            files: files
+                .iter()
+                .map(|(_source, file)| file.clone().into())
+                .collect(),
             installed_plugins: vec![],
         })
     }
@@ -171,6 +174,8 @@ impl ComponentService for FileSystemComponentService {
         false
     }
 
+
+
     fn component_client(&self) -> ComponentServiceClient {
         panic!("No real component service running")
     }
@@ -184,7 +189,7 @@ impl ComponentService for FileSystemComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
     ) -> Component {
@@ -205,7 +210,7 @@ impl ComponentService for FileSystemComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
     ) -> Result<Component, AddComponentError> {
@@ -247,7 +252,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let target_dir = &self.root;
@@ -314,6 +319,10 @@ impl ComponentService for FileSystemComponentService {
         let path = target_dir.join(format!("{component_id}-{component_version}.wasm"));
         let metadata = tokio::fs::metadata(&path).await?;
         Ok(Some(metadata.len()))
+    }
+
+    fn component_directory(&self) -> &Path {
+        panic!("No real component service running")
     }
 
     fn private_host(&self) -> String {

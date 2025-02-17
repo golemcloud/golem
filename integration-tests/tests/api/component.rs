@@ -6,13 +6,11 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::Component;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType,
-    InitialComponentFile,
+    AccountId, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
-use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use tokio::join;
 use uuid::Uuid;
@@ -235,7 +233,7 @@ async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
         .unwrap();
 
     // Check metadata version
-    check!(result.versioned_component_id.unwrap().version == 4);
+    check!(result.versioned_component_id.unwrap().version == 3);
 }
 
 #[test]
@@ -248,34 +246,25 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
         .store_and_get_name()
         .await;
 
-    // Update component a few times while change type, ifs, dynamic link
-    let account_id = AccountId {
-        value: "test-account".to_string(),
-    };
-    let file1_key = deps
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/foo.txt"),
-        )
-        .await;
-    let file2_key = deps
-        .add_initial_component_file(
-            &account_id,
-            Path::new("initial-file-read-write/files/baz.txt"),
+    // Update component a few times while changing type, ifs, dynamic link
+    let files = deps
+        .add_initial_component_files(
+            &AccountId::placeholder(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/test-file-readonly",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/test-file-readwrite",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+            ],
         )
         .await;
 
-    let file_1 = InitialComponentFile {
-        key: file1_key,
-        path: ComponentFilePath::from_abs_str("/dummy-readonly").unwrap(),
-        permissions: ComponentFilePermissions::ReadOnly,
-    };
-
-    let file_2 = InitialComponentFile {
-        key: file2_key,
-        path: ComponentFilePath::from_abs_str("/dummy-readonly").unwrap(),
-        permissions: ComponentFilePermissions::ReadOnly,
-    };
     let link = (
         "dummy:dummy/dummy".to_string(),
         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -290,7 +279,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
-            Some(&[file_1.clone(), file_2.clone()]),
+            Some(&files),
             None,
         )
         .await;
@@ -348,15 +337,17 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
         check!(component.component_name == component_name.0, "{idx}");
 
         match idx {
-            1 => {
+            idx if idx >= 1 => {
                 assert!(component.files.len() == 2, "{idx}");
 
                 check!(
-                    InitialComponentFile::try_from(component.files[0].clone()).unwrap() == file_1,
+                    InitialComponentFile::try_from(component.files[0].clone()).unwrap()
+                        == files[0].1,
                     "{idx}"
                 );
                 check!(
-                    InitialComponentFile::try_from(component.files[1].clone()).unwrap() == file_2,
+                    InitialComponentFile::try_from(component.files[1].clone()).unwrap()
+                        == files[1].1,
                     "{idx}"
                 );
             }
