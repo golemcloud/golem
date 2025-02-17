@@ -56,6 +56,36 @@ pub enum InstanceType {
 }
 
 impl InstanceType {
+    pub fn set_worker_name(&mut self, worker_name: Expr) {
+        match self {
+            InstanceType::Global {
+                worker_name: wn, ..
+            } => {
+                *wn = Some(Box::new(worker_name));
+            }
+            InstanceType::Package {
+                worker_name: wn, ..
+            } => {
+                *wn = Some(Box::new(worker_name));
+            }
+            InstanceType::Interface {
+                worker_name: wn, ..
+            } => {
+                *wn = Some(Box::new(worker_name));
+            }
+            InstanceType::PackageInterface {
+                worker_name: wn, ..
+            } => {
+                *wn = Some(Box::new(worker_name));
+            }
+            InstanceType::Resource {
+                worker_name: wn, ..
+            } => {
+                *wn = Some(Box::new(worker_name));
+            }
+        }
+    }
+
     pub fn worker_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
             InstanceType::Global { worker_name, .. } => worker_name.as_mut(),

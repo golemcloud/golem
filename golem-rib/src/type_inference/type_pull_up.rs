@@ -800,6 +800,36 @@ mod internal {
                         });
                 }
 
+                let mut worker_in_inferred_type = None;
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    let worker = instance_type.worker_name();
+                    if let Some(worker) = worker {
+                        worker_in_inferred_type = Some(
+                            inferred_type_stack
+                                .pop_front()
+                                .unwrap_or(worker.deref().clone()),
+                        )
+                    }
+                };
+
+                let new_inferred_type = match worker_in_inferred_type {
+                    Some(worker) => match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            let mut new_instance_type = instance_type.clone();
+                            new_instance_type.set_worker_name(worker);
+
+                            InferredType::Instance {
+                                instance_type: new_instance_type,
+                            }
+                        }
+
+                        _ => inferred_type.clone(),
+                    },
+                    None => inferred_type.clone(),
+                };
+
+                // worker in the call type
                 let new_call = if let Some(worker) = worker {
                     let worker = inferred_type_stack
                         .pop_front()
@@ -812,7 +842,7 @@ mod internal {
                         },
                         None,
                         new_arg_exprs,
-                        inferred_type.clone(),
+                        new_inferred_type,
                     )
                 } else {
                     Expr::Call(
@@ -822,7 +852,7 @@ mod internal {
                         },
                         None,
                         new_arg_exprs,
-                        inferred_type.clone(),
+                        new_inferred_type,
                     )
                 };
 

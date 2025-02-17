@@ -210,7 +210,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Option(Some(expr), _, _) => queue.push_back(expr),
         Expr::Result(Ok(expr), _, _) => queue.push_back(expr),
         Expr::Result(Err(expr), _, _) => queue.push_back(expr),
-        Expr::Call(call_type, _, arguments, _) => {
+        Expr::Call(call_type, _, arguments, inferred_type) => {
             if let CallType::Function {
                 function_name,
                 worker,
@@ -220,6 +220,14 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
                     queue.extend(params.iter())
                 }
 
+                // Worker in InstanceType
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(worker_expr) = instance_type.worker() {
+                        queue.push_back(worker_expr);
+                    }
+                }
+
+                // Worker in Call Expression
                 if let Some(worker) = worker {
                     queue.push_back(worker);
                 }
