@@ -53,8 +53,8 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
               <Typography className="md:text-2xl sm:text-xl text-lg">
                 {heading}
               </Typography>
-              <IconButton onClick={onClose} className="text-muted-foreground">
-                <CloseIcon />
+              <IconButton onClick={onClose}>
+                <CloseIcon className="text-muted-foreground"/>
               </IconButton>
             </Box>
             {subheading && (
