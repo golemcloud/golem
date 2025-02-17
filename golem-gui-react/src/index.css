@@ -17,6 +17,7 @@ body {
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
+    --card-secondary: 0, 0%, 95%;
     --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 3.9%;
@@ -48,6 +49,7 @@ body {
     --background: 0 0% 8.5%;
     --foreground: 0 0% 98%;
     --card: 0 0% 8.5%;
+    --card-secondary: 0, 0%, 13%;
     --card-foreground: 0 0% 98%;
     --popover: 0 0% 8.5%;
     --popover-foreground: 0 0% 98%;
@@ -75,6 +77,60 @@ body {
 }
 
 
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-secondary: hsl(var(--card-secondary));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-silver: hsl(var(--silver));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  --color-button-bg: hsl(var(--button-background));
+  --color-button-border: hsl(var(--button-border));
+
+  /* Border Radius */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  /* Box Shadows */
+  --shadow-custom: 0px 3px 10px 1px #666;
+}
+
+
+
+/* ----------------- Custom styling for material ui components ----------------------*/
+
+
 .dark {
   .MuiSelect-root {
     background-color: #555;
@@ -82,13 +138,12 @@ body {
   }
 
   .MuiPaper-root {
-    background-color: #222;
-    color:white
+    @apply bg-card-secondary text-foreground border border-border;
   }
 
   /* outline for input border initially */
   .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline {
-    border-color: hsl(var(--border));
+    @apply border-border;
   }
 
   /* outline color on focus */
@@ -112,18 +167,26 @@ body {
 }
 
 
+
+
+
+
 .light{
-  /* .MuiInputLabel-root {
+  .MuiInputLabel-root {
     @apply text-muted-foreground;
-  } */
+  }
   .Mui-focused .MuiOutlinedInput-notchedOutline {
     border:1px solid #888;
   }
   .MuiPaper-root {
-    background-color: white;
+    @apply bg-card-secondary text-foreground border border-border;
   }
 }
 
+
+
+
+/* ----------------- Custom styling for react-paginate ----------------------*/
 
 /* Dark Mode Styles */
 .dark .pagination .MuiPaginationItem-root {
