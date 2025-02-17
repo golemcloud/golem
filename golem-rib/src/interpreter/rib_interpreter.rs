@@ -2711,7 +2711,6 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
-        #[ignore]
         #[test]
         async fn test_first_class_worker_22() {
             let expr = r#"
