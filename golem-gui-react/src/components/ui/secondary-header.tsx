@@ -228,7 +228,7 @@ export default function SecondaryHeader({
         )}
 
         {pathname === `/components/${compId}/overview` && (
-          <Box className="flex items-center justify-between w-full">
+          <Box className="flex items-center justify-between w-full h-1/5">
             <ComponentVersionFilter showFilter={true} />
            <Box sx={{ marginLeft: "auto", display: "flex", gap: 2 }}>
            {!hideNew &&<Button2
