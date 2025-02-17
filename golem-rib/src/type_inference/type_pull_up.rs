@@ -71,7 +71,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::InvokeLazy { .. } => {
+            Expr::InvokeMethodLazy { .. } => {
                 Err("Internal compiler error: Invoke expression cannot be part of type pull up phase".to_string())?;
             }
 

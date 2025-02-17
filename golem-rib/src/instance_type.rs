@@ -3,9 +3,20 @@ use crate::type_parameter::InterfaceName;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
 };
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
+use golem_api_grpc::proto::golem::rib::{
+    function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
+    FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
+    FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod,
+    FunctionDictionary as ProtoFunctionDictionary, FunctionNameType as ProtoFunctionName,
+    FunctionType as ProtoFunctionType, InstanceType as ProtoInstanceType,
+    InterfaceName as ProtoInterfaceName, PackageName as ProtoPackageName,
+    ResourceMethodDictionary as ProtoResourceMethodDictionary,
+};
+use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+use std::fmt::Display;
 
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -176,7 +187,7 @@ impl InstanceType {
     }
     pub fn get_function(
         &self,
-        function_name: &str,
+        method_name: &str,
         type_parameter: Option<TypeParameter>,
     ) -> Result<Function, String> {
         match type_parameter {
@@ -195,13 +206,13 @@ impl InstanceType {
 
                     let functions = interfaces
                         .into_iter()
-                        .filter(|(f, _)| f.name() == function_name)
+                        .filter(|(f, _)| f.name() == method_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
                         return Err(format!(
                             "Function '{}' not found in interface '{}'",
-                            function_name, iface
+                            method_name, iface
                         ));
                     }
 
@@ -214,7 +225,7 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, function_name)
+                        search_function_in_instance(self, method_name)
                     }
                 }
 
@@ -232,13 +243,13 @@ impl InstanceType {
 
                     let functions = packages
                         .into_iter()
-                        .filter(|(f, _)| f.name() == function_name)
+                        .filter(|(f, _)| f.name() == method_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
                         return Err(format!(
                             "Function '{}' not found in package {}",
-                            function_name, pkg
+                            method_name, pkg
                         ));
                     }
 
@@ -249,7 +260,7 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, function_name)
+                        search_function_in_instance(self, method_name)
                     }
                 }
 
@@ -261,14 +272,14 @@ impl InstanceType {
                         .filter(|(f, _)| {
                             f.package_name() == Some(fq_iface.package_name.clone())
                                 && f.interface_name() == Some(fq_iface.interface_name.clone())
-                                && f.name() == function_name
+                                && f.name() == method_name
                         })
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
                         return Err(format!(
                             "Function '{}' not found in interface '{}'",
-                            function_name, fq_iface
+                            method_name, fq_iface
                         ));
                     }
 
@@ -279,11 +290,11 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, function_name)
+                        search_function_in_instance(self, method_name)
                     }
                 }
             },
-            None => search_function_in_instance(self, function_name),
+            None => search_function_in_instance(self, method_name),
         }
     }
 
@@ -577,9 +588,9 @@ impl FunctionName {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedResourceConstructor {
-    package_name: Option<PackageName>,
-    interface_name: Option<InterfaceName>,
-    resource_name: String,
+    pub package_name: Option<PackageName>,
+    pub interface_name: Option<InterfaceName>,
+    pub resource_name: String,
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -764,13 +775,6 @@ fn search_function_in_multiple_packages(
     Err(error_msg)
 }
 
-
-use std::convert::TryFrom;
-use combine::parser::combinator::Try;
-use golem_api_grpc::proto::golem::rib::{InstanceType as ProtoInstanceType, GlobalInstance, PackageInstance, InterfaceInstance, PackageInterfaceInstance, ResourceInstance, FunctionDictionary as ProtoFunctionDictionary, FunctionEntry, ResourceMethodDictionary as ProtoResourceMethodDictionary, ResourceMethodEntry, FunctionType as ProtoFunctionType, FunctionNameType as ProtoFunctionName, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName, FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor, FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod, PackageName as ProtoPackageName, InterfaceName as ProtoInterfaceName, Expr as ProtoExpr, function_name_type};
-use golem_wasm_ast::analysis::AnalysedType;
-
-// Convert ProtoFunctionType -> FunctionType
 impl TryFrom<ProtoFunctionType> for FunctionType {
     type Error = String;
 
@@ -782,7 +786,7 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
 
         let mut return_type = Vec::new();
         for ret in proto.return_type {
-            return_type.push( InferredType::from(AnalysedType::try_from(&ret)?));
+            return_type.push(InferredType::from(AnalysedType::try_from(&ret)?));
         }
 
         Ok(Self {
@@ -792,12 +796,33 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
     }
 }
 
+impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
+    type Error = String;
+
+    fn try_from(proto: ProtoResourceMethodDictionary) -> Result<Self, Self::Error> {
+        let mut map = Vec::new();
+        for resource_method_entry in proto.map {
+            let resource_method = resource_method_entry
+                .key
+                .ok_or("Resource method not found")?;
+            let function_type = resource_method_entry
+                .value
+                .ok_or("Function type not found")?;
+            let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
+            let function_type = FunctionType::try_from(function_type)?;
+            map.push((resource_method, function_type));
+        }
+        Ok(ResourceMethodDictionary { map })
+    }
+}
+
 impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
     type Error = String;
 
-    fn try_from(proto: ProtoFunctionDictionary) -> Result<Self, Self::Error> {
+    fn try_from(value: ProtoFunctionDictionary) -> Result<Self, Self::Error> {
         let mut map = Vec::new();
-        for function_entry in proto.map {
+
+        for function_entry in value.map {
             let function_name = function_entry.key.ok_or("Function name not found")?;
             let function_type = function_entry.value.ok_or("Function type not found")?;
 
@@ -805,23 +830,8 @@ impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
             let function_type = FunctionType::try_from(function_type)?;
             map.push((function_name, function_type));
         }
+
         Ok(FunctionDictionary { map })
-    }
-}
-
-impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
-    type Error = String;
-
-    fn try_from(proto: ProtoResourceMethodDictionary) -> Result<Self, Self::Error> {
-        let mut map = Vec::new();
-        for resource_method_entry in proto.map {
-            let resource_method = resource_method_entry.key.ok_or("Resource method not found")?;
-            let function_type = resource_method_entry.value.ok_or("Function type not found")?;
-            let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
-            let function_type = FunctionType::try_from(function_type)?;
-            map.push((resource_method, function_type));
-        }
-        Ok(ResourceMethodDictionary { map })
     }
 }
 
@@ -891,9 +901,157 @@ impl TryFrom<ProtoFunctionName> for FunctionName {
     fn try_from(proto: ProtoFunctionName) -> Result<Self, Self::Error> {
         let proto_function_name = proto.function_name.ok_or("Function name not found")?;
         match proto_function_name {
-            function_name_type::FunctionName::Function(fqfn) => Ok(FunctionName::Function(TryFrom::try_from(fqfn)?)),
-            function_name_type::FunctionName::ResourceConstructor(fqfn) => Ok(FunctionName::ResourceConstructor(TryFrom::try_from(fqfn)?)),
-            function_name_type::FunctionName::ResourceMethod(fqfn) => Ok(FunctionName::ResourceMethod(TryFrom::try_from(fqfn)?)),
+            function_name_type::FunctionName::Function(fqfn) => {
+                Ok(FunctionName::Function(TryFrom::try_from(fqfn)?))
+            }
+            function_name_type::FunctionName::ResourceConstructor(fqfn) => {
+                Ok(FunctionName::ResourceConstructor(TryFrom::try_from(fqfn)?))
+            }
+            function_name_type::FunctionName::ResourceMethod(fqfn) => {
+                Ok(FunctionName::ResourceMethod(TryFrom::try_from(fqfn)?))
+            }
+        }
+    }
+}
+
+impl TryFrom<ProtoInstanceType> for InstanceType {
+    type Error = String;
+
+    fn try_from(value: ProtoInstanceType) -> Result<Self, Self::Error> {
+        let instance = value.instance.ok_or("Instance not found")?;
+
+        match instance {
+            Instance::Global(global_instance) => {
+                let functions_global = global_instance
+                    .functions_global
+                    .ok_or("Functions global not found")?;
+
+                Ok(InstanceType::Global {
+                    worker_name: global_instance
+                        .worker_name
+                        .map(Expr::try_from)
+                        .transpose()?
+                        .map(Box::new),
+                    functions_global: TryFrom::try_from(functions_global)?,
+                })
+            }
+            Instance::Package(package_instance) => {
+                let package_name = package_instance
+                    .package_name
+                    .ok_or("Package name not found")?;
+                let functions_in_package = package_instance
+                    .functions_in_package
+                    .ok_or("Functions in package not found")?;
+
+                Ok(InstanceType::Package {
+                    worker_name: package_instance
+                        .worker_name
+                        .map(Expr::try_from)
+                        .transpose()?
+                        .map(Box::new),
+                    package_name: TryFrom::try_from(package_name)?,
+                    functions_in_package: TryFrom::try_from(functions_in_package)?,
+                })
+            }
+            Instance::Interface(interface_instance) => {
+                let interface_name = interface_instance
+                    .interface_name
+                    .ok_or("Interface name not found")?;
+                let functions_in_interface = interface_instance
+                    .functions_in_interface
+                    .ok_or("Functions in interface not found")?;
+
+                Ok(InstanceType::Interface {
+                    worker_name: interface_instance
+                        .worker_name
+                        .map(Expr::try_from)
+                        .transpose()?
+                        .map(Box::new),
+                    interface_name: TryFrom::try_from(interface_name)?,
+                    functions_in_interface: TryFrom::try_from(functions_in_interface)?,
+                })
+            }
+            Instance::PackageInterface(package_interface_instance) => {
+                let functions_in_package_interface = package_interface_instance
+                    .functions_in_package_interface
+                    .ok_or("Functions in package interface not found")?;
+
+                let interface_name = package_interface_instance
+                    .interface_name
+                    .ok_or("Interface name not found")?;
+                let package_name = package_interface_instance
+                    .package_name
+                    .ok_or("Package name not found")?;
+
+                Ok(InstanceType::PackageInterface {
+                    worker_name: package_interface_instance
+                        .worker_name
+                        .map(Expr::try_from)
+                        .transpose()?
+                        .map(Box::new),
+                    package_name: TryFrom::try_from(package_name)?,
+                    interface_name: TryFrom::try_from(interface_name)?,
+                    functions_in_package_interface: TryFrom::try_from(
+                        functions_in_package_interface,
+                    )?,
+                })
+            }
+            Instance::Resource(resource_instance) => {
+                let resource_method_dict = resource_instance
+                    .resource_method_dict
+                    .ok_or("Resource method dictionary not found")?;
+                Ok(InstanceType::Resource {
+                    worker_name: resource_instance
+                        .worker_name
+                        .map(Expr::try_from)
+                        .transpose()?
+                        .map(Box::new),
+                    package_name: resource_instance
+                        .package_name
+                        .map(TryFrom::try_from)
+                        .transpose()?,
+                    interface_name: resource_instance
+                        .interface_name
+                        .map(TryFrom::try_from)
+                        .transpose()?,
+                    resource_constructor: resource_instance.resource_constructor,
+                    resource_args: resource_instance
+                        .resource_args
+                        .into_iter()
+                        .map(TryFrom::try_from)
+                        .collect::<Result<Vec<Expr>, String>>()?,
+                    resource_method_dict: TryFrom::try_from(resource_method_dict)?,
+                })
+            }
+        }
+    }
+}
+
+impl From<PackageName> for ProtoPackageName {
+    fn from(value: PackageName) -> Self {
+        ProtoPackageName {
+            namespace: value.namespace,
+            package_name: value.package_name,
+            version: value.version,
+        }
+    }
+}
+
+impl From<InterfaceName> for ProtoInterfaceName {
+    fn from(value: InterfaceName) -> Self {
+        ProtoInterfaceName {
+            name: value.name,
+            version: value.version,
+        }
+    }
+}
+
+impl From<FullyQualifiedResourceConstructor> for ProtoFullyQualifiedResourceConstructor {
+    fn from(value: FullyQualifiedResourceConstructor) -> Self {
+        ProtoFullyQualifiedResourceConstructor {
+            package_name: value.package_name.map(ProtoPackageName::from),
+            interface_name: value.interface_name.map(ProtoInterfaceName::from),
+            resource_name: value.resource_name,
         }
     }
 }

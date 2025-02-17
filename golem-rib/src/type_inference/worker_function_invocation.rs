@@ -12,9 +12,9 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
     queue.push_back(expr);
 
     while let Some(expr) = queue.pop_back() {
-        if let Expr::InvokeLazy {
+        if let Expr::InvokeMethodLazy {
             lhs,
-            function_name,
+            method,
             generic_type_parameter,
             args,
             ..
@@ -34,9 +34,9 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
 
                     // resource.cart("x, y, z")
                     // resource is of the type instance type
-                    let function = instance_type.get_function(function_name, type_parameter)?;
+                    let fqn = instance_type.get_function(method, type_parameter)?;
 
-                    match function.function_name {
+                    match fqn.function_name {
                         FunctionName::Function(function_name) => {
                             let dynamic_parsed_function_name = function_name.to_string();
                             let dynamic_parsed_function_name =

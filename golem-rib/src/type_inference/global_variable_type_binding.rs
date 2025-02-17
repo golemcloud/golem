@@ -318,7 +318,7 @@ mod internal {
                     );
                 }
 
-                Expr::InvokeLazy { .. } => {
+                Expr::InvokeMethodLazy { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
 

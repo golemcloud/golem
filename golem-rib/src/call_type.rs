@@ -92,8 +92,72 @@ impl Display for CallType {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::call_type::CallType;
-    use crate::{DynamicParsedFunctionName, ParsedFunctionName};
+    use crate::call_type::{CallType, InstanceCreationType};
+    use crate::instance_type::FullyQualifiedResourceConstructor;
+    use crate::{DynamicParsedFunctionName, Expr, ParsedFunctionName};
+    use golem_api_grpc::proto::golem::rib::WorkerInstance;
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::InstanceCreationType> for InstanceCreationType {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::InstanceCreationType,
+        ) -> Result<Self, Self::Error> {
+            match value.kind.ok_or("Missing instance creation kind")? {
+                golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(
+                    worker_instance,
+                ) => {
+                    let worker_name = worker_instance
+                        .worker_name
+                        .map(|w| Expr::try_from(*w))
+                        .transpose()?
+                        .map(Box::new);
+
+                    Ok(InstanceCreationType::Worker { worker_name })
+                }
+                golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
+                    resource_instance,
+                ) => {
+                    let worker_name = resource_instance
+                        .worker_name
+                        .map(|w| Expr::try_from(*w))
+                        .transpose()?
+                        .map(Box::new);
+                    let resource_constructor_proto = resource_instance
+                        .resource_name
+                        .ok_or("Missing resource name")?;
+                    let resource_name =
+                        FullyQualifiedResourceConstructor::try_from(resource_constructor_proto)?;
+
+                    Ok(InstanceCreationType::Resource {
+                        worker_name,
+                        resource_name,
+                    })
+                }
+            }
+        }
+    }
+
+    impl From<InstanceCreationType> for golem_api_grpc::proto::golem::rib::InstanceCreationType {
+        fn from(value: InstanceCreationType) -> Self {
+            match value {
+                InstanceCreationType::Worker { worker_name } => {
+                    golem_api_grpc::proto::golem::rib::InstanceCreationType {
+                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                            worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                        }))),
+                    }
+                }
+                InstanceCreationType::Resource { worker_name, resource_name } => {
+                    golem_api_grpc::proto::golem::rib::InstanceCreationType {
+                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
+                            worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                            resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
+                        }))),
+                    }
+                }
+            }
+        }
+    }
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::CallType> for CallType {
         type Error = String;
@@ -101,11 +165,16 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::rib::CallType,
         ) -> Result<Self, Self::Error> {
             let invocation = value.name.ok_or("Missing name of invocation")?;
+            let worker = value
+                .worker_name
+                .map(|w| Expr::try_from(*w))
+                .transpose()?
+                .map(Box::new);
             match invocation {
                 golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
                     Ok(CallType::Function {
                         function_name: DynamicParsedFunctionName::try_from(name)?,
-                        worker: todo!(),
+                        worker,
                     })
                 }
                 golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
@@ -113,6 +182,13 @@ mod protobuf {
                 }
                 golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name) => {
                     Ok(CallType::EnumConstructor(name))
+                }
+
+                golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
+                    instance_creation,
+                ) => {
+                    let instance_creation = InstanceCreationType::try_from(*instance_creation)?;
+                    Ok(CallType::InstanceCreation(instance_creation))
                 }
             }
         }
@@ -125,11 +201,13 @@ mod protobuf {
                     worker,
                     function_name,
                 } => golem_api_grpc::proto::golem::rib::CallType {
+                    worker_name: worker.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                     name: Some(golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(
                         function_name.into(),
                     )),
                 },
                 CallType::VariantConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
+                    worker_name: None,
                     name: Some(
                         golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                             name,
@@ -137,12 +215,39 @@ mod protobuf {
                     ),
                 },
                 CallType::EnumConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
+                    worker_name: None,
                     name: Some(
                         golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name),
                     ),
                 },
-                CallType::InstanceCreation(_) => {
-                    todo!("InstanceCreation not supported in protobuf")
+                CallType::InstanceCreation(instance_creation) => {
+                    match instance_creation {
+                        InstanceCreationType::Worker { worker_name } => {
+                            golem_api_grpc::proto::golem::rib::CallType {
+                                worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
+                                    Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
+                                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                                            worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                        }))),
+                                    })
+                                )),
+                            }
+                        }
+                        InstanceCreationType::Resource { worker_name, resource_name } => {
+                            golem_api_grpc::proto::golem::rib::CallType {
+                                worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
+                                    Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
+                                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
+                                            worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                            resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
+                                        }))),
+                                    })
+                                )),
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -161,7 +266,7 @@ mod protobuf {
             match invocation {
                 golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
                     Ok(CallType::Function {
-                        worker: todo!("Worker not supported in protobuf"),
+                        worker: None,
                         function_name: DynamicParsedFunctionName::parse(
                             ParsedFunctionName::try_from(name)?.to_string(),
                         )?,

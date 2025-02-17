@@ -129,7 +129,7 @@ mod internal {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::InvokeLazy { inferred_type, .. }
+            | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 *inferred_type = new_type;
             }

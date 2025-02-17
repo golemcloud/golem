@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
+use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
@@ -66,8 +66,8 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
-    // instance("my-worker") will be simply be parsed Expr::Call("instance", vec!["my-worker"])
-    // or as we go, instance[ns:pkg]("my-worker") will be parsed as Expr::Call("instance", vec!["my-worker"])
+    // instance[t]("my-worker") will be parsed sd Expr::Call("instance", Some(t), vec!["my-worker"])
+    // will be parsed as Expr::Call("instance", vec!["my-worker"]).
     // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call(InstanceCreation,..)
     // with inferred-type as `InstanceType`. This way any variables attached to the instance creation
     // will be having the `InstanceType`.
@@ -78,15 +78,16 @@ pub enum Expr {
         InferredType,
     ),
     // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
-    // such that `my-worker-variable-expr` will be of the type `InferredType::InstanceType`
+    // such that `my-worker-variable-expr` (lhs) will be of the type `InferredType::InstanceType`. `lhs` will
+    // be `Expr::Call(InstanceCreation)` with type `InferredType::InstanceType`.
     // As part of a separate type inference phase this will be converted back to `Expr::Call` with fully
     // qualified function names (the complex version) which further takes part in all other type inference phases.
-    InvokeLazy {
+    InvokeMethodLazy {
         lhs: Box<Expr>,
-        function_name: String,
+        method: String,
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
-        inferred_type: InferredType, // This will be the return type of the function similar to Call
+        inferred_type: InferredType,
     },
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
@@ -295,9 +296,9 @@ impl Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
     ) -> Self {
-        Expr::InvokeLazy {
+        Expr::InvokeMethodLazy {
             lhs: Box::new(lhs),
-            function_name,
+            method: function_name,
             generic_type_parameter,
             args,
             inferred_type: InferredType::Unknown,
@@ -639,7 +640,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type)
-            | Expr::InvokeLazy { inferred_type, .. } => inferred_type.clone(),
+            | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -827,7 +828,7 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::InvokeLazy { inferred_type, .. }
+            | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -876,7 +877,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::InvokeLazy { inferred_type, .. }
+            | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -921,7 +922,6 @@ impl Expr {
         Expr::number(big_decimal, None, InferredType::number())
     }
 
-    // TODO; introduced to minimise the number of changes in tests.
     pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
         Expr::number(big_decimal, Some(type_name), InferredType::number())
     }
@@ -1470,9 +1470,39 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
                             ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, None, params),
+                            golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
+                                let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
+                                let call_type = CallType::InstanceCreation(instance_creation_type);
+                                Expr::Call(
+                                    call_type,
+                                    None,
+                                    vec![],
+                                    InferredType::Unknown
+                                )
+                            }
                         }
                     }
                     (_, _) => Err("Missing both call type (and legacy invocation type)")?,
+                }
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(lazy_invoke) => {
+                let lhs_proto = lazy_invoke.lhs.ok_or("Missing lhs")?;
+                let lhs = Box::new((*lhs_proto).try_into()?);
+                let method = lazy_invoke.method;
+                let generic_type_parameter = lazy_invoke.generic_type_parameter;
+                let args: Vec<Expr> = lazy_invoke
+                    .args
+                    .into_iter()
+                    .map(|expr| Expr::try_from(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter: generic_type_parameter
+                        .map(|value| GenericTypeParameter { value }),
+                    args,
+                    inferred_type: InferredType::Unknown,
                 }
             }
         };
@@ -1755,13 +1785,16 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Call(function_name, _, args, _) => {
+                Expr::Call(function_name, generic_type_parameter, args, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
-                        golem_api_grpc::proto::golem::rib::CallExpr {
-                            name: None,
+                        Box::new(golem_api_grpc::proto::golem::rib::CallExpr {
+                            name: None, // Kept for backward compatibility
                             params: args.into_iter().map(|expr| expr.into()).collect(),
-                            call_type: Some(function_name.into()),
-                        },
+                            generic_type_parameter: generic_type_parameter.map(|t| t.value),
+                            call_type: Some(Box::new(
+                                golem_api_grpc::proto::golem::rib::CallType::from(function_name),
+                            )),
+                        }),
                     ))
                 }
                 Expr::Unwrap(expr, _) => {
@@ -1829,9 +1862,22 @@ mod protobuf {
                         yield_expr: Some(Box::new((*yield_expr).into())),
                     }),
                 )),
-                Expr::InvokeLazy { .. } => {
-                    todo!("Invoke is not supported in protobuf serialization")
-                }
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter,
+                    args,
+                    ..
+                } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(Box::new(
+                        golem_api_grpc::proto::golem::rib::LazyInvokeMethodExpr {
+                            lhs: Some(Box::new((*lhs).into())),
+                            method,
+                            generic_type_parameter: generic_type_parameter.map(|t| t.value),
+                            args: args.into_iter().map(|expr| expr.into()).collect(),
+                        },
+                    )),
+                ),
             };
 
             golem_api_grpc::proto::golem::rib::Expr { expr }

@@ -12,7 +12,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Let(_, _, expr, _) => {
                 queue.push_back(expr);
             }
-            Expr::InvokeLazy {
+            Expr::InvokeMethodLazy {
                 lhs,
                 args,
                 inferred_type,

@@ -395,9 +395,7 @@ mod internal {
                     queue.push_back(worker);
                 }
 
-                let exprs = function_name.raw_resource_params_mut();
-
-                for expr in exprs {
+                if let Some(expr) = function_name.raw_resource_params_mut() {
                     queue.extend(expr);
                 }
 

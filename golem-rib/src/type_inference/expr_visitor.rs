@@ -117,7 +117,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(yield_expr);
         }
 
-        Expr::InvokeLazy {
+        Expr::InvokeMethodLazy {
             lhs,
             args,
             inferred_type,
@@ -281,7 +281,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::GetTag(expr, _) => {
             queue.push_back(expr);
         }
-        Expr::InvokeLazy {
+        Expr::InvokeMethodLazy {
             lhs,
             args,
             inferred_type,
@@ -445,7 +445,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(yield_expr);
         }
 
-        Expr::InvokeLazy {
+        Expr::InvokeMethodLazy {
             lhs,
             args,
             inferred_type,
