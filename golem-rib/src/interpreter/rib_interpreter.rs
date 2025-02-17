@@ -2308,7 +2308,8 @@ mod interpreter_tests {
         #[test]
         async fn test_first_class_durable_worker_simple() {
             let expr = r#"
-                let worker = instance("my-worker");
+                let xxxxx = "my-worker";
+                let worker = instance(xxxxx);
                 let result = worker.foo("bar");
                 result
             "#;
@@ -2685,6 +2686,37 @@ mod interpreter_tests {
         async fn test_first_class_worker_21() {
             let expr = r#"
                 let worker = instance("my-worker");
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.remove-item(a);
+                cart.update-item-quantity(a, 2);
+                let result = cart.get-cart-contents();
+                cart.drop();
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[ignore]
+        #[test]
+        async fn test_first_class_worker_22() {
+            let expr = r#"
+                let my_worker = "my-worker";
+                let worker = instance(my_worker);
                 let a = "mac";
                 let b = "apple";
                 let c = 1;

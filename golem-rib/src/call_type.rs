@@ -53,6 +53,12 @@ impl InstanceCreationType {
 }
 
 impl CallType {
+    pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
+        match self {
+            CallType::Function { worker, .. } => worker.as_mut(),
+            _ => None,
+        }
+    }
     pub fn function_without_worker(function: DynamicParsedFunctionName) -> CallType {
         CallType::Function {
             worker: None,

@@ -222,10 +222,31 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
             Expr::Call(function_call, _, vec, inferred_type) => {
+
                 queue.extend(vec.iter_mut());
 
                 match function_call {
+                    // We don't care about anything inside instance creation
                     CallType::InstanceCreation(_) => {}
+                    // Make sure worker expression in function
+                    CallType::Function { worker, function_name } => {
+                        if let Some(worker) = worker {
+                            queue.push(worker);
+                        }
+
+                        let unified_inferred_type = inferred_type.unify();
+
+                        match unified_inferred_type {
+                            Ok(unified_type) => *inferred_type = unified_type,
+                            Err(e) => {
+                                errors.push(format!(
+                                    "unable to infer the type of function return {}, {}",
+                                    function_name, e
+                                ));
+                            }
+                        }
+                    }
+
                     _ => {
                         let unified_inferred_type = inferred_type.unify();
 

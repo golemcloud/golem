@@ -56,6 +56,26 @@ pub enum InstanceType {
 }
 
 impl InstanceType {
+    pub fn worker_mut(&mut self) -> Option<&mut Box<Expr>> {
+        match self {
+            InstanceType::Global { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Package { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Interface { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Resource { worker_name, .. } => worker_name.as_mut(),
+        }
+    }
+
+    pub fn worker(&self) -> Option<&Box<Expr>> {
+        match self {
+            InstanceType::Global { worker_name, .. } => worker_name.as_ref(),
+            InstanceType::Package { worker_name, .. } => worker_name.as_ref(),
+            InstanceType::Interface { worker_name, .. } => worker_name.as_ref(),
+            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_ref(),
+            InstanceType::Resource { worker_name, .. } => worker_name.as_ref(),
+        }
+    }
+
     // Get InstanceType::Resource from the fully qualified resource constructor
     // from an existing instance type
     pub fn get_resource_instance_type(
