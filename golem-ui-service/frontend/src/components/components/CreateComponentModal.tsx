@@ -1,12 +1,13 @@
 import {
-Cloud,
-FileIcon,
-Folder,
-Loader2,
-Plus,
-Server,
-Upload,
-X,
+  AlertCircle,
+  Cloud,
+  FileIcon,
+  Folder,
+  Loader2,
+  Plus,
+  Server,
+  Upload,
+  X,
 } from "lucide-react";
 import { useCreateComponent, useUpdateComponent } from "../../api/components";
 import { useEffect, useRef, useState } from "react";
@@ -138,6 +139,14 @@ const CreateComponentModal = ({
   const [mainFile, setMainFile] = useState<File | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const validateName = (name: string) => {
+    if (!name) return "Component name is required";
+    if (name.length < 3) return "Component name must be at least 3 characters";
+    if (!/^[a-zA-Z0-9-_]+$/.test(name)) return "Only alphanumeric characters, hyphens, and underscores allowed";
+    return "";
+  };
+
+  const [nameError, setNameError] = useState("");
 
   const createComponent = useCreateComponent();
   const updateComponent = useUpdateComponent();
@@ -304,13 +313,24 @@ const CreateComponentModal = ({
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                const newName = e.target.value;
+                setName(newName);
+                setNameError(validateName(newName));
+              }}
               placeholder="Enter component name"
               disabled={isSubmitting || isUpdateMode}
-              className="w-full px-4 py-2.5 bg-card/50 rounded-lg border border-input 
-                focus:border-primary focus:ring-1 focus:ring-primary outline-none
-                transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`w-full px-4 py-2.5 bg-card/50 rounded-lg border
+    ${nameError ? "border-destructive" : "border-input"} 
+    focus:border-primary focus:ring-1 focus:ring-primary outline-none
+    transition-all duration-200 disabled:opacity-50`}
             />
+            {nameError && (
+              <div className="mt-1 flex items-center gap-1 text-destructive text-sm">
+                <AlertCircle size={14} />
+                <span>{nameError}</span>
+              </div>
+            )}
           </div>
 
           <div>
@@ -398,7 +418,7 @@ const CreateComponentModal = ({
             </button>
             <button
               onClick={handleSubmit}
-              disabled={!name || (!mainFile && !isUpdateMode) || isSubmitting}
+              disabled={!name || nameError|| (!mainFile && !isUpdateMode) || isSubmitting}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90
                 disabled:opacity-50 transition-colors flex items-center gap-2"
             >
