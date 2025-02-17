@@ -19,7 +19,8 @@ import OverviewEphemeral from "@pages/Components/OverviewEphemeral";
 import ExportsPage from "@pages/Components/Exports";
 import FilesPage from "@pages/Components/Files";
 import SettingsPage from "@pages/Components/Settings";
-import WorkerPage from "@pages/Components/Worker";
+import WorkerList from "@pages/Workers/WorkerList";
+import WorkerPage from "@pages/Workers/Worker";
 
 function App() {
   return (
@@ -31,7 +32,7 @@ function App() {
           <Route path="/apis" element={<Api />} />
           <Route path="/apis/:apiId" element={<ApiLayout />}>
             <Route path="overview" element={<OverviewApi />} />
-            <Route path="new-route" element={<NewRoute />}/>
+            <Route path="new-route" element={<NewRoute />} />
             <Route path="playground" element={<PlaygroundLayout />}>
               <Route index element={<Playground />} />
             </Route>
@@ -41,13 +42,14 @@ function App() {
             <Route path=":routeId" element={<RouteInfo />} />
           </Route>
           <Route path="/components" element={<Component />} />
-          <Route path="/components/:compId" element={<ComponentsLayout />} >
-             <Route path="durableoverview" element={ <OverviewDurable/>}/>
-             <Route path="ephemeraloverview" element={ <OverviewEphemeral/>}/>
-             <Route path="exports" element={ <ExportsPage/>}/>
-              <Route path="files" element={ <FilesPage/>}/>
-              <Route path="settings" element={ <SettingsPage/>}/>
-              <Route path="workers" element={ <WorkerPage/>}/>
+          <Route path="/components/:compId" element={<ComponentsLayout />}>
+            <Route path="durableoverview" element={<OverviewDurable />} />
+            <Route path="ephemeraloverview" element={<OverviewEphemeral />} />
+            <Route path="exports" element={<ExportsPage />} />
+            <Route path="files" element={<FilesPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="workers" element={<WorkerList />}/>
+            <Route path="workers/:id" element={<WorkerPage />} />
           </Route>
           <Route path="/plugins" element={<Plugins />} />
         </Routes>

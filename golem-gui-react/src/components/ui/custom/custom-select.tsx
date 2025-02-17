@@ -7,7 +7,7 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@ui/select";
 import { Control, Controller} from "react-hook-form";
 
 interface Option {
