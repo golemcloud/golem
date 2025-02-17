@@ -11,8 +11,9 @@ import { NotepadText, Code, BookOpenText, Github } from "lucide-react";
 import useComponents from "../lib/hooks/use-component"; 
 import useApiDefinitions from "../lib/hooks/use-api-definitons"; 
 import FooterLinks from "../components/FooterLinks";
-import {Link} from "react-router-dom";
-import ErrorBoundary from "../components/ui/error-boundary";
+import { Link } from "react-router-dom";
+import ErrorBoundary from "@components/ui/error-boundary";
+
 import { useNavigate } from "react-router-dom";
 
 const Dashboard = () => {
