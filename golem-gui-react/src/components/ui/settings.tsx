@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Typography, Box, Divider } from "@mui/material";
-import {Button2 as Button} from "@/components/ui/button";
+import {Button2 as Button} from "@ui/button";
 
 type SettingProps = {
     title: string;

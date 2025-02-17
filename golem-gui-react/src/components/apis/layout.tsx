@@ -61,7 +61,7 @@ export default function APISLayout() {
         />
         <div className="mx-auto max-w-7xl px-2 md:px-4 lg:px-8">
           <div className="mx-auto max-w-2xl lg:max-w-none py-5 md:p-5">
-            <Outlet /> {/* Replace children with Outlet */}
+            <Outlet />
           </div>
         </div>
       </div>

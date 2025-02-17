@@ -1,0 +1,60 @@
+import React, { useCallback, useEffect, useRef } from "react";
+import { Editor } from "@monaco-editor/react";
+import { editor as MonacoEditor } from "monaco-editor";
+import { useTheme } from "next-themes"
+
+
+const JsonEditor = ({ json }: {json:Record<string,unknown>|Array<unknown>|string}) => {
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor|null>(null);
+  const {theme} = useTheme()
+
+  const handleEditorDidMount = useCallback(( editor: MonacoEditor.IStandaloneCodeEditor) => {
+    editorRef.current = editor;
+    // Trigger format document action immediately after mount
+    const model = editor.getModel();
+    if (model) {
+      model.onDidChangeContent(() => {
+        // Trigger format action only when the editor's content changes
+        editor.getAction("editor.action.formatDocument")?.run();
+      });
+    }
+
+    // Initial formatting
+    editor.getAction("editor.action.formatDocument")?.run();
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor) {
+      const newValue = typeof json === "string" ? json : JSON.stringify(json, null, 2);
+      editor.getModel()?.setValue(newValue);
+    }
+  }, [json]);
+
+  return (
+    <div
+      style={{
+        height: "50vh",
+        overflow: "auto",
+        borderRadius: "4px",
+      }}
+      className="border"
+    >
+      <Editor
+        defaultLanguage="json"
+        defaultValue={typeof json ==="string" ? json : JSON.stringify(json)}
+        options={{
+          cursorStyle: "line",
+          formatOnPaste: true,
+          formatOnType: true,
+          wordWrap: "on",
+          scrollBeyondLastLine: false,
+        }}
+        theme={theme == "dark" ? "vs-dark" : "light"  }
+        onMount={handleEditorDidMount}
+      />
+    </div>
+  );
+};
+
+export default JsonEditor;
