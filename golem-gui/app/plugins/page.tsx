@@ -23,7 +23,7 @@ import {
 } from "@mui/icons-material";
 import usePlugins, { useDeletePlugin } from "@/lib/hooks/use-plugin";
 
-import CreatePluginForm from "./create-plugin";
+import CreatePluginForm from "../../../golem-gui-react/src/components/plugins/create-plugin";
 import CustomModal from "@/components/custom/custom-modal";
 import { Plugin } from "@/types/api";
 import ErrorBoundary from "@/components/error/error-boundary";

@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import {
   Box,
@@ -11,9 +9,9 @@ import {
   Typography,
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
-import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import RouteSideBar from "../../app/apis/route-side-bar";
+import {Link} from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import RouteSideBar from "@components/apis/route-side-bar";
 
 type SidebarProps = {
   id: string;
@@ -31,9 +29,9 @@ type NavigationLinks = {
 };
 
 const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) => {
-  const pathname = usePathname();
-  const router = useRouter();
-  const params = useSearchParams();
+  const {pathname} = useLocation();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const version = params.get("version");
 
   if(type === "Ephemeral"){
@@ -72,7 +70,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
           return (
             <Link
               key={link.name}
-              href={link.href}
+              to={link.href}
               style={{ textDecoration: "none", color: "inherit" }}
             >
               <ListItem
@@ -120,7 +118,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
         <Button
           onClick={(e) => {
             e.preventDefault();
-            router.push(
+            navigate(
               `/apis/${id}/new-route${version ? `?version=${version}` : ""}`
             );
           }}

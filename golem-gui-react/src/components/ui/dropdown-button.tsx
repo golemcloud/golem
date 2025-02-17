@@ -4,12 +4,12 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@ui/dropdown-menu";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 
 export function Dropdown(list: { route: string; value: string }[]) {
-  const router = useRouter();
+  const navigate = useNavigate();
 
   return (
     <DropdownMenu>
@@ -23,7 +23,7 @@ export function Dropdown(list: { route: string; value: string }[]) {
               key={ind}
               onClick={(e) => {
                 e.stopPropagation();
-                router.push(item.route);
+                navigate(item.route);
               }}
               className="cursor-pointer"
             >

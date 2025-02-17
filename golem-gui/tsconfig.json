@@ -27,6 +27,6 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "../golem-gui-react/src/components/apis/api-info-card.tsx", "../golem-gui-react/src/components/components/file-dropzone.tsx", "../golem-gui-react/src/components/plugins/create-plugin.tsx", "../golem-gui-react/src/components/apis/deployment-creation.tsx", "../golem-gui-react/src/components/apis/types.ts", "../golem-gui-react/src/components/components/component-version-filter.tsx", "../golem-gui-react/src/components/components/create-worker.tsx"],
   "exclude": ["node_modules"]
 }

@@ -15,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { ApiDefinition } from "@/types/api";
 import CustomModal from "@/components/custom/custom-modal";
 import useApiDefinitions from "@/lib/hooks/use-api-definitons";
-import ApiInfoCard from "./api-info-card";
+import ApiInfoCard from "../../../golem-gui-react/src/components/apis/api-info-card";
 import { Button2 } from "@/components/ui/button";
 import ErrorBoundary from "@/components/error/error-boundary";
 import NotFoundCard from "@/components/ui/not-found-card";

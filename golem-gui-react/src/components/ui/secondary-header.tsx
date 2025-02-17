@@ -14,23 +14,24 @@ import { Home, Settings, RocketLaunch, Add } from "@mui/icons-material";
 
 import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
-import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import {Link} from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Button2 } from "@/components/ui/button";
-import { Dropdown } from "@/components/ui/dropdown-button";
+import { Button2 } from "@ui/button";
+import { Dropdown } from "@ui/dropdown-button";
 import PlayForWorkIcon from "@mui/icons-material/PlayForWork";
-import { ApiDropdown } from "@/app/apis/[apiId]/api-dropdown";
-import { VersionFilter } from "@/app/apis/[apiId]/apis-filter";
-import CustomModal from "../custom/custom-modal";
-import CreateNewApiVersion from "@/app/apis/create-api-new-version";
-import DeploymentCreationPage from "../../app/apis/deployment-creation";
-import NewRouteForm from "@/app/apis/new-route";
-import DeleteApiVersion from "@/app/apis/api-version-deletion";
-import { downloadApi } from "@/lib/hooks/use-api-definitons";
-import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { ComponentVersionFilter } from "../../app/components/component-version-filter";
-import CreateWorker from "@/app/components/create-worker";
+import { ApiDropdown } from "@components/apis/api-dropdown";
+import { VersionFilter } from "@components/apis/apis-filter";
+import CustomModal from "@ui/custom/custom-modal";
+import CreateNewApiVersion from "@components/apis/create-api-new-version";
+import DeploymentCreationPage from "@components/apis/deployment-creation";
+import NewRouteForm from "@components/apis/new-route"; 
+import DeleteApiVersion from "@components/apis/api-version-deletion"; 
+import { downloadApi } from "@lib/hooks/use-api-definitons";
+import { useCustomParam } from "@lib/hooks/use-custom-param";
+import { ComponentVersionFilter } from "@components/components/component-version-filter"; 
+import CreateWorker from "@components/components/create-worker";
+
 const actionsMap = {
   new_version: "Create New Version",
   new_route: "Create New Route",
@@ -53,11 +54,11 @@ export default function SecondaryHeader({
   hideNew
 }: secondaryHeaderProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const pathname = usePathname();
+  const {pathname} = useLocation();
   const { compId } = useCustomParam();
   const { id: workerName } = useCustomParam();
   const { apiId } = useCustomParam();
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const version = params.get("version");
 
   const [open, setOpen] = useState<string | null>(null);
@@ -292,7 +293,7 @@ export default function SecondaryHeader({
             return (
               <Link
                 key={link.name}
-                href={link.href}
+                to={link.href}
                 style={{ textDecoration: "none", color: "inherit" }}
               >
                 <ListItem
@@ -330,7 +331,7 @@ export default function SecondaryHeader({
         )}
 
         {variant === "apis" && (
-          <Link href={`/apis/${apiId}/new-route`}>
+          <Link to={`/apis/${apiId}/new-route`}>
             <Button
               variant="outlined"
               sx={{

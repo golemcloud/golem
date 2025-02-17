@@ -19,7 +19,7 @@ import {
 import { Button2 as CustomButton } from "@/components/ui/button";
 import { ApiDeployment as Deployment} from "@/types/api";
 import { Card } from "@/components/ui/card";
-import DeploymentCreationPage from "@/app/apis/deployment-creation";
+import DeploymentCreationPage from "../../../../golem-gui-react/src/components/apis/deployment-creation";
 import { useState } from "react";
 import CustomModal from "@/components/custom/custom-modal";
 import { useCustomParam } from "@/lib/hooks/use-custom-param";

@@ -8,16 +8,16 @@ import {
   OplogQueryParams,
   Cursor,
   WorkerNormalFilter,
-} from "@/types/api";
+} from "../types/api";
 import { toast } from "react-toastify";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useCallback, useEffect, useState } from "react";
-import { WorkerFilter } from "../../types/api";
+import { WorkerFilter } from "../types/api";
 import { useCustomParam } from "./use-custom-param";
 const ROUTE_PATH = "v1/components";
 
 export function useDeleteWorker(componentId: string, workerName: string) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const endpoint = `${ROUTE_PATH}/${componentId}/workers/${workerName}`;
 
   const deleteWorker = async () => {
@@ -30,7 +30,7 @@ export function useDeleteWorker(componentId: string, workerName: string) {
     toast.success("Successfully deleted the worker");
     mutate(endpoint);
     mutate(`${ROUTE_PATH}/${componentId}/workers`);
-    router.push(`/components/${componentId}/workers`);
+    navigate(`/components/${componentId}/workers`);
   };
 
   return {
@@ -256,7 +256,7 @@ export function useWorkerFind(compId: string, limit?: number, slientToast?:boole
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [cursor, setCursor] = useState<Cursor>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const searchParams = useSearchParams();
+  const [searchParams] = useSearchParams();
   const transformSearchParams = useCallback(
     (cursor?: Cursor, triggerNext?:boolean) => {
       // Parse the query string into an object

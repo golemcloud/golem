@@ -8,7 +8,7 @@ import DeleteApiVersion from "../../api-version-deletion";
 import { downloadApi } from "@/lib/hooks/use-api-definitons";
 import { Typography } from "@mui/material";
 import JsonEditor from "@/components/json-editor/json-editor";
-import DeploymentCreationPage from "@/app/apis/deployment-creation";
+import DeploymentCreationPage from "../../../../../golem-gui-react/src/components/apis/deployment-creation";
 const operationMap = {
   "new_route": "New Route",
   "new_api": "New Version",
