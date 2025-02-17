@@ -2,10 +2,10 @@
 import React, { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { Box, TextField, CircularProgress, Typography } from "@mui/material";
-import { Button2 } from "@/components/ui/button";
-import { installPlugin, useUninstallPlugin } from "@/lib/hooks/use-component";
-import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import { Plugin } from "@/types/api";
+import { Button2 } from "@ui/button";
+import { installPlugin, useUninstallPlugin } from "@lib/hooks/use-component";
+import { useCustomParam } from "@lib/hooks/use-custom-param";
+import { Plugin } from "@lib/types/api";
 interface PluginFormData {
   name: string;
   version: string;

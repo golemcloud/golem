@@ -1,12 +1,15 @@
-import { Button2, AddIcon, CustomModal } from "@/components/imports";
+import { Button2 } from "@ui/button";
+import CustomModal from "@ui/custom/custom-modal";
+import AddIcon from "@mui/icons-material/Add";
+
 import { Box, InputAdornment, TextField } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
-import { Plugin } from "@/types/api";
+import { Plugin } from "@lib/types/api";
 import React, {useMemo, useState, useCallback } from "react";
-import PluginInstallForm, { PluginUninstallForm } from "../../../../../golem-gui-react/src/components/components/install-plugin-form";
-import useComponents, { useInstallPlugins } from "@/lib/hooks/use-component";
-import { useCustomParam } from "@/lib/hooks/use-custom-param";
-import GenericTable from "@/components/ui/generic-table";
+import PluginInstallForm, { PluginUninstallForm } from "@components/components/install-plugin-form";
+import useComponents, { useInstallPlugins } from "@lib/hooks/use-component";
+import { useCustomParam } from "@lib/hooks/use-custom-param";
+import GenericTable from "@ui/generic-table";
 
 interface Column<T> {
   key: string;

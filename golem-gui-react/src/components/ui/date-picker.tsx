@@ -4,14 +4,14 @@ import * as React from "react"
 import { format } from "date-fns"
 import { Calendar as CalendarIcon } from "lucide-react"
 
-import { cn } from "@/lib/utils"
-import { Button2 as Button } from "@/components/ui/button"
-import { Calendar } from "@/components/ui/calendar"
+import { cn } from "@lib/utils"
+import { Button2 as Button } from "@ui/button"
+import { Calendar } from "@ui/calendar"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover"
+} from "@ui/popover"
 import { useEffect } from "react"
 
 export function DatePicker({handleChange, defaultValue, label}:{handleChange?:(date?:Date)=>void, defaultValue?:Date, label?:string}) {

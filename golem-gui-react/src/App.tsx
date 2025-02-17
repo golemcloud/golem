@@ -16,6 +16,10 @@ import Settings from "@pages/Api/Settings";
 import ComponentsLayout from "@components/components/layout";
 import OverviewDurable from "@pages/Components/OverviewDurable";
 import OverviewEphemeral from "@pages/Components/OverviewEphemeral";
+import ExportsPage from "@pages/Components/Exports";
+import FilesPage from "@pages/Components/Files";
+import SettingsPage from "@pages/Components/Settings";
+import WorkerPage from "@pages/Components/Worker";
 
 function App() {
   return (
@@ -40,7 +44,10 @@ function App() {
           <Route path="/components/:compId" element={<ComponentsLayout />} >
              <Route path="durableoverview" element={ <OverviewDurable/>}/>
              <Route path="ephemeraloverview" element={ <OverviewEphemeral/>}/>
-             {/* <Route path="exports" element={ <OverviewEphemeral/>}/> */}
+             <Route path="exports" element={ <ExportsPage/>}/>
+              <Route path="files" element={ <FilesPage/>}/>
+              <Route path="settings" element={ <SettingsPage/>}/>
+              <Route path="workers" element={ <WorkerPage/>}/>
           </Route>
           <Route path="/plugins" element={<Plugins />} />
         </Routes>
