@@ -18,7 +18,6 @@ pub enum InstanceType {
     // Holds functions across every package and interface in the component
     Global {
         worker_name: Option<Box<Expr>>,
-        component_id: String,
         functions_global: FunctionDictionary,
     },
 
@@ -26,7 +25,6 @@ pub enum InstanceType {
     Package {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
-        component_id: String,
         functions_in_package: FunctionDictionary,
     },
 
@@ -34,7 +32,6 @@ pub enum InstanceType {
     Interface {
         worker_name: Option<Box<Expr>>,
         interface_name: InterfaceName,
-        component_id: String,
         functions_in_interface: FunctionDictionary,
     },
 
@@ -43,7 +40,6 @@ pub enum InstanceType {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
         interface_name: InterfaceName,
-        component_id: String,
         functions_in_package_interface: FunctionDictionary,
     },
 
@@ -55,7 +51,6 @@ pub enum InstanceType {
         interface_name: Option<InterfaceName>,
         resource_constructor: String,
         resource_args: Vec<Expr>,
-        component_id: String,
         resource_method_dict: ResourceMethodDictionary,
     },
 }
@@ -67,7 +62,6 @@ impl InstanceType {
         &self,
         fully_qualified_resource_constructor: FullyQualifiedResourceConstructor,
         resource_args: Vec<Expr>,
-        component_id: String,
         worker_name: Option<Box<Expr>>,
     ) -> InstanceType {
         let interface_name = fully_qualified_resource_constructor.interface_name.clone();
@@ -96,7 +90,6 @@ impl InstanceType {
             interface_name,
             resource_constructor: resource_constructor_name,
             resource_args,
-            component_id,
             resource_method_dict,
         }
     }
@@ -118,15 +111,6 @@ impl InstanceType {
             InstanceType::Interface { .. } => None,
             InstanceType::PackageInterface { package_name, .. } => Some(package_name.clone()),
             InstanceType::Resource { package_name, .. } => package_name.clone(),
-        }
-    }
-    pub fn component_id(&self) -> &String {
-        match self {
-            InstanceType::Global { component_id, .. } => component_id,
-            InstanceType::Package { component_id, .. } => component_id,
-            InstanceType::Interface { component_id, .. } => component_id,
-            InstanceType::PackageInterface { component_id, .. } => component_id,
-            InstanceType::Resource { component_id, .. } => component_id,
         }
     }
 
@@ -278,7 +262,6 @@ impl InstanceType {
     }
 
     pub fn from(
-        component_id: String,
         registry: FunctionTypeRegistry,
         worker_name: Option<Expr>,
         type_parameter: Option<TypeParameter>,
@@ -287,7 +270,6 @@ impl InstanceType {
 
         match type_parameter {
             None => Ok(InstanceType::Global {
-                component_id,
                 worker_name: worker_name.map(Box::new),
                 functions_global: function_dict,
             }),
@@ -302,7 +284,6 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::Interface {
-                        component_id,
                         worker_name: worker_name.map(Box::new),
                         interface_name,
                         functions_in_interface: function_dict,
@@ -318,7 +299,6 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::Package {
-                        component_id,
                         worker_name: worker_name.map(Box::new),
                         package_name,
                         functions_in_package: function_dict,
@@ -338,7 +318,6 @@ impl InstanceType {
                     };
 
                     Ok(InstanceType::PackageInterface {
-                        component_id,
                         worker_name: worker_name.map(Box::new),
                         package_name: fq_interface.package_name,
                         interface_name: fq_interface.interface_name,

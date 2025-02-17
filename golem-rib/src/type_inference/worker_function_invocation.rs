@@ -57,7 +57,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                             let resource_instance_type = instance_type.get_resource_instance_type(
                                 fully_qualified_resource_constructor.clone(),
                                 args.clone(),
-                                instance_type.component_id().clone(),
                                 instance_type.worker_name(),
                             );
 
@@ -67,7 +66,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
 
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::Resource {
-                                    component_id: instance_type.component_id().clone(),
                                     worker_name: instance_type.worker_name(),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
@@ -82,8 +80,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                             match instance_type.deref() {
                                 InstanceType::Resource {
                                     resource_args,
-                                    component_id,
                                     resource_method_dict,
+                                    resource_constructor,
                                     ..
                                 } => {
                                     let resource_method = resource_method_dict
@@ -93,7 +91,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                         .map(|(k, _)| k.clone())
                                         .ok_or(format!(
                                             "Resource method {:?} not found in resource {}",
-                                            resource_method, component_id
+                                            resource_method, resource_constructor
                                         ))?;
 
                                     let dynamic_parsed_function_name = resource_method

@@ -31,24 +31,15 @@ pub enum CallType {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum InstanceCreationType {
     Worker {
-        component_id: String,
-        worker_name: Option<Box<Expr>>, // Making it ephemeral if no specific worker instance
+        worker_name: Option<Box<Expr>>,
     },
     Resource {
         worker_name: Option<Box<Expr>>,
-        component_id: String,
         resource_name: FullyQualifiedResourceConstructor,
     },
 }
 
 impl InstanceCreationType {
-    pub fn component_id(&self) -> String {
-        match self {
-            InstanceCreationType::Worker { component_id, .. } => component_id.clone(),
-            InstanceCreationType::Resource { component_id, .. } => component_id.clone(),
-        }
-    }
-
     pub fn worker_name(&self) -> Option<Expr> {
         match self {
             InstanceCreationType::Worker { worker_name, .. } => {

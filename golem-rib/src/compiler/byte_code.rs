@@ -98,7 +98,7 @@ mod internal {
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -441,9 +441,12 @@ mod internal {
 
                     // There is nothing to do as such for instance creation
                     CallType::InstanceCreation(instance_creation) => {
-                        instructions.push(RibIR::PushLit(
-                            instance_creation.component_id().into_value_and_type(),
-                        ));
+                        instructions.push(RibIR::PushLit(match instance_creation {
+                            InstanceCreationType::Worker { .. } => "worker".into_value_and_type(),
+                            InstanceCreationType::Resource { .. } => {
+                                "resource".into_value_and_type()
+                            }
+                        }));
                     }
 
                     CallType::VariantConstructor(variant_name) => {

@@ -102,7 +102,6 @@ mod internal {
                     if let Some(instance_creation_details) = instance_creation_details {
                         *call_type = CallType::InstanceCreation(instance_creation_details.clone());
                         let new_instance_type = InstanceType::from(
-                            instance_creation_details.component_id(),
                             function_type_registry.clone(),
                             instance_creation_details.worker_name(),
                             type_parameter,
@@ -131,7 +130,6 @@ mod internal {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
                         let optional_worker_name_expression = args.first();
                         Some(InstanceCreationType::Worker {
-                            component_id: "component_id_to_be_provided".to_string(), // TODO: This is a placeholder
                             worker_name: optional_worker_name_expression
                                 .map(|x| Box::new(x.clone())),
                         })

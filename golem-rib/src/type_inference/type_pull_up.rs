@@ -836,21 +836,15 @@ mod internal {
                     let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
 
                     let new_instance_creation = match instance_creation {
-                        InstanceCreationType::Worker { component_id, .. } => {
-                            InstanceCreationType::Worker {
-                                component_id: component_id.clone(),
+                        InstanceCreationType::Worker { .. } => InstanceCreationType::Worker {
+                            worker_name: Some(Box::new(worker_name.clone())),
+                        },
+                        InstanceCreationType::Resource { resource_name, .. } => {
+                            InstanceCreationType::Resource {
                                 worker_name: Some(Box::new(worker_name.clone())),
+                                resource_name: resource_name.clone(),
                             }
                         }
-                        InstanceCreationType::Resource {
-                            component_id,
-                            resource_name,
-                            ..
-                        } => InstanceCreationType::Resource {
-                            worker_name: Some(Box::new(worker_name.clone())),
-                            component_id: component_id.clone(),
-                            resource_name: resource_name.clone(),
-                        },
                     };
 
                     let new_call = Expr::Call(

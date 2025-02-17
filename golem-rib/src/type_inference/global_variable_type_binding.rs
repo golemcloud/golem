@@ -834,14 +834,9 @@ mod internal {
                         .map(|x| x.0)
                         .unwrap_or(worker.clone());
                     match instance_creation_type {
-                        InstanceCreationType::Resource {
-                            component_id,
-                            resource_name,
-                            ..
-                        } => {
+                        InstanceCreationType::Resource { resource_name, .. } => {
                             let new_call = Expr::Call(
                                 CallType::InstanceCreation(InstanceCreationType::Resource {
-                                    component_id: component_id.clone(),
                                     resource_name: resource_name.clone(),
                                     worker_name: Some(Box::new(new_worker)),
                                 }),
