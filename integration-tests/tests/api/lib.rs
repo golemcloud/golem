@@ -1,5 +1,6 @@
 test_r::enable!();
 
+use golem_api_grpc::proto::golem::rib::Expr;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -13,6 +14,7 @@ mod component;
 mod worker;
 
 tag_suite!(api_security, http_only);
+tag_suite!(api_deployment, http_only);
 
 pub struct Tracing;
 
@@ -42,4 +44,8 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
 #[test_dep]
 pub fn tracing() -> Tracing {
     Tracing::init()
+}
+
+pub fn to_grpc_rib_expr(expr: &str) -> Expr {
+    rib::Expr::from_text(expr).unwrap().into()
 }

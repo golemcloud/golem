@@ -1,4 +1,4 @@
-use crate::Tracing;
+use crate::{to_grpc_rib_expr, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, update_api_definition_request,
@@ -10,7 +10,6 @@ use golem_api_grpc::proto::golem::apidefinition::{
     HttpApiDefinition, HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_api_grpc::proto::golem::rib::Expr;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
@@ -456,10 +455,6 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
     check_contains(&result, &request_2_1);
     check_contains(&result, &request_2_2);
     check_contains(&result, &request_2_3);
-}
-
-fn to_grpc_rib_expr(expr: &str) -> Expr {
-    rib::Expr::from_text(expr).unwrap().into()
 }
 
 fn check_equal_api_definition_request_and_response(
