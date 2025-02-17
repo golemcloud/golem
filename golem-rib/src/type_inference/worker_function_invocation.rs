@@ -6,11 +6,7 @@ use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
-// worker.foo("x, y, z")
-// Ensure worker is of the type `InstanceType`. This could be a resource of a component as well.
-// The calls will be converted back to Expr::Call() itself making use of the `InstanceType` of LHS
-// If `foo` is found to be a resource constructor, Expr::Invoke will be kept as is, as we make
-// Invoke is lazy and the call is strict.
+// such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
@@ -116,8 +112,15 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                     }
                 }
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
-                // This would
-                _ => {}
+                // Re-running the same phase will help identify the instance type of `lhs`.
+                // Hence, this phase is part of computing the fix-point of compiler type inference.
+                InferredType::Unknown => {}
+                _ => {
+                    return Err(format!(
+                        "Invalid worker function invoke. Expected to be an instance type, found {}",
+                        TypeName::try_from(inferred_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string())
+                    ));
+                }
             }
         }
         expr.visit_children_mut_bottom_up(&mut queue);

@@ -2546,8 +2546,8 @@ mod interpreter_tests {
             let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart[golem:it]("bar");
-                let result = cart.add-item("mac");
-                result
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
             "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
@@ -2562,7 +2562,154 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
 
+        #[test]
+        async fn test_first_class_worker_15() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-items({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Function 'add-items' not found".to_string());
+
+        }
+
+        #[test]
+        async fn test_first_class_worker_16() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.carts[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Function 'carts' not found in package golem:it".to_string());
+
+        }
+
+        #[test]
+        async fn test_first_class_worker_17() {
+            // Ephemeral
+            let expr = r#"
+                let worker = instance();
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: "macbook", quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_18() {
+            // Ephemeral
+            let expr = r#"
+                let worker = instance();
+                let cart = worker.cart[golem:it]("bar");
+                cart.add-item({product-id: "mac", name: 1, quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Invalid argument in `golem:it/api.{cart(\"bar\").add-item}`: `{product-id: \"mac\", name: 1, quantity: 1, price: 1}`. Type mismatch for `name`. Expected `string`".to_string());
+        }
+
+        #[test]
+        async fn test_first_class_worker_19() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: "mac", name: "apple", quantity: 1, price: 1});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_20() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_21() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                let a = "mac";
+                let b = "apple";
+                let c = 1;
+                let d = 1;
+                let cart = worker.cart("bar");
+                cart.add-item({product-id: a, name: b, quantity: c, price: d});
+                cart.remove-item(a);
+                cart.update-item-quantity(a, 2);
+                let result = cart.get-cart-contents();
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
     }
+
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{RibFunctionInvoke, RibInput};

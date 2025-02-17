@@ -248,7 +248,9 @@ impl InstanceType {
                     }
                 }
             },
-            None => search_function_in_instance(self, function_name),
+            None => {
+                search_function_in_instance(self, function_name)
+            },
         }
     }
 
@@ -565,6 +567,7 @@ pub struct FullyQualifiedResourceMethod {
 }
 
 impl FullyQualifiedResourceMethod {
+    // We rely on the fully parsed function name itself to retrieve the original function name
     pub fn dynamic_parsed_function_name(
         &self,
         resource_args: Vec<Expr>,
@@ -574,11 +577,12 @@ impl FullyQualifiedResourceMethod {
         // Construct the package/interface prefix
         if let Some(package) = &self.package_name {
             dynamic_parsed_str.push_str(&package.to_string());
-            dynamic_parsed_str.push(':');
+            dynamic_parsed_str.push('/');
         }
+
         if let Some(interface) = &self.interface_name {
             dynamic_parsed_str.push_str(&interface.to_string());
-            dynamic_parsed_str.push('/');
+            dynamic_parsed_str.push('.');
         }
 
         // Start the dynamic function name with resource
@@ -604,6 +608,7 @@ impl FullyQualifiedResourceMethod {
         dynamic_parsed_str.push('}');
 
         DynamicParsedFunctionName::parse(dynamic_parsed_str)
+
     }
 
     pub fn method_name(&self) -> &String {
@@ -641,6 +646,10 @@ fn search_function_in_instance(
         .into_iter()
         .filter(|(f, _)| f.name() == *function_name)
         .collect();
+
+    if functions.is_empty() {
+        return Err(format!("Function '{}' not found", function_name));
+    }
 
     let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
         HashMap::new();
