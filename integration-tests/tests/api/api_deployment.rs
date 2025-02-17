@@ -1,16 +1,14 @@
 use crate::{to_grpc_rib_expr, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, update_api_definition_request,
-    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
-    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+    api_definition_request, create_api_definition_request, ApiDefinitionRequest,
+    CreateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
-    api_definition, ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType,
-    HttpApiDefinition, HttpMethod, HttpRoute,
+    ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType, HttpApiDefinition,
+    HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_api_grpc::proto::golem::rib::Expr;
 use golem_client::model::{ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite};
 use golem_common::model::ComponentId;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};

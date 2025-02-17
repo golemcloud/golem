@@ -294,7 +294,7 @@ pub trait WorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
         match self.worker_client() {
@@ -348,7 +348,7 @@ pub trait WorkerService {
                         &request.worker_id.unwrap().name.unwrap(),
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
-                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                        &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
                     .await
                 {
@@ -366,7 +366,7 @@ pub trait WorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         match self.worker_client() {
@@ -425,7 +425,7 @@ pub trait WorkerService {
                         &request.worker_id.unwrap().name.unwrap(),
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
-                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                        &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
                     .await
                 {
@@ -1555,35 +1555,29 @@ fn grpc_filter_to_http_filter(filter: Filter) -> Vec<String> {
 }
 
 fn invoke_parameters_to_http(
-    parameters: Option<Vec<ValueAndType>>,
+    parameters: Vec<ValueAndType>,
 ) -> golem_client::model::InvokeParameters {
     golem_client::model::InvokeParameters {
-        params: match parameters {
-            Some(parameters) => parameters
-                .into_iter()
-                .map(|p| p.try_into().unwrap())
-                .collect(),
-            None => vec![],
-        },
+        params: parameters
+            .into_iter()
+            .map(|p| p.try_into().unwrap())
+            .collect(),
     }
 }
 
 fn invoke_json_parameters_to_http(
-    parameters: Option<Vec<String>>,
+    parameters: Vec<String>,
 ) -> golem_client::model::InvokeParameters {
     golem_client::model::InvokeParameters {
-        params: match parameters {
-            Some(parameters) => parameters
-                .into_iter()
-                .map(|p| serde_json::from_str(&p).unwrap())
-                .collect(),
-            None => vec![],
-        },
+        params: parameters
+            .into_iter()
+            .map(|p| serde_json::from_str(&p).unwrap())
+            .collect(),
     }
 }
 
-fn invoke_parameters_to_grpc(parameters: Option<Vec<ValueAndType>>) -> Option<InvokeParameters> {
-    parameters.map(|parameters| InvokeParameters {
+fn invoke_parameters_to_grpc(parameters: Vec<ValueAndType>) -> Option<InvokeParameters> {
+    Some(InvokeParameters {
         params: parameters
             .into_iter()
             .map(|param| param.value.into())

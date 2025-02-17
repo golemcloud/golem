@@ -291,7 +291,7 @@ impl WorkerService for ForwardingWorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -306,13 +306,9 @@ impl WorkerService for ForwardingWorkerService {
                     name: function.clone(),
                     input: invoke_parameters
                         .clone()
-                        .map(|invoke_parameters| {
-                            invoke_parameters
-                                .into_iter()
-                                .map(|param| param.value.into())
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                        .into_iter()
+                        .map(|param| param.value.into())
+                        .collect(),
                     account_id: Some(
                         AccountId {
                             value: "test-account".to_string(),
@@ -364,7 +360,7 @@ impl WorkerService for ForwardingWorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -379,8 +375,9 @@ impl WorkerService for ForwardingWorkerService {
                     name: function.clone(),
                     input: invoke_parameters
                         .clone()
-                        .map(|params| params.into_iter().map(|param| param.value.into()).collect())
-                        .unwrap_or_default(),
+                        .into_iter()
+                        .map(|param| param.value.into())
+                        .collect(),
                     account_id: Some(
                         AccountId {
                             value: "test-account".to_string(),

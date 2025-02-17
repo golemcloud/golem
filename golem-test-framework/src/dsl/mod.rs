@@ -673,7 +673,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 target_worker_id.into(),
                 None,
                 function_name.to_string(),
-                Some(params),
+                params,
                 None,
             )
             .await?;
@@ -704,7 +704,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 target_worker_id.into(),
                 Some(idempotency_key.clone().into()),
                 function_name.to_string(),
-                Some(params),
+                params,
                 None,
             )
             .await?;
@@ -778,7 +778,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 target_worker_id.into(),
                 Some(idempotency_key.clone().into()),
                 function_name.to_string(),
-                Some(params),
+                params,
                 None,
             )
             .await?;
