@@ -25,7 +25,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/overview" element={<Overview />} />
           <Route path="/apis" element={<Api />} />
-          <Route path="/apis/:id" element={<ApiLayout />}>
+          <Route path="/apis/:apiId" element={<ApiLayout />}>
             <Route path="overview" element={<OverviewApi />} />
             <Route path="new-route" element={<NewRoute />}/>
             <Route path="playground" element={<PlaygroundLayout />}>

@@ -1,9 +1,7 @@
 import DynamicForm from "@components/components/form-generator";
 import { useCustomParam } from "@lib/hooks/use-custom-param";
 import { ApiDeployment, ApiRoute, Parameter } from "@lib/types/api";
-import {
-  AnalysedType_TypeRecord,
-} from "@lib/types/golem-data-types";
+import { AnalysedType_TypeRecord} from "@lib/types/golem-data-types";
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 import { useMemo, useState } from "react";
 import useApiDeployments from "@lib/hooks/use-api-deployments";

@@ -59,6 +59,7 @@ const ApiDetails: React.FC<ApiDetailsProps> = ({
   const handleDelete = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
     e.preventDefault();
     try {
+      console.log("deleting route", apiId, route, version);
       await deleteRoute(route, version);
       if (!noRedirect) {
         navigate(`/apis/${apiId}/overview?version=${version}`);
