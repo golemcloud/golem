@@ -15,7 +15,12 @@ where
 {
     (identifier().skip(spaces()), char('.'), rib_expr())
         .and_then(|(worker_variable, _, call)| match call {
-            Expr::Call(CallType::Function {function_name, .. }, generic_type_parameter, args, _) => {
+            Expr::Call(
+                CallType::Function { function_name, .. },
+                generic_type_parameter,
+                args,
+                _,
+            ) => {
                 let function_name = function_name.to_string();
                 Ok(Expr::invoke_worker_function(
                     worker_variable,

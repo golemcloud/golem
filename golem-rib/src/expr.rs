@@ -279,7 +279,10 @@ impl Expr {
         args: Vec<Expr>,
     ) -> Self {
         Expr::Call(
-            CallType::Function{function_name: dynamic_parsed_fn_name, worker: worker_name.map(Box::new) },
+            CallType::Function {
+                function_name: dynamic_parsed_fn_name,
+                worker: worker_name.map(Box::new),
+            },
             generic_type_parameter,
             args,
             InferredType::Unknown,

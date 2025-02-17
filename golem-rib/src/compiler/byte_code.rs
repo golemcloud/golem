@@ -310,7 +310,7 @@ mod internal {
                 }
 
                 match call_type {
-                    CallType::Function { function_name, ..} => {
+                    CallType::Function { function_name, .. } => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {

@@ -775,7 +775,10 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
-            CallType::Function { function_name, worker } => {
+            CallType::Function {
+                function_name,
+                worker,
+            } => {
                 let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
@@ -797,9 +800,10 @@ mod internal {
                         });
                 }
 
-
                 let new_call = if let Some(worker) = worker {
-                    let worker = inferred_type_stack.pop_front().unwrap_or(worker.deref().clone());
+                    let worker = inferred_type_stack
+                        .pop_front()
+                        .unwrap_or(worker.deref().clone());
 
                     Expr::Call(
                         CallType::Function {
@@ -818,7 +822,7 @@ mod internal {
                         },
                         None,
                         new_arg_exprs,
-                        inferred_type.clone()
+                        inferred_type.clone(),
                     )
                 };
 
@@ -838,13 +842,15 @@ mod internal {
                                 worker_name: Some(Box::new(worker_name.clone())),
                             }
                         }
-                        InstanceCreationType::Resource { component_id, resource_name, .. } => {
-                            InstanceCreationType::Resource {
-                                worker_name: Some(Box::new(worker_name.clone())),
-                                component_id: component_id.clone(),
-                                resource_name: resource_name.clone(),
-                            }
-                        }
+                        InstanceCreationType::Resource {
+                            component_id,
+                            resource_name,
+                            ..
+                        } => InstanceCreationType::Resource {
+                            worker_name: Some(Box::new(worker_name.clone())),
+                            component_id: component_id.clone(),
+                            resource_name: resource_name.clone(),
+                        },
                     };
 
                     let new_call = Expr::Call(

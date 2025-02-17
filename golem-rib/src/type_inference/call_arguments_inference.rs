@@ -61,7 +61,7 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(_) => Ok(()),
-            CallType::Function { function_name , ..} => {
+            CallType::Function { function_name, .. } => {
                 let resource_constructor_registry_key =
                     RegistryKey::resource_constructor_registry_key(function_name);
 
@@ -74,10 +74,8 @@ mod internal {
                         args,
                     ),
                     None => {
-                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(format!(
-                            "Invalid function call: `{}`",
-                            function_name
-                        ))?;
+                        let registry_key = RegistryKey::from_call_type(&cloned)
+                            .ok_or(format!("Invalid function call: `{}`", function_name))?;
 
                         infer_args_and_result_type(
                             &FunctionDetails::Fqn(function_name.to_string()),
