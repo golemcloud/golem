@@ -58,11 +58,6 @@ pub struct RunDetails {
     pub grpc_port: u16,
 }
 
-// pub struct StartedEndpoint {
-//     pub grpc_port: u16,
-//     pub endpoint: BoxEndpoin<'static>
-// }
-
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
     shard_manager_config: Arc<ShardManagerConfig>,
