@@ -246,7 +246,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
-                WHERE namespace = $1
+                WHERE namespace = $1 ORDER BY namespace, site, host, subdomain
                 "#,
         )
         .bind(namespace)
@@ -260,7 +260,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
-                WHERE namespace = $1
+                WHERE namespace = $1 ORDER BY namespace, site, host, subdomain
                 "#,
         )
         .bind(namespace)
@@ -362,8 +362,8 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
-                WHERE
-                 site = $1
+                WHERE site = $1
+                ORDER BY namespace, site, host, subdomain
                 "#,
         )
         .bind(site)
