@@ -293,18 +293,18 @@ async fn initial_file_listing_through_api(
             },
             &[
                 (
-                    "initial-file-read-write/files/foo.txt".into(),
-                    "/foo.txt".try_into().unwrap(),
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
                     ComponentFilePermissions::ReadOnly,
                 ),
                 (
-                    "initial-file-read-write/files/baz.txt".into(),
-                    "/bar/baz.txt".try_into().unwrap(),
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
                     ComponentFilePermissions::ReadWrite,
                 ),
                 (
-                    "initial-file-read-write/files/baz.txt".into(),
-                    "/baz.txt".try_into().unwrap(),
+                    "initial-file-read-write/files/baz.txt",
+                    "/baz.txt",
                     ComponentFilePermissions::ReadWrite,
                 ),
             ],
@@ -382,13 +382,13 @@ async fn initial_file_reading_through_api(
             },
             &[
                 (
-                    "initial-file-read-write/files/foo.txt".into(),
-                    "/foo.txt".try_into().unwrap(),
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
                     ComponentFilePermissions::ReadOnly,
                 ),
                 (
-                    "initial-file-read-write/files/baz.txt".into(),
-                    "/bar/baz.txt".try_into().unwrap(),
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
                     ComponentFilePermissions::ReadWrite,
                 ),
             ],

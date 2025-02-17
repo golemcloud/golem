@@ -174,8 +174,6 @@ impl ComponentService for FileSystemComponentService {
         false
     }
 
-
-
     fn component_client(&self) -> ComponentServiceClient {
         panic!("No real component service running")
     }

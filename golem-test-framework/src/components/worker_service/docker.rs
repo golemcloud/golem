@@ -162,7 +162,7 @@ impl DockerWorkerService {
 #[async_trait]
 impl WorkerService for DockerWorkerService {
     fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol.clone()
+        self.client_protocol
     }
 
     fn worker_client(&self) -> WorkerServiceClient {

@@ -48,7 +48,7 @@ async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 fn new_security_scheme() -> SecuritySchemeData {
     SecuritySchemeData {
         provider_type: Provider::Google,
-        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4().to_string()),
+        scheme_identifier: format!("security-scheme-{}", Uuid::new_v4()),
         client_id: "client_id".to_string(),
         client_secret: "super_secret".to_string(),
         redirect_url: "http://localhost/redirect-url".to_string(),
