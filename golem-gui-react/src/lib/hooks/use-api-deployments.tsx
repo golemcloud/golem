@@ -1,6 +1,6 @@
 import useSWR, { mutate } from "swr";
 import { fetcher } from "../utils";
-import { ApiDeployment } from "@/types/api";
+import { ApiDeployment } from "@lib/types/api";
 import { toast } from "react-toastify";
 // import { useRouter } from "next/navigation";
 

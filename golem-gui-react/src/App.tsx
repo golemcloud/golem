@@ -13,6 +13,9 @@ import PlaygroundLayout from "@components/apis/playground/layout";
 import RouteInfo from "@pages/Api/RouteInfo";
 import Deployment from "@pages/Api/Deployment";
 import Settings from "@pages/Api/Settings";
+import ComponentsLayout from "@components/components/layout";
+import OverviewDurable from "@pages/Components/OverviewDurable";
+import OverviewEphemeral from "@pages/Components/OverviewEphemeral";
 
 function App() {
   return (
@@ -34,6 +37,11 @@ function App() {
             <Route path=":routeId" element={<RouteInfo />} />
           </Route>
           <Route path="/components" element={<Component />} />
+          <Route path="/components/:compId" element={<ComponentsLayout />} >
+             <Route path="durableoverview" element={ <OverviewDurable/>}/>
+             <Route path="ephemeraloverview" element={ <OverviewEphemeral/>}/>
+             {/* <Route path="exports" element={ <OverviewEphemeral/>}/> */}
+          </Route>
           <Route path="/plugins" element={<Plugins />} />
         </Routes>
       </Layout>

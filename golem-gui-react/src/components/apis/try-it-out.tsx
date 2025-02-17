@@ -5,9 +5,9 @@ import {
   AnalysedType_TypeRecord,
 } from "@lib/types/golem-data-types";
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
-import  { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import useApiDeployments from "@lib/hooks/use-api-deployments";
-import JsonEditor from "@ui/json-editor/json-editor"; 
+import JsonEditor from "@ui/json-editor/json-editor";
 import { Loader } from "lucide-react";
 import ErrorBoundary from "@ui/error-boundary";
 import { toast } from "react-toastify";
