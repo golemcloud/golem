@@ -222,14 +222,16 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
             Expr::Call(function_call, _, vec, inferred_type) => {
-
                 queue.extend(vec.iter_mut());
 
                 match function_call {
                     // We don't care about anything inside instance creation
                     CallType::InstanceCreation(_) => {}
                     // Make sure worker expression in function
-                    CallType::Function { worker, function_name } => {
+                    CallType::Function {
+                        worker,
+                        function_name,
+                    } => {
                         if let Some(worker) = worker {
                             queue.push(worker);
                         }

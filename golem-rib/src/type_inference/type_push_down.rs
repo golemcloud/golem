@@ -363,9 +363,9 @@ mod internal {
     }
 
     pub(crate) fn handle_call<'a>(
-        call_type: &CallType,
+        call_type: &'a mut CallType,
         expressions: &'a mut Vec<Expr>,
-        inferred_type: &InferredType,
+        inferred_type: &'a mut InferredType,
         queue: &mut VecDeque<&'a mut Expr>,
     ) {
         match call_type {
@@ -387,11 +387,30 @@ mod internal {
                     }
                 }
             }
-            _ => {
-                for expr in expressions {
-                    queue.push_back(expr);
+            CallType::Function {
+                worker,
+                function_name,
+            } => {
+                if let Some(worker) = worker {
+                    queue.push_back(worker);
                 }
+
+                let exprs = function_name.raw_resource_params_mut();
+
+                for expr in exprs {
+                    queue.extend(expr);
+                }
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(function) = instance_type.worker_mut() {
+                        queue.push_back(function);
+                    }
+                }
+
+                queue.extend(expressions);
             }
+
+            _ => queue.extend(expressions),
         }
     }
 

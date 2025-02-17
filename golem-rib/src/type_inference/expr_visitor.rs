@@ -79,7 +79,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
 
             // The expr existing in the inferred type should be visited
             if let InferredType::Instance { instance_type } = inferred_type {
-                if let Some(worker_expr) = instance_type.worker_mut(){
+                if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
             }
@@ -117,9 +117,14 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(yield_expr);
         }
 
-        Expr::InvokeLazy { lhs, args, inferred_type, .. } => {
+        Expr::InvokeLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
             if let InferredType::Instance { instance_type } = inferred_type {
-                if let Some(worker_expr) = instance_type.worker_mut(){
+                if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
             }
@@ -268,9 +273,14 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::GetTag(expr, _) => {
             queue.push_back(expr);
         }
-        Expr::InvokeLazy { lhs, args, inferred_type, .. } => {
+        Expr::InvokeLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
             if let InferredType::Instance { instance_type } = inferred_type {
-                if let Some(worker_expr) = instance_type.worker(){
+                if let Some(worker_expr) = instance_type.worker() {
                     queue.push_back(worker_expr);
                 }
             }
@@ -396,7 +406,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
 
             // The expr existing in the inferred type should be visited
             if let InferredType::Instance { instance_type } = inferred_type {
-                if let Some(worker_expr) = instance_type.worker_mut(){
+                if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
             }
@@ -427,9 +437,14 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(yield_expr);
         }
 
-        Expr::InvokeLazy { lhs, args, inferred_type, .. } => {
+        Expr::InvokeLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
             if let InferredType::Instance { instance_type } = inferred_type {
-                if let Some(worker_expr) = instance_type.worker_mut(){
+                if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_front(worker_expr);
                 }
             }
@@ -467,17 +482,11 @@ mod internal {
                 worker.as_mut(),
             ),
 
-            CallType::InstanceCreation(instance_creation) => {
-                match instance_creation {
-                    InstanceCreationType::Worker { worker_name, .. } => {
-                        (None, worker_name.as_mut())
-                    }
+            CallType::InstanceCreation(instance_creation) => match instance_creation {
+                InstanceCreationType::Worker { worker_name, .. } => (None, worker_name.as_mut()),
 
-                    InstanceCreationType::Resource { worker_name, .. } => {
-                        (None, worker_name.as_mut())
-                    }
-                }
-            }
+                InstanceCreationType::Resource { worker_name, .. } => (None, worker_name.as_mut()),
+            },
 
             CallType::VariantConstructor(_) => (None, None),
             CallType::EnumConstructor(_) => (None, None),
