@@ -1,10 +1,11 @@
+pub(crate) use check_instance_returns::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
-pub(crate) use check_instance_returns::*;
 
+mod check_instance_returns;
 mod check_number_types;
 mod exhaustive_pattern_match;
 mod math;
@@ -14,7 +15,6 @@ mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
-mod check_instance_returns;
 
 use crate::type_checker::check_number_types::check_number_types;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
