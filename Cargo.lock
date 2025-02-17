@@ -3961,7 +3961,6 @@ dependencies = [
  "serde",
  "serde_json",
  "test-r",
- "thiserror 2.0.11",
 ]
 
 [[package]]
