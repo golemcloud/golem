@@ -4,13 +4,15 @@ use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingC
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
-use test_r::test_dep;
+use test_r::{tag_suite, test_dep};
 
 mod api_definition;
 mod api_deployment;
 mod api_security;
 mod component;
 mod worker;
+
+tag_suite!(api_security, http_only);
 
 pub struct Tracing;
 
@@ -41,14 +43,3 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
 pub fn tracing() -> Tracing {
     Tracing::init()
 }
-
-macro_rules! http_only {
-    ($deps:expr) => {
-        if $deps.worker_service().client_protocol() != GolemClientProtocol::Http {
-            println!("Skipping http only test.");
-            return;
-        }
-    };
-}
-
-pub(crate) use http_only;

@@ -1,9 +1,7 @@
-use crate::{http_only, Tracing};
+use crate::Tracing;
 use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
-use golem_test_framework::config::{
-    EnvBasedTestDependencies, GolemClientProtocol, TestDependencies,
-};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -15,8 +13,6 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    http_only!(deps);
-
     let security_scheme = new_security_scheme();
 
     let created_security_scheme = deps
@@ -31,8 +27,6 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    http_only!(deps);
-
     let security_scheme = new_security_scheme();
 
     deps.worker_service()
