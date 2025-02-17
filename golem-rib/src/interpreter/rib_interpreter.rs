@@ -2500,7 +2500,22 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
+        
+        #[test]
+        async fn test_first_class_worker_cannot_return_resource_constructor() {
+            let expr = r#"
+                let worker = instance("my-worker");
+                worker.cart[golem:it]("bar")
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata_with_resource_with_params();
 
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(compiled, "Resource constructor instance cannot be returned".to_string());
+        }
+
+        // This is a noop infact
         #[test]
         async fn test_first_class_worker_13() {
             let expr = r#"
@@ -2520,6 +2535,7 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
+
     }
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
