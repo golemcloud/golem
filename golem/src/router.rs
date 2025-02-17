@@ -12,33 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::AllRunDetails;
+use crate::StartedComponents;
+use anyhow::Context;
+use poem::middleware::{OpenTelemetryMetrics, Tracing};
+use poem::EndpointExt;
+use poem::{Route, Server};
+use std::net::Ipv4Addr;
 use tokio::task::JoinSet;
 use tracing::info;
-use poem::EndpointExt;
-use poem::{handler};
-use crate::StartedComponents;
-
-#[cfg(not(windows))]
-use anyhow::Context;
-#[cfg(not(windows))]
-use sozu_command_lib::proto::command::WorkerResponse;
-#[cfg(not(windows))]
-use sozu_command_lib::{
-    channel::Channel,
-    config::ListenerBuilder,
-    proto::command::{
-        request::RequestType, AddBackend, Cluster, LoadBalancingAlgorithms, PathRule,
-        RequestHttpFrontend, RulePosition, SocketAddress, WorkerRequest,
-    },
-};
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::{Route, Server};
 use tracing::Instrument;
-#[cfg(not(windows))]
-use std::net::Ipv4Addr;
 
-#[cfg(not(windows))]
 pub fn start_router(
     listener_addr: &str,
     listener_port: u16,
@@ -69,10 +52,22 @@ pub fn start_router(
 
     // poem only has limited support for regexes (no nest + regex), so type
     let app = Route::new()
-        .at("/v1/components/:component_id/invoke", worker_service_api.clone())
-        .at("/v1/components/:component_id/invoke-and-await", worker_service_api.clone())
-        .at("/v1/components/:component_id/workers", worker_service_api.clone())
-        .at("/v1/components/:component_id/workers/*", worker_service_api.clone())
+        .at(
+            "/v1/components/:component_id/invoke",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/invoke-and-await",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/*",
+            worker_service_api.clone(),
+        )
         .nest_no_strip("/v1/api", worker_service_api)
         .nest_no_strip("/v1/components", component_service_api.clone())
         .nest_no_strip("/v1/plugins", component_service_api.clone())
@@ -84,7 +79,9 @@ pub fn start_router(
     // TODO: have proper healtchchecks, pass them through the different services and expose here -- similar to metrics
     // for now just use the one from component service.
 
-    join_set.spawn(async move { Server::new(listener).run(app).await.map_err(|e| e.into()) }.in_current_span());
+    join_set.spawn(
+        async move { Server::new(listener).run(app).await.map_err(|e| e.into()) }.in_current_span(),
+    );
 
     Ok(())
 }

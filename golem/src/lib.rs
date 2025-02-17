@@ -15,10 +15,8 @@
 use prometheus::Registry;
 
 pub mod command;
-mod health;
 pub mod launch;
 mod migration;
-mod proxy;
 mod router;
 
 #[cfg(test)]
@@ -29,23 +27,5 @@ pub struct StartedComponents {
     pub shard_manager: golem_shard_manager::RunDetails,
     pub worker_executor: golem_worker_executor_base::RunDetails,
     pub worker_service: golem_worker_service::TrafficReadyEndpoints,
-    pub prometheus_registy: Registry
-}
-
-pub struct AllRunDetails {
-    pub component_service: golem_component_service::RunDetails,
-    pub shard_manager: golem_shard_manager::RunDetails,
-    pub worker_executor: golem_worker_executor_base::RunDetails,
-    pub worker_service: golem_worker_service::RunDetails,
-}
-
-impl AllRunDetails {
-    pub fn healthcheck_ports(&self) -> Vec<u16> {
-        vec![
-            self.component_service.http_port,
-            self.shard_manager.http_port,
-            self.worker_service.http_port,
-            self.worker_executor.http_port,
-        ]
-    }
+    pub prometheus_registy: Registry,
 }

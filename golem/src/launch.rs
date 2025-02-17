@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::router::start_router;
-use crate::{health, StartedComponents};
 use crate::migration::IncludedMigrationsDir;
-use crate::proxy;
-use crate::AllRunDetails;
+use crate::router::start_router;
+use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
@@ -83,7 +81,12 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
 
     let started_components = start_components(args, &mut join_set).await?;
 
-    start_router(&args.router_host, args.router_port, started_components, &mut join_set)?;
+    start_router(
+        &args.router_host,
+        args.router_port,
+        started_components,
+        &mut join_set,
+    )?;
 
     while let Some(res) = join_set.join_next().await {
         res??;
@@ -92,10 +95,12 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
     Ok(())
 }
 
-async fn start_components(args: &LaunchArgs, join_set: &mut JoinSet<Result<(), anyhow::Error>>) -> Result<StartedComponents, anyhow::Error> {
+async fn start_components(
+    args: &LaunchArgs,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<StartedComponents, anyhow::Error> {
     let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
-    let component_service =
-        run_component_service(component_service_config(args), join_set).await?;
+    let component_service = run_component_service(component_service_config(args), join_set).await?;
     let worker_executor = run_worker_executor(
         worker_executor_config(args, &shard_manager, &component_service),
         join_set,
@@ -112,7 +117,7 @@ async fn start_components(args: &LaunchArgs, join_set: &mut JoinSet<Result<(), a
         worker_executor,
         component_service,
         worker_service,
-        prometheus_registy: prometheus::default_registry().clone()
+        prometheus_registy: prometheus::default_registry().clone(),
     })
 }
 

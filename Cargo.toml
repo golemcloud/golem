@@ -167,8 +167,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
-sozu-command-lib = { version = "1.0.5", default-features = false }
-sozu-lib = { version = "1.0.5", default-features = false }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",

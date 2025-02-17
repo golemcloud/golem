@@ -22,7 +22,7 @@ use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::{Endpoint, EndpointExt};
+use poem::EndpointExt;
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -109,7 +109,11 @@ impl WorkerService {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let custom_request_port = self.start_api_gateway_server(join_set).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
-        Ok(TrafficReadyEndpoints { grpc_port, api_endpoint, custom_request_port })
+        Ok(TrafficReadyEndpoints {
+            grpc_port,
+            api_endpoint,
+            custom_request_port,
+        })
     }
 
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {

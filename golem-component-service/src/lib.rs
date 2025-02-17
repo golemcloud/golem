@@ -20,11 +20,11 @@ use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
-use poem::endpoint::{BoxEndpoint, DynEndpoint};
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::{Endpoint, EndpointExt, IntoEndpoint, Route};
+use poem::{EndpointExt, IntoEndpoint};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -44,12 +44,12 @@ test_r::enable!();
 
 pub struct RunDetails {
     pub grpc_port: u16,
-    pub http_port: u16
+    pub http_port: u16,
 }
 
 pub struct TrafficReadyEndpoints {
     pub grpc_port: u16,
-    pub endpoint: BoxEndpoint<'static>
+    pub endpoint: BoxEndpoint<'static>,
 }
 
 #[derive(Clone)]
@@ -113,7 +113,10 @@ impl ComponentService {
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let endpoint = self.main_endpoint();
-        Ok(TrafficReadyEndpoints { grpc_port, endpoint })
+        Ok(TrafficReadyEndpoints {
+            grpc_port,
+            endpoint,
+        })
     }
 
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
@@ -134,7 +137,9 @@ impl ComponentService {
     }
 
     fn main_endpoint(&self) -> BoxEndpoint<'static> {
-        api::make_open_api_service(&self.services).into_endpoint().boxed()
+        api::make_open_api_service(&self.services)
+            .into_endpoint()
+            .boxed()
     }
 
     async fn start_standalone_http_server(
@@ -147,7 +152,8 @@ impl ComponentService {
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        let poem_listener = poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
+        let poem_listener =
+            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
         let acceptor = poem_listener.into_acceptor().await?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
