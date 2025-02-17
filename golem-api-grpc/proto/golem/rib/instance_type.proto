@@ -3,13 +3,14 @@ syntax = "proto3";
 package golem.rib;
 
 import "golem/rib/expr.proto";
+import "wasm/ast/type.proto";
 
 message FunctionDictionary {
   repeated FunctionEntry map = 1;
 }
 
 message FunctionEntry {
-  FunctionName key = 1;
+  FunctionNameType key = 1;
   FunctionType value = 2;
 }
 
@@ -66,7 +67,7 @@ message ResourceInstance {
 }
 
 // Function-related messages
-message FunctionName {
+message FunctionNameType {
   oneof function_name {
     FullyQualifiedFunctionName function = 1;
     FullyQualifiedResourceConstructor resource_constructor = 2;
@@ -102,5 +103,6 @@ message InterfaceName {
 }
 
 message FunctionType {
-  string type_name = 1; // Modify as needed
+  repeated wasm.ast.Type parameter_types = 1;
+  repeated wasm.ast.Type return_type = 2;
 }
