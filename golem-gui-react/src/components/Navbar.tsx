@@ -12,8 +12,7 @@ import {
 import { Menu as MenuIcon } from "@mui/icons-material";
 import { ModeToggle } from "./ui/toggle-button";
 import Logo from "../assets/GolemLogo";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router-dom";
 
 type NAV_LINK = {
   name: string;
@@ -30,7 +29,7 @@ const links = [
 ] as NAV_LINK[];
 
 export default function Navbar() {
-  const pathname = usePathname();
+  const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const toggleDrawer = (open: boolean) => () => {
@@ -52,12 +51,12 @@ export default function Navbar() {
         <Box sx={{ display: { xs: "none", md: "flex" }, gap: 4 }}>
           {links.map((link) => {
             const isActive =
-              pathname === link?.to ||
-              (link.to !== "/" && pathname?.startsWith(link.to));
+              location.pathname === link?.to ||
+              (link.to !== "/" && location.pathname.startsWith(link.to));
             return (
               <Link
                 key={link.name}
-                href={link.comingSoon ? "#" : link.to}
+                to={link.comingSoon ? "#" : link.to}
                 style={{ textDecoration: "none", color: "inherit" }}
               >
                 <ListItem
@@ -115,12 +114,12 @@ export default function Navbar() {
         <List>
           {links.map((link) => {
             const isActive =
-              pathname === link?.to ||
-              (link.to !== "/" && pathname?.startsWith(link.to));
+              location.pathname === link?.to ||
+              (link.to !== "/" && location.pathname.startsWith(link.to));
             return (
               <Link
                 key={link.name}
-                href={link.comingSoon ? "#" : link.to}
+                to={link.comingSoon ? "#" : link.to}
                 style={{ textDecoration: "none", color: "inherit" }}
               >
                 <ListItem

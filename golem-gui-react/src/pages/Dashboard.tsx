@@ -10,9 +10,9 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import { NotepadText, Code, BookOpenText, Github } from "lucide-react";
 import useComponents from "../lib/hooks/use-component"; 
 import useApiDefinitions from "../lib/hooks/use-api-definitons"; 
-import FooterLinks from "./FooterLinks";
-import Link from "next/link";
-import ErrorBoundary from "./ui/error-boundary";
+import FooterLinks from "../components/FooterLinks";
+import {Link} from "react-router-dom";
+import ErrorBoundary from "../components/ui/error-boundary";
 import { useNavigate } from "react-router-dom";
 
 const Dashboard = () => {
@@ -137,7 +137,7 @@ const Dashboard = () => {
               >
                 {item.link && (
                   <Link
-                    href={item.link || "#"}
+                    to={item.link || "#"}
                     style={{ textDecoration: "none", color: "inherit" }}
                     target="_blank" // Opens the link in a new tab
                     rel="noopener noreferrer" // Improves security by preventing access to the window.opener object
