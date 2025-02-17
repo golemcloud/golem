@@ -1,6 +1,4 @@
-"use client";
-
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Grid2 as Grid,
   Paper,
@@ -28,7 +26,7 @@ import SecondaryHeader from "@ui/secondary-header";
 import ErrorBoundary from "@ui/error-boundary";
 import { useCustomParam } from "@lib/hooks/use-custom-param";
 
-const Overview = () => {
+const OverviewDurable = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { compId } = useCustomParam();
   const [params] = useSearchParams();
@@ -285,4 +283,4 @@ const Overview = () => {
   );
 };
 
-export default Overview;
+export default OverviewDurable;

@@ -1,6 +1,4 @@
-"use client";
-
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import {
   Grid2 as Grid,
   Paper,
@@ -19,7 +17,7 @@ import ErrorBoundary from "@ui/error-boundary";
 import { useCustomParam } from "@lib/hooks/use-custom-param";
 import InvokePage from "@components/components/invoke";
 
-const Overview = () => {
+const OverviewEphemeral = () => {
   const { compId } = useCustomParam();
   const [params] = useSearchParams();
   const version = params?.get("version");
@@ -90,4 +88,4 @@ const Overview = () => {
   );
 };
 
-export default Overview;
+export default OverviewEphemeral;

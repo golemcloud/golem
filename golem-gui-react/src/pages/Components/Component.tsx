@@ -24,7 +24,6 @@ import clsx from "clsx";
 import ComponentTable from "@components/ui/generic-table";
 import ErrorBoundary from "@components/ui/error-boundary";
 import NotFoundCard from "@components/ui/not-found-card";
-import { useCustomParam } from "@lib/hooks/use-custom-param";
 
 const ComponentsPage = () => {
   const [open, setOpen] = useState(false);
@@ -41,13 +40,9 @@ const ComponentsPage = () => {
     setViewMode(button === "grid" ? "card" : "table");
   };
   const navigate = useNavigate();
-  const { compId } = useCustomParam();
   const { components, isLoading, error } = useComponents();
-  const component = useComponents(compId, "latest");
-  const type = component?.components[0]?.componentType;
   
-  function handleComponentClick(id: string) {
-    console.log("Component Clicked", type);
+  function handleComponentClick(id: string, type: string) {
     type=="Ephemeral"?navigate(`/components/${id}/ephemeraloverview`):navigate(`/components/${id}/durableoverview`);
   }
 
@@ -168,7 +163,7 @@ const ComponentsPage = () => {
                         componentType={item.componentType}
                         onClick={() =>
                           handleComponentClick(
-                            item.versionedComponentId.componentId
+                            item.versionedComponentId.componentId,item.componentType
                           )
                         }
                       />
@@ -200,7 +195,7 @@ const ComponentsPage = () => {
                     },
                   ]}
                   onRowClick={(item) =>
-                    handleComponentClick(item.versionedComponentId.componentId)
+                    handleComponentClick(item.versionedComponentId.componentId,item.componentType)
                   }
                 />
               )

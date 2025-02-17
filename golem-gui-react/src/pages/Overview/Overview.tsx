@@ -42,9 +42,8 @@ const ProjectDashboard = () => {
 
   const uniquesApis = Object.values(apiMap)?.reverse();
 
-  function handleComponentClick(id: string) {
-    console.log("Component Clicked");
-    navigate(`/components/${id}/overview`);
+  function handleComponentClick(id: string, type: string) {
+    type=="Ephemeral"?navigate(`/components/${id}/ephemeraloverview`):navigate(`/components/${id}/durableoverview`);
   }
 
   // const handleOpen = (type: string) => setOpen(type);
@@ -158,7 +157,7 @@ const ProjectDashboard = () => {
                           type={component.componentType}
                           onClick={() =>
                             handleComponentClick(
-                              component.versionedComponentId.componentId!
+                              component.versionedComponentId.componentId!, component.componentType
                             )
                           }
                         />

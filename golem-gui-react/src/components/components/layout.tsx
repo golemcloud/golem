@@ -1,5 +1,3 @@
-"use client"
-
 import Sidebar from "@ui/Sidebar";
 import { Home, Settings, RocketLaunch } from "@mui/icons-material";
 import CodeIcon from '@mui/icons-material/Code';
