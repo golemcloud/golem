@@ -133,15 +133,15 @@ const Dashboard = () => {
           <MuiGrid container spacing={4}>
             {buttonData.map((item) => (
               <MuiGrid
-                className=" border dark:hover:bg-[#555] hover:bg-[#e4e4e4] rounded-md cursor-pointer"
+                className="border border-border hover:bg-silver rounded-md cursor-pointer"
                 key={item.label}
               >
                 {item.link && (
                   <Link
                     to={item.link || "#"}
                     style={{ textDecoration: "none", color: "inherit" }}
-                    target="_blank" // Opens the link in a new tab
-                    rel="noopener noreferrer" // Improves security by preventing access to the window.opener object
+                    target="_blank"
+                    rel="noopener noreferrer"
                   >
                     <Box
                       onClick={item?.onClick}

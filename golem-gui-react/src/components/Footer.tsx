@@ -9,7 +9,7 @@ const Footer = () => {
   return (
     <Box
       component="footer"
-      className="dark:bg-[#0a0a0a] bg-white border-t border-gray-300 dark:border-[#3f3f3f] py-20"
+      className="bg-primary-background border-t border-border py-20"
     >
       <Container
         maxWidth="lg"
@@ -21,10 +21,9 @@ const Footer = () => {
           rowGap: 4,
         }}
       >
-        {/* Left Section */}
         <Box
           sx={{
-            flexBasis: { xs: "100%", sm: "45%", md: "30%" }, // Responsive width
+            flexBasis: { xs: "100%", sm: "45%", md: "30%" },
           }}
         >
           <Typography
@@ -81,13 +80,13 @@ const Footer = () => {
           </Typography>
           <Stack spacing={0.5}>
             <Link href="https://www.golem.cloud/" color="inherit" underline="hover"
-             target="_blank" // Opens the link in a new tab
+             target="_blank" 
              rel="noopener noreferrer"
             >
               About
             </Link>
             <Link href="https://learn.golem.cloud/" color="inherit" underline="hover"
-             target="_blank" // Opens the link in a new tab
+             target="_blank" 
              rel="noopener noreferrer"
             >
               Docs
@@ -95,10 +94,9 @@ const Footer = () => {
           </Stack>
         </Box>
 
-        {/* Right Section */}
         <Box
           sx={{
-            flexBasis: { xs: "100%", sm: "25%", md: "20%" }, // Responsive width
+            flexBasis: { xs: "100%", sm: "25%", md: "20%" },
           }}
         >
           <Typography
@@ -109,13 +107,13 @@ const Footer = () => {
           </Typography>
           <Stack spacing={0.5}>
             <Link href="https://www.golem.cloud/blog" color="inherit" underline="hover"
-             target="_blank" // Opens the link in a new tab
+             target="_blank"
              rel="noopener noreferrer"
             >
               Blog
             </Link>
             <Link href="https://support.golem.cloud/" color="inherit" underline="hover"
-             target="_blank" // Opens the link in a new tab
+             target="_blank"
              rel="noopener noreferrer"
             >
               Help Center

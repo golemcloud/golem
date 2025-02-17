@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  AppBar,
   Toolbar,
   IconButton,
   Drawer,
@@ -37,17 +36,12 @@ export default function Navbar() {
   };
 
   return (
-    <AppBar
+    <Box
       position="static"
-      color="transparent"
-      className="dark:bg-[#0a0a0a] bg-white border-b border-gray-300 dark:border-[#3f3f3f]"
-      sx={{ boxShadow: "0px 0px" }}
+      className="bg-primary-background border-b border-border"
     >
       <Toolbar className="flex justify-between items-center">
-        {/* Logo */}
         <Logo />
-
-        {/* Desktop Navigation */}
         <Box sx={{ display: { xs: "none", md: "flex" }, gap: 4 }}>
           {links.map((link) => {
             const isActive =
@@ -64,15 +58,8 @@ export default function Navbar() {
                     padding: "0.3rem 0.8rem",
                     marginBottom: "0.5rem",
                     cursor: "pointer",
-                    borderRadius: "3px",
-                    borderBottom: isActive
-                      ? "1px solid #373737"
-                      : "transparent",
-                    "&:hover": {
-                      backgroundColor: "#373737",
-                    },
                   }}
-                  className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]`}
+                  className={`hover:bg-silver rounded ${isActive ? "border-b-2 border-silver" : ""}`}
                 >
                   <ListItemText
                     primary={`${link.name}${link.comingSoon ? "" : ""}`}
@@ -82,8 +69,6 @@ export default function Navbar() {
             );
           })}
         </Box>
-
-        {/* Mobile Menu and Dark Mode Toggle */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           <IconButton
             edge="start"
@@ -97,8 +82,6 @@ export default function Navbar() {
           <ModeToggle />
         </Box>
       </Toolbar>
-
-      {/* Mobile Drawer */}
       <Drawer
         anchor="right"
         open={drawerOpen}
@@ -143,6 +126,6 @@ export default function Navbar() {
           })}
         </List>
       </Drawer>
-    </AppBar>
+    </Box>
   );
 }
