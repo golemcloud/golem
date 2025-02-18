@@ -18,7 +18,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies) {
-    let (component_id, component_name) = deps
+    let (component_id, _) = deps
         .component("environment-service")
         .unique()
         .store_and_get_name()
@@ -107,7 +107,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
                 .collect::<HashMap<_, _>>(),
             _ => panic!("expected List, got {:?}", ok),
         },
-        _ => panic!("expected List, got {:?}", result),
+        _ => panic!("expected Result(Ok(Some(_))), got {:?}", result[0]),
     };
 
     println!("env vars: {:?}", env_vars);

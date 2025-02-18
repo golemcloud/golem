@@ -393,7 +393,17 @@ pub trait WorkerService {
                 {
                     Ok(result) => Ok(InvokeAndAwaitResponse {
                         result: Some(invoke_and_await_response::Result::Success(InvokeResult {
-                            result: vec![Value::try_from(result.result).unwrap().into()],
+                            result: {
+                                match Value::try_from(result.result).unwrap() {
+                                    Value::Tuple(values) => {
+                                        values.into_iter().map(|value| value.into()).collect()
+                                    }
+                                    Value::Record(values) => {
+                                        values.into_iter().map(|value| value.into()).collect()
+                                    }
+                                    value => vec![value.into()],
+                                }
+                            },
                         })),
                     }),
                     Err(error) => Err(anyhow!("{error:?}")),
