@@ -9,7 +9,7 @@ const Footer = () => {
   return (
     <Box
       component="footer"
-      className="bg-primary-background border-t border-border py-20"
+      className="bg-primary border-t border-border py-20"
     >
       <Container
         maxWidth="lg"

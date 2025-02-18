@@ -48,7 +48,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
         minHeight: "100vh",
         display: apiTab === "playground" ? "none" : { xs: "none", md: "flex" },
       }}
-      className="dark:bg-[#0a0a0a] bg-white border-r border-gray-300 dark:border-[#3f3f3f] "
+      className=" bg-primary border-r "
     >
       {variant == "apis" && (
         <Typography
@@ -78,13 +78,9 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
                   marginBottom: "0.8rem",
                   cursor: "pointer",
                   borderRadius: "10px",
-                  backgroundColor: isActive ? "#373737" : "transparent",
-                  "&:hover": {
-                    backgroundColor: "#373737",
-                  },
                 }}
-                className={`dark:hover:bg-[#373737] hover:bg-[#C0C0C0]
-                ${isActive ? "dark:bg-[#373737] bg-[#C0C0C0]" : "transparent"}
+                className={`hover:bg-silver
+                ${isActive ? "bg-silver" : "transparent"}
                 `}
               >
                 <ListItemIcon sx={{ minWidth: 32, color: "inherit" }}>
