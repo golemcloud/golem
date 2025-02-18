@@ -4,13 +4,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
     invoke_and_await_response, launch_new_worker_response, InvokeAndAwaitResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
 };
-use golem_api_grpc::proto::golem::worker::{IdempotencyKey, InvokeResult, TargetWorkerId};
-use golem_common::base_model::ComponentId;
+use golem_api_grpc::proto::golem::worker::{InvokeResult, TargetWorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::{IntoValue, Value};
-use rib::infer_enums;
+use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -99,7 +96,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
     let env_vars = match &result[0] {
         Value::Result(Ok(Some(ok))) => match ok.as_ref() {
             Value::List(env_vars) => env_vars
-                .into_iter()
+                .iter()
                 .map(|env_var| match env_var {
                     Value::Tuple(elems) => match elems.as_slice() {
                         [Value::String(key), Value::String(value)] => (key.clone(), value.clone()),
