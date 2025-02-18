@@ -2781,6 +2781,44 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
         }
+
+        #[test]
+        async fn test_first_class_worker_24() {
+            let expr = r#"
+                let user_id1: string = request.path.user-id;
+                let user_id2: string = request.path.user-id;
+                let worker1 = instance(user_id1);
+                let result1 = worker1.qux[amazon:shopping-cart]("bar");
+                let worker2 = instance(user_id2);
+                let result2 = worker2.qux[amazon:shopping-cart]("bar");
+                user_id2
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut input = HashMap::new();
+
+            let rib_input_key = "request";
+            let rib_input_value = ValueAndType::new(
+                Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
+                record(vec![field("path", record(vec![field("user-id", str())]))]),
+            );
+
+            input.insert(rib_input_key.to_string(), rib_input_value);
+
+            let rib_input = RibInput::new(input);
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                Some(rib_input),
+            );
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "user".into_value_and_type());
+        }
     }
 
     mod internal {
