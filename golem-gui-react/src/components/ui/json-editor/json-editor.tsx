@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Editor } from "@monaco-editor/react";
 import { editor as MonacoEditor } from "monaco-editor";
 import { useTheme } from "next-themes"

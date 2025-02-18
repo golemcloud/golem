@@ -8,7 +8,7 @@ import {
   Edge,
 } from "@xyflow/react";
 
-import { FlowNode, FlowState } from "@/types/react-flow";
+import { FlowNode, FlowState } from "@lib/types/react-flow";
 
 export type StoreGet = () => FlowState;
 export type StoreSet = (

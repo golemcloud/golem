@@ -18,6 +18,7 @@ const TerminalPage = ({ messages }: { messages: Array<EventMessage> }) => {
   );
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    console.log(event)
     setActiveTab(newValue);
   };
 

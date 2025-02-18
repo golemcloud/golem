@@ -36,6 +36,7 @@ const WorkerListWithDropdowns = () => {
   console.log("isConnected", isConnected);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    console.log(event);
     setActiveTab(newValue);
   };
 

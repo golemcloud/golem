@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Worker, WorkerFunction } from "@lib/types/api";
 import useComponents from "@lib/hooks/use-component";
 import { Loader } from "lucide-react";

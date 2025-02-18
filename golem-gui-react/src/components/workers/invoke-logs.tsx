@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Typography, List, Box, Divider } from "@mui/material";
 import { EventMessage, InvocationStart } from "@lib/types/api";
 import { Button2 as Button } from "@ui/button";

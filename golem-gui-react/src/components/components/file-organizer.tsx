@@ -1,7 +1,5 @@
-"use client";
-
 import * as React from "react";
-import { FileEntity } from "./types";
+import { FileEntity } from "@lib/types/api";
 import { FileDropzone } from "./file-dropzone";
 import { FileList } from "./file-list";
 import { DndProvider } from "react-dnd";

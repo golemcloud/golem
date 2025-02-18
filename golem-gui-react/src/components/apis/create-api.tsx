@@ -1,10 +1,9 @@
-import React from "react";
 import { Box, TextField, Typography } from "@mui/material";
 import { useForm, Controller } from "react-hook-form";
-import { addNewApiDefinition } from "../../lib/hooks/use-api-definitons";
-import { ApiDefinition } from "../../lib/types/api";
-import { getFormErrorMessage } from "../../lib/utils";
-import { Button2 } from "../ui/button"; 
+import { addNewApiDefinition } from "@lib/hooks/use-api-definitons";
+import { ApiDefinition } from "@lib/types/api";
+import { getFormErrorMessage } from "@lib/utils";
+import { Button2 } from "@ui/button";
 
 const CreateAPI = ({
   onCreation,

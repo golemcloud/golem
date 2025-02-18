@@ -5,11 +5,8 @@ import { Edge, useReactFlow } from "@xyflow/react";
 import useStore from "./use-react-flow-store";
 import dagre, { graphlib } from "@dagrejs/dagre";
 import { processApiFlow } from "../react-flow/utils";
-import {
-  ApiStep,
-  FlowNode,
-} from "@/types/react-flow";
-import { ApiDefinition } from "@/types/api";
+import {ApiStep, FlowNode} from "@lib/types/react-flow";
+import { ApiDefinition } from "@lib/types/api";
 
 const getLayoutedElements = (
   nodes: FlowNode[],
@@ -127,8 +124,7 @@ const useApiInitialization = (
       const es = useInitialNodes ? initialEdges : edges;
 
       const { nodes: _layoutedNodes, edges: _layoutedEdges } =
-        // @ts-expect-error
-        getLayoutedElements(ns, es, opts);
+        getLayoutedElements(ns?ns:[], es?es:[], opts);
       const layoutedEdges = _layoutedEdges.map((edge: Edge) => {
         return {
           ...edge,

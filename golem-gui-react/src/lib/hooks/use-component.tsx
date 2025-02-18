@@ -4,7 +4,7 @@ import {
   Component,
   InstallPluginPayload,
   UpdatePluginInstallPayload,
-} from "@/types/api";
+} from "@lib/types/api";
 import { toast } from "react-toastify";
 // import { useRouter } from "next/navigation";
 

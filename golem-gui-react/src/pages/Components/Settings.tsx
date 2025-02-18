@@ -27,6 +27,7 @@ const WorkerSettings = () => {
 
   const handleTabChange = useCallback(
     (event: React.SyntheticEvent, newValue: number) => {
+      console.log(event);
       setActiveTab(newValue);
     },
     []

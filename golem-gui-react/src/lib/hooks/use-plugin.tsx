@@ -1,6 +1,6 @@
 import useSWR, { mutate } from "swr";
 import { fetcher } from "../utils";
-import { Plugin } from "@/types/api";
+import { Plugin } from "@lib/types/api";
 import { toast } from "react-toastify";
 import { useCustomParam } from "./use-custom-param";
 const PULGIN_PATH = "v1/plugins";
