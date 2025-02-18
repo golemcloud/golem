@@ -11,7 +11,7 @@ pub fn check_instance_returns(expr: &Expr) -> Result<(), String> {
             }
 
             _ => Err("Worker instance cannot be returned".to_string()),
-        }
+        };
     }
 
     Ok(())

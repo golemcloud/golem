@@ -137,6 +137,10 @@ impl Expr {
     /// string interpolation (see error_message above) etc.
     ///
     pub fn from_text(input: &str) -> Result<Expr, String> {
+        if input.trim().ends_with(';') {
+            return Err("unexpected `;` at the end of rib expression. \nnote: `;` is used to separate expressions, but it should not appear after the last expression (which is the return value)".to_string());
+        }
+
         spaces()
             .with(block().skip(eof()))
             .easy_parse(position::Stream::new(input))

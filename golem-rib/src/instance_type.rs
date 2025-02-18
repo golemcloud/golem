@@ -114,8 +114,10 @@ impl InstanceType {
             InstanceType::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
             InstanceType::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
             InstanceType::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceType::Resource { worker_name, .. } =>worker_name.as_ref().map(|v| v.deref())
+            InstanceType::PackageInterface { worker_name, .. } => {
+                worker_name.as_ref().map(|v| v.deref())
+            }
+            InstanceType::Resource { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
         }
     }
 

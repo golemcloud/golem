@@ -478,7 +478,7 @@ mod internal {
     ) -> Result<(), String> {
         let env_key = EnvironmentKey::from(variable_id.clone());
         let value = interpreter_env.lookup(&env_key).ok_or(format!(
-            "Variable `{}` not found during evaluation of expression",
+            "`{}` not found. If this is a global input, pass it to the rib interpreter",
             variable_id
         ))?;
 
@@ -680,10 +680,14 @@ mod internal {
                 interpreter_stack.push_val(ValueAndType::new(value, field.1.typ));
                 Ok(())
             }
-            result => Err(format!(
-                "Expected a record value to select a field. Obtained {:?}",
-                result
-            )),
+            result => {
+                let stack_value_as_string = String::try_from(result)?;
+
+                Err(format!(
+                    "Unable to select field `{}` as the input `{}` is not a `record` type",
+                    field_name, stack_value_as_string
+                ))
+            }
         }
     }
 
@@ -2230,8 +2234,10 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr};
-        use golem_wasm_rpc::IntoValueAndType;
+        use crate::{compiler, Expr, RibInput};
+        use golem_wasm_ast::analysis::analysed_type::{field, record, str};
+        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+        use std::collections::HashMap;
         use test_r::test;
 
         #[test]
@@ -2735,6 +2741,41 @@ mod interpreter_tests {
 
             let mut rib_interpreter =
                 internal::static_test_interpreter(&"success".into_value_and_type(), None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        }
+
+        #[test]
+        async fn test_first_class_worker_23() {
+            let expr = r#"
+                let worker = instance(request.path.user-id: string);
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut input = HashMap::new();
+
+            // Passing request data as input to interpreter
+            let rib_input_key = "request";
+            let rib_input_value = ValueAndType::new(
+                Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
+                record(vec![field("path", record(vec![field("user-id", str())]))]),
+            );
+
+            input.insert(rib_input_key.to_string(), rib_input_value);
+
+            let rib_input = RibInput::new(input);
+
+            let mut rib_interpreter = internal::static_test_interpreter(
+                &"success".into_value_and_type(),
+                Some(rib_input),
+            );
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 

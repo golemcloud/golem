@@ -15,6 +15,7 @@
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
 use crate::CoercedNumericValue;
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
 use std::ops::Deref;
@@ -28,6 +29,19 @@ pub enum RibInterpreterStackValue {
     Val(ValueAndType),
     Iterator(Box<dyn Iterator<Item = ValueAndType> + Send>),
     Sink(Vec<ValueAndType>, AnalysedType),
+}
+
+impl TryFrom<RibInterpreterStackValue> for String {
+    type Error = String;
+    fn try_from(value: RibInterpreterStackValue) -> Result<Self, Self::Error> {
+        match value {
+            RibInterpreterStackValue::Val(val) => golem_wasm_rpc::print_type_annotated_value(
+                &TypeAnnotatedValue::try_from(val).map_err(|e| e.join(", "))?,
+            ),
+            RibInterpreterStackValue::Unit => Ok("Unit".to_string()),
+            _ => Ok("Unknown".to_string()),
+        }
+    }
 }
 
 impl RibInterpreterStackValue {
