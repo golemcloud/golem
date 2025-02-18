@@ -15,7 +15,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <ToastContainer position="bottom-right" theme="dark" />
         <Navbar />
-        <div className="flex-1">{children}</div>
+        <div className="flex-1 min-h-[100vh]">{children}</div>
         <Footer />
       </ThemeProvider>
     </div>

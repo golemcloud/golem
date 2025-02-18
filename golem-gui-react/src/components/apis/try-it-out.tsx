@@ -202,6 +202,7 @@ export default function TryItOut({
           <Typography>Select Host</Typography>
           <Select
             variant="outlined"
+            size="small"
             className="w-[250px] mb-3"
             required
             defaultValue={finalDeployments[0]}

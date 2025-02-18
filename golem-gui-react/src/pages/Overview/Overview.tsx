@@ -86,7 +86,7 @@ const ProjectDashboard = () => {
                   {!isLoading &&
                     uniquesApis.slice(0, 8).map((api) => (
                       <React.Fragment key={api.id}>
-                        <Divider className="border" />
+                        <Divider className="bg-border" />
                         <Box
                           key={api.id}
                           padding={3}

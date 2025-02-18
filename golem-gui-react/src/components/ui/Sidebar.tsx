@@ -1,7 +1,6 @@
 import React from "react";
 import {
   Box,
-  Button,
   List,
   ListItem,
   ListItemIcon,
@@ -10,7 +9,7 @@ import {
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
 import {Link} from "react-router-dom";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import RouteSideBar from "@components/apis/route-side-bar";
 
 type SidebarProps = {
@@ -30,7 +29,6 @@ type NavigationLinks = {
 
 const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) => {
   const {pathname} = useLocation();
-  const navigate = useNavigate();
   const [params] = useSearchParams();
   const version = params.get("version");
 
@@ -79,9 +77,7 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
                   cursor: "pointer",
                   borderRadius: "10px",
                 }}
-                className={`hover:bg-silver
-                ${isActive ? "bg-silver" : "transparent"}
-                `}
+                className={`hover:bg-silver ${isActive ? "bg-silver" : "transparent"}`}
               >
                 <ListItemIcon sx={{ minWidth: 32, color: "inherit" }}>
                   {link.icon}
@@ -110,27 +106,13 @@ const Sidebar = ({ id, navigationLinks, variant, apiTab,type }: SidebarProps) =>
       )}
 
       {variant === "apis" && (
-        //TODO:for now handling for button. but needs to Link.(don't want to break the ui)
-        <Button
-          onClick={(e) => {
-            e.preventDefault();
-            navigate(
-              `/apis/${id}/new-route${version ? `?version=${version}` : ""}`
-            );
-          }}
-          variant="outlined"
-          sx={{
-            textTransform: "none",
-            padding: "6px 12px",
-            fontSize: "16px",
-            fontWeight: "500",
-          }}
-          fullWidth
-          className="border border-border dark:hover:bg-[#333] hover:bg-[#c0c0c0] text-foreground"
+        <Link
+          to={`/apis/${id}/new-route${version ? `?version=${version}` : ""}`}
+          className="border hover:bg-silver text-center rounded-sm p-2"
         >
           Add
           <Add className="ml-2" />
-        </Button>
+        </Link>
       )}
     </Box>
   );

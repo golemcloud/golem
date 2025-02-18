@@ -134,6 +134,7 @@ const paramStructure = route?.binding?.workerNameInput?.types?.request?.fields;
           </Typography>
         </Grid>
         <Grid size={{ xs: 12, sm: 9 }} alignItems="center">
+          {/* TODO: fix routing */}
           <Link
             to={`/components/${route?.binding?.componentId?.componentId}/overview?version=${route?.binding?.componentId?.version}`}
           >

@@ -67,9 +67,9 @@ const ApiInfoCard: React.FC<ApiInfoProps> = ({
           <Stack direction="row">
             <Box className="flex items-center gap-1">
               {locked ? (
-                <LockIcon className="text-[1.2rem] text-muted-foreground " />
+                <LockIcon fontSize="small" className="text-muted-foreground " />
               ) : (
-                <LockOpenIcon className="text-[1.2rem] text-muted-foreground  " />
+                <LockOpenIcon fontSize="small" className="text-muted-foreground  " />
               )}
             </Box>
             <Typography

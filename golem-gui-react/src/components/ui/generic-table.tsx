@@ -36,7 +36,7 @@ const GenericTable = <T,>({
             {columns.map((column, index) => (
               <TableCell
                 key={index}
-                className="border-b border-border text-gray-900 dark:text-gray-100"
+                className="dark:border-border text-gray-900 dark:text-gray-100"
                 align={column.align || "left"}
               >
                 {column.label}
@@ -49,13 +49,13 @@ const GenericTable = <T,>({
             <TableRow
               key={rowIndex}
               onClick={() => onRowClick && onRowClick(item)}
-              className="hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+              className="hover:bg-silver cursor-pointer"
             >
               {columns.map((column, colIndex) => (
                 <TableCell
                   key={colIndex}
                   align={column.align || "left"}
-                  className="border-b border-border text-gray-900 dark:text-gray-100"
+                  className="text-gray-900 dark:text-gray-100 border-b dark:border-border"
                 >
                   {column.accessor(item)}
                 </TableCell>
