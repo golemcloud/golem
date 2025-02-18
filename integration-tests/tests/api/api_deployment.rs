@@ -25,10 +25,14 @@ inherit_test_dep!(EnvBasedTestDependencies);
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("counters").unique().store().await;
 
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4().to_string())
+    }
+
     let api_definition_1 = create_api_definition(
         deps,
         &component_id,
-        Uuid::new_v4().to_string(),
+        new_api_definition_id("a"),
         "1".to_string(),
         "/path-1".to_string(),
     )
@@ -36,7 +40,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let api_definition_2 = create_api_definition(
         deps,
         &component_id,
-        Uuid::new_v4().to_string(),
+        new_api_definition_id("b"),
         "2".to_string(),
         "/path-2".to_string(),
     )
@@ -75,12 +79,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     check!(request.api_definitions == response.api_definitions);
     check!(request.site == response.site);
 
-    // TODO: is this normal that update "_appends_"?
-    /*
     let api_definition_3 = create_api_definition(
         deps,
         &component_id,
-        Uuid::new_v4().to_string(),
+        new_api_definition_id("c"),
         "1".to_string(),
         "/path-3".to_string(),
     )
@@ -103,12 +105,34 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         },
     };
 
+    // NOTE: create_or_update does not delete previous defs
+    let expected_merged = ApiDeploymentRequest {
+        api_definitions: vec![
+            ApiDefinitionInfo {
+                id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                version: api_definition_1.version.clone(),
+            },
+            ApiDefinitionInfo {
+                id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                version: api_definition_2.version.clone(),
+            },
+            ApiDefinitionInfo {
+                id: api_definition_3.id.as_ref().unwrap().value.clone(),
+                version: api_definition_3.version.clone(),
+            },
+        ],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("subdomain".to_string()),
+        },
+    };
+
     let response = deps
         .worker_service()
         .create_or_update_api_deployment(request.clone())
         .await
         .unwrap();
-    check!(request.api_definitions == response.api_definitions);
+    check!(expected_merged.api_definitions == response.api_definitions);
     check!(request.site == response.site);
 
     let response = deps
@@ -116,9 +140,8 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         .get_api_deployment("subdomain.localhost")
         .await
         .unwrap();
-    check!(request.api_definitions == response.api_definitions);
+    check!(expected_merged.api_definitions == response.api_definitions);
     check!(request.site == response.site);
-    */
 
     deps.worker_service()
         .delete_api_deployment("subdomain.localhost")

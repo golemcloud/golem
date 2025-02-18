@@ -8,8 +8,6 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
-// TODO: no delete for security scheme?
-
 #[test]
 #[tracing::instrument]
 async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
@@ -24,9 +22,7 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
     assert!(created_security_scheme == security_scheme);
 }
 
-// TODO: this is failing currently
 #[test]
-#[ignore]
 #[tracing::instrument]
 async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
     let security_scheme = new_security_scheme();
