@@ -93,7 +93,7 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId,
+        InferredType, InstructionId, RibIR, VariableId, WorkerName,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
@@ -309,8 +309,15 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
+                let mut worker_expr = None;
+
                 match call_type {
-                    CallType::Function { function_name, .. } => {
+                    CallType::Function {
+                        function_name,
+                        worker,
+                    } => {
+                        worker_expr = worker.as_ref();
+
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -320,9 +327,22 @@ mod internal {
                             )?)
                         };
 
-                        // Invoke Function after resolving the function name
-                        instructions
-                            .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
+                        // To be pushed to interpreter stack later
+                        let worker_name = match worker_expr {
+                            Some(x) => WorkerName::Provided,
+                            None => WorkerName::NotProvided,
+                        };
+
+                        instructions.push(RibIR::InvokeFunction(
+                            worker_name,
+                            arguments.len(),
+                            function_result_type,
+                        ));
+
+                        if let Some(worker_expr) = worker_expr {
+                            dbg!("here????");
+                            stack.push(ExprState::from_expr(worker_expr));
+                        }
 
                         let site = function_name.site.clone();
 
@@ -442,9 +462,11 @@ mod internal {
                     // There is nothing to do as such for instance creation
                     CallType::InstanceCreation(instance_creation) => {
                         instructions.push(RibIR::PushLit(match instance_creation {
-                            InstanceCreationType::Worker { .. } => "worker".into_value_and_type(),
+                            InstanceCreationType::Worker { .. } => {
+                                "create_worker".into_value_and_type()
+                            }
                             InstanceCreationType::Resource { .. } => {
-                                "resource".into_value_and_type()
+                                "create_resource".into_value_and_type()
                             }
                         }));
                     }

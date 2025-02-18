@@ -18,6 +18,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
 // A result of a function can be unit, which is not representable using value_and_type

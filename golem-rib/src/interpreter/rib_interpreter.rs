@@ -167,9 +167,14 @@ impl Interpreter {
                     )?;
                 }
 
-                RibIR::InvokeFunction(arg_size, _) => {
-                    internal::run_call_instruction(arg_size, &mut stack, &mut interpreter_env)
-                        .await?;
+                RibIR::InvokeFunction(worker_type, arg_size, _) => {
+                    internal::run_call_instruction(
+                        arg_size,
+                        worker_type,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )
+                    .await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
@@ -271,7 +276,7 @@ mod internal {
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
         CoercedNumericValue, FunctionReferenceType, InstructionId, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, VariableId,
+        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerName,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -283,7 +288,7 @@ mod internal {
     use std::sync::Arc;
 
     pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
-        Arc::new(|_, _| {
+        Arc::new(|_, _, _| {
             Box::pin(async {
                 Ok(ValueAndType {
                     value: Value::Tuple(vec![]),
@@ -963,12 +968,24 @@ mod internal {
 
     pub(crate) async fn run_call_instruction(
         arg_size: usize,
+        worker_type: WorkerName,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
         let function_name = interpreter_stack
             .pop_str()
             .ok_or("Internal Error: Failed to get a function name".to_string())?;
+
+        let worker_name = match worker_type {
+            WorkerName::NotProvided => None,
+            WorkerName::Provided => {
+                let worker_name = interpreter_stack
+                    .pop_str()
+                    .ok_or("Internal Error: Failed to get the worker name".to_string())?;
+
+                Some(worker_name.clone())
+            }
+        };
 
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
@@ -985,7 +1002,7 @@ mod internal {
             .collect::<Result<Vec<ValueAndType>, String>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(function_name, parameter_values)
+            .invoke_worker_function_async(worker_name, function_name, parameter_values)
             .await?;
 
         let interpreter_result = match result {
@@ -2834,20 +2851,59 @@ mod interpreter_tests {
 
             assert_eq!(error, "Invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
         }
+
+        #[test]
+        async fn test_first_class_worker_26() {
+            let expr = r#"
+                let worker = instance(1:u32);
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(error, "Worker name expression `1u32` is invalid. Worker name must be of the type string. Obtained u32");
+        }
+
+        #[test]
+        async fn test_first_class_worker_27() {
+            let expr = r#"
+                let worker = instance("my-worker-name");
+                let result = worker.qux[amazon:shopping-cart]("param1");
+                result
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let mut rib_interpreter =
+                internal::dynamic_test_interpreter(internal::DefaultTestFunctionInvoke, None);
+
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+            assert!(result.get_val().is_some());
+        }
     }
 
     mod internal {
+        use crate::interpreter::env::{
+            FullyEvaluatedArgs, FullyEvaluatedFunctionName, FullyEvaluatedWorkerName,
+        };
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{RibFunctionInvoke, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
+            case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
-        use golem_wasm_rpc::{Value, ValueAndType};
+        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+        use std::fmt::format;
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -3149,7 +3205,8 @@ mod interpreter_tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        // A simple interpreter that always return result_value regardless of the input
+        // A simple interpreter that always return result_value regardless
+        // of the function name, args, or worker name
         pub(crate) fn static_test_interpreter(
             result_value: &ValueAndType,
             input: Option<RibInput>,
@@ -3160,10 +3217,11 @@ mod interpreter_tests {
             }
         }
 
+        // value will be prefixed with worker-name
         fn static_worker_invoke(value: &ValueAndType) -> RibFunctionInvoke {
             let value = value.clone();
 
-            Arc::new(move |_, _| {
+            Arc::new(move |_, _, _| {
                 Box::pin({
                     let value = value.clone();
 
@@ -3175,6 +3233,86 @@ mod interpreter_tests {
                         ))
                     }
                 })
+            })
+        }
+
+        trait TestFunctionInvoke {
+            fn invoke(
+                &self,
+                worker_name: Option<FullyEvaluatedWorkerName>,
+                fqn: FullyEvaluatedFunctionName,
+                args: FullyEvaluatedArgs,
+            ) -> ValueAndType;
+        }
+
+        pub(crate) struct DefaultTestFunctionInvoke;
+
+        // Invoking this function simply returns the original worker name, the function name
+        // and the arguments, confirming that we are infact calling the actual function
+        impl TestFunctionInvoke for DefaultTestFunctionInvoke {
+            fn invoke(
+                &self,
+                worker_name: Option<FullyEvaluatedWorkerName>,
+                fqn: FullyEvaluatedFunctionName,
+                args: FullyEvaluatedArgs,
+            ) -> ValueAndType {
+                let worker_name = worker_name.map(|x| x.0);
+
+                let function_name = fqn.0.into_value_and_type();
+
+                let args = args.0;
+
+                let mut arg_types = vec![];
+
+                for (index, value_and_type) in args.iter().enumerate() {
+                    let name = format!("args{}", index);
+                    let value = value_and_type.typ.clone();
+                    arg_types.push(field(name.as_str(), value));
+                }
+
+                let args_type = args.iter().map(|x| x.typ.clone()).collect::<Vec<_>>();
+
+                let mut analysed_type_pairs = vec![];
+                analysed_type_pairs.push(field("worker_name", option(str())));
+                analysed_type_pairs.push(field("function_name", str()));
+                analysed_type_pairs.extend(arg_types);
+
+                let mut values = vec![];
+
+                values.push(Value::Option(
+                    worker_name.map(|x| Box::new(Value::String(x))),
+                ));
+                values.push(function_name.value);
+
+                for arg_value in args {
+                    values.push(arg_value.value);
+                }
+
+                let value = ValueAndType::new(
+                    Value::Tuple(vec![Value::Record(values)]),
+                    tuple(vec![record(analysed_type_pairs)]),
+                );
+                value
+            }
+        }
+
+        pub(crate) fn dynamic_test_interpreter<T: TestFunctionInvoke + Sync + Send + 'static>(
+            invoke_fun: T,
+            input: Option<RibInput>,
+        ) -> Interpreter {
+            Interpreter {
+                input: input.unwrap_or_default(),
+                invoke: dynamic_worker_invoke(invoke_fun),
+            }
+        }
+
+        fn dynamic_worker_invoke<T: TestFunctionInvoke + Sync + Send + 'static>(
+            t: T,
+        ) -> RibFunctionInvoke {
+            Arc::new(move |worker_name, fqn, args| {
+                let result = t.invoke(worker_name, fqn, args);
+
+                Box::pin({ async move { Ok(result) } })
             })
         }
     }

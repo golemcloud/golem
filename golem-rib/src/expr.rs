@@ -675,7 +675,6 @@ impl Expr {
 
         self.check_types(function_type_registry)
             .map_err(|x| vec![x])?;
-        dbg!(self.clone());
         self.unify_types()?;
         Ok(())
     }

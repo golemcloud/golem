@@ -2248,9 +2248,9 @@ mod comprehensive_test {
         ) -> RibFunctionInvoke {
             let value = functions_and_result.clone();
 
-            Arc::new(move |a, _| {
+            Arc::new(move |_, a, _| {
                 Box::pin({
-                    let value = value.get(&FunctionName(a)).cloned().flatten();
+                    let value = value.get(&FunctionName(a.0)).cloned().flatten();
 
                     async move {
                         if let Some(value) = value {

@@ -7,6 +7,7 @@ pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
 mod check_number_types;
+mod check_worker_name;
 mod exhaustive_pattern_match;
 mod math;
 mod missing_fields;
@@ -15,14 +16,13 @@ mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
-mod check_worker_name;
 
 use crate::type_checker::check_number_types::check_number_types;
+use crate::type_checker::check_worker_name::check_worker_name;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::math::check_types_in_math_expr;
 use crate::type_checker::type_mismatch_call_args::check_type_errors_in_function_call;
 use crate::{Expr, FunctionTypeRegistry};
-use crate::type_checker::check_worker_name::check_worker_name;
 
 pub fn type_check(
     expr: &mut Expr,

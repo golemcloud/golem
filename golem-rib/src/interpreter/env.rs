@@ -36,12 +36,20 @@ impl Debug for InterpreterEnv {
 
 pub type RibFunctionInvoke = Arc<
     dyn Fn(
-            String,
-            Vec<ValueAndType>,
+            Option<FullyEvaluatedWorkerName>,
+            FullyEvaluatedFunctionName,
+            FullyEvaluatedArgs,
         ) -> Pin<Box<dyn Future<Output = Result<ValueAndType, String>> + Send>>
         + Send
         + Sync,
 >;
+
+pub struct FullyEvaluatedFunctionName(pub String);
+
+#[derive(Clone)]
+pub struct FullyEvaluatedWorkerName(pub String);
+
+pub struct FullyEvaluatedArgs(pub Vec<ValueAndType>);
 
 impl Default for InterpreterEnv {
     fn default() -> Self {
@@ -55,10 +63,15 @@ impl Default for InterpreterEnv {
 impl InterpreterEnv {
     pub fn invoke_worker_function_async(
         &self,
+        worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
     ) -> Pin<Box<dyn Future<Output = Result<ValueAndType, String>> + Send>> {
-        (self.call_worker_function_async)(function_name, args)
+        (self.call_worker_function_async)(
+            worker_name.map(FullyEvaluatedWorkerName),
+            FullyEvaluatedFunctionName(function_name),
+            FullyEvaluatedArgs(args),
+        )
     }
 
     pub fn from_input(env: &RibInput) -> Self {
@@ -119,7 +132,7 @@ mod internal {
     use std::sync::Arc;
 
     pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
-        Arc::new(|_, _| {
+        Arc::new(|_, _, _| {
             Box::pin(async { Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![]))) })
         })
     }
