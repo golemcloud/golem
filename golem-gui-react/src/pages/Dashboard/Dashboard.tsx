@@ -119,14 +119,11 @@ const Dashboard = () => {
         sx={{
           display: "flex",
           flexDirection: "column",
-          mb: 2,
-          py: 4,
-          px: 3,
           borderRadius: "5px",
         }}
-        className="border"
+        className="border mb-2 ;y-4 px-3"
       >
-        <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+        <Typography variant="h5" sx={{fontWeight: 600 }} className="mb-2">
           Quick Access
         </Typography>
         <Box>
@@ -160,7 +157,8 @@ const Dashboard = () => {
                       {item.icon}
                       <Typography
                         variant="caption"
-                        sx={{ mt: 1, fontWeight: 500 }}
+                        className="mt-1"
+                        sx={{ fontWeight: 500 }}
                       >
                         {item.label}
                       </Typography>
@@ -185,7 +183,8 @@ const Dashboard = () => {
                     {item.icon}
                     <Typography
                       variant="caption"
-                      sx={{ mt: 1, fontWeight: 500 }}
+                      className="mt-1"
+                      sx={{fontWeight: 500 }}
                     >
                       {item.label}
                     </Typography>

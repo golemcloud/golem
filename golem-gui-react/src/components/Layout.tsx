@@ -1,7 +1,7 @@
 import React, { ReactNode } from 'react';
 import Navbar from './Navbar';
 import Footer from './Footer';
-import { ThemeProvider } from './ui/theme-provider';
+import { ThemeProvider } from '@ui/theme-provider';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
