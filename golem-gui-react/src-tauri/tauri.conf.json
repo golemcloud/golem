@@ -5,7 +5,9 @@
   "identifier": "console.golem.cloud",
   "build": {
     "devUrl": "http://localhost:5173",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
@@ -18,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:9881;",
+      "csp": "default-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' asset: https://asset.localhost; connect-src 'self' http://localhost:9881;",
       "headers": {
         "Cross-Origin-Opener-Policy": "cross-origin",
         "Timing-Allow-Origin": "*"
