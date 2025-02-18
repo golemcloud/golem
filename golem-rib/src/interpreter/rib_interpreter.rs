@@ -3269,13 +3269,6 @@ mod interpreter_tests {
             }
         }
 
-        // value will be prefixed with worker-name
-        fn static_worker_invoke(value: &ValueAndType) -> Arc<dyn RibFunctionInvoke + Send + Sync> {
-            let value = value.clone();
-
-            Arc::new(StaticWorkerFnInvoke { value })
-        }
-
         struct DynamicWorkerFnInvoke;
 
         #[async_trait]
