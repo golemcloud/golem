@@ -2252,10 +2252,11 @@ mod interpreter_tests {
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, RibInput};
-        use golem_wasm_ast::analysis::analysed_type::{field, record, str};
-        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+        use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
+        use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
         #[test]
         async fn test_first_class_worker_0() {
@@ -2884,7 +2885,24 @@ mod interpreter_tests {
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert!(result.get_val().is_some());
+            let result_val = result.get_val().unwrap();
+            dbg!(print_value_and_type(&result_val).unwrap());
+            let expected_analysed_type = record(vec![
+                field("worker-name", option(str())),
+                field("function-name", str()),
+                field("args0", str()),
+            ]);
+
+            let expected_val = parse_value_and_type(&expected_analysed_type,r#"
+              {
+                 worker-name: some("my-worker-name"),
+                 function-name: "amazon:shopping-cart/api1.{qux}",
+                 args0: "param1"
+              }
+            "#).unwrap();
+
+
+            assert_eq!(result_val, expected_val);
         }
     }
 
@@ -3245,6 +3263,7 @@ mod interpreter_tests {
             ) -> ValueAndType;
         }
 
+
         pub(crate) struct DefaultTestFunctionInvoke;
 
         // Invoking this function simply returns the original worker name, the function name
@@ -3273,8 +3292,8 @@ mod interpreter_tests {
                 let args_type = args.iter().map(|x| x.typ.clone()).collect::<Vec<_>>();
 
                 let mut analysed_type_pairs = vec![];
-                analysed_type_pairs.push(field("worker_name", option(str())));
-                analysed_type_pairs.push(field("function_name", str()));
+                analysed_type_pairs.push(field("worker-name", option(str())));
+                analysed_type_pairs.push(field("function-name", str()));
                 analysed_type_pairs.extend(arg_types);
 
                 let mut values = vec![];

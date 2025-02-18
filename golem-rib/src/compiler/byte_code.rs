@@ -340,7 +340,6 @@ mod internal {
                         ));
 
                         if let Some(worker_expr) = worker_expr {
-                            dbg!("here????");
                             stack.push(ExprState::from_expr(worker_expr));
                         }
 
