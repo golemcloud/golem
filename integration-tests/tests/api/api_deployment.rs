@@ -26,7 +26,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("counters").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
-        format!("{}-{}", prefix, Uuid::new_v4().to_string())
+        format!("{}-{}", prefix, Uuid::new_v4())
     }
 
     let api_definition_1 = create_api_definition(

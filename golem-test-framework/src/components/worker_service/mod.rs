@@ -1115,7 +1115,6 @@ pub trait WorkerService {
         }
     }
 
-    // TODO: on the service side "site" is optional, how is that exposed on the client?
     async fn delete_api_deployment(&self, site: &str) -> crate::Result<()> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
