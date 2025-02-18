@@ -251,7 +251,7 @@ export const RouteModal = ({
         ),
       ]),
     );
-  }, [path, selectedComponent,workersData]);
+  }, [path, selectedComponent, workersData]);
 
   useEffect(() => {
     if (existingRoute) {
@@ -506,11 +506,11 @@ export const RouteModal = ({
             />
           </div>
 
-          <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-700">
+          <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-border/10">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm bg-gray-700 rounded-md hover:bg-gray-600
-                transition-colors"
+              className="px-4 py-2 text-sm bg-card/80 rounded-md hover:bg-muted 
+      transition-colors"
               disabled={isLoading}
             >
               Cancel
@@ -518,8 +518,8 @@ export const RouteModal = ({
             <button
               onClick={handleSave}
               disabled={isLoading}
-              className="px-4 py-2 text-sm bg-primary rounded-md hover:bg-blue-600 
-                disabled:opacity-50 transition-colors flex items-center gap-2"
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 
+      disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {isLoading ? (
                 <>

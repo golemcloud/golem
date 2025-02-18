@@ -3,8 +3,7 @@ import * as monaco from "monaco-editor";
 import { AlertCircle, ChevronLeft, Code2, Maximize2, Minimize2, X } from "lucide-react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import React, { useEffect, useState } from "react";
-
-import { apiClient } from "../../lib/api-client";
+import { apiClient, baseURL } from "../../lib/api-client";
 
 // Types
 interface ContextVariable {
@@ -47,7 +46,7 @@ const ValidationError = ({ message, onClose, onCloseWithError }: ValidationError
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
           <span className="text-sm">{message}</span>
         </div>
-        
+
         <div className="flex items-center gap-2">
           {onCloseWithError && (
             <button
@@ -59,7 +58,7 @@ const ValidationError = ({ message, onClose, onCloseWithError }: ValidationError
               Close with Error
             </button>
           )}
-          
+
           <button
             onClick={onClose}
             className="p-1.5 hover:bg-destructive/10 rounded-md transition-colors"
@@ -318,8 +317,10 @@ const RibEditorPanel: React.FC<RibEditorPanelProps> = ({
 
   const validateContent = async (): Promise<boolean> => {
     setIsValidating(true);
+    let origin = window.location.origin;
+    let url = baseURL == '/api' ? `${origin}/rib-validator` : baseURL.replace('/api', '') + '/rib-validator';
     try {
-      await apiClient.post('http://localhost:3000/rib-validator', {
+      await apiClient.post(url, {
         rib: currentValue,
         exports: exports
       });
