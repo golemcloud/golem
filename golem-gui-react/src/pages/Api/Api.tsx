@@ -1,0 +1,145 @@
+"use client";
+
+import  { useCallback, useMemo, useState } from "react";
+import {
+  Box,
+  InputAdornment,
+  Pagination,
+  TextField,
+} from "@mui/material";
+import SearchIcon from "@mui/icons-material/Search";
+import AddIcon from "@mui/icons-material/Add";
+import CreateAPI from "@components/apis/create-api"; 
+import ApiIcon from "@mui/icons-material/Api";
+import { useNavigate } from "react-router-dom";
+import { ApiDefinition } from "@lib/types/api"; 
+import CustomModal from "@components/ui/custom/custom-modal"; 
+import useApiDefinitions from "@lib/hooks/use-api-definitons";
+import ApiInfoCard from "@components/apis/api-info-card"; 
+import { Button2 } from "@components/ui/button";
+import ErrorBoundary from "@components/ui/error-boundary";
+import NotFoundCard from "@components/ui/not-found-card";
+
+const ComponentsPage = () => {
+  const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const { apiDefinitions, isLoading, error } = useApiDefinitions();
+  const [currentPage, setCurrentPage] = useState(1);
+  const navigate = useNavigate();
+
+  const handleOpen = () => setOpen(true);
+  const handleClose = () => setOpen(false);
+
+  const handleApiClick = (apiId: string) => {
+    navigate(`/apis/${apiId}/overview`);
+  };
+
+  const checkForMatch = useCallback(
+    (api: ApiDefinition) => {
+      if (!searchQuery || searchQuery?.length <= 2) {
+        return true;
+      }
+
+      return api.id.toLowerCase().includes(searchQuery.toLowerCase());
+    },
+    [searchQuery]
+  );
+
+  const finalApis = useMemo(() => {
+    return Object.values(
+      apiDefinitions?.reduce<Record<string, ApiDefinition>>(
+        (obj, api: ApiDefinition) => {
+          obj[api.id] = api;
+          return obj;
+        },
+        {}
+      ) || {}
+    ).reverse()
+  }, [apiDefinitions]).filter(checkForMatch);
+ const itemsPerPage=15
+  const totalPages = Math.ceil(finalApis.length / itemsPerPage);
+  const paginatedApis = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return finalApis.slice(startIndex, endIndex);
+  }, [finalApis, currentPage]);
+
+  return (
+    <main className="mx-auto max-w-7xl px-6 lg:px-8">
+      <Box className="mx-auto max-w-2xl lg:max-w-none gap-6 flex flex-1 flex-col py-6">
+       {error && <ErrorBoundary message={error}/>}
+        {!error && !isLoading && (
+          <>
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              mb={2}
+              gap={2}
+            >
+              <TextField
+                placeholder="Search APIs..."
+                variant="outlined"
+                size="small"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)} // Update search query
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ color: "grey.500" }} />
+                    </InputAdornment>
+                  ),
+                }}
+                className="flex-1"
+              />
+              <Button2
+                variant="default"
+                endIcon={<AddIcon />}
+                size="md"
+                onClick={handleOpen}
+              >
+                New
+              </Button2>
+            </Box>
+
+            {finalApis.length === 0 ? (
+              <NotFoundCard heading="No APIs available" subheading="Create a  new api to get started" icon={<ApiIcon fontSize="large"/>}/>
+            ) : (
+              <Box className="grid w-full grid-cols-1  lg:grid-cols-2 xl:grid-cols-3  gap-6">
+                {!isLoading &&
+                  paginatedApis.map((api: ApiDefinition) => (
+                    <ApiInfoCard
+                      key={api.id}
+                      name={api.id}
+                      version={api.version}
+                      routesCount={api.routes.length}
+                      locked={api.draft}
+                      onClick={() => handleApiClick(api.id)}
+                    />
+                  ))}
+              </Box>
+            )}
+            <Box mt={4} display="flex" justifyContent="center">
+              <Pagination
+                count={totalPages}
+                page={currentPage}
+                onChange={(_, value) => setCurrentPage(value)}
+                color="primary"
+                className="pagination"
+              />
+            </Box>
+            <CustomModal
+              open={open}
+              onClose={handleClose}
+              heading="Create New API"
+            >
+              <CreateAPI onCreation={handleClose} />
+            </CustomModal>
+          </>
+        )}
+      </Box>
+    </main>
+  );
+};
+
+export default ComponentsPage;
