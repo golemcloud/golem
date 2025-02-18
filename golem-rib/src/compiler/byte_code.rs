@@ -309,15 +309,11 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                let mut worker_expr = None;
-
                 match call_type {
                     CallType::Function {
                         function_name,
                         worker,
                     } => {
-                        worker_expr = worker.as_ref();
-
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -328,8 +324,8 @@ mod internal {
                         };
 
                         // To be pushed to interpreter stack later
-                        let worker_name = match worker_expr {
-                            Some(x) => WorkerName::Provided,
+                        let worker_name = match worker {
+                            Some(_) => WorkerName::Provided,
                             None => WorkerName::NotProvided,
                         };
 
@@ -339,7 +335,7 @@ mod internal {
                             function_result_type,
                         ));
 
-                        if let Some(worker_expr) = worker_expr {
+                        if let Some(worker_expr) = worker {
                             stack.push(ExprState::from_expr(worker_expr));
                         }
 

@@ -2253,10 +2253,11 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
-        use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValueAndType, Value, ValueAndType};
+        use golem_wasm_rpc::{
+            parse_value_and_type, print_value_and_type, IntoValueAndType, Value, ValueAndType,
+        };
         use std::collections::HashMap;
         use test_r::test;
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
         #[test]
         async fn test_first_class_worker_0() {
@@ -2893,14 +2894,17 @@ mod interpreter_tests {
                 field("args0", str()),
             ]);
 
-            let expected_val = parse_value_and_type(&expected_analysed_type,r#"
+            let expected_val = parse_value_and_type(
+                &expected_analysed_type,
+                r#"
               {
                  worker-name: some("my-worker-name"),
                  function-name: "amazon:shopping-cart/api1.{qux}",
                  args0: "param1"
               }
-            "#).unwrap();
-
+            "#,
+            )
+            .unwrap();
 
             assert_eq!(result_val, expected_val);
         }
@@ -2921,7 +2925,6 @@ mod interpreter_tests {
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
-        use std::fmt::format;
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -3254,7 +3257,7 @@ mod interpreter_tests {
             })
         }
 
-        trait TestFunctionInvoke {
+        pub(crate) trait TestFunctionInvoke {
             fn invoke(
                 &self,
                 worker_name: Option<FullyEvaluatedWorkerName>,
@@ -3262,7 +3265,6 @@ mod interpreter_tests {
                 args: FullyEvaluatedArgs,
             ) -> ValueAndType;
         }
-
 
         pub(crate) struct DefaultTestFunctionInvoke;
 
@@ -3288,8 +3290,6 @@ mod interpreter_tests {
                     let value = value_and_type.typ.clone();
                     arg_types.push(field(name.as_str(), value));
                 }
-
-                let args_type = args.iter().map(|x| x.typ.clone()).collect::<Vec<_>>();
 
                 let mut analysed_type_pairs = vec![];
                 analysed_type_pairs.push(field("worker-name", option(str())));
@@ -3331,7 +3331,7 @@ mod interpreter_tests {
             Arc::new(move |worker_name, fqn, args| {
                 let result = t.invoke(worker_name, fqn, args);
 
-                Box::pin({ async move { Ok(result) } })
+                Box::pin(async move { Ok(result) })
             })
         }
     }
