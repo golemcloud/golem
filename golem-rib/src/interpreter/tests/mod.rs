@@ -2255,9 +2255,9 @@ mod comprehensive_test {
         impl RibFunctionInvoke for DynamicRibFunctionInvoke {
             async fn invoke(
                 &self,
-                worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
-                args: EvaluatedFnArgs,
+                _args: EvaluatedFnArgs,
             ) -> Result<ValueAndType, String> {
                 let function_name = FunctionName(function_name.0);
                 let value = self

@@ -19,8 +19,6 @@ use crate::{
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct InterpreterEnv {
@@ -121,7 +119,7 @@ mod internal {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::tuple;
     use golem_wasm_rpc::{Value, ValueAndType};
-    use std::sync::Arc;
+    
 
     pub(crate) struct NoopRibFunctionInvoke;
 
