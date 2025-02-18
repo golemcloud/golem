@@ -20,10 +20,11 @@ use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::EndpointExt;
+use poem::{EndpointExt, IntoEndpoint};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -42,8 +43,13 @@ const VERSION: &str = golem_version!();
 test_r::enable!();
 
 pub struct RunDetails {
-    pub http_port: u16,
     pub grpc_port: u16,
+    pub http_port: u16,
+}
+
+pub struct TrafficReadyEndpoints {
+    pub grpc_port: u16,
+    pub endpoint: BoxEndpoint<'static>,
 }
 
 #[derive(Clone)]
@@ -93,10 +99,23 @@ impl ComponentService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let http_port = self.start_http_server(join_set).await?;
+        let http_port = self.start_standalone_http_server(join_set).await?;
         Ok(RunDetails {
             http_port,
             grpc_port,
+        })
+    }
+
+    /// Endpoints are only valid until joinset is dropped
+    pub async fn start_endpoints(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
+        let grpc_port = self.start_grpc_server(join_set).await?;
+        let endpoint = self.main_endpoint();
+        Ok(TrafficReadyEndpoints {
+            grpc_port,
+            endpoint,
         })
     }
 
@@ -104,7 +123,7 @@ impl ComponentService {
         make_open_api_service(&self.services)
     }
 
-    pub async fn start_grpc_server(
+    async fn start_grpc_server(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<u16, anyhow::Error> {
@@ -117,11 +136,18 @@ impl ComponentService {
         .map_err(|err| anyhow!(err).context("gRPC server failed"))
     }
 
-    async fn start_http_server(
+    fn main_endpoint(&self) -> BoxEndpoint<'static> {
+        api::make_open_api_service(&self.services)
+            .into_endpoint()
+            .boxed()
+    }
+
+    async fn start_standalone_http_server(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
+
         let app = api::combined_routes(prometheus_registry, &self.services)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);

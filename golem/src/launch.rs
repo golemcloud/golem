@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::health;
 use crate::migration::IncludedMigrationsDir;
-use crate::proxy;
-use crate::AllRunDetails;
+use crate::router::start_router;
+use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
@@ -80,40 +79,12 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
             )
         })?;
 
-    let shard_manager = run_shard_manager(shard_manager_config(args), &mut join_set).await?;
-    let component_service =
-        run_component_service(component_service_config(args), &mut join_set).await?;
-    let worker_executor = run_worker_executor(
-        worker_executor_config(args, &shard_manager, &component_service),
-        &mut join_set,
-    )
-    .await?;
-    let worker_service = run_worker_service(
-        worker_service_config(args, &shard_manager, &component_service),
-        &mut join_set,
-    )
-    .await?;
+    let started_components = start_components(args, &mut join_set).await?;
 
-    let all_run_details = AllRunDetails {
-        shard_manager,
-        worker_executor,
-        component_service,
-        worker_service,
-    };
-
-    let healthcheck_port = health::start_healthcheck_server(
-        all_run_details.healthcheck_ports(),
-        prometheus::default_registry().clone(),
-        &mut join_set,
-    )
-    .await?;
-
-    // Don't drop the channel, it will cause the proxy to fail
-    let _proxy_command_channel = proxy::start_proxy(
+    start_router(
         &args.router_host,
         args.router_port,
-        healthcheck_port,
-        &all_run_details,
+        started_components,
         &mut join_set,
     )?;
 
@@ -122,6 +93,32 @@ pub async fn launch_golem_services(args: &LaunchArgs) -> Result<(), anyhow::Erro
     }
 
     Ok(())
+}
+
+async fn start_components(
+    args: &LaunchArgs,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<StartedComponents, anyhow::Error> {
+    let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
+    let component_service = run_component_service(component_service_config(args), join_set).await?;
+    let worker_executor = run_worker_executor(
+        worker_executor_config(args, &shard_manager, &component_service),
+        join_set,
+    )
+    .await?;
+    let worker_service = run_worker_service(
+        worker_service_config(args, &shard_manager, &component_service),
+        join_set,
+    )
+    .await?;
+
+    Ok(StartedComponents {
+        shard_manager,
+        worker_executor,
+        component_service,
+        worker_service,
+        prometheus_registy: prometheus::default_registry().clone(),
+    })
 }
 
 fn blob_storage_config(args: &LaunchArgs) -> BlobStorageConfig {
@@ -172,7 +169,7 @@ fn component_service_config(args: &LaunchArgs) -> ComponentServiceConfig {
 fn worker_executor_config(
     args: &LaunchArgs,
     shard_manager_run_details: &golem_shard_manager::RunDetails,
-    component_service_run_details: &golem_component_service::RunDetails,
+    component_service_run_details: &golem_component_service::TrafficReadyEndpoints,
 ) -> GolemConfig {
     let mut config = GolemConfig {
         port: 0,
@@ -210,7 +207,7 @@ fn worker_executor_config(
 fn worker_service_config(
     args: &LaunchArgs,
     shard_manager_run_details: &golem_shard_manager::RunDetails,
-    component_service_run_details: &golem_component_service::RunDetails,
+    component_service_run_details: &golem_component_service::TrafficReadyEndpoints,
 ) -> WorkerServiceBaseConfig {
     WorkerServiceBaseConfig {
         port: 0,
@@ -265,7 +262,7 @@ async fn run_shard_manager(
 async fn run_component_service(
     config: ComponentServiceConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<golem_component_service::RunDetails, anyhow::Error> {
+) -> Result<golem_component_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"
@@ -275,7 +272,7 @@ async fn run_component_service(
     ComponentService::new(config, prometheus_registry, migration_path)
         .instrument(span.clone())
         .await?
-        .run(join_set)
+        .start_endpoints(join_set)
         .instrument(span)
         .await
 }
@@ -295,7 +292,7 @@ async fn run_worker_executor(
 async fn run_worker_service(
     config: WorkerServiceBaseConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<golem_worker_service::RunDetails, anyhow::Error> {
+) -> Result<golem_worker_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"
@@ -306,7 +303,7 @@ async fn run_worker_service(
     WorkerService::new(config, prometheus_registry, migration_path)
         .instrument(span.clone())
         .await?
-        .run(join_set)
+        .start_endpoints(join_set)
         .instrument(span)
         .await
 }
