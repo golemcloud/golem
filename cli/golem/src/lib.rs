@@ -12,29 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::Registry;
+
 pub mod command;
-mod health;
 pub mod launch;
 mod migration;
-mod proxy;
+mod router;
 
 #[cfg(test)]
 test_r::enable!();
 
-pub struct AllRunDetails {
-    pub component_service: golem_component_service::RunDetails,
+pub struct StartedComponents {
+    pub component_service: golem_component_service::TrafficReadyEndpoints,
     pub shard_manager: golem_shard_manager::RunDetails,
     pub worker_executor: golem_worker_executor_base::RunDetails,
-    pub worker_service: golem_worker_service::RunDetails,
-}
-
-impl AllRunDetails {
-    pub fn healthcheck_ports(&self) -> Vec<u16> {
-        vec![
-            self.component_service.http_port,
-            self.shard_manager.http_port,
-            self.worker_service.http_port,
-            self.worker_executor.http_port,
-        ]
-    }
+    pub worker_service: golem_worker_service::TrafficReadyEndpoints,
+    pub prometheus_registy: Registry,
 }

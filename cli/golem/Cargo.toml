@@ -51,16 +51,5 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
-# Sozu builds with simd support by default, but it only works on x86_64
-# Sozu does not support windows, until we find an alternative we exclude suzo deps, and build a dummy binary
-
-[target.'cfg(all(target_arch = "x86_64", not(windows)))'.dependencies]
-sozu-command-lib = { workspace = true }
-sozu-lib = { workspace = true }
-
-[target.'cfg(all(not(target_arch = "x86_64"), not(windows)))'.dependencies]
-sozu-command-lib = { workspace = true, default-features = false }
-sozu-lib = { workspace = true, default-features = false }
-
 [dev-dependencies]
 test-r = { workspace = true }
