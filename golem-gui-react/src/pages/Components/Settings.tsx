@@ -15,7 +15,8 @@ import { useCustomParam } from "@lib/hooks/use-custom-param";
 const WorkerSettings = () => {
   const { compId } = useCustomParam();
   const { components, error, isLoading } = useComponents(compId);
-  const [version, setVersion] = useState<number | null>(null);
+  const [latestComponent] = components;
+  const [version, setVersion] = useState<number | null>(latestComponent.versionedComponentId.version);
   const [searchParams] = useSearchParams();
   const defaultTab =  searchParams.get("activeTab");
   const [activeTab, setActiveTab] = useState(defaultTab ? Number(defaultTab) : 0);

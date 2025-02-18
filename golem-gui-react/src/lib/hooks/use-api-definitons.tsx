@@ -3,6 +3,8 @@ import { fetcher, getErrorMessage } from "../utils";
 import { ApiDefinition, ApiRoute } from "../types/api";
 import { toast } from "react-toastify";
 import { useNavigate } from "react-router-dom";
+import {writeTextFile} from "@tauri-apps/plugin-fs";
+import {BaseDirectory} from "@tauri-apps/api/path";
 
 const ROUTE_PATH = "v1/api/definitions";
 
@@ -307,35 +309,34 @@ export async function addNewApiDefinition(
   }
 }
 
-export const downloadApi = async(apiId:string, version?:string)=>{
+export const downloadApi = async (apiId: string, version?: string) => {
+  try {
+    const { data: apiDefinition, error } = await fetcher(
+      `${ROUTE_PATH}${
+        version
+          ? `/${encodeURIComponent(apiId)}/${encodeURIComponent(version)}`
+          : `?api-definition-id=${encodeURIComponent(apiId)}`
+      }`
+    );
 
-    try{
-        const {data:apiDefinition,error} = await fetcher(`${ROUTE_PATH}${version ? `/${encodeURIComponent(apiId)}/${encodeURIComponent(version)}`: `?api-definition-id=${encodeURIComponent(apiId)}`}`);
-        
-        const api = Array.isArray(apiDefinition)? apiDefinition[apiDefinition.length-1]: apiDefinition
-        if(!api || error){
-          return toast.error(`Failed to downalod: ${error || 'No api found!'}`)
-        }
-        const jsonString = JSON.stringify(api, null, 2); // Pretty print with 2 spaces
-        const blob = new Blob([jsonString], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${api.id}-${api.version}.json`; // The name of the file to download
-    
-        // Trigger the download
-        document.body.appendChild(link);
-        link.click();
-    
-        // Clean up and remove the link
-        link.remove();
-        URL.revokeObjectURL(url);
-        return toast.success("Successfully triggered");
-    }catch(err){
-      console.error("error occurred while downlaoding the api", err);
-      toast.error("Something went wrong!")
+    const api = Array.isArray(apiDefinition) ? apiDefinition[apiDefinition.length - 1] : apiDefinition;
+    if (!api || error) {
+      return toast.error(`Failed to download: ${error || 'No API found!'}`);
     }
-  }
 
+    const jsonString = JSON.stringify(api, null, 2); // Pretty print with 2 spaces
+    const fileName = `${api.id}-${api.version}.json`;
+
+    // Use Tauri's fs API to save the file
+    // await writeTextFile(fileName, jsonString, { dir: BaseDirectory.Download });
+    await writeTextFile(fileName, jsonString, {
+      baseDir: BaseDirectory.Download,
+    });
+    toast.success(`Successfully downloaded ${fileName}`);
+  } catch (err) {
+    console.error('Error occurred while downloading the API', err);
+    toast.error('Something went wrong!');
+  }
+};
 
 export default useApiDefinitions;

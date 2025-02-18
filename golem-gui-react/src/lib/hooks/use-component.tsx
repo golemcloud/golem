@@ -6,7 +6,8 @@ import {
   UpdatePluginInstallPayload,
 } from "@lib/types/api";
 import { toast } from "react-toastify";
-// import { useRouter } from "next/navigation";
+import {writeFile} from "@tauri-apps/plugin-fs";
+import {BaseDirectory} from "@tauri-apps/api/path";
 
 const ROUTE_PATH = "v1/components";
 
@@ -258,36 +259,37 @@ export function useUpdateInstallPlugin(
   };
 }
 
-export async function downloadComponent(
-  compId: string,
-  version: number | string
-) {
+  
+export async function downloadComponent(compId: string, version: number | string) {
   try {
-    const { data, error } = await fetcher(
-      `${ROUTE_PATH}/${compId}/download${version ? `?version=${version}` : ""}`
-    );
-    if (!data || error) {
-      return toast.error(
-        `Failed to downalod: ${error || "No component found!"}`
-      );
+    const url = `${ROUTE_PATH}/${compId}/download${version ? `?version=${version}` : ""}`;
+    console.log("Downloading from:", url); // Debugging
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch: ${response.statusText}`);
     }
-    const blob = new Blob([data], { type: "application/wasm" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${compId}-${version}.wasm`; // The name of the file to download
 
-    // Trigger the download
-    document.body.appendChild(link);
-    link.click();
+    // Ensure binary response
+    const arrayBuffer = await response.arrayBuffer();
+    const fileData = new Uint8Array(arrayBuffer);
 
-    // Clean up and remove the link
-    link.remove();
-    URL.revokeObjectURL(url);
-    return toast.success("Successfully triggered");
+    if (fileData.length === 0) {
+      throw new Error("Downloaded file is empty.");
+    }
+
+    const fileName = `${compId}-${version}.wasm`;
+
+    // Write file to Downloads directory
+    await writeFile(fileName, fileData, {
+      baseDir: BaseDirectory.Download,
+    });
+
+    return toast.success("Successfully downloaded");
   } catch (err) {
-    console.error("error occurred while downlaoding the component", err);
-    toast.error("Something went wrong!");
+    console.error("Error occurred while downloading the component:", err);
+    toast.error("Something went wrong");
   }
 }
 
