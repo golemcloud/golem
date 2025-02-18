@@ -12,27 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::env::{InterpreterEnv, RibFunctionInvoke};
+use crate::interpreter::env::InterpreterEnv;
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibIR, RibInput, RibResult};
+use crate::{RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use std::sync::Arc;
 
 pub struct Interpreter {
     pub input: RibInput,
-    pub invoke: RibFunctionInvoke,
+    pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 }
 
 impl Default for Interpreter {
     fn default() -> Self {
         Interpreter {
             input: RibInput::default(),
-            invoke: internal::default_worker_invoke_async(),
+            invoke: Arc::new(internal::NoopRibFunctionInvoke),
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(input: &RibInput, invoke: RibFunctionInvoke) -> Self {
+    pub fn new(input: &RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
@@ -44,7 +45,7 @@ impl Interpreter {
     pub fn pure(input: &RibInput) -> Self {
         Interpreter {
             input: input.clone(),
-            invoke: internal::default_worker_invoke_async(),
+            invoke: Arc::new(internal::NoopRibFunctionInvoke),
         }
     }
 
@@ -275,27 +276,34 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        CoercedNumericValue, FunctionReferenceType, InstructionId, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerName,
+        CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
+        FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
+        ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerName,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
+    use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::{str, tuple};
     use std::ops::Deref;
-    use std::sync::Arc;
 
-    pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
-        Arc::new(|_, _, _| {
-            Box::pin(async {
-                Ok(ValueAndType {
-                    value: Value::Tuple(vec![]),
-                    typ: tuple(vec![]),
-                })
+    pub(crate) struct NoopRibFunctionInvoke;
+
+    #[async_trait]
+    impl RibFunctionInvoke for NoopRibFunctionInvoke {
+        async fn invoke(
+            &self,
+            _worker_name: Option<EvaluatedWorkerName>,
+            _function_name: EvaluatedFqFn,
+            _args: EvaluatedFnArgs,
+        ) -> Result<ValueAndType, String> {
+            Ok(ValueAndType {
+                value: Value::Tuple(vec![]),
+                typ: tuple(vec![]),
             })
-        })
+        }
     }
 
     pub(crate) fn run_is_empty_instruction(
@@ -2881,8 +2889,7 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_interpreter =
-                internal::dynamic_test_interpreter(internal::DefaultTestFunctionInvoke, None);
+            let mut rib_interpreter = internal::dynamic_test_interpreter(None);
 
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2911,11 +2918,11 @@ mod interpreter_tests {
     }
 
     mod internal {
-        use crate::interpreter::env::{
-            FullyEvaluatedArgs, FullyEvaluatedFunctionName, FullyEvaluatedWorkerName,
-        };
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{RibFunctionInvoke, RibInput};
+        use crate::{
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+        };
+        use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
@@ -3232,54 +3239,56 @@ mod interpreter_tests {
             result_value: &ValueAndType,
             input: Option<RibInput>,
         ) -> Interpreter {
+            let value = result_value.clone();
+
+            let invoke = Arc::new(StaticWorkerFnInvoke { value });
+
             Interpreter {
                 input: input.unwrap_or_default(),
-                invoke: static_worker_invoke(result_value),
+                invoke,
+            }
+        }
+
+        struct StaticWorkerFnInvoke {
+            value: ValueAndType,
+        }
+
+        #[async_trait]
+        impl RibFunctionInvoke for StaticWorkerFnInvoke {
+            async fn invoke(
+                &self,
+                _worker_name: Option<EvaluatedWorkerName>,
+                _fqn: EvaluatedFqFn,
+                _args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
+                let value = self.value.clone();
+                Ok(ValueAndType::new(
+                    Value::Tuple(vec![value.value]),
+                    tuple(vec![value.typ]),
+                ))
             }
         }
 
         // value will be prefixed with worker-name
-        fn static_worker_invoke(value: &ValueAndType) -> RibFunctionInvoke {
+        fn static_worker_invoke(value: &ValueAndType) -> Arc<dyn RibFunctionInvoke + Send + Sync> {
             let value = value.clone();
 
-            Arc::new(move |_, _, _| {
-                Box::pin({
-                    let value = value.clone();
-
-                    async move {
-                        let value = value.clone();
-                        Ok(ValueAndType::new(
-                            Value::Tuple(vec![value.value]),
-                            tuple(vec![value.typ]),
-                        ))
-                    }
-                })
-            })
+            Arc::new(StaticWorkerFnInvoke { value })
         }
 
-        pub(crate) trait TestFunctionInvoke {
-            fn invoke(
-                &self,
-                worker_name: Option<FullyEvaluatedWorkerName>,
-                fqn: FullyEvaluatedFunctionName,
-                args: FullyEvaluatedArgs,
-            ) -> ValueAndType;
-        }
+        struct DynamicWorkerFnInvoke;
 
-        pub(crate) struct DefaultTestFunctionInvoke;
-
-        // Invoking this function simply returns the original worker name, the function name
-        // and the arguments, confirming that we are infact calling the actual function
-        impl TestFunctionInvoke for DefaultTestFunctionInvoke {
-            fn invoke(
+        #[async_trait]
+        impl RibFunctionInvoke for DynamicWorkerFnInvoke {
+            async fn invoke(
                 &self,
-                worker_name: Option<FullyEvaluatedWorkerName>,
-                fqn: FullyEvaluatedFunctionName,
-                args: FullyEvaluatedArgs,
-            ) -> ValueAndType {
+                worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+            ) -> Result<ValueAndType, String> {
                 let worker_name = worker_name.map(|x| x.0);
 
-                let function_name = fqn.0.into_value_and_type();
+                let function_name = function_name.0.into_value_and_type();
 
                 let args = args.0;
 
@@ -3311,28 +3320,17 @@ mod interpreter_tests {
                     Value::Tuple(vec![Value::Record(values)]),
                     tuple(vec![record(analysed_type_pairs)]),
                 );
-                value
+                Ok(value)
             }
         }
 
-        pub(crate) fn dynamic_test_interpreter<T: TestFunctionInvoke + Sync + Send + 'static>(
-            invoke_fun: T,
-            input: Option<RibInput>,
-        ) -> Interpreter {
+        pub(crate) fn dynamic_test_interpreter(rib_input: Option<RibInput>) -> Interpreter {
+            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(DynamicWorkerFnInvoke);
+
             Interpreter {
-                input: input.unwrap_or_default(),
-                invoke: dynamic_worker_invoke(invoke_fun),
+                input: rib_input.unwrap_or_default(),
+                invoke,
             }
-        }
-
-        fn dynamic_worker_invoke<T: TestFunctionInvoke + Sync + Send + 'static>(
-            t: T,
-        ) -> RibFunctionInvoke {
-            Arc::new(move |worker_name, fqn, args| {
-                let result = t.invoke(worker_name, fqn, args);
-
-                Box::pin(async move { Ok(result) })
-            })
         }
     }
 }

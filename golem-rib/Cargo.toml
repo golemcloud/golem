@@ -25,6 +25,7 @@ poem-openapi = { workspace = true, optional = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = "0.1.85"
 
 [dev-dependencies]
 test-r = { workspace = true }
