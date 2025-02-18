@@ -71,8 +71,9 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::InvokeMethodLazy { .. } => {
-                Err("Internal compiler error: Invoke expression cannot be part of type pull up phase".to_string())?;
+            Expr::InvokeMethodLazy { lhs, method, .. } => {
+                let lhs = lhs.to_string();
+                return Err(format!("Invalid method invocation `{}.{}`. Make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs));
             }
 
             Expr::SelectField(expr, field, _, current_inferred_type) => {

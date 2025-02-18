@@ -2819,6 +2819,21 @@ mod interpreter_tests {
 
             assert_eq!(result.get_val().unwrap(), "user".into_value_and_type());
         }
+
+        #[test]
+        async fn test_first_class_worker_25() {
+            let expr = r#"
+                let worker1 = instance("foo");
+                let result = worker.qux[amazon:shopping-cart]("bar");
+                "success"
+            "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_metadata();
+
+            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+
+            assert_eq!(error, "Invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
+        }
     }
 
     mod internal {
