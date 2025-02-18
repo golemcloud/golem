@@ -423,12 +423,18 @@ mod protobuf {
                         None => AnalysedTypeWithUnit::Unit,
                     };
 
-                    let worker_name_presence =
-                        call_instruction.worker_name_presence.map(|x| golem_api_grpc::proto::golem::rib::WorkerNamePresence::try_from(x).map_err(|err| err.to_string())).transpose()?;
+                    let worker_name_presence = call_instruction
+                        .worker_name_presence
+                        .map(|x| {
+                            golem_api_grpc::proto::golem::rib::WorkerNamePresence::try_from(x)
+                                .map_err(|err| err.to_string())
+                        })
+                        .transpose()?;
 
                     // Default is absent because old rib scripts don't have worker name in it
-                    let worker_name_presence =
-                        worker_name_presence.map(|x| x.into()).unwrap_or(WorkerNamePresence::Absent);
+                    let worker_name_presence = worker_name_presence
+                        .map(|x| x.into())
+                        .unwrap_or(WorkerNamePresence::Absent);
 
                     Ok(RibIR::InvokeFunction(
                         worker_name_presence,
