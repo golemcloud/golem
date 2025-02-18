@@ -93,7 +93,7 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId, WorkerName,
+        InferredType, InstructionId, RibIR, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
@@ -325,8 +325,8 @@ mod internal {
 
                         // To be pushed to interpreter stack later
                         let worker_name = match worker {
-                            Some(_) => WorkerName::Provided,
-                            None => WorkerName::NotProvided,
+                            Some(_) => WorkerNamePresence::Absent,
+                            None => WorkerNamePresence::Present,
                         };
 
                         instructions.push(RibIR::InvokeFunction(

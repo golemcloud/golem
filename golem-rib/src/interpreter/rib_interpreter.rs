@@ -278,7 +278,7 @@ mod internal {
     use crate::{
         CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
         FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
-        ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerName,
+        ParsedFunctionSite, RibFunctionInvoke, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -976,7 +976,7 @@ mod internal {
 
     pub(crate) async fn run_call_instruction(
         arg_size: usize,
-        worker_type: WorkerName,
+        worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
@@ -985,8 +985,8 @@ mod internal {
             .ok_or("Internal Error: Failed to get a function name".to_string())?;
 
         let worker_name = match worker_type {
-            WorkerName::NotProvided => None,
-            WorkerName::Provided => {
+            WorkerNamePresence::Present => None,
+            WorkerNamePresence::Absent => {
                 let worker_name = interpreter_stack
                     .pop_str()
                     .ok_or("Internal Error: Failed to get the worker name".to_string())?;
