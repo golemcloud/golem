@@ -18,6 +18,7 @@ use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -40,6 +41,12 @@ pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub custom_request_port: u16,
+}
+
+pub struct TrafficReadyEndpoints {
+    pub grpc_port: u16,
+    pub custom_request_port: u16,
+    pub api_endpoint: BoxEndpoint<'static>,
 }
 
 #[derive(Clone)]
@@ -94,6 +101,21 @@ impl WorkerService {
         })
     }
 
+    /// Endpoints are only valid until joinset is dropped
+    pub async fn start_endpoints(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
+        let grpc_port = self.start_grpc_server(join_set).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set).await?;
+        let api_endpoint = api::make_open_api_service(&self.services).boxed();
+        Ok(TrafficReadyEndpoints {
+            grpc_port,
+            api_endpoint,
+            custom_request_port,
+        })
+    }
+
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
         make_open_api_service(&self.services)
     }
@@ -116,6 +138,7 @@ impl WorkerService {
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
+
         let app = api::combined_routes(prometheus_registry, &self.services)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
