@@ -610,6 +610,8 @@ impl DbColumnType {
     }
 
     fn get_analysed_type(root: bool) -> AnalysedType {
+        // "root" flag is used to avoid infinite recursion, in case of complex types
+
         let composite_type = if root {
             analysed_type::case("composite", CompositeType::get_analysed_type(false))
         } else {
@@ -1115,6 +1117,8 @@ impl DbValue {
     }
 
     fn get_analysed_type(root: bool) -> AnalysedType {
+        // "root" flag is used to avoid infinite recursion, in case of complex types
+
         let composite_type = if root {
             analysed_type::case("composite", Composite::get_analysed_type(false))
         } else {
