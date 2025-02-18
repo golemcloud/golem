@@ -50,9 +50,9 @@ const CustomModal: React.FC<CustomModalProps> = ({ open, onClose, children, head
                 justifyContent: "space-between",
               }}
             >
-              <Typography className="md:text-2xl sm:text-xl text-lg">
+              <p className="md:text-2xl sm:text-xl text-lg">
                 {heading}
-              </Typography>
+              </p>
               <IconButton onClick={onClose}>
                 <CloseIcon className="text-muted-foreground"/>
               </IconButton>

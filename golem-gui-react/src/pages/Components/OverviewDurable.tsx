@@ -192,17 +192,16 @@ const OverviewDurable = () => {
             {/* Exports Section */}
             <Grid size={{ xs: 12, md: 4 }}>
               <Paper
-                sx={{ bgcolor: "#1E1E1E", minHeight: 550 }}
+                sx={{ minHeight: 550 }}
                 className="border"
               >
-                <Typography variant="h6" className="m-5">
+                <Typography variant="h6" className="p-2">
                   Exports
                 </Typography>
-                <Divider className="my-1 bg-border" />
                 <ErrorBoundary message={!isSameError ? error: ""}>
                 <List className="px-7">
                   {exports.slice(0, 13).map((item, index) => (
-                    <ListItem key={index} divider className="border-border">
+                    <ListItem key={index}  className="border-t">
                       <ListItemText primary={item} />
                     </ListItem>
                   ))}
@@ -214,10 +213,10 @@ const OverviewDurable = () => {
             {/* Worker Status */}
             <Grid size={{ xs: 12, md: 8 }}>
               <Paper
-                sx={{ bgcolor: "#1E1E1E", minHeight: 550 }}
+                sx={{ minHeight: 550 }}
                 className="border"
               >
-                <Typography variant="h6" className="m-5">
+                <Typography variant="h6" className="p-3">
                   Worker Status
                 </Typography>
                 <Divider className="my-1 bg-border" />
@@ -259,7 +258,7 @@ const OverviewDurable = () => {
                     </Box>
                   </Box>
                 ) : (
-                  <Typography className="mt-5 ml-5">
+                  <Typography className="pl-5 pt-5">
                     No workers found
                   </Typography>
                 )}

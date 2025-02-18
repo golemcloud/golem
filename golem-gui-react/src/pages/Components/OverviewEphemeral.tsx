@@ -55,7 +55,7 @@ const OverviewEphemeral = () => {
                   sx={{ bgcolor: "#1E1E1E", minHeight: 550 }}
                   className="border"
                 >
-                  <Typography variant="h6" className="m-5">
+                  <Typography variant="h6" className="p-5">
                     Exports
                   </Typography>
                   <Divider className="my-1 bg-border" />
@@ -75,7 +75,7 @@ const OverviewEphemeral = () => {
                 {exports.length > 0 ? (
                   <InvokePage />
                 ) : (
-                  <Typography className="mt-5 ml-5">
+                  <Typography className="pl-5 pt-5">
                     No Invocations found
                   </Typography>
                 )}

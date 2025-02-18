@@ -141,7 +141,7 @@ export default function ComponentForm({
       {isCreateMode && (
         <>
           <Box>
-            <Typography variant="body2" className="text-foreground">Component Name</Typography>
+            <Typography variant="body1" className="text-foreground">Component Name</Typography>
             <Controller
               name="name"
               rules={{ required: "Name is mandatory!" }}

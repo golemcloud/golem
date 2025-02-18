@@ -4,7 +4,6 @@ import {
   Box,
   InputAdornment,
   TextField,
-  IconButton,
   Pagination,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
@@ -117,7 +116,7 @@ const ComponentsPage = () => {
                 <Box
                   onClick={() => handleActiveButton("grid")}
                   className={clsx(
-                    "p-2 rounded-md transition-colors",
+                    "p-1 rounded-md transition-colors",
                     activeButton === "grid"
                       ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
@@ -128,7 +127,7 @@ const ComponentsPage = () => {
                 <Box
                   onClick={() => handleActiveButton("list")}
                   className={clsx(
-                    "p-2 rounded-md",
+                    "p-1 rounded-md",
                     activeButton === "list"
                       ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
