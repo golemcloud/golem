@@ -1,5 +1,5 @@
 use crate::Tracing;
-use assert2::{assert, check};
+use assert2::{assert, check, let_assert};
 use golem_api_grpc::proto::golem::worker::v1::{
     invoke_and_await_response, launch_new_worker_response, InvokeAndAwaitResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
@@ -93,22 +93,17 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
         .collect::<Vec<_>>();
 
     assert!(result.len() == 1);
-    let env_vars = match &result[0] {
-        Value::Result(Ok(Some(ok))) => match ok.as_ref() {
-            Value::List(env_vars) => env_vars
-                .iter()
-                .map(|env_var| match env_var {
-                    Value::Tuple(elems) => match elems.as_slice() {
-                        [Value::String(key), Value::String(value)] => (key.clone(), value.clone()),
-                        _ => panic!("expected Tuple(String, String), got {:?}", elems),
-                    },
-                    _ => panic!("expected Tuple, got {:?}", env_var),
-                })
-                .collect::<HashMap<_, _>>(),
-            _ => panic!("expected List, got {:?}", ok),
-        },
-        _ => panic!("expected Result(Ok(Some(_))), got {:?}", result[0]),
-    };
+
+    let_assert!(Value::Result(Ok(Some(ok))) = &result[0]);
+    let_assert!(Value::List(env_vars) = ok.as_ref());
+    let env_vars = env_vars
+        .iter()
+        .map(|env_var| {
+            let_assert!(Value::Tuple(elems) = env_var);
+            let_assert!([Value::String(key), Value::String(value)] = elems.as_slice());
+            (key.to_owned(), value.to_owned())
+        })
+        .collect::<HashMap<_, _>>();
 
     println!("env vars: {:?}", env_vars);
     check!(env_vars.get("GOLEM_COMPONENT_VERSION") == Some(&"1".to_string()));
