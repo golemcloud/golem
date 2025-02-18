@@ -73,7 +73,6 @@ mod internal {
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
-    use crate::type_inference::global_variable_type_binding::internal;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
