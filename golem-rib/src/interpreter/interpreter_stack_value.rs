@@ -27,7 +27,7 @@ use std::ops::Deref;
 pub enum RibInterpreterStackValue {
     Unit,
     Val(ValueAndType),
-    Iterator(Box<dyn Iterator<Item = ValueAndType> + Send>),
+    Iterator(Box<dyn Iterator<Item = ValueAndType> + Send + Sync>),
     Sink(Vec<ValueAndType>, AnalysedType),
 }
 

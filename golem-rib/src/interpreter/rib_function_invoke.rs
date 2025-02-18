@@ -12,6 +12,7 @@ pub trait RibFunctionInvoke {
 }
 
 pub struct EvaluatedFqFn(pub String);
+
 #[derive(Clone)]
 pub struct EvaluatedWorkerName(pub String);
 
