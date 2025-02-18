@@ -318,16 +318,20 @@ mod internal {
                     );
                 }
 
-                Expr::InvokeMethodLazy { lhs,  method, generic_type_parameter, args, inferred_type } => {
-                    handle_invoke_method(
-                        lhs,
-                        method,
-                        args,
-                        generic_type_parameter.clone(),
-                        inferred_type,
-                        &mut temp_stack,
-                    )
-                }
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter,
+                    args,
+                    inferred_type,
+                } => handle_invoke_method(
+                    lhs,
+                    method,
+                    args,
+                    generic_type_parameter.clone(),
+                    inferred_type,
+                    &mut temp_stack,
+                ),
 
                 Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
                     handle_call(
@@ -824,7 +828,6 @@ mod internal {
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
     ) {
-
         let mut new_arg_exprs = vec![];
 
         for expr in args.iter().rev() {
@@ -841,8 +844,10 @@ mod internal {
 
         if let InferredType::Instance { instance_type } = inferred_type {
             if let Some(worker_expr) = instance_type.worker() {
-
-                let new_worker_expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker_expr.clone());
+                let new_worker_expr = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(worker_expr.clone());
 
                 let mut new_instance_type = instance_type.clone();
                 new_instance_type.set_worker_name(new_worker_expr.clone());
@@ -880,7 +885,6 @@ mod internal {
 
             temp_stack.push_front((new_call, false));
         }
-
     }
 
     pub(crate) fn handle_call(
@@ -970,7 +974,8 @@ mod internal {
                     if let Some(worker) = worker {
                         worker_in_inferred_type = Some(
                             temp_stack
-                                .pop_front().map(|x| x.0)
+                                .pop_front()
+                                .map(|x| x.0)
                                 .unwrap_or(worker.deref().clone()),
                         )
                     }

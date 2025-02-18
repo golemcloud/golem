@@ -2261,9 +2261,7 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
-        use golem_wasm_rpc::{
-            parse_value_and_type, IntoValueAndType, Value, ValueAndType,
-        };
+        use golem_wasm_rpc::{parse_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
 

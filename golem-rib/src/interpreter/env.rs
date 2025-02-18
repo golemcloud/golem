@@ -119,7 +119,6 @@ mod internal {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::tuple;
     use golem_wasm_rpc::{Value, ValueAndType};
-    
 
     pub(crate) struct NoopRibFunctionInvoke;
 
