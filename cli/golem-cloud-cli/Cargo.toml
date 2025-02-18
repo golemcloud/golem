@@ -1,0 +1,110 @@
+[package]
+name = "golem-cloud-cli"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
+readme = "README.md"
+description = "Command line interface for Golem."
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "golem-cloud-cli"
+path = "src/cloud_main.rs"
+test = false
+
+[[bin]]
+name = "golem-cli"
+path = "src/universal_main.rs"
+required-features = ["universal"]
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+harness = false
+
+[dependencies]
+# NOTE: these cannot be workspace (git) deps, as that breaks publishing
+golem-client = "=1.1.15"
+golem-cli = "=1.1.15"
+golem-common = "=1.1.15"
+golem-wasm-ast = { version = "=1.1.15", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { version = "=1.1.15", default-features = false, features = ["host"] }
+golem-wasm-rpc-stubgen = { version = "=1.1.15", optional = true }
+
+golem-cloud-client = { path = "../golem-cloud-client", version = "=0.0.0" }
+
+assert2 = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = "3.0.1"
+clap_complete = { version = "4.5.38" }
+derive_more = { workspace = true }
+dirs = "5.0.1"
+futures-util = { workspace = true }
+golem-examples = "=1.1.1"
+h2 = "0.3.24"
+http = { workspace = true }
+hyper = { workspace = true }
+indoc = "2.0.4"
+itertools = { workspace = true }
+native-tls = "0.2.11"
+openapiv3 = "2.0.0"
+rand = "0.8.5"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tower = "0.4.13"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tungstenite = "0.20.1"
+url = { workspace = true }
+uuid = { workspace = true }
+version-compare = "=0.0.11"
+cli-table = "0.4.7"
+textwrap = "0.16.1"
+anyhow.workspace = true
+colored = "2.1.0"
+inquire = "0.7.5"
+
+[dev-dependencies]
+async-recursion = "1.0.5"
+env_logger = "0.11.1"
+log = "0.4.22"
+postgres = "0.19.7"
+rand = "0.8.5"
+redis = { version = "0.25.2", features = ["default"] }
+serde_json_path = "0.7.1"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+test-r = { workspace = true }
+tokio-postgres = "0.7.10"
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+regex = "1.10.3"
+strip-ansi-escapes = "0.2.0"
+once_cell = "1.19.0"
+golem-api-grpc = { workspace = true }
+cloud-api-grpc = { path = "../cloud-api-grpc" }
+
+# NOTE: these cannot be workspace (git) deps, as that breaks publishing
+golem-test-framework = "=1.1.15"
+
+[features]
+default = ["stubgen"]
+stubgen = ["dep:golem-wasm-rpc-stubgen"]
+universal = []
