@@ -186,8 +186,8 @@ export default function SecondaryHeader({
   }, [drawerOpen]);
 
   const workloads = [
-    { route: `/components/${compId}/settings?activeTab=1`, value: "info" },
-    { route: `/components/${compId}/settings?activeTab=2`, value: "update" },
+    { route: `/components/${compId}/settings?activeTab=0`, value: "info" },
+    { route: `/components/${compId}/settings?activeTab=1`, value: "update" },
   ];
 
   const toggleDrawer = (open: boolean) => () => {

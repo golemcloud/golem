@@ -1,6 +1,5 @@
-import { Typography } from "@mui/material";
-import { Box } from "lucide-react";
-import { Button2 } from "../ui/button";
+import { Typography, Box } from "@mui/material";
+import { Button2 } from "@ui/button";
 import AddIcon from "@mui/icons-material/Add";
 
 
