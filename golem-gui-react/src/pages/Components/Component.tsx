@@ -114,28 +114,28 @@ const ComponentsPage = () => {
               />
 
               <Box className="flex rounded-md dark:bg-[#333] bg-gray-200 p-1">
-                <IconButton
+                <Box
                   onClick={() => handleActiveButton("grid")}
                   className={clsx(
-                    "p-1 rounded-md transition-colors",
+                    "p-2 rounded-md transition-colors",
                     activeButton === "grid"
                       ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
                   )}
                 >
                   <GridViewIcon />
-                </IconButton>
-                <IconButton
+                </Box>
+                <Box
                   onClick={() => handleActiveButton("list")}
                   className={clsx(
-                    "p-1 rounded-md",
+                    "p-2 rounded-md",
                     activeButton === "list"
                       ? "dark:bg-black bg-gray-500 text-white hover:bg-gray-500"
                       : "dark:text-gray-200 text-gray-700"
                   )}
                 >
                   <ListIcon />
-                </IconButton>
+                </Box>
               </Box>
               <Button2
                 variant="primary"

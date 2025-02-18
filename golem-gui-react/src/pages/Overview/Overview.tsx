@@ -90,7 +90,7 @@ const ProjectDashboard = () => {
                         <Box
                           key={api.id}
                           padding={3}
-                          className='hover:bg-[#444] cursor-pointer'
+                          className='hover:bg-silver cursor-pointer'
                           onClick={() =>
                             navigate(
                               `/apis/${api.id}/overview?version=${api.version}`
