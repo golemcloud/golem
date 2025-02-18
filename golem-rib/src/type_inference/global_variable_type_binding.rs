@@ -73,6 +73,7 @@ mod internal {
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
+    use crate::type_inference::global_variable_type_binding::internal;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
@@ -318,8 +319,15 @@ mod internal {
                     );
                 }
 
-                Expr::InvokeMethodLazy { .. } => {
-                    temp_stack.push_front((expr.clone(), false));
+                Expr::InvokeMethodLazy { lhs,  method, generic_type_parameter, args, inferred_type } => {
+                    handle_invoke_method(
+                        lhs,
+                        method,
+                        args,
+                        generic_type_parameter.clone(),
+                        inferred_type,
+                        &mut temp_stack,
+                    )
                 }
 
                 Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
@@ -809,6 +817,73 @@ mod internal {
         temp_stack.push_front((new_binary, false));
     }
 
+    pub(crate) fn handle_invoke_method(
+        original_lhs_expr: &Expr,
+        method_name: &str,
+        args: &[Expr],
+        generic_type_parameter: Option<GenericTypeParameter>,
+        inferred_type: &InferredType,
+        temp_stack: &mut VecDeque<(Expr, bool)>,
+    ) {
+
+        let mut new_arg_exprs = vec![];
+
+        for expr in args.iter().rev() {
+            let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
+            new_arg_exprs.push(expr);
+        }
+
+        new_arg_exprs.reverse();
+
+        let new_lhs_expr = temp_stack
+            .pop_front()
+            .map(|x| x.0)
+            .unwrap_or(original_lhs_expr.clone());
+
+        if let InferredType::Instance { instance_type } = inferred_type {
+            if let Some(worker_expr) = instance_type.worker() {
+
+                let new_worker_expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker_expr.clone());
+
+                let mut new_instance_type = instance_type.clone();
+                new_instance_type.set_worker_name(new_worker_expr.clone());
+
+                let new_call = Expr::InvokeMethodLazy {
+                    lhs: Box::new(new_lhs_expr),
+                    method: method_name.to_string(),
+                    generic_type_parameter,
+                    args: new_arg_exprs,
+                    inferred_type: InferredType::Instance {
+                        instance_type: new_instance_type,
+                    },
+                };
+
+                temp_stack.push_front((new_call, false));
+            } else {
+                let new_call = Expr::InvokeMethodLazy {
+                    lhs: Box::new(new_lhs_expr),
+                    method: method_name.to_string(),
+                    generic_type_parameter,
+                    args: new_arg_exprs,
+                    inferred_type: inferred_type.clone(),
+                };
+
+                temp_stack.push_front((new_call, false));
+            }
+        } else {
+            let new_call = Expr::InvokeMethodLazy {
+                lhs: Box::new(new_lhs_expr),
+                method: method_name.to_string(),
+                generic_type_parameter,
+                args: new_arg_exprs,
+                inferred_type: inferred_type.clone(),
+            };
+
+            temp_stack.push_front((new_call, false));
+        }
+
+    }
+
     pub(crate) fn handle_call(
         call_type: &CallType,
         arguments: &[Expr],
@@ -827,42 +902,39 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
-            CallType::InstanceCreation(instance_creation_type) => {
-                if let Some(worker) = instance_creation_type.worker_name() {
-                    let new_worker = temp_stack
-                        .pop_front()
-                        .map(|x| x.0)
-                        .unwrap_or(worker.clone());
-                    match instance_creation_type {
+            CallType::InstanceCreation(instance_creation) => {
+                let worker_name = instance_creation.worker_name();
+
+                if let Some(worker_name) = worker_name {
+                    let worker_name = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker_name);
+
+                    let new_instance_creation = match instance_creation {
+                        InstanceCreationType::Worker { .. } => InstanceCreationType::Worker {
+                            worker_name: Some(Box::new(worker_name.clone())),
+                        },
                         InstanceCreationType::Resource { resource_name, .. } => {
-                            let new_call = Expr::Call(
-                                CallType::InstanceCreation(InstanceCreationType::Resource {
-                                    resource_name: resource_name.clone(),
-                                    worker_name: Some(Box::new(new_worker)),
-                                }),
-                                generic_type_parameter.clone(),
-                                new_arg_exprs,
-                                inferred_type.clone(),
-                            );
-                            temp_stack.push_front((new_call, false));
+                            InstanceCreationType::Resource {
+                                worker_name: Some(Box::new(worker_name.clone())),
+                                resource_name: resource_name.clone(),
+                            }
                         }
-                        _ => {
-                            let new_call = Expr::Call(
-                                CallType::InstanceCreation(instance_creation_type.clone()),
-                                generic_type_parameter.clone(),
-                                new_arg_exprs,
-                                inferred_type.clone(),
-                            );
-                            temp_stack.push_front((new_call, false));
-                        }
-                    }
-                } else {
+                    };
+
                     let new_call = Expr::Call(
-                        CallType::InstanceCreation(instance_creation_type.clone()),
+                        CallType::InstanceCreation(new_instance_creation.clone()),
                         generic_type_parameter.clone(),
                         new_arg_exprs,
                         inferred_type.clone(),
                     );
+                    temp_stack.push_front((new_call, false));
+                } else {
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(instance_creation.clone()),
+                        generic_type_parameter.clone(),
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+
                     temp_stack.push_front((new_call, false));
                 }
             }
@@ -892,6 +964,36 @@ mod internal {
                         });
                 }
 
+                let mut worker_in_inferred_type = None;
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    let worker = instance_type.worker_name();
+                    if let Some(worker) = worker {
+                        worker_in_inferred_type = Some(
+                            temp_stack
+                                .pop_front().map(|x| x.0)
+                                .unwrap_or(worker.deref().clone()),
+                        )
+                    }
+                };
+
+                let new_inferred_type = match worker_in_inferred_type {
+                    Some(worker) => match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            let mut new_instance_type = instance_type.clone();
+                            new_instance_type.set_worker_name(worker);
+
+                            InferredType::Instance {
+                                instance_type: new_instance_type,
+                            }
+                        }
+
+                        _ => inferred_type.clone(),
+                    },
+                    None => inferred_type.clone(),
+                };
+
+                // worker in the call type
                 let new_call = if let Some(worker) = worker {
                     let worker = temp_stack
                         .pop_front()
@@ -905,7 +1007,7 @@ mod internal {
                         },
                         None,
                         new_arg_exprs,
-                        inferred_type.clone(),
+                        new_inferred_type,
                     )
                 } else {
                     Expr::Call(
@@ -915,7 +1017,7 @@ mod internal {
                         },
                         None,
                         new_arg_exprs,
-                        inferred_type.clone(),
+                        new_inferred_type,
                     )
                 };
 

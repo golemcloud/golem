@@ -2894,7 +2894,7 @@ mod interpreter_tests {
             let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
             let result_val = result.get_val().unwrap();
-            dbg!(print_value_and_type(&result_val).unwrap());
+
             let expected_analysed_type = record(vec![
                 field("worker-name", option(str())),
                 field("function-name", str()),

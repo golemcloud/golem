@@ -689,6 +689,7 @@ impl Expr {
         *self = self
             .bind_global_variable_types(type_spec)
             .map_err(|x| vec![x])?;
+
         self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
