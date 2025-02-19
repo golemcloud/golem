@@ -27,6 +27,7 @@ console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures-util = { workspace = true }
 humantime-serde = { workspace = true }
+include_dir = { workspace = true }
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"
 opentelemetry = { workspace = true }

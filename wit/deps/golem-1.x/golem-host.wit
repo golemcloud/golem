@@ -1,4 +1,4 @@
-package golem:api@1.1.4;
+package golem:api@1.1.5;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
@@ -178,6 +178,10 @@ interface host {
     /// Suspends execution until the given promise gets completed, and returns the payload passed to
     /// the promise completion.
     await-promise: func(promise-id: promise-id) -> list<u8>;
+
+    /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
+    /// it returns the payload passed to the promise completion.
+    poll-promise: func(promise-id: promise-id) -> option<list<u8>>;
 
     /// Completes the given promise with the given payload. Returns true if the promise was completed, false
     /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
