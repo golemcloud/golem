@@ -138,7 +138,7 @@ mod internal {
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::EqualTo);
             }
-            Expr::GreaterThan(lhs, rhs, _) => {
+            Expr::GreaterThan{lhs, rhs, ..} => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::GreaterThan);
@@ -510,7 +510,7 @@ mod internal {
                 stack.push(ExprState::from_ir(RibIR::GetTag));
             }
 
-            Expr::Concat(exprs, _) => {
+            Expr::Concat{exprs, ..} => {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }

@@ -9,7 +9,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Let(_, _, expr, _) => {
+            Expr::Let{expr, ..} => {
                 queue.push_back(expr);
             }
             Expr::InvokeMethodLazy {
@@ -58,7 +58,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Tuple(exprs, _) => {
+            Expr::Tuple{exprs, ..} => {
                 internal::unresolved_types_in_tuple(exprs)?;
             }
             Expr::Literal(_, inferred_type) => {

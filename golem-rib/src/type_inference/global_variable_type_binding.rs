@@ -179,7 +179,7 @@ mod internal {
                     );
                 }
 
-                Expr::Concat(exprs, _) => {
+                Expr::Concat{exprs, ..} => {
                     handle_concat(exprs, &mut temp_stack);
                 }
 

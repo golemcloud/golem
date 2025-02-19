@@ -138,7 +138,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Concat(exprs, _) => {
+            Expr::Concat{exprs, ..} => {
                 internal::handle_concat(exprs, &mut inferred_type_stack);
             }
 

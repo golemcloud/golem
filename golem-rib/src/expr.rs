@@ -56,16 +56,16 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     Sequence {
-        expressions: Vec<Expr>,
+        exprs: Vec<Expr>,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
     },
     Record {
-        fields: Vec<(String, Box<Expr>)>,
+        exprs: Vec<(String, Box<Expr>)>,
         inferred_type: InferredType,
     },
     Tuple {
-        expressions: Vec<Expr>,
+        exprs: Vec<Expr>,
         inferred_type: InferredType,
     },
     Literal {
@@ -91,11 +91,11 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     Concat {
-        expressions: Vec<Expr>,
+        exprs: Vec<Expr>,
         inferred_type: InferredType,
     },
     ExprBlock {
-        expressions: Vec<Expr>,
+        exprs: Vec<Expr>,
         inferred_type: InferredType,
     },
     Not {
@@ -103,8 +103,8 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     GreaterThan {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
         inferred_type: InferredType,
     },
     And {
@@ -123,13 +123,13 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     LessThanOrEqualTo {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
         inferred_type: InferredType,
     },
     Plus {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
         inferred_type: InferredType,
     },
     Multiply {
@@ -138,8 +138,8 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     Minus {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
         inferred_type: InferredType,
     },
     Divide {
@@ -153,8 +153,8 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     LessThan {
-        left: Box<Expr>,
-        right: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
         inferred_type: InferredType,
     },
     Cond {
@@ -232,7 +232,7 @@ pub enum Expr {
 impl Expr {
     pub fn as_record(&self) -> Option<Vec<(String, Expr)>> {
         match self {
-            Expr::Record { fields, .. } => Some(
+            Expr::Record { exprs: fields, .. } => Some(
                 fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.deref().clone()))
@@ -394,16 +394,16 @@ impl Expr {
 
     pub fn plus(left: Expr, right: Expr) -> Self {
         Expr::Plus {
-            left: Box::new(left),
-            right: Box::new(right),
+            lhs: Box::new(left),
+            rhs: Box::new(right),
             inferred_type: InferredType::number(),
         }
     }
 
     pub fn minus(left: Expr, right: Expr) -> Self {
         Expr::Minus {
-            left: Box::new(left),
-            right: Box::new(right),
+            lhs: Box::new(left),
+            rhs: Box::new(right),
             inferred_type: InferredType::number(),
         }
     }
@@ -473,7 +473,7 @@ impl Expr {
 
     pub fn concat(expressions: Vec<Expr>) -> Self {
         Expr::Concat {
-            expressions,
+            exprs: expressions,
             inferred_type: InferredType::Str,
         }
     }
@@ -516,8 +516,8 @@ impl Expr {
 
     pub fn greater_than(left: Expr, right: Expr) -> Self {
         Expr::GreaterThan {
-            left: Box::new(left),
-            right: Box::new(right),
+            lhs: Box::new(left),
+            rhs: Box::new(right),
             inferred_type: InferredType::Bool,
         }
     }
@@ -541,16 +541,16 @@ impl Expr {
 
     pub fn less_than(left: Expr, right: Expr) -> Self {
         Expr::LessThan {
-            left: Box::new(left),
-            right: Box::new(right),
+            lhs: Box::new(left),
+            rhs: Box::new(right),
             inferred_type: InferredType::Bool,
         }
     }
 
     pub fn less_than_or_equal_to(left: Expr, right: Expr) -> Self {
         Expr::LessThanOrEqualTo {
-            left: Box::new(left),
-            right: Box::new(right),
+            lhs: Box::new(left),
+            rhs: Box::new(right),
             inferred_type: InferredType::Bool,
         }
     }
@@ -659,7 +659,7 @@ impl Expr {
             .map_or(InferredType::Unknown, |e| e.inferred_type());
 
         Expr::ExprBlock {
-            expressions,
+            exprs: expressions,
             inferred_type,
         }
     }
@@ -736,7 +736,7 @@ impl Expr {
         );
 
         Expr::Record {
-            fields: expressions
+            exprs: expressions
                 .into_iter()
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
@@ -808,7 +808,7 @@ impl Expr {
         );
 
         Expr::Tuple {
-            expressions,
+            exprs: expressions,
             inferred_type,
         }
     }
@@ -821,7 +821,7 @@ impl Expr {
         ));
 
         Expr::Sequence {
-            expressions,
+            exprs: expressions,
             type_annotation,
             inferred_type,
         }
@@ -1829,7 +1829,7 @@ mod protobuf {
                     }),
                 )),
                 Expr::Sequence {
-                    expressions,
+                    exprs: expressions,
                     type_annotation,
                     ..
                 } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
@@ -1838,7 +1838,7 @@ mod protobuf {
                         type_name: type_annotation.map(|t| t.into()),
                     },
                 )),
-                Expr::Record { fields, .. } => {
+                Expr::Record { exprs: fields, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Record(
                         golem_api_grpc::proto::golem::rib::RecordExpr {
                             fields: fields
@@ -1853,7 +1853,7 @@ mod protobuf {
                         },
                     ))
                 }
-                Expr::Tuple { expressions, .. } => {
+                Expr::Tuple { exprs: expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
                         golem_api_grpc::proto::golem::rib::TupleExpr {
                             exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
@@ -1896,14 +1896,14 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::BooleanExpr { value },
                     ))
                 }
-                Expr::Concat { expressions, .. } => {
+                Expr::Concat { exprs: expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
                         golem_api_grpc::proto::golem::rib::ConcatExpr {
                             exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
                         },
                     ))
                 }
-                Expr::ExprBlock { expressions, .. } => {
+                Expr::ExprBlock { exprs: expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
                         golem_api_grpc::proto::golem::rib::MultipleExpr {
                             exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
@@ -1915,7 +1915,7 @@ mod protobuf {
                         expr: Some(Box::new((*expr).into())),
                     }),
                 )),
-                Expr::GreaterThan { left, right, .. } => {
+                Expr::GreaterThan { lhs: left, rhs: right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
                         Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
                             left: Some(Box::new((*left).into())),
@@ -1931,7 +1931,7 @@ mod protobuf {
                         },
                     )),
                 ),
-                Expr::LessThan { left, right, .. } => {
+                Expr::LessThan { lhs: left, rhs: right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
                         Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
                             left: Some(Box::new((*left).into())),
@@ -1939,7 +1939,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Plus { left, right, .. } => {
+                Expr::Plus { lhs: left, rhs: right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Add(
                         Box::new(golem_api_grpc::proto::golem::rib::AddExpr {
                             left: Some(Box::new((*left).into())),
@@ -1947,7 +1947,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Minus { left, right, .. } => {
+                Expr::Minus { lhs: left, rhs: right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(
                         Box::new(golem_api_grpc::proto::golem::rib::SubtractExpr {
                             left: Some(Box::new((*left).into())),
@@ -1971,7 +1971,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::LessThanOrEqualTo { left, right, .. } => Some(
+                Expr::LessThanOrEqualTo { lhs: left, rhs: right, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                             left: Some(Box::new((*left).into())),
