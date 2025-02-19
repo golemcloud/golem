@@ -419,10 +419,10 @@ pub trait WorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 let request = InvokeAndAwaitRequest {
                     worker_id: Some(worker_id),
