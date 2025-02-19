@@ -14,8 +14,8 @@
 
 use crate::{Expr, FunctionTypeRegistry};
 
-// Handling the following and making sure the types are inferred fully at this stage for each
-// The expr calls will still be expr calls itself but CallType will be worker instance creation
+// Handling the following and making sure the types are inferred fully at this stage.
+// The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
 // or resource creation
 // instance;
 // instance[foo]
@@ -80,16 +80,6 @@ mod internal {
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                // We discard the generic parameter when identifying instance creation as we think the context of Rib doesn't deal with packages across components to identify which component, as of now
-                // In a component metadata, all we infer is the list of functions and it can be a mix of different package names and interfaces. Example:
-                // Exports:
-                //   app:component-b-exports/app-component-b-api.{add}(value: u64) // Function that's part of the main package app:component-b-exports (which in actual WIT is app:component-b) and interface called api
-                //   app:component-b-exports/app-component-b-api.{get}() -> u64 // Function that's part of the main package app:component-b-exports (which in actual WIT is app:component-b) and interface called api
-                //   wasi:clocks/monotonic-clock@0.2.0.{now}() -> u64 // Function from a different package-interface
-                //   wasi:clocks/monotonic-clock@0.2.0.{resolution}() -> u64 // Function from a different package-interface
-                //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-instant}(when: u64) -> handle<0> // Function from a different package-interface
-                //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-duration}(when: u64) -> handle<0> // Function from a different package-interface
-                //   app:component-b-exports/app-component-b-inline-functions.{run}() -> u64 // A top level function but part of a package and a generated interface
                 Expr::Call(call_type, generic_type_parameter, args, inferred_type) => {
                     let type_parameter = generic_type_parameter
                         .clone()
