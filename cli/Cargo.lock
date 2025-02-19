@@ -3467,6 +3467,7 @@ dependencies = [
  "golem-worker-service-base",
  "http-body-util",
  "hyper 1.6.0",
+ "include_dir",
  "opentelemetry 0.28.0",
  "opentelemetry-prometheus 0.28.0",
  "opentelemetry_sdk 0.28.0",
