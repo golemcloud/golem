@@ -409,47 +409,6 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
-  cli-tests:
-    runs-on: ubuntu-latest-xlarge
-    env:
-      CARGO_BUILD_JOBS: 6
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: CLI tests
-        env:
-          QUIET: true
-        run: cargo make --profile ci cli-tests
-        timeout-minutes: 35
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: '**/target/report-*.xml'
-          detailed_summary: true
-          include_passed: true
   sharding-tests:
     env:
       CARGO_BUILD_JOBS: 6
@@ -498,7 +457,6 @@ jobs:
         wasm-rpc-stub,
         worker-tests,
         integration-tests,
-        cli-tests,
         sharding-tests,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"

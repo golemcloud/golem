@@ -9,7 +9,6 @@
 # - `cargo make unit-tests`: runs unit tests only
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make integration-tests`: runs integration tests only
-# - `cargo make cli-tests`: runs CLI tests only
 # - `cargo make sharding-tests`: runs sharding integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
@@ -189,7 +188,6 @@ description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
     "unit-tests",
     "worker-executor-tests",
-    "cli-tests",
     "sharding-tests",
     "integration-tests",
 ]
@@ -323,14 +321,6 @@ cargo test \
 -- --nocapture --test-threads=1
 '''
 
-[tasks.cli-tests]
-description = "Runs CLI tests only"
-dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
-script = '''
-cargo test --package golem-cli --test integration -- --test-threads=1 --report-time $JUNIT_OPTS
-'''
-
 ## ** CHECK-OPENAPI **
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
@@ -420,7 +410,6 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-cli",
 ]
 
 [tasks.set-version]
@@ -538,11 +527,6 @@ args = [
     "--allow-dirty",
     "--no-verify",
 ]
-
-[tasks.publish-golem-cli]
-description = "Publishes golem-cli package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-cli", "--all-features", "--allow-dirty"]
 
 [tasks.publish-golem-rib]
 description = "Publishes golem-rib package to crates.io"
