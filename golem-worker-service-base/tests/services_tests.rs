@@ -754,7 +754,7 @@ async fn test_deployment_conflict(
         &Uuid::new_v4().to_string(),
         "0.0.1",
         "/api/get1",
-        "${ let worker = instance[golem:it](\"worker2\"); {body: instance.get-cart-contents(\"foo\")} }",
+        "${ let worker = instance[golem:it](\"worker2\"); {body: worker.get-cart-contents(\"foo\")} }",
         false,
     );
 
