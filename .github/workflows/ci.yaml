@@ -365,7 +365,7 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
-  integration-tests:
+  api-and-integration-tests:
     env:
       CARGO_BUILD_JOBS: 6
     runs-on: ubuntu-latest-xlarge
@@ -397,6 +397,16 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: API tests - HTTP
+        env:
+          QUIET: true
+        run: cargo make --profile ci api-tests-http
+        timeout-minutes: 30
+      - name: API tests - GRPC
+        env:
+          QUIET: true
+        run: cargo make --profile ci api-tests-grpc
+        timeout-minutes: 30
       - name: Integration tests
         env:
           QUIET: true
@@ -497,7 +507,7 @@ jobs:
         build-and-test,
         wasm-rpc-stub,
         worker-tests,
-        integration-tests,
+        api-and-integration-tests,
         cli-tests,
         sharding-tests,
       ]

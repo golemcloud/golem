@@ -14,7 +14,11 @@
 
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::{WorkerLogEventStream, WorkerService, WorkerServiceClient};
+use crate::components::worker_service::{
+    ApiDefinitionServiceClient, ApiDeploymentServiceClient, ApiSecurityServiceClient,
+    WorkerLogEventStream, WorkerService, WorkerServiceClient,
+};
+use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -73,8 +77,24 @@ impl ForwardingWorkerService {
 
 #[async_trait]
 impl WorkerService for ForwardingWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        panic!("There is no worker-service, cannot create gRPC client")
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("There is no worker-service, cannot get client protocol")
+    }
+
+    fn worker_client(&self) -> WorkerServiceClient {
+        panic!("There is no worker-service, cannot create worker client")
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        panic!("There is no worker-service, cannot create api-definition client")
+    }
+
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
+        panic!("There is no worker-service, cannot create api-deployment client")
+    }
+
+    fn api_security_client(&self) -> ApiSecurityServiceClient {
+        panic!("There is no worker-service, cannot create api-security client")
     }
 
     async fn create_worker(
@@ -271,7 +291,7 @@ impl WorkerService for ForwardingWorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -286,13 +306,9 @@ impl WorkerService for ForwardingWorkerService {
                     name: function.clone(),
                     input: invoke_parameters
                         .clone()
-                        .map(|invoke_parameters| {
-                            invoke_parameters
-                                .into_iter()
-                                .map(|param| param.value.into())
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                        .into_iter()
+                        .map(|param| param.value.into())
+                        .collect(),
                     account_id: Some(
                         AccountId {
                             value: "test-account".to_string(),
@@ -344,7 +360,7 @@ impl WorkerService for ForwardingWorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -359,8 +375,9 @@ impl WorkerService for ForwardingWorkerService {
                     name: function.clone(),
                     input: invoke_parameters
                         .clone()
-                        .map(|params| params.into_iter().map(|param| param.value.into()).collect())
-                        .unwrap_or_default(),
+                        .into_iter()
+                        .map(|param| param.value.into())
+                        .collect(),
                     account_id: Some(
                         AccountId {
                             value: "test-account".to_string(),

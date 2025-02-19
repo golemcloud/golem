@@ -28,13 +28,13 @@ pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 pub mod cli;
 mod env;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "kebab-case")]
 pub enum GolemClientProtocol {
     Grpc,
@@ -48,7 +48,7 @@ pub trait TestDependencies {
     fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static>;
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static>;
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
-    fn component_directory(&self) -> PathBuf;
+    fn component_directory(&self) -> &Path;
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static>;
     fn component_compilation_service(
         &self,

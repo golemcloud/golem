@@ -599,7 +599,10 @@ async fn test_deployment(
     ));
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
-        .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+        .get_definitions_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -619,7 +622,10 @@ async fn test_deployment(
         .unwrap();
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
-        .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
+        .get_definitions_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("my.test.com".to_string()),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -636,7 +642,10 @@ async fn test_deployment(
         .unwrap();
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap();
     assert!(deployment.is_some());
@@ -655,7 +664,10 @@ async fn test_deployment(
     assert!(!deployments.is_empty());
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
-        .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+        .get_definitions_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -672,7 +684,10 @@ async fn test_deployment(
     deployment_service.undeploy(&deployment).await.unwrap();
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
-        .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+        .get_definitions_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -697,13 +712,19 @@ async fn test_deployment(
     );
 
     let definitions = deployment_service
-        .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+        .get_definitions_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap();
     assert!(definitions.is_empty());
 
     let deployment = deployment_service
-        .get_by_site(&ApiSiteString("test.com".to_string()))
+        .get_by_site(
+            &DefaultNamespace::default(),
+            &ApiSiteString("test.com".to_string()),
+        )
         .await
         .unwrap();
     assert!(deployment.is_none());
