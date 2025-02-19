@@ -419,47 +419,6 @@ jobs:
           report_paths: '**/target/report-*.xml'
           detailed_summary: true
           include_passed: true
-  cli-tests:
-    runs-on: ubuntu-latest-xlarge
-    env:
-      CARGO_BUILD_JOBS: 6
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: CLI tests
-        env:
-          QUIET: true
-        run: cargo make --profile ci cli-tests
-        timeout-minutes: 35
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: '**/target/report-*.xml'
-          detailed_summary: true
-          include_passed: true
   sharding-tests:
     env:
       CARGO_BUILD_JOBS: 6
@@ -508,7 +467,6 @@ jobs:
         wasm-rpc-stub,
         worker-tests,
         api-and-integration-tests,
-        cli-tests,
         sharding-tests,
       ]
     if: "startsWith(github.ref, 'refs/tags/v')"
@@ -540,77 +498,9 @@ jobs:
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
         run: cargo make --profile ci publish
 
-  publish_cli_binaries:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
-    strategy:
-      fail-fast: false
-      matrix:
-        project:
-          - golem-cli
-          - golem
-        cfg:
-          - rust-target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
-          - rust-target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest-xlarge
-            cross: true
-          - rust-target: x86_64-apple-darwin
-            os: macos-latest
-          - rust-target: aarch64-apple-darwin
-            os: macos-latest
-          - rust-target: x86_64-pc-windows-gnu
-            os: windows-latest
-    name: Publish binaries of ${{ matrix.project }}
-    runs-on: ${{ matrix.cfg.os }}
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - id: get_version
-        uses: battila7/get-version-action@v2
-      - name: Set version for all packages
-        env:
-          VERSION: ${{ steps.get_version.outputs.version-without-v }}
-        run: cargo make --profile ci set-version
-
-      - run: cargo install cross
-        if: ${{ matrix.cfg.cross }}
-      - uses: ilammy/setup-nasm@v1
-
-      - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
-        if: ${{ ! matrix.cfg.cross }}
-      - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
-        if: ${{ matrix.cfg.cross }}
-
-      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}.exe ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
-        if: matrix.cfg.os == 'windows-latest'
-      - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-        if: matrix.cfg.os != 'windows-latest'
-      - name: Login GH CLI
-        shell: bash
-        run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
-      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
-        if: matrix.cfg.os == 'windows-latest'
-      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-        if: matrix.cfg.os != 'windows-latest'
-
   publish-slack-notification:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [ publish, docker-publish, publish_cli_binaries ]
+    needs: [ publish, docker-publish ]
     runs-on: ubuntu-latest
     steps:
       - name: Publish Slack Notification
@@ -619,6 +509,6 @@ jobs:
           SLACK_COLOR: ${{ needs.publish.result }}
           SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
           SLACK_TITLE: "Release Notification"
-          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, cli bin result: `${{ needs.publish_cli_binaries.result }}`, docker result: `${{ needs.docker-publish.result }}`"
+          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
           SLACK_USERNAME: CI
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
