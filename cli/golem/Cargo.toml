@@ -37,7 +37,6 @@ dirs = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 futures = { workspace = true }
-include_dir = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }

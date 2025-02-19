@@ -37,7 +37,6 @@ use golem_worker_executor_base::services::golem_config::{
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use include_dir::include_dir;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::{default_registry, Registry};
@@ -253,7 +252,6 @@ async fn run_shard_manager(
 ) -> Result<golem_shard_manager::RunDetails, anyhow::Error> {
     let prometheus_registry = default_registry().clone();
     let span = tracing::info_span!("shard-manager");
-
     golem_shard_manager::run(&config, prometheus_registry, join_set)
         .instrument(span)
         .await
@@ -264,11 +262,7 @@ async fn run_component_service(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<golem_component_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
-    // TODO:
-    /*let migration_path = IncludedMigrationsDir::new(include_dir!(
-        "$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"
-    ));
-
+    let migration_path = IncludedMigrationsDir::new(ComponentService::db_migrations());
     let span = tracing::info_span!("component-service", component = "component-service");
     ComponentService::new(config, prometheus_registry, migration_path)
         .instrument(span.clone())
@@ -276,8 +270,6 @@ async fn run_component_service(
         .start_endpoints(join_set)
         .instrument(span)
         .await
-     */
-    todo!()
 }
 
 async fn run_worker_executor(
@@ -297,19 +289,12 @@ async fn run_worker_service(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<golem_worker_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
-    // TODO:
-    /*let migration_path = IncludedMigrationsDir::new(include_dir!(
-        "$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"
-    ));
-
+    let migration_path = IncludedMigrationsDir::new(WorkerService::db_migrations());
     let span = tracing::info_span!("worker-service");
-
     WorkerService::new(config, prometheus_registry, migration_path)
         .instrument(span.clone())
         .await?
         .start_endpoints(join_set)
         .instrument(span)
         .await
-     */
-    todo!()
 }
