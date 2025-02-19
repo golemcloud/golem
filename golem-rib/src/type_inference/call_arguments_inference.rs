@@ -538,10 +538,10 @@ mod function_parameters_inference_tests {
             vec![Expr::identifier(
                 "x".to_string(),
                 None,
-            ).override_type(InferredType::U64)],
-        ).override_type(InferredType::Sequence(vec![]));
+            ).with_inferred_type(InferredType::U64)],
+        ).with_inferred_type(InferredType::Sequence(vec![]));
 
-        let expected = Expr::expr_block(vec![let_binding, call_expr]).override_type(InferredType::Unknown);
+        let expected = Expr::expr_block(vec![let_binding, call_expr]).with_inferred_type(InferredType::Unknown);
 
         assert_eq!(expr, expected);
     }

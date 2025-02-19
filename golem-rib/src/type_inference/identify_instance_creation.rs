@@ -42,7 +42,7 @@ mod internal {
         queue.push_front(expr);
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Let(variable_id, _, expr, _) => {
+                Expr::Let { variable_id, expr, ..} => {
                     queue.push_front(expr);
 
                     if variable_id.name() == "instance" {
@@ -52,7 +52,7 @@ mod internal {
                         );
                     }
                 }
-                Expr::Identifier(variable_id, _, _) => {
+                Expr::Identifier{variable_id, ..}=> {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         return Err(concat!(
                         "`instance` is a reserved keyword.\n ",
@@ -90,7 +90,7 @@ mod internal {
                 //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-instant}(when: u64) -> handle<0> // Function from a different package-interface
                 //   wasi:clocks/monotonic-clock@0.2.0.{subscribe-duration}(when: u64) -> handle<0> // Function from a different package-interface
                 //   app:component-b-exports/app-component-b-inline-functions.{run}() -> u64 // A top level function but part of a package and a generated interface
-                Expr::Call(call_type, generic_type_parameter, args, inferred_type) => {
+                Expr::Call{ call_type, generic_type_parameter, args, inferred_type} => {
                     let type_parameter = generic_type_parameter
                         .clone()
                         .map(|type_parameter| TypeParameter::from_str(&type_parameter.value))

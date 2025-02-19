@@ -1065,7 +1065,7 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
-    pub fn override_type(&self, new_inferred_type: InferredType) -> Expr {
+    pub fn with_inferred_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.override_type_mut(new_inferred_type);
         expr_copied
