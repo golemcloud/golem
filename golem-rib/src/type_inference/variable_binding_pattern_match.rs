@@ -40,8 +40,12 @@ mod internal {
         // Start from the end
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::PatternMatch(expr, match_arms, _) => {
-                    queue.push_front(expr);
+                Expr::PatternMatch {
+                    predicate,
+                    match_arms,
+                    ..
+                } => {
+                    queue.push_front(predicate);
                     for arm in match_arms {
                         // We increment the index for each arm regardless of whether there is an identifier exist or not
                         index += 1;
@@ -51,11 +55,13 @@ mod internal {
                         index = latest
                     }
                 }
-                Expr::Let(variable_id, _, expr, _) => {
+                Expr::Let {
+                    variable_id, expr, ..
+                } => {
                     queue.push_front(expr);
                     shadowed_let_binding.push(variable_id.name());
                 }
-                Expr::Identifier(variable_id, _, _) => {
+                Expr::Identifier { variable_id, .. } => {
                     let identifier_name = variable_id.name();
                     if let Some(x) = match_identifiers.iter().find(|x| x.name == identifier_name) {
                         if !shadowed_let_binding.contains(&identifier_name) {
@@ -148,7 +154,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier(variable_id, _, _) => {
+                Expr::Identifier { variable_id, .. } => {
                     let match_identifier =
                         MatchIdentifier::new(variable_id.name(), global_arm_index);
                     identifier_names.push(match_identifier);
@@ -233,7 +239,8 @@ mod pattern_match_bindings {
         let first_expr = expected_match(1);
         let second_expr = expected_match(3); // 3 because first block has 2 arms
 
-        let block = Expr::ExprBlock(vec![first_expr, second_expr], InferredType::Unknown);
+        let block = Expr::expr_block(vec![first_expr, second_expr])
+            .with_inferred_type(InferredType::Unknown);
 
         assert_eq!(expr, block);
     }
@@ -262,36 +269,27 @@ mod pattern_match_bindings {
         use bigdecimal::BigDecimal;
 
         pub(crate) fn expected_match(index: usize) -> Expr {
-            Expr::PatternMatch(
-                Box::new(Expr::Option(
-                    Some(Box::new(Expr::Identifier(
-                        VariableId::Global("x".to_string()),
-                        None,
-                        InferredType::Unknown,
-                    ))),
-                    None,
-                    InferredType::Option(Box::new(InferredType::Unknown)),
-                )),
+            Expr::pattern_match(
+                Expr::option(Some(Expr::identifier_global("x", None)))
+                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
                             "some",
-                            vec![ArmPattern::literal(Expr::Identifier(
+                            vec![ArmPattern::literal(Expr::identifier_with_variable_id(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     index,
                                 )),
                                 None,
-                                InferredType::Unknown,
                             ))],
                         ),
-                        arm_resolution_expr: Box::new(Expr::Identifier(
+                        arm_resolution_expr: Box::new(Expr::identifier_with_variable_id(
                             VariableId::MatchIdentifier(MatchIdentifier::new(
                                 "x".to_string(),
                                 index,
                             )),
                             None,
-                            InferredType::Unknown,
                         )),
                     },
                     MatchArm {
@@ -299,33 +297,28 @@ mod pattern_match_bindings {
                         arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
-                InferredType::Unknown,
             )
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
             let let_binding =
                 Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
-            let identifier_expr = Expr::Identifier(
-                VariableId::Global("x".to_string()),
-                None,
-                InferredType::Unknown,
-            );
-            let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
+            let identifier_expr =
+                Expr::identifier_with_variable_id(VariableId::Global("x".to_string()), None);
+            let block = Expr::expr_block(vec![let_binding, identifier_expr]);
 
-            Expr::PatternMatch(
-                Box::new(Expr::option(Some(Expr::identifier_global("x", None)))), // x is still global
+            Expr::pattern_match(
+                Expr::option(Some(Expr::identifier_global("x", None))),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
                             "some",
-                            vec![ArmPattern::literal(Expr::Identifier(
+                            vec![ArmPattern::literal(Expr::identifier_with_variable_id(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     index,
                                 )),
                                 None,
-                                InferredType::Unknown,
                             ))],
                         ),
                         arm_resolution_expr: Box::new(block),
@@ -335,73 +328,68 @@ mod pattern_match_bindings {
                         arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
-                InferredType::Unknown,
             )
         }
 
         pub(crate) fn expected_nested_match() -> Expr {
-            Expr::PatternMatch(
-                Box::new(Expr::Result(
-                    Ok(Box::new(Expr::Option(
-                        Some(Box::new(Expr::Identifier(
-                            VariableId::Global("x".to_string()),
-                            None,
-                            InferredType::Unknown,
-                        ))),
+            Expr::pattern_match(
+                Expr::ok(
+                    Expr::option(Some(Expr::identifier_with_variable_id(
+                        VariableId::Global("x".to_string()),
                         None,
-                        InferredType::Option(Box::new(InferredType::Unknown)),
-                    ))),
+                    )))
+                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
                     None,
-                    InferredType::Result {
-                        ok: Some(Box::new(InferredType::Option(Box::new(
-                            InferredType::Unknown,
-                        )))),
-                        error: Some(Box::new(InferredType::Unknown)),
-                    },
-                )),
+                )
+                .with_inferred_type(InferredType::Result {
+                    ok: Some(Box::new(InferredType::Option(Box::new(
+                        InferredType::Unknown,
+                    )))),
+                    error: Some(Box::new(InferredType::Unknown)),
+                }),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
                             "ok",
-                            vec![ArmPattern::literal(Expr::Identifier(
+                            vec![ArmPattern::literal(Expr::identifier_with_variable_id(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     1,
                                 )),
                                 None,
-                                InferredType::Unknown,
                             ))],
                         ),
-                        arm_resolution_expr: Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier(
+                        arm_resolution_expr: Box::new(Expr::pattern_match(
+                            Expr::identifier_with_variable_id(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     1,
                                 )),
                                 None,
-                                InferredType::Unknown,
-                            )),
+                            ),
                             vec![
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor(
                                         "some",
-                                        vec![ArmPattern::literal(Expr::Identifier(
+                                        vec![ArmPattern::literal(
+                                            Expr::identifier_with_variable_id(
+                                                VariableId::MatchIdentifier(MatchIdentifier::new(
+                                                    "x".to_string(),
+                                                    2,
+                                                )),
+                                                None,
+                                            ),
+                                        )],
+                                    ),
+                                    arm_resolution_expr: Box::new(
+                                        Expr::identifier_with_variable_id(
                                             VariableId::MatchIdentifier(MatchIdentifier::new(
                                                 "x".to_string(),
                                                 2,
                                             )),
                                             None,
-                                            InferredType::Unknown,
-                                        ))],
+                                        ),
                                     ),
-                                    arm_resolution_expr: Box::new(Expr::Identifier(
-                                        VariableId::MatchIdentifier(MatchIdentifier::new(
-                                            "x".to_string(),
-                                            2,
-                                        )),
-                                        None,
-                                        InferredType::Unknown,
-                                    )),
                                 },
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor("none", vec![]),
@@ -410,25 +398,22 @@ mod pattern_match_bindings {
                                     )),
                                 },
                             ],
-                            InferredType::Unknown,
                         )),
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
                             "err",
-                            vec![ArmPattern::literal(Expr::Identifier(
+                            vec![ArmPattern::literal(Expr::identifier_with_variable_id(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     4,
                                 )),
                                 None,
-                                InferredType::Unknown,
                             ))],
                         ),
                         arm_resolution_expr: Box::new(Expr::untyped_number(BigDecimal::from(0))),
                     },
                 ],
-                InferredType::Unknown,
             )
         }
     }

@@ -560,6 +560,14 @@ impl Expr {
         }
     }
 
+    pub fn identifier_with_variable_id(variable_id: VariableId, type_annotation: Option<TypeName>) -> Self {
+        Expr::Identifier {
+            variable_id,
+            type_annotation,
+            inferred_type: InferredType::Unknown,
+        }
+    }
+
     pub fn less_than(left: Expr, right: Expr) -> Self {
         Expr::LessThan {
             lhs: Box::new(left),

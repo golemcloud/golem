@@ -63,11 +63,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier(variable_in_yield, _, _) => {
-                    if iterated_variable_id.name() == variable_in_yield.name() {
-                        *variable_in_yield = iterated_variable_id.clone();
-                    } else if reduce_variable.name() == variable_in_yield.name() {
-                        *variable_in_yield = reduce_variable.clone()
+                Expr::Identifier{ variable_id, ..} => {
+                    if iterated_variable_id.name() == variable_id.name() {
+                        *variable_id = iterated_variable_id.clone();
+                    } else if reduce_variable.name() == variable_id.name() {
+                        *variable_id = reduce_variable.clone()
                     }
                 }
                 _ => expr.visit_children_mut_top_down(&mut queue),
