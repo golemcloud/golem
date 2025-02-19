@@ -1858,6 +1858,13 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     }
 }
 
+impl TryFrom<&str> for ComponentFilePath {
+    type Error = String;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::from_either_str(value)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[serde(rename_all = "kebab-case")]

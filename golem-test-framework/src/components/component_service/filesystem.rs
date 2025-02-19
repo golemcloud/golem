@@ -17,6 +17,7 @@ use crate::components::component_service::{
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
@@ -27,6 +28,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -45,13 +47,14 @@ impl FileSystemComponentService {
     async fn write_component_to_filesystem(
         &self,
         source_path: &Path,
+        component_name: &str,
         component_id: &ComponentId,
         component_version: ComponentVersion,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
-    ) -> Result<ComponentId, AddComponentError> {
+    ) -> Result<Component, AddComponentError> {
         let target_dir = &self.root;
         debug!("Local component store: {target_dir:?}");
         if !target_dir.exists() {
@@ -93,13 +96,13 @@ impl FileSystemComponentService {
             .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
             .len();
 
-        let metadata = ComponentMetadata {
+        let metadata = FilesystemComponentMetadata {
             version: component_version,
             component_type,
-            files: files.to_owned(),
+            files: files.iter().map(|(_source, file)| file.clone()).collect(),
             size,
-            memories,
-            exports,
+            memories: memories.clone(),
+            exports: exports.clone(),
             plugin_installations: vec![],
             dynamic_linking: dynamic_linking.clone(),
         };
@@ -107,7 +110,33 @@ impl FileSystemComponentService {
             .write_to_file(&target_dir.join(format!("{component_id}-{component_version}.json")))
             .await?;
 
-        Ok(component_id.clone())
+        Ok(Component {
+            versioned_component_id: Some(VersionedComponentId {
+                component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
+                    value: Some(component_id.0.into()),
+                }),
+                version: component_version,
+            }),
+            component_name: component_name.into(),
+            component_size: size,
+            metadata: Some(ComponentMetadata {
+                exports: exports.into_iter().map(|export| export.into()).collect(),
+                producers: vec![],
+                memories: memories.into_iter().map(|mem| mem.into()).collect(),
+                dynamic_linking: dynamic_linking
+                    .iter()
+                    .map(|(link, instance)| (link.clone(), instance.clone().into()))
+                    .collect(),
+            }),
+            project_id: None,
+            created_at: Some(SystemTime::now().into()),
+            component_type: Some(component_type as i32),
+            files: files
+                .iter()
+                .map(|(_source, file)| file.clone().into())
+                .collect(),
+            installed_plugins: vec![],
+        })
     }
 
     async fn analyze_memories_and_exports(
@@ -158,10 +187,10 @@ impl ComponentService for FileSystemComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
-    ) -> ComponentId {
+    ) -> Component {
         self.add_component(
             local_path,
             name,
@@ -177,14 +206,15 @@ impl ComponentService for FileSystemComponentService {
     async fn add_component(
         &self,
         local_path: &Path,
-        _name: &str,
+        name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
-    ) -> Result<ComponentId, AddComponentError> {
+    ) -> Result<Component, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
+            name,
             &ComponentId(Uuid::new_v4()),
             0,
             component_type,
@@ -203,6 +233,7 @@ impl ComponentService for FileSystemComponentService {
     ) -> Result<(), AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
+            &Uuid::new_v4().to_string(),
             component_id,
             0,
             component_type,
@@ -219,7 +250,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let target_dir = &self.root;
@@ -240,6 +271,7 @@ impl ComponentService for FileSystemComponentService {
         let empty_linking = HashMap::<String, DynamicLinkedInstance>::new();
         self.write_component_to_filesystem(
             local_path,
+            &Uuid::new_v4().to_string(),
             component_id,
             new_version,
             component_type,
@@ -287,6 +319,10 @@ impl ComponentService for FileSystemComponentService {
         Ok(Some(metadata.len()))
     }
 
+    fn component_directory(&self) -> &Path {
+        panic!("No real component service running")
+    }
+
     fn private_host(&self) -> String {
         panic!("No real component service running")
     }
@@ -304,7 +340,7 @@ impl ComponentService for FileSystemComponentService {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentMetadata {
+pub struct FilesystemComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
@@ -315,7 +351,7 @@ pub struct ComponentMetadata {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
-impl ComponentMetadata {
+impl FilesystemComponentMetadata {
     async fn write_to_file(&self, path: &Path) -> Result<(), AddComponentError> {
         let json = serde_json::to_string(self).map_err(|_| {
             AddComponentError::Other("Failed to serialize component file properties".to_string())

@@ -3,7 +3,6 @@ resolver = "2"
 
 members = [
     "golem-api-grpc",
-    "golem-cli",
     "golem-client",
     "golem-common",
     "golem-service-base",
@@ -18,11 +17,8 @@ members = [
     "golem-worker-service-base",
     "golem-worker-service",
     "integration-tests",
-    "golem",
     "wasm-ast",
     "wasm-rpc",
-    "wasm-rpc-stubgen",
-    "wasm-rpc-stubgen/tests-integration"
 ]
 
 exclude = [
@@ -98,10 +94,8 @@ cli-table = "0.4.9"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
-ctor = "0.2.9"
 dashmap = "6.1.0"
 derive_more = { version = "1.0.0", features = ["display", "into", "from_str"] }
-dirs = "6.0.0"
 drop-stream = "0.3.2"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fred = { version = "=9.4.0", features = [
@@ -109,7 +103,6 @@ fred = { version = "=9.4.0", features = [
     "serde-json",
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
-fs_extra = "1.3.0"
 futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
@@ -136,7 +129,6 @@ openidconnect = "3.5.0"
 opentelemetry = "0.27.1"
 opentelemetry-prometheus = "0.27.0"
 opentelemetry_sdk = "0.27.1"
-phf = { version = "0.11.2", features = ["macros"] }
 poem-openapi = { version = "5.1.4", features = [
     "swagger-ui",
     "chrono",
@@ -207,7 +199,6 @@ tonic = { version = "0.12.3", features = ["gzip"] }
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-opentelemetry = "0.28.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.19", features = [
     "env-filter",
@@ -216,7 +207,6 @@ tracing-subscriber = { version = "0.3.19", features = [
     "json",
 ] }
 tracing-test = "0.2.5"
-tungstenite = "0.25.0"
 typed-path = "0.10.0"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["serde", "v4", "v5"] }
@@ -224,7 +214,6 @@ wasm-wave = "0.222.0"
 wasmtime = { version = "=27.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=27.0.0" }
 wasmtime-wasi-http = { version = "=27.0.0" }
-webpki-roots = { version = "0.26.7" }
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
