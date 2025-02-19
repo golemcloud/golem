@@ -100,7 +100,7 @@ async fn measure_component(
 ) -> anyhow::Result<(i64, i64)> {
     info!("Measuring {path:?}");
 
-    let component_id = executor
+    let component_meta = executor
         .component_service()
         .get_or_add_component(
             path,
@@ -130,9 +130,17 @@ async fn measure_component(
         let before_vmemory = process.virtual_memory();
 
         let worker_id = executor
-            .start_worker(&component_id, "measure")
-            .await
-            .unwrap();
+            .start_worker(
+                &component_meta
+                    .versioned_component_id
+                    .unwrap()
+                    .component_id
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                "measure",
+            )
+            .await?;
 
         system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         let process = system.process(pid).unwrap();

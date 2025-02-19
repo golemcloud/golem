@@ -64,10 +64,17 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
     async fn get_by_site(
         &self,
+        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn get_definitions_by_site(
+        &self,
+        namespace: &Namespace,
+        site: &ApiSiteString,
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>>;
+
+    async fn get_all_definitions_by_site(
         &self,
         site: &ApiSiteString,
     ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>>;
@@ -281,7 +288,10 @@ where
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(deployment.site.to_string().as_str())
+            .get_by_site(
+                &deployment.namespace.to_string(),
+                &deployment.site.to_string(),
+            )
             .await?;
 
         let mut existing_api_definition_keys: HashSet<ApiDefinitionIdWithVersion> = HashSet::new();
@@ -354,7 +364,7 @@ where
         }
 
         let existing_definitions = self
-            .get_definitions_by_site(&(&deployment.site.clone()).into())
+            .get_definitions_by_site(&deployment.namespace, &(&deployment.site.clone()).into())
             .await?;
 
         new_definitions.extend(existing_definitions);
@@ -427,7 +437,10 @@ where
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(deployment.site.to_string().as_str())
+            .get_by_site(
+                &deployment.namespace.to_string(),
+                &deployment.site.to_string(),
+            )
             .await?;
 
         let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
@@ -533,19 +546,18 @@ where
 
     async fn get_by_site(
         &self,
+        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         info!("Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(site.to_string().as_str())
+            .get_by_site(&namespace.to_string(), &site.to_string())
             .await?;
 
         let mut api_definition_keys: Vec<ApiDefinitionIdWithVersion> = vec![];
 
         let mut site: Option<ApiSite> = None;
-
-        let mut namespace: Option<Namespace> = None;
 
         let mut created_at: Option<chrono::DateTime<Utc>> = None;
 
@@ -555,17 +567,6 @@ where
                     host: deployment_record.host,
                     subdomain: deployment_record.subdomain,
                 });
-            }
-
-            if namespace.is_none() {
-                namespace = Some(deployment_record.namespace.try_into().map_err(
-                    |e: <Namespace as TryFrom<std::string::String>>::Error| {
-                        ApiDeploymentError::conversion_error(
-                            "API deployment namespace",
-                            e.to_string(),
-                        )
-                    },
-                )?);
             }
 
             if created_at.is_none() || created_at.is_some_and(|t| t > deployment_record.created_at)
@@ -579,9 +580,9 @@ where
             });
         }
 
-        match (site, namespace, created_at) {
-            (Some(site), Some(namespace), Some(created_at)) => Ok(Some(ApiDeployment {
-                namespace,
+        match (site, created_at) {
+            (Some(site), Some(created_at)) => Ok(Some(ApiDeployment {
+                namespace: namespace.clone(),
                 site,
                 api_definition_keys,
                 created_at,
@@ -592,12 +593,36 @@ where
 
     async fn get_definitions_by_site(
         &self,
+        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>> {
-        info!("Get API definitions");
+        info!(namespace = %namespace, "Get API definitions");
         let records = self
             .deployment_repo
-            .get_definitions_by_site(site.to_string().as_str())
+            .get_definitions_by_site(&namespace.to_string(), &site.to_string())
+            .await?;
+
+        let mut values: Vec<CompiledHttpApiDefinition<Namespace>> = vec![];
+
+        for record in records {
+            values.push(
+                record.try_into().map_err(|e| {
+                    ApiDeploymentError::conversion_error("API definition record", e)
+                })?,
+            );
+        }
+
+        Ok(values)
+    }
+
+    async fn get_all_definitions_by_site(
+        &self,
+        site: &ApiSiteString,
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>> {
+        info!("Get all API definitions");
+        let records = self
+            .deployment_repo
+            .get_all_definitions_by_site(&site.to_string())
             .await?;
 
         let mut values: Vec<CompiledHttpApiDefinition<Namespace>> = vec![];
@@ -621,7 +646,7 @@ where
         info!(namespace = %namespace, "Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(site.to_string().as_str())
+            .get_by_site(&namespace.to_string(), &site.to_string())
             .await?;
 
         if existing_deployment_records.is_empty() {

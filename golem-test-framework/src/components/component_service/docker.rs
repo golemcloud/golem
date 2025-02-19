@@ -23,6 +23,7 @@ use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -31,6 +32,7 @@ use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct DockerComponentService {
+    component_directory: PathBuf,
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,
     keep_container: bool,
     public_http_port: u16,
@@ -46,6 +48,7 @@ impl DockerComponentService {
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9091);
 
     pub async fn new(
+        component_directory: PathBuf,
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
@@ -53,6 +56,7 @@ impl DockerComponentService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
+            component_directory,
             Box::new(GolemEnvVars()),
             component_compilation_service,
             rdb,
@@ -64,6 +68,7 @@ impl DockerComponentService {
     }
 
     pub async fn new_base(
+        component_directory: PathBuf,
         env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -100,6 +105,7 @@ impl DockerComponentService {
             .expect("Failed to get public gRPC port");
 
         Self {
+            component_directory,
             container: Arc::new(Mutex::new(Some(container))),
             keep_container,
             public_http_port,
@@ -135,6 +141,10 @@ impl ComponentService for DockerComponentService {
 
     fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
+    }
+
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn private_host(&self) -> String {

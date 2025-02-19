@@ -17,7 +17,9 @@ use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
-    new_client, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
+    new_api_definition_client, new_api_deployment_client, new_api_security_client,
+    new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient, WorkerServiceEnvVars,
 };
 use crate::components::{GolemEnvVars, NETWORK};
 use crate::config::GolemClientProtocol;
@@ -37,7 +39,11 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
-    client: WorkerServiceClient,
+    client_protocol: GolemClientProtocol,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
+    api_deployment_client: ApiDeploymentServiceClient,
+    api_security_client: ApiSecurityServiceClient,
 }
 
 impl DockerWorkerService {
@@ -119,7 +125,15 @@ impl DockerWorkerService {
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
-            client: new_client(
+            client_protocol,
+            worker_client: new_worker_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
+            api_definition_client: new_api_definition_client(
                 client_protocol,
                 "localhost",
                 public_grpc_port,
@@ -127,14 +141,44 @@ impl DockerWorkerService {
             )
             .await,
             keep_container,
+            api_deployment_client: new_api_deployment_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
+            api_security_client: new_api_security_client(
+                client_protocol,
+                "localhost",
+                public_grpc_port,
+                public_http_port,
+            )
+            .await,
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for DockerWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
+    }
+
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
+        self.api_deployment_client.clone()
+    }
+
+    fn api_security_client(&self) -> ApiSecurityServiceClient {
+        self.api_security_client.clone()
     }
 
     fn private_host(&self) -> String {
