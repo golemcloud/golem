@@ -36,6 +36,7 @@ use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
+use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use async_trait::async_trait;
@@ -1500,6 +1501,10 @@ impl IntoValue for SerializableError {
                 case_idx: 5,
                 case_value: Some(Box::new(error.into_value())),
             },
+            SerializableError::Rdbms { error } => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(error.into_value())),
+            },
         }
     }
 
@@ -1529,6 +1534,10 @@ impl IntoValue for SerializableError {
                 NameOptionTypePair {
                     name: "WorkerProxy".to_string(),
                     typ: Some(WorkerProxyError::get_type()),
+                },
+                NameOptionTypePair {
+                    name: "Rdbms".to_string(),
+                    typ: Some(RdbmsError::get_type()),
                 },
             ],
         })
