@@ -1,6 +1,14 @@
 package golem:it;
 
+interface api {
+    use golem:api/host@1.1.5.{promise-id};
+
+    create: func() -> promise-id;
+    await: func(id: promise-id) -> list<u8>;
+    poll: func(id: promise-id) -> option<list<u8>>;
+}
+
 world promise {
-  import golem:api/host@0.2.0;
-  export run: func() -> list<u8>;
+  import golem:api/host@1.1.5;
+  export api;
 }
