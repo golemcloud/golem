@@ -427,20 +427,21 @@ pub mod record_data_serde {
     use crate::gateway_api_definition::http::CompiledRoute;
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::apidefinition::{
-        CompiledHttpApiDefinition, CompiledHttpRoute,
+        CompiledHttpApiDefinition as ProtoCompiledHttpApiDefinition,
+        CompiledHttpRoute as ProtoCompiledRoute,
     };
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &[CompiledRoute]) -> Result<Bytes, String> {
-        let routes: Vec<CompiledHttpRoute> = value
+        let routes: Vec<ProtoCompiledRoute> = value
             .iter()
             .cloned()
-            .map(CompiledHttpRoute::try_from)
-            .collect::<Result<Vec<CompiledHttpRoute>, String>>()?;
+            .map(ProtoCompiledRoute::try_from)
+            .collect::<Result<Vec<ProtoCompiledRoute>, String>>()?;
 
-        let proto_value: CompiledHttpApiDefinition = CompiledHttpApiDefinition { routes };
+        let proto_value: ProtoCompiledHttpApiDefinition = ProtoCompiledHttpApiDefinition { routes };
 
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
@@ -453,7 +454,7 @@ pub mod record_data_serde {
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: CompiledHttpApiDefinition = Message::decode(data)
+                let proto_value: ProtoCompiledHttpApiDefinition = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
                 let value = proto_value

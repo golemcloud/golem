@@ -1443,6 +1443,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 // This is not required and kept for backward compatibility
                 let legacy_invocation_name = expr.name;
                 let call_type = expr.call_type;
+                let generic_type_parameter = expr
+                    .generic_type_parameter
+                    .map(|tp| GenericTypeParameter { value: tp });
 
                 match (legacy_invocation_name, call_type) {
                     (Some(legacy), None) => {
@@ -1452,34 +1455,34 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
                                 Expr::call(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
-                                )?, None, None, params)
+                                )?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, None, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, None, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call(name.try_into()?, None, None, params)
+                                Expr::call(name.try_into()?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, None, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, None, None, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                                 let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
                                 let call_type = CallType::InstanceCreation(instance_creation_type);
                                 Expr::Call(
                                     call_type,
-                                    None,
+                                    generic_type_parameter,
                                     vec![],
                                     InferredType::Unknown
                                 )
