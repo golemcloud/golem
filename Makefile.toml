@@ -196,9 +196,8 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features --exclude wasm-rpc-stubgen-tests-integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
-cargo test -p golem-wasm-rpc-stubgen --tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]
@@ -291,7 +290,6 @@ cargo test --package golem-component-service-base --test tests -- --nocapture --
 cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package wasm-rpc-stubgen-tests-integration --tests -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.sharding-tests]
@@ -403,7 +401,6 @@ dependencies = [
     "build-release",
     "publish-golem-wasm-ast",
     "publish-golem-wasm-rpc",
-    "publish-golem-wasm-rpc-stubgen",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
@@ -458,18 +455,6 @@ args = [
     "publish",
     "-p",
     "golem-wasm-rpc",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-wasm-rpc-stubgen]
-description = "Publishes golem-wasm-rpc-stubgen package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-wasm-rpc-stubgen",
     "--all-features",
     "--allow-dirty",
     "--no-verify",
