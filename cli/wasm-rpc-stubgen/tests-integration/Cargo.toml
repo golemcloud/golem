@@ -1,10 +1,10 @@
 [package]
-name = "wasm-rpc-stubgen-tests-integration"
+name = "golem-wasm-rpc-stubgen-tests-integration"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/wasm-rpc"
+repository = "https://github.com/golemcloud/golem-cli"
 description = "Golem WASM RPC stub generator - integration tests"
 
 [lib]
@@ -24,12 +24,14 @@ name = "stub_wasm"
 harness = false
 
 [dependencies]
+golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "=0.0.0" }
+
+golem-wasm-ast = { workspace = true }
+
 assert2 = { workspace = true }
 fs_extra = { workspace = true }
-golem-wasm-ast = { path = "../../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "=0.0.0" }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-test-r = { workspace = true, default-features = true }
+test-r = { workspace = true }

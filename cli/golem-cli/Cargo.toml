@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud/"
-repository = "https://github.com/golemcloud/golem"
+repository = "https://github.com/golemcloud/golem-cli"
 description = "Command line interface for Golem."
 autotests = false
 
@@ -22,42 +22,41 @@ path = "tests/main.rs"
 harness = false
 
 [dependencies]
-golem-client = { path = "../golem-client", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0", default-features = false }
-golem-rib = { path = "../golem-rib", version = "=0.0.0", default-features = false }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
-    "analysis",
-] }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false }
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
 
-anyhow.workspace = true
+golem-client = { workspace = true }
+golem-common = { workspace = true }
+golem-examples = { workspace = true }
+golem-rib = { workspace = true }
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+
+anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
-async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
-base64 = "0.22.1"
+async_zip = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-clap-verbosity-flag = "3.0.1"
-clap_complete = { version = "4.5.38" }
+clap-verbosity-flag = { workspace = true }
+clap_complete = { workspace = true }
 cli-table = { workspace = true }
-colored = "2.1.0"
+colored = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
-glob = "0.3.1"
-golem-examples = "=1.1.1"
-h2 = "0.4.7"
+glob = { workspace = true }
+h2 = { workspace = true }
 http = { workspace = true }
 humansize = { workspace = true }
 hyper = { workspace = true }
-indoc = "2.0.5"
-inquire = "0.7.5"
-iso8601 = "0.6.1"
+indoc = { workspace = true }
+inquire = { workspace = true }
+iso8601 = { workspace = true }
 itertools = { workspace = true }
-lenient_bool = "0.1.1"
+lenient_bool = { workspace = true }
 log = { workspace = true }
-native-tls = "0.2.12"
+native-tls = { workspace = true }
 openapiv3 = { workspace = true }
 phf = { workspace = true }
 rand = { workspace = true }
@@ -70,35 +69,35 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
 testcontainers-modules = { workspace = true }
-textwrap = "0.16.1"
+textwrap = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = { workspace = true, features = ["fs"] }
-tokio-tungstenite = { workspace = true, features = ["native-tls"] }
-tower = "0.5.1"
+tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tungstenite = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-version-compare = "=0.0.11"
-walkdir = "2.5.0"
+version-compare = { workspace = true }
+walkdir = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]
-golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
+golem-test-framework = { workspace = true }
 
 async-recursion = { workspace = true }
-env_logger = "0.11.5"
-log = "0.4.22"
+env_logger = { workspace = true }
+log = { workspace = true }
 postgres = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
-reqwest = { workspace = true, features = ["blocking"] }
-serde_json_path = "0.7.1"
+reqwest = { workspace = true }
+serde_json_path = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+test-r = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
-test-r = { workspace = true }
 tokio-postgres = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
-strip-ansi-escapes = "0.2.0"
