@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
@@ -44,7 +44,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
-        + IntoValue
+        + ExtIntoValueAndType
         + 'static;
     type DbValue: Clone
         + Send
@@ -54,7 +54,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
-        + IntoValue
+        + ExtIntoValueAndType
         + 'static;
 }
 
@@ -269,18 +269,55 @@ pub struct DbRow<T: 'static> {
     pub values: Vec<T>,
 }
 
-impl<T: IntoValue + 'static> IntoValue for DbRow<T> {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.values.into_value()])
+impl<T> ExtIntoValueAndType for DbRow<T>
+where
+    Vec<T>: ExtIntoValueAndType,
+{
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = ExtIntoValueAndType::into_value_and_type(self.values);
+        let t = analysed_type::record(vec![analysed_type::field("values", v.typ)]);
+        ValueAndType::new(Value::Record(vec![v.value]), t)
     }
 
-    fn get_type() -> AnalysedType {
+    fn get_base_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field(
             "values",
-            analysed_type::list(T::get_type()),
+            <Vec<T>>::get_base_type(),
         )])
     }
 }
+
+impl<T> AnalysedTypeMerger for DbRow<T>
+where
+    Vec<T>: ExtIntoValueAndType,
+{
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first // TODO implement merge
+    }
+}
+
+// impl<T> ExtIntoValueAndType for Vec<DbRow<T>>
+// where
+//     Vec<T>: ExtIntoValueAndType,
+//     T: AnalysedTypeMerger
+// {
+//     fn into_value_and_type(self) -> ValueAndType {
+//         let mut ts = Vec::with_capacity(self.len());
+//         let mut vs = Vec::with_capacity(self.len());
+//         for v in self {
+//             let v = v.values.into_value_and_type();
+//             ts.push(v.typ);
+//             vs.push(Value::Record(vec![v.value]));
+//         }
+//
+//         let t = T::merge_types_many(ts).unwrap_or(T::get_base_type());
+//         ValueAndType::new(Value::List(vs), t)
+//     }
+//
+//     fn get_base_type() -> AnalysedType {
+//         analysed_type::list(DbRow::<T>::get_base_type())
+//     }
+// }
 
 #[async_trait]
 pub trait DbResultStream<T: RdbmsType> {
@@ -318,15 +355,26 @@ impl<T: RdbmsType> DbResult<T> {
     }
 }
 
-impl<T: RdbmsType> IntoValue for DbResult<T> {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.columns.into_value(), self.rows.into_value()])
+impl<T> ExtIntoValueAndType for DbResult<T>
+where
+    T: RdbmsType,
+    Vec<T::DbColumn>: ExtIntoValueAndType,
+    Vec<DbRow<T::DbValue>>: ExtIntoValueAndType,
+{
+    fn into_value_and_type(self) -> ValueAndType {
+        let cs = ExtIntoValueAndType::into_value_and_type(self.columns);
+        let rs = ExtIntoValueAndType::into_value_and_type(self.rows);
+        let t = analysed_type::record(vec![
+            analysed_type::field("columns", cs.typ),
+            analysed_type::field("rows", rs.typ),
+        ]);
+        ValueAndType::new(Value::Record(vec![cs.value, rs.value]), t)
     }
 
-    fn get_type() -> AnalysedType {
+    fn get_base_type() -> AnalysedType {
         analysed_type::record(vec![
-            analysed_type::field("columns", analysed_type::list(T::DbColumn::get_type())),
-            analysed_type::field("rows", analysed_type::list(DbRow::<T::DbValue>::get_type())),
+            analysed_type::field("columns", <Vec<T::DbColumn>>::get_base_type()),
+            analysed_type::field("rows", <Vec<DbRow<T::DbValue>>>::get_base_type()),
         ])
     }
 }
@@ -411,4 +459,83 @@ impl From<GolemError> for Error {
     fn from(value: GolemError) -> Self {
         Self::other_response_failure(value)
     }
+}
+
+pub trait ExtIntoValueAndType {
+    fn into_value_and_type(self) -> ValueAndType;
+
+    fn get_base_type() -> AnalysedType;
+}
+
+impl<T: ExtIntoValueAndType> ExtIntoValueAndType for Option<T> {
+    fn into_value_and_type(self) -> ValueAndType {
+        match self {
+            Some(t) => {
+                let v = t.into_value_and_type();
+                ValueAndType::new(
+                    Value::Option(Some(Box::new(v.value))),
+                    analysed_type::option(v.typ),
+                )
+            }
+            None => ValueAndType::new(Value::Option(None), Self::get_base_type()),
+        }
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::option(T::get_base_type())
+    }
+}
+
+impl<S: ExtIntoValueAndType, E: IntoValue> ExtIntoValueAndType for Result<S, E> {
+    fn into_value_and_type(self) -> ValueAndType {
+        match self {
+            Ok(t) => {
+                let v = t.into_value_and_type();
+                ValueAndType::new(
+                    Value::Result(Ok(Some(Box::new(v.value)))),
+                    analysed_type::result(v.typ, E::get_type()),
+                )
+            }
+            Err(e) => ValueAndType::new(
+                Value::Result(Err(Some(Box::new(e.into_value())))),
+                Self::get_base_type(),
+            ),
+        }
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::result(S::get_base_type(), E::get_type())
+    }
+}
+
+pub trait AnalysedTypeMerger {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType;
+}
+
+impl<T: ExtIntoValueAndType + AnalysedTypeMerger> ExtIntoValueAndType for Vec<T> {
+    fn into_value_and_type(self) -> ValueAndType {
+        get_value_and_type(self)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::list(T::get_base_type())
+    }
+}
+
+pub(crate) fn get_value_and_type<T: ExtIntoValueAndType + AnalysedTypeMerger>(
+    values: Vec<T>,
+) -> ValueAndType {
+    let mut vs = Vec::with_capacity(values.len());
+    let mut t: Option<AnalysedType> = None;
+    for v in values {
+        let v = v.into_value_and_type();
+        t = match t {
+            None => Some(v.typ),
+            Some(t) => Some(T::merge_types(t, v.typ)),
+        };
+        vs.push(v.value);
+    }
+
+    let t = t.unwrap_or(T::get_base_type());
+    ValueAndType::new(Value::List(vs), analysed_type::list(t))
 }

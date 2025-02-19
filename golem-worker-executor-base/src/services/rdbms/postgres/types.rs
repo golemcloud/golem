@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::rdbms::{AnalysedTypeMerger, ExtIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use itertools::Itertools;
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -73,14 +74,14 @@ impl CompositeType {
         CompositeType { name, attributes }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(attribute_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
             analysed_type::field(
                 "attributes",
                 analysed_type::list(analysed_type::tuple(vec![
                     analysed_type::str(),
-                    DbColumnType::get_analysed_type(root),
+                    attribute_type,
                 ])),
             ),
         ])
@@ -107,13 +108,25 @@ impl NamedType for CompositeType {
     }
 }
 
-impl IntoValue for CompositeType {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), self.attributes.into_value()])
+impl ExtIntoValueAndType for CompositeType {
+    fn into_value_and_type(self) -> ValueAndType {
+        let mut vs = Vec::with_capacity(self.attributes.len());
+        let mut t: Option<AnalysedType> = None;
+        for (n, v) in self.attributes {
+            let v = v.into_value_and_type();
+            t = match t {
+                None => Some(v.typ),
+                Some(t) => Some(DbColumnType::merge_types(t, v.typ)),
+            };
+            vs.push(Value::Record(vec![n.into_value(), v.value]));
+        }
+        let typ = Self::get_analysed_type(t.unwrap_or(DbColumnType::get_base_type()));
+        let value = Value::Record(vec![self.name.into_value(), Value::List(vs)]);
+        ValueAndType::new(value, typ)
     }
 
-    fn get_type() -> AnalysedType {
-        CompositeType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(DbColumnType::get_base_type())
     }
 }
 
@@ -131,10 +144,10 @@ impl DomainType {
         }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", DbColumnType::get_analysed_type(root)),
+            analysed_type::field("base-type", base_type),
         ])
     }
 }
@@ -151,13 +164,16 @@ impl NamedType for DomainType {
     }
 }
 
-impl IntoValue for DomainType {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), (*self.base_type).into_value()])
+impl ExtIntoValueAndType for DomainType {
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = ExtIntoValueAndType::into_value_and_type(*self.base_type);
+        let typ = Self::get_analysed_type(v.typ);
+        let value = Value::Record(vec![self.name.into_value(), v.value]);
+        ValueAndType::new(value, typ)
     }
 
-    fn get_type() -> AnalysedType {
-        DbColumnType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(DbColumnType::get_base_type())
     }
 }
 
@@ -175,10 +191,10 @@ impl RangeType {
         }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", DbColumnType::get_analysed_type(root)),
+            analysed_type::field("base-type", base_type),
         ])
     }
 }
@@ -195,13 +211,16 @@ impl NamedType for RangeType {
     }
 }
 
-impl IntoValue for RangeType {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), (*self.base_type).into_value()])
+impl ExtIntoValueAndType for RangeType {
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = ExtIntoValueAndType::into_value_and_type(*self.base_type);
+        let typ = Self::get_analysed_type(v.typ);
+        let value = Value::Record(vec![self.name.into_value(), v.value]);
+        ValueAndType::new(value, typ)
     }
 
-    fn get_type() -> AnalysedType {
-        RangeType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(DbColumnType::get_base_type())
     }
 }
 
@@ -405,13 +424,10 @@ impl Composite {
         Composite { name, values }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(values_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
-            analysed_type::field(
-                "values",
-                analysed_type::list(DbValue::get_analysed_type(root)),
-            ),
+            analysed_type::field("values", values_type),
         ])
     }
 }
@@ -433,13 +449,15 @@ impl NamedType for Composite {
     }
 }
 
-impl IntoValue for Composite {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), self.values.into_value()])
+impl ExtIntoValueAndType for Composite {
+    fn into_value_and_type(self) -> ValueAndType {
+        let values = ExtIntoValueAndType::into_value_and_type(self.values);
+        let typ = Self::get_analysed_type(values.typ);
+        let value = Value::Record(vec![self.name.into_value(), values.value]);
+        ValueAndType::new(value, typ)
     }
-
-    fn get_type() -> AnalysedType {
-        CompositeType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(<Vec<DbValue>>::get_base_type())
     }
 }
 
@@ -457,10 +475,10 @@ impl Domain {
         }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(value_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", DbValue::get_analysed_type(root)),
+            analysed_type::field("value", value_type),
         ])
     }
 }
@@ -477,13 +495,16 @@ impl Display for Domain {
     }
 }
 
-impl IntoValue for Domain {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), self.value.into_value()])
+impl ExtIntoValueAndType for Domain {
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = ExtIntoValueAndType::into_value_and_type(*self.value);
+        let typ = Self::get_analysed_type(v.typ);
+        let value = Value::Record(vec![self.name.into_value(), v.value]);
+        ValueAndType::new(value, typ)
     }
 
-    fn get_type() -> AnalysedType {
-        Domain::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(DbColumnType::get_base_type())
     }
 }
 
@@ -501,18 +522,18 @@ impl Range {
         }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
-        fn get_bound_type(root: bool) -> AnalysedType {
+    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
+        fn get_bound_type(base_type: AnalysedType) -> AnalysedType {
             analysed_type::variant(vec![
-                analysed_type::case("included", DbValue::get_analysed_type(root)),
-                analysed_type::case("excluded", DbValue::get_analysed_type(root)),
+                analysed_type::case("included", base_type.clone()),
+                analysed_type::case("excluded", base_type.clone()),
                 analysed_type::unit_case("unbounded"),
             ])
         }
 
         let value_type = analysed_type::record(vec![
-            analysed_type::field("start", get_bound_type(root)),
-            analysed_type::field("end", get_bound_type(root)),
+            analysed_type::field("start", get_bound_type(base_type.clone())),
+            analysed_type::field("end", get_bound_type(base_type.clone())),
         ]);
 
         analysed_type::record(vec![
@@ -534,13 +555,57 @@ impl Display for Range {
     }
 }
 
-impl IntoValue for Range {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), (*self.value).into_value()])
+impl ExtIntoValueAndType for Range {
+    fn into_value_and_type(self) -> ValueAndType {
+        fn get_bound_value(value: Bound<DbValue>) -> (Value, Option<AnalysedType>) {
+            match value {
+                Bound::Included(t) => {
+                    let v = t.into_value_and_type();
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(v.value)),
+                    };
+                    (value, Some(v.typ))
+                }
+                Bound::Excluded(t) => {
+                    let v = t.into_value_and_type();
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(v.value)),
+                    };
+                    (value, Some(v.typ))
+                }
+                Bound::Unbounded => {
+                    let value = Value::Variant {
+                        case_idx: 2,
+                        case_value: None,
+                    };
+                    (value, None)
+                }
+            }
+        }
+
+        let (value_start, typ_start) = get_bound_value(self.value.start);
+        let (value_end, typ_end) = get_bound_value(self.value.end);
+
+        let base_type = match (typ_start, typ_end) {
+            (Some(typ_start), Some(typ_end)) => DbValue::merge_types(typ_start, typ_end),
+            (Some(typ_start), None) => typ_start,
+            (None, Some(typ_end)) => typ_end,
+            (None, None) => DbValue::get_base_type(),
+        };
+
+        let typ = Self::get_analysed_type(base_type);
+
+        let value = Value::Record(vec![
+            self.name.into_value(),
+            Value::Record(vec![value_start, value_end]),
+        ]);
+        ValueAndType::new(value, typ)
     }
 
-    fn get_type() -> AnalysedType {
-        RangeType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        Self::get_analysed_type(DbValue::get_base_type())
     }
 }
 
@@ -609,29 +674,16 @@ impl DbColumnType {
         )
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
-        // "root" flag is used to avoid infinite recursion, in case of complex types
-
-        let composite_type = if root {
-            analysed_type::case("composite", CompositeType::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("composite")
-        };
-        let domain_type = if root {
-            analysed_type::case("domain", DomainType::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("domain")
-        };
-        let array_type = if root {
-            analysed_type::case("array", DbColumnType::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("array")
-        };
-        let range_type = if root {
-            analysed_type::case("range", RangeType::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("range")
-        };
+    fn get_analysed_type(
+        composite_type: Option<AnalysedType>,
+        domain_type: Option<AnalysedType>,
+        array_type: Option<AnalysedType>,
+        range_type: Option<AnalysedType>,
+    ) -> AnalysedType {
+        let composite_type = analysed_type::opt_case("composite", composite_type);
+        let domain_type = analysed_type::opt_case("domain", domain_type);
+        let array_type = analysed_type::opt_case("array", array_type);
+        let range_type = analysed_type::opt_case("range", range_type);
 
         analysed_type::variant(vec![
             analysed_type::unit_case("character"),
@@ -737,182 +789,105 @@ impl Display for DbColumnType {
     }
 }
 
-impl IntoValue for DbColumnType {
-    fn into_value(self) -> Value {
+impl ExtIntoValueAndType for DbColumnType {
+    fn into_value_and_type(self) -> ValueAndType {
+        fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
+            let case_value = case_value.map(Box::new);
+            let v = Value::Variant {
+                case_idx,
+                case_value,
+            };
+            ValueAndType::new(v, DbColumnType::get_analysed_type(None, None, None, None))
+        }
+
         match self {
-            DbColumnType::Character => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            DbColumnType::Int2 => Value::Variant {
-                case_idx: 1,
-                case_value: None,
-            },
-            DbColumnType::Int4 => Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            DbColumnType::Int8 => Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            DbColumnType::Float4 => Value::Variant {
-                case_idx: 4,
-                case_value: None,
-            },
-            DbColumnType::Float8 => Value::Variant {
-                case_idx: 5,
-                case_value: None,
-            },
-            DbColumnType::Numeric => Value::Variant {
-                case_idx: 6,
-                case_value: None,
-            },
-            DbColumnType::Boolean => Value::Variant {
-                case_idx: 7,
-                case_value: None,
-            },
-            DbColumnType::Text => Value::Variant {
-                case_idx: 8,
-                case_value: None,
-            },
-            DbColumnType::Varchar => Value::Variant {
-                case_idx: 9,
-                case_value: None,
-            },
-            DbColumnType::Bpchar => Value::Variant {
-                case_idx: 10,
-                case_value: None,
-            },
-            DbColumnType::Timestamp => Value::Variant {
-                case_idx: 11,
-                case_value: None,
-            },
-            DbColumnType::Timestamptz => Value::Variant {
-                case_idx: 12,
-                case_value: None,
-            },
-            DbColumnType::Date => Value::Variant {
-                case_idx: 13,
-                case_value: None,
-            },
-            DbColumnType::Time => Value::Variant {
-                case_idx: 14,
-                case_value: None,
-            },
-            DbColumnType::Timetz => Value::Variant {
-                case_idx: 15,
-                case_value: None,
-            },
-            DbColumnType::Interval => Value::Variant {
-                case_idx: 16,
-                case_value: None,
-            },
-            DbColumnType::Bytea => Value::Variant {
-                case_idx: 17,
-                case_value: None,
-            },
-            DbColumnType::Uuid => Value::Variant {
-                case_idx: 18,
-                case_value: None,
-            },
-            DbColumnType::Xml => Value::Variant {
-                case_idx: 19,
-                case_value: None,
-            },
-            DbColumnType::Json => Value::Variant {
-                case_idx: 20,
-                case_value: None,
-            },
-            DbColumnType::Jsonb => Value::Variant {
-                case_idx: 21,
-                case_value: None,
-            },
-            DbColumnType::Jsonpath => Value::Variant {
-                case_idx: 22,
-                case_value: None,
-            },
-            DbColumnType::Inet => Value::Variant {
-                case_idx: 23,
-                case_value: None,
-            },
-            DbColumnType::Cidr => Value::Variant {
-                case_idx: 24,
-                case_value: None,
-            },
-            DbColumnType::Macaddr => Value::Variant {
-                case_idx: 25,
-                case_value: None,
-            },
-            DbColumnType::Bit => Value::Variant {
-                case_idx: 26,
-                case_value: None,
-            },
-            DbColumnType::Varbit => Value::Variant {
-                case_idx: 27,
-                case_value: None,
-            },
-            DbColumnType::Int4range => Value::Variant {
-                case_idx: 28,
-                case_value: None,
-            },
-            DbColumnType::Int8range => Value::Variant {
-                case_idx: 29,
-                case_value: None,
-            },
-            DbColumnType::Numrange => Value::Variant {
-                case_idx: 30,
-                case_value: None,
-            },
-            DbColumnType::Tsrange => Value::Variant {
-                case_idx: 31,
-                case_value: None,
-            },
-            DbColumnType::Tstzrange => Value::Variant {
-                case_idx: 32,
-                case_value: None,
-            },
-            DbColumnType::Daterange => Value::Variant {
-                case_idx: 33,
-                case_value: None,
-            },
-            DbColumnType::Money => Value::Variant {
-                case_idx: 34,
-                case_value: None,
-            },
-            DbColumnType::Oid => Value::Variant {
-                case_idx: 35,
-                case_value: None,
-            },
-            DbColumnType::Enumeration(v) => Value::Variant {
-                case_idx: 36,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbColumnType::Composite(v) => Value::Variant {
-                case_idx: 37,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbColumnType::Domain(v) => Value::Variant {
-                case_idx: 38,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbColumnType::Array(v) => Value::Variant {
-                case_idx: 39,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbColumnType::Range(v) => Value::Variant {
-                case_idx: 40,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbColumnType::Null => Value::Variant {
-                case_idx: 41,
-                case_value: None,
-            },
+            DbColumnType::Character => get_variant(0, None),
+            DbColumnType::Int2 => get_variant(1, None),
+            DbColumnType::Int4 => get_variant(2, None),
+            DbColumnType::Int8 => get_variant(3, None),
+            DbColumnType::Float4 => get_variant(4, None),
+            DbColumnType::Float8 => get_variant(5, None),
+            DbColumnType::Numeric => get_variant(6, None),
+            DbColumnType::Boolean => get_variant(7, None),
+            DbColumnType::Text => get_variant(8, None),
+            DbColumnType::Varchar => get_variant(9, None),
+            DbColumnType::Bpchar => get_variant(10, None),
+            DbColumnType::Timestamp => get_variant(11, None),
+            DbColumnType::Timestamptz => get_variant(12, None),
+            DbColumnType::Date => get_variant(13, None),
+            DbColumnType::Time => get_variant(14, None),
+            DbColumnType::Timetz => get_variant(15, None),
+            DbColumnType::Interval => get_variant(16, None),
+            DbColumnType::Bytea => get_variant(17, None),
+            DbColumnType::Json => get_variant(18, None),
+            DbColumnType::Jsonb => get_variant(19, None),
+            DbColumnType::Jsonpath => get_variant(20, None),
+            DbColumnType::Xml => get_variant(21, None),
+            DbColumnType::Uuid => get_variant(22, None),
+            DbColumnType::Inet => get_variant(23, None),
+            DbColumnType::Cidr => get_variant(24, None),
+            DbColumnType::Macaddr => get_variant(25, None),
+            DbColumnType::Bit => get_variant(26, None),
+            DbColumnType::Varbit => get_variant(27, None),
+            DbColumnType::Int4range => get_variant(28, None),
+            DbColumnType::Int8range => get_variant(29, None),
+            DbColumnType::Numrange => get_variant(30, None),
+            DbColumnType::Tsrange => get_variant(31, None),
+            DbColumnType::Tstzrange => get_variant(32, None),
+            DbColumnType::Daterange => get_variant(33, None),
+            DbColumnType::Money => get_variant(34, None),
+            DbColumnType::Oid => get_variant(35, None),
+            DbColumnType::Enumeration(v) => get_variant(36, Some(v.into_value())),
+            DbColumnType::Composite(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 37,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbColumnType::get_analysed_type(Some(v.typ), None, None, None),
+                )
+            }
+            DbColumnType::Domain(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 38,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbColumnType::get_analysed_type(None, Some(v.typ), None, None),
+                )
+            }
+            DbColumnType::Array(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 39,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbColumnType::get_analysed_type(None, None, Some(v.typ), None),
+                )
+            }
+            DbColumnType::Range(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 40,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbColumnType::get_analysed_type(None, None, None, Some(v.typ)),
+                )
+            }
+            DbColumnType::Null => get_variant(41, None),
         }
     }
 
-    fn get_type() -> AnalysedType {
-        DbColumnType::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        DbColumnType::get_analysed_type(None, None, None, None)
     }
 }
 
@@ -1116,32 +1091,16 @@ impl DbValue {
         }
     }
 
-    fn get_analysed_type(root: bool) -> AnalysedType {
-        // "root" flag is used to avoid infinite recursion, in case of complex types
-
-        let composite_type = if root {
-            analysed_type::case("composite", Composite::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("composite")
-        };
-        let domain_type = if root {
-            analysed_type::case("domain", Domain::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("domain")
-        };
-        let array_type = if root {
-            analysed_type::case(
-                "array",
-                analysed_type::list(DbValue::get_analysed_type(false)),
-            )
-        } else {
-            analysed_type::unit_case("array")
-        };
-        let range_type = if root {
-            analysed_type::case("range", Range::get_analysed_type(false))
-        } else {
-            analysed_type::unit_case("range")
-        };
+    fn get_analysed_type(
+        composite_type: Option<AnalysedType>,
+        domain_type: Option<AnalysedType>,
+        array_type: Option<AnalysedType>,
+        range_type: Option<AnalysedType>,
+    ) -> AnalysedType {
+        let composite_type = analysed_type::opt_case("composite", composite_type);
+        let domain_type = analysed_type::opt_case("domain", domain_type);
+        let array_type = analysed_type::opt_case("array", array_type);
+        let range_type = analysed_type::opt_case("range", range_type);
 
         analysed_type::variant(vec![
             analysed_type::case("character", analysed_type::s8()),
@@ -1190,182 +1149,107 @@ impl DbValue {
     }
 }
 
-impl IntoValue for DbValue {
-    fn into_value(self) -> Value {
+impl ExtIntoValueAndType for DbValue {
+    fn into_value_and_type(self) -> ValueAndType {
+        fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
+            let case_value = case_value.map(Box::new);
+            let v = Value::Variant {
+                case_idx,
+                case_value,
+            };
+            ValueAndType::new(v, DbValue::get_analysed_type(None, None, None, None))
+        }
+
         match self {
-            DbValue::Character(v) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Int2(v) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Int4(v) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Int8(v) => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Float4(v) => Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Float8(v) => Value::Variant {
-                case_idx: 5,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Numeric(v) => Value::Variant {
-                case_idx: 6,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Boolean(v) => Value::Variant {
-                case_idx: 7,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Text(v) => Value::Variant {
-                case_idx: 8,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Varchar(v) => Value::Variant {
-                case_idx: 9,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Bpchar(v) => Value::Variant {
-                case_idx: 10,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Timestamp(v) => Value::Variant {
-                case_idx: 11,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Timestamptz(v) => Value::Variant {
-                case_idx: 12,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Date(v) => Value::Variant {
-                case_idx: 13,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Time(v) => Value::Variant {
-                case_idx: 14,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Timetz(v) => Value::Variant {
-                case_idx: 15,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Interval(v) => Value::Variant {
-                case_idx: 16,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Bytea(v) => Value::Variant {
-                case_idx: 17,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Json(v) => Value::Variant {
-                case_idx: 18,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Jsonb(v) => Value::Variant {
-                case_idx: 19,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Jsonpath(v) => Value::Variant {
-                case_idx: 20,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Xml(v) => Value::Variant {
-                case_idx: 21,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Uuid(v) => Value::Variant {
-                case_idx: 22,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Inet(v) => Value::Variant {
-                case_idx: 23,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Cidr(v) => Value::Variant {
-                case_idx: 24,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Macaddr(v) => Value::Variant {
-                case_idx: 25,
-                case_value: Some(Box::new(v.to_string().into_value())),
-            },
-            DbValue::Bit(v) => Value::Variant {
-                case_idx: 26,
-                case_value: Some(Box::new(v.iter().collect::<Vec<bool>>().into_value())),
-            },
-            DbValue::Varbit(v) => Value::Variant {
-                case_idx: 27,
-                case_value: Some(Box::new(v.iter().collect::<Vec<bool>>().into_value())),
-            },
-            DbValue::Int4range(v) => Value::Variant {
-                case_idx: 28,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Int8range(v) => Value::Variant {
-                case_idx: 29,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Numrange(v) => Value::Variant {
-                case_idx: 30,
-                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
-            },
-            DbValue::Tsrange(v) => Value::Variant {
-                case_idx: 31,
-                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
-            },
-            DbValue::Tstzrange(v) => Value::Variant {
-                case_idx: 32,
-                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
-            },
-            DbValue::Daterange(v) => Value::Variant {
-                case_idx: 33,
-                case_value: Some(Box::new(v.map(|v| v.to_string()).into_value())),
-            },
-            DbValue::Money(v) => Value::Variant {
-                case_idx: 34,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Oid(v) => Value::Variant {
-                case_idx: 35,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Enumeration(v) => Value::Variant {
-                case_idx: 36,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Composite(v) => Value::Variant {
-                case_idx: 37,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Domain(v) => Value::Variant {
-                case_idx: 38,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Array(v) => Value::Variant {
-                case_idx: 39,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Range(v) => Value::Variant {
-                case_idx: 40,
-                case_value: Some(Box::new(v.into_value())),
-            },
-            DbValue::Null => Value::Variant {
-                case_idx: 41,
-                case_value: None,
-            },
+            DbValue::Character(v) => get_variant(0, Some(v.into_value())),
+            DbValue::Int2(v) => get_variant(1, Some(v.into_value())),
+            DbValue::Int4(v) => get_variant(2, Some(v.into_value())),
+            DbValue::Int8(v) => get_variant(3, Some(v.into_value())),
+            DbValue::Float4(v) => get_variant(4, Some(v.into_value())),
+            DbValue::Float8(v) => get_variant(5, Some(v.into_value())),
+            DbValue::Numeric(v) => get_variant(6, Some(v.to_string().into_value())),
+            DbValue::Boolean(v) => get_variant(7, Some(v.into_value())),
+            DbValue::Text(v) => get_variant(8, Some(v.into_value())),
+            DbValue::Varchar(v) => get_variant(9, Some(v.into_value())),
+            DbValue::Bpchar(v) => get_variant(10, Some(v.into_value())),
+            DbValue::Timestamp(v) => get_variant(11, Some(v.to_string().into_value())),
+            DbValue::Timestamptz(v) => get_variant(12, Some(v.to_string().into_value())),
+            DbValue::Date(v) => get_variant(13, Some(v.to_string().into_value())),
+            DbValue::Time(v) => get_variant(14, Some(v.to_string().into_value())),
+            DbValue::Timetz(v) => get_variant(15, Some(v.to_string().into_value())),
+            DbValue::Interval(v) => get_variant(16, Some(v.into_value())),
+            DbValue::Bytea(v) => get_variant(17, Some(v.into_value())),
+            DbValue::Json(v) => get_variant(18, Some(v.into_value())),
+            DbValue::Jsonb(v) => get_variant(19, Some(v.into_value())),
+            DbValue::Jsonpath(v) => get_variant(20, Some(v.into_value())),
+            DbValue::Xml(v) => get_variant(21, Some(v.into_value())),
+            DbValue::Uuid(v) => get_variant(22, Some(v.to_string().into_value())),
+            DbValue::Inet(v) => get_variant(23, Some(v.to_string().into_value())),
+            DbValue::Cidr(v) => get_variant(24, Some(v.to_string().into_value())),
+            DbValue::Macaddr(v) => get_variant(25, Some(v.to_string().into_value())),
+            DbValue::Bit(v) => get_variant(26, Some(v.iter().collect::<Vec<bool>>().into_value())),
+            DbValue::Varbit(v) => {
+                get_variant(27, Some(v.iter().collect::<Vec<bool>>().into_value()))
+            }
+            DbValue::Int4range(v) => get_variant(28, Some(v.into_value())),
+            DbValue::Int8range(v) => get_variant(29, Some(v.into_value())),
+            DbValue::Numrange(v) => get_variant(30, Some(v.map(|v| v.to_string()).into_value())),
+            DbValue::Tsrange(v) => get_variant(31, Some(v.map(|v| v.to_string()).into_value())),
+            DbValue::Tstzrange(v) => get_variant(32, Some(v.map(|v| v.to_string()).into_value())),
+            DbValue::Daterange(v) => get_variant(33, Some(v.map(|v| v.to_string()).into_value())),
+            DbValue::Money(v) => get_variant(34, Some(v.into_value())),
+            DbValue::Oid(v) => get_variant(35, Some(v.into_value())),
+            DbValue::Enumeration(v) => get_variant(36, Some(v.into_value())),
+            DbValue::Composite(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 37,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbValue::get_analysed_type(Some(v.typ), None, None, None),
+                )
+            }
+            DbValue::Domain(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 38,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbValue::get_analysed_type(None, Some(v.typ), None, None),
+                )
+            }
+            DbValue::Array(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 39,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbValue::get_analysed_type(None, None, Some(v.typ), None),
+                )
+            }
+            DbValue::Range(v) => {
+                let v = v.into_value_and_type();
+                let value = Value::Variant {
+                    case_idx: 40,
+                    case_value: Some(Box::new(v.value)),
+                };
+                ValueAndType::new(
+                    value,
+                    DbValue::get_analysed_type(None, None, None, Some(v.typ)),
+                )
+            }
+            DbValue::Null => get_variant(41, None),
         }
     }
 
-    fn get_type() -> AnalysedType {
-        DbValue::get_analysed_type(true)
+    fn get_base_type() -> AnalysedType {
+        DbValue::get_analysed_type(None, None, None, None)
     }
 }
 
@@ -1377,22 +1261,49 @@ pub struct DbColumn {
     pub db_type_name: String,
 }
 
-impl IntoValue for DbColumn {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.ordinal.into_value(),
-            self.name.into_value(),
-            self.db_type.into_value(),
-            self.db_type_name.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
+impl DbColumn {
+    fn get_analysed_type(column_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("ordinal", analysed_type::u64()),
             analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("db-type", DbColumnType::get_type()),
+            analysed_type::field("db-type", column_type),
             analysed_type::field("db-type-name", analysed_type::str()),
         ])
+    }
+}
+
+impl ExtIntoValueAndType for DbColumn {
+    fn into_value_and_type(self) -> ValueAndType {
+        let db_type = ExtIntoValueAndType::into_value_and_type(self.db_type);
+        let t = DbColumn::get_analysed_type(db_type.typ);
+        let v = Value::Record(vec![
+            self.ordinal.into_value(),
+            self.name.into_value(),
+            db_type.value,
+            self.db_type_name.into_value(),
+        ]);
+        ValueAndType::new(v, t)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        DbColumn::get_analysed_type(DbColumnType::get_base_type())
+    }
+}
+
+impl AnalysedTypeMerger for DbColumnType {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first // TODO implement merge
+    }
+}
+
+impl AnalysedTypeMerger for DbValue {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first // TODO implement merge
+    }
+}
+
+impl AnalysedTypeMerger for DbColumn {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first // TODO implement merge
     }
 }

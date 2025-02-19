@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{ExtIntoValueAndType, RdbmsPoolKey, RdbmsType};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct RdbmsRequest<T: RdbmsType + 'static> {
@@ -32,22 +32,33 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             params,
         }
     }
-}
 
-impl<T: RdbmsType + 'static> IntoValue for RdbmsRequest<T> {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.pool_key.into_value(),
-            self.statement.into_value(),
-            self.params.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
+    fn get_analysed_type(params_type: AnalysedType) -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("pool-key", RdbmsPoolKey::get_type()),
             analysed_type::field("statement", analysed_type::str()),
-            analysed_type::field("params", analysed_type::list(T::DbValue::get_type())),
+            analysed_type::field("params", params_type),
         ])
+    }
+}
+
+impl<T> ExtIntoValueAndType for RdbmsRequest<T>
+where
+    T: RdbmsType + 'static,
+    Vec<T::DbValue>: ExtIntoValueAndType,
+{
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = self.params.into_value_and_type();
+        let t = RdbmsRequest::<T>::get_analysed_type(v.typ);
+        let v = Value::Record(vec![
+            self.pool_key.into_value(),
+            self.statement.into_value(),
+            v.value,
+        ]);
+        ValueAndType::new(v, t)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        RdbmsRequest::<T>::get_analysed_type(<Vec<T::DbValue>>::get_base_type())
     }
 }

@@ -2265,11 +2265,11 @@ pub mod tests {
         DbValueWithResourceRep,
     };
     use crate::services::rdbms::postgres::types as postgres_types;
+    use crate::services::rdbms::ExtIntoValueAndType;
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
-    use golem_wasm_rpc::IntoValueAndType;
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;

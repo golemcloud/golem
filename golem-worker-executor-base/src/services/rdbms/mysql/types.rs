@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::rdbms::{AnalysedTypeMerger, ExtIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 use std::fmt::Display;
 
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
@@ -565,6 +566,16 @@ impl IntoValue for DbValue {
     }
 }
 
+impl ExtIntoValueAndType for DbValue {
+    fn into_value_and_type(self) -> ValueAndType {
+        IntoValueAndType::into_value_and_type(self)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        DbValue::get_type()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DbColumn {
     pub ordinal: u64,
@@ -590,5 +601,36 @@ impl IntoValue for DbColumn {
             analysed_type::field("db-type", DbColumnType::get_type()),
             analysed_type::field("db-type-name", analysed_type::str()),
         ])
+    }
+}
+
+impl ExtIntoValueAndType for DbColumn {
+    fn into_value_and_type(self) -> ValueAndType {
+        IntoValueAndType::into_value_and_type(self)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        DbColumn::get_type()
+    }
+}
+
+impl AnalysedTypeMerger for DbColumnType {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        // same types are expected
+        first
+    }
+}
+
+impl AnalysedTypeMerger for DbValue {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        // same types are expected
+        first
+    }
+}
+
+impl AnalysedTypeMerger for DbColumn {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        // same types are expected
+        first
     }
 }
