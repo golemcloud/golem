@@ -526,7 +526,7 @@ mod function_parameters_inference_tests {
 
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
-        let call_expr = Expr::call(
+        let call_expr = Expr::call_worker_function(
             DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {

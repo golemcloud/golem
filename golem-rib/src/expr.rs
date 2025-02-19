@@ -439,7 +439,7 @@ impl Expr {
         cond
     }
 
-    pub fn call(
+    pub fn call_worker_function(
         dynamic_parsed_fn_name: DynamicParsedFunctionName,
         generic_type_parameter: Option<GenericTypeParameter>,
         worker_name: Option<Expr>,
@@ -453,6 +453,19 @@ impl Expr {
             generic_type_parameter,
             args,
             inferred_type: InferredType::Unknown,
+        }
+    }
+
+    pub fn call(
+        call_type: CallType,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+    ) -> Self {
+        Expr::Call {
+            call_type,
+            generic_type_parameter,
+            args,
+            inferred_type: InferredType::Unknown
         }
     }
 
@@ -1031,7 +1044,7 @@ impl Expr {
         type_inference::unify_types(self)
     }
 
-    pub fn add_infer_type(&self, new_inferred_type: InferredType) -> Expr {
+    pub fn merge_inferred_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.add_infer_type_mut(new_inferred_type);
         expr_copied
@@ -1704,30 +1717,30 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                         match name {
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
-                                Expr::call(DynamicParsedFunctionName::parse(
+                                Expr::call_worker_function(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
                                 )?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call(name.try_into()?, generic_type_parameter, None, params)
+                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                                 let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
                                 let call_type = CallType::InstanceCreation(instance_creation_type);
@@ -2472,7 +2485,7 @@ mod tests {
             ),
             Expr::let_binding(
                 "result",
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "ns".to_string(),

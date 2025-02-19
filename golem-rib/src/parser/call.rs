@@ -46,7 +46,7 @@ where
             sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
         ),
     )
-        .map(|(name, tp, args)| Expr::call(name, tp, None, args))
+        .map(|(name, tp, args)| Expr::call_worker_function(name, tp, None, args))
         .message("Invalid function call")
 }
 
@@ -251,7 +251,7 @@ mod function_call_tests {
         let input = "foo()";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -274,7 +274,7 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
 
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -295,7 +295,7 @@ mod function_call_tests {
         let input = "foo(bar, baz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -316,7 +316,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -341,7 +341,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -367,7 +367,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux, quuz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -394,7 +394,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux, quuz, quuux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -422,7 +422,7 @@ mod function_call_tests {
         let input = "foo({bar: baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -446,7 +446,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -470,7 +470,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, {qux: quux})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -494,7 +494,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, {qux: quux}, quuz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -519,7 +519,7 @@ mod function_call_tests {
         let input = "foo([bar, baz])";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -543,7 +543,7 @@ mod function_call_tests {
         let input = "foo([bar, baz], qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -570,7 +570,7 @@ mod function_call_tests {
         let input = "foo([bar, baz], [qux, quux])";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -603,7 +603,7 @@ mod function_call_tests {
         let input = "foo((bar, baz))";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -627,7 +627,7 @@ mod function_call_tests {
         let input = "foo((bar, baz), qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -654,7 +654,7 @@ mod function_call_tests {
         let input = "foo({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -675,7 +675,7 @@ mod function_call_tests {
         let input = "interface.{fn1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Interface {
                         name: "interface".to_string(),
@@ -698,7 +698,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{fn1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -724,7 +724,7 @@ mod function_call_tests {
         let input = "wasi:cli/run@0.2.0.{run}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "wasi".to_string(),
@@ -750,7 +750,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -776,7 +776,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[constructor]resource1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -802,7 +802,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1().new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -831,7 +831,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -863,7 +863,7 @@ mod function_call_tests {
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -895,7 +895,7 @@ mod function_call_tests {
     fn test_call_with_function_name_method_syntax_sugar() {
         let input = "ns:name/interface.{resource1.do-something}({bar, baz})";
         let result = Expr::from_text(input).unwrap();
-        let expected = Expr::call(
+        let expected = Expr::call_worker_function(
             DynamicParsedFunctionName {
                 site: ParsedFunctionSite::PackagedInterface {
                     namespace: "ns".to_string(),
@@ -920,7 +920,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[method]resource1.do-something}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -948,7 +948,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.do-something-static}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -975,7 +975,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[static]resource1.do-something-static}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1002,7 +1002,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1028,7 +1028,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1().drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1055,7 +1055,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1087,7 +1087,7 @@ mod function_call_tests {
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1120,7 +1120,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[drop]resource1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),

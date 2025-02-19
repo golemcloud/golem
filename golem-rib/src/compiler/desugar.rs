@@ -27,7 +27,7 @@ pub fn desugar_pattern_match(
         }
     }
 
-    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    internal::build_expr_from(if_else_branches).map(|expr| expr.merge_inferred_type(expr_type))
 }
 
 mod internal {
@@ -47,7 +47,7 @@ mod internal {
                     let else_copy = *else_.clone();
                     *else_ = Box::new(
                         Expr::cond(branch.condition.clone(), branch.body.clone(), else_copy)
-                            .add_infer_type(branch.body.inferred_type()),
+                            .merge_inferred_type(branch.body.inferred_type()),
                     );
                 }
             }

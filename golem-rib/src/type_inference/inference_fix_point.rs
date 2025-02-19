@@ -335,8 +335,8 @@ mod tests {
         ]);
         let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
 
-        let left = Expr::identifier_global("x", None).add_infer_type(left);
-        let right = Expr::identifier_global("x", None).add_infer_type(right);
+        let left = Expr::identifier_global("x", None).merge_inferred_type(left);
+        let right = Expr::identifier_global("x", None).merge_inferred_type(right);
 
         assert!(equivalent_exprs(&left, &right));
     }
@@ -350,8 +350,8 @@ mod tests {
             InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
         ]);
 
-        let left = Expr::identifier_global("x", None).add_infer_type(left);
-        let right = Expr::identifier_global("x", None).add_infer_type(right);
+        let left = Expr::identifier_global("x", None).merge_inferred_type(left);
+        let right = Expr::identifier_global("x", None).merge_inferred_type(right);
 
         assert!(!equivalent_exprs(&left, &right));
     }

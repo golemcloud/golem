@@ -89,13 +89,13 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
                 None,
                 vec![Expr::identifier_global("x", None)],
             ),
-            Expr::call(
+            Expr::call_worker_function(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
                 None,
@@ -124,13 +124,13 @@ mod tests {
             Expr::expr_block(vec![
                 Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                 Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
                     None,
                     vec![Expr::identifier_global("x", None)],
                 ),
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
                     None,
@@ -168,13 +168,13 @@ mod tests {
                 Expr::expr_block(vec![
                     Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                     Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
                         None,
                         vec![Expr::identifier_global("x", None)],
                     ),
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
                         None,
@@ -219,13 +219,13 @@ mod tests {
                     Expr::expr_block(vec![
                         Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
                         Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-                        Expr::call(
+                        Expr::call_worker_function(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,
                             None,
                             vec![Expr::identifier_global("x", None)],
                         ),
-                        Expr::call(
+                        Expr::call_worker_function(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,
                             None,

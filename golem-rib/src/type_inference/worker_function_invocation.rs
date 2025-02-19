@@ -44,7 +44,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
 
                             let worker_name = instance_type.worker_name().as_deref().cloned();
 
-                            let new_call = Expr::call(
+                            let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
                                 None,
                                 worker_name,
@@ -102,7 +102,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                     let worker_name =
                                         instance_type.worker_name().as_deref().cloned();
 
-                                    let new_call = Expr::call(
+                                    let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
                                         None,
                                         worker_name,

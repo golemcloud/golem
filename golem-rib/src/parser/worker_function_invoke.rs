@@ -123,7 +123,7 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding(
                 "worker",
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
                     None,
                     None,
@@ -161,7 +161,7 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding(
                 "worker",
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
                     None,
                     None,
@@ -203,7 +203,7 @@ mod tests {
         let expected = Expr::expr_block(vec![
             Expr::let_binding(
                 "worker",
-                Expr::call(
+                Expr::call_worker_function(
                     DynamicParsedFunctionName::parse("instance").unwrap(),
                     Some(type_parameter1),
                     None,

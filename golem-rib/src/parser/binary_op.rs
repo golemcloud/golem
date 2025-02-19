@@ -317,7 +317,7 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName {
                             site: ParsedFunctionSite::Global,
                             function: DynamicParsedFunctionReference::Function {
@@ -328,7 +328,7 @@ mod test {
                         None,
                         vec![]
                     ),
-                    Expr::call(
+                    Expr::call_worker_function(
                         DynamicParsedFunctionName {
                             site: ParsedFunctionSite::Global,
                             function: DynamicParsedFunctionReference::Function {
