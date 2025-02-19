@@ -37,46 +37,155 @@ use std::str::FromStr;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
-    Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
-    SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
-    SelectIndex(Box<Expr>, usize, Option<TypeName>, InferredType),
-    Sequence(Vec<Expr>, Option<TypeName>, InferredType),
-    Record(Vec<(String, Box<Expr>)>, InferredType),
-    Tuple(Vec<Expr>, InferredType),
+    Let {
+        variable_id: VariableId,
+        type_annotation: Option<TypeName>,
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    SelectField {
+        expr: Box<Expr>,
+        field: String,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    SelectIndex {
+        expr: Box<Expr>,
+        index: usize,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    Sequence {
+        expressions: Vec<Expr>,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    Record {
+        fields: Vec<(String, Box<Expr>)>,
+        inferred_type: InferredType,
+    },
+    Tuple {
+        expressions: Vec<Expr>,
+        inferred_type: InferredType,
+    },
     Literal(String, InferredType),
-    Number(Number, Option<TypeName>, InferredType),
-    Flags(Vec<String>, InferredType),
-    Identifier(VariableId, Option<TypeName>, InferredType),
-    Boolean(bool, InferredType),
-    Concat(Vec<Expr>, InferredType),
-    ExprBlock(Vec<Expr>, InferredType),
-    Not(Box<Expr>, InferredType),
-    GreaterThan(Box<Expr>, Box<Expr>, InferredType),
-    And(Box<Expr>, Box<Expr>, InferredType),
-    Or(Box<Expr>, Box<Expr>, InferredType),
-    GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
-    LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
-    Plus(Box<Expr>, Box<Expr>, InferredType),
-    Multiply(Box<Expr>, Box<Expr>, InferredType),
-    Minus(Box<Expr>, Box<Expr>, InferredType),
-    Divide(Box<Expr>, Box<Expr>, InferredType),
-    EqualTo(Box<Expr>, Box<Expr>, InferredType),
-    LessThan(Box<Expr>, Box<Expr>, InferredType),
-    Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
-    PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
-    Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
-    Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
+    Number {
+        number: Number,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    Flags {
+        flags: Vec<String>,
+        inferred_type: InferredType,
+    },
+    Identifier {
+        variable_id: VariableId,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    Boolean {
+        value: bool,
+        inferred_type: InferredType,
+    },
+    Concat {
+        expressions: Vec<Expr>,
+        inferred_type: InferredType,
+    },
+    ExprBlock {
+        expressions: Vec<Expr>,
+        inferred_type: InferredType,
+    },
+    Not {
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    GreaterThan {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    And {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Or {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    GreaterThanOrEqualTo {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    LessThanOrEqualTo {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Plus {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Multiply {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Minus {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Divide {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    EqualTo {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    LessThan {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Cond {
+        cond: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    PatternMatch {
+        predicate: Box<Expr>,
+        match_arms: Vec<MatchArm>,
+        inferred_type: InferredType,
+    },
+    Option {
+        expr: Option<Box<Expr>>,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
+    Result {
+        expr: Result<Box<Expr>, Box<Expr>>,
+        type_annotation: Option<TypeName>,
+        inferred_type: InferredType,
+    },
     // instance[t]("my-worker") will be parsed sd Expr::Call("instance", Some(t), vec!["my-worker"])
     // will be parsed as Expr::Call("instance", vec!["my-worker"]).
     // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call(InstanceCreation,..)
     // with inferred-type as `InstanceType`. This way any variables attached to the instance creation
     // will be having the `InstanceType`.
-    Call(
-        CallType,
-        Option<GenericTypeParameter>,
-        Vec<Expr>,
-        InferredType,
-    ),
+    Call {
+        call_type: CallType,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+        inferred_type: InferredType,
+    },
     // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
     // such that `my-worker-variable-expr` (lhs) will be of the type `InferredType::InstanceType`. `lhs` will
     // be `Expr::Call(InstanceCreation)` with type `InferredType::InstanceType`.
@@ -89,9 +198,18 @@ pub enum Expr {
         args: Vec<Expr>,
         inferred_type: InferredType,
     },
-    Unwrap(Box<Expr>, InferredType),
-    Throw(String, InferredType),
-    GetTag(Box<Expr>, InferredType),
+    Unwrap {
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    Throw {
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    GetTag {
+        expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
     ListComprehension {
         iterated_variable: VariableId,
         iterable_expr: Box<Expr>,
