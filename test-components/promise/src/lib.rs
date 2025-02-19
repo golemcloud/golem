@@ -1,14 +1,21 @@
 mod bindings;
 
+use crate::bindings::exports::golem::it::api::{Guest, PromiseId};
 use crate::bindings::golem::api::host::*;
-use crate::bindings::Guest;
 
 struct Component;
 
 impl Guest for Component {
-    fn run() -> Vec<u8> {
-        let promise_id = create_promise();
-        await_promise(&promise_id)
+    fn create() -> PromiseId {
+        create_promise()
+    }
+
+    fn await_(id: PromiseId) -> Vec<u8> {
+        await_promise(&id)
+    }
+
+    fn poll(id: PromiseId) -> Option<Vec<u8>> {
+        poll_promise(&id)
     }
 }
 
