@@ -2,6 +2,7 @@
 #
 # - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
 # - `cargo make wit`: fetches the WIT dependencies based on wit/deps.toml
+# - `cargo make check-wit`: deletes then fetches the WIT dependencies based on wit/deps.toml, then checks if it's up-to-date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
@@ -58,10 +59,11 @@ dependencies = [
 # WIT DEPENDENCIES
 [tasks.wit]
 description = "Fetches the WIT dependencies based on wit/deps.toml"
-dependencies = ["wit-host", "wit-wasm-rpc"]
+condition = { files_modified = { input = ["wit/deps.toml"], output = ["wit/deps.done"] } }
+run_task = [{ name = ["remove-wit-deps", "wit-host", "wit-wasm-rpc", "wit-done"] }]
 
 [tasks.wit-wasm-rpc]
-dependencies = ["wit-host"]
+private = true
 script_runner = "@duckscript"
 script = """
 rm -r wasm-rpc/wit/deps
@@ -72,9 +74,33 @@ cp wit/deps/wasm-rpc wasm-rpc/wit/deps
 """
 
 [tasks.wit-host]
+private = true
 install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
 command = "wit-deps"
 args = ["update"]
+
+[tasks.wit-done]
+private = true
+script_runner = "@duckscript"
+script = "touch wit/deps.done"
+
+[tasks.remove-wit-deps]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -rf wit/deps.done
+rm -rf wit/deps
+rm -rf wasm-rpc/wit/deps
+"""
+
+[tasks.diff-wit]
+private = true
+script = "git diff --exit-code wit wasm-rpc/wit"
+
+[tasks.check-wit]
+run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
+
+# BUILD
 
 [tasks.build]
 dependencies = ["wit"]

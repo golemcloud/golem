@@ -230,6 +230,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check that wit-deps are up-to-date
+        run: cargo make --profile ci check-wit
       - name: Build all targets
         run: cargo make --profile ci build
       - name: Check that OpenAPI specs are up-to-date
