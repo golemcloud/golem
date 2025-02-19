@@ -17,7 +17,7 @@ use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder, GolemEnvVars,
 };
 use crate::config::GolemClientProtocol;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -26,11 +26,15 @@ use golem_api_grpc::proto::golem::component::v1::component_service_client::Compo
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response, create_plugin_response,
-    download_component_response, get_component_metadata_response, get_components_response,
-    install_plugin_response, update_component_request, update_component_response,
-    CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader,
-    CreatePluginRequest, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
+    download_component_response, get_component_metadata_all_versions_response,
+    get_component_metadata_response, get_components_response, install_plugin_response,
+    update_component_request, update_component_response, CreateComponentRequest,
+    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
+    GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+};
+use golem_api_grpc::proto::golem::component::{
+    Component, PluginInstallation, VersionedComponentId,
 };
 use golem_client::api::ComponentClient as ComponentServiceHttpClient;
 use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
@@ -50,7 +54,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 use tokio::fs;
 use tokio::fs::File;
@@ -85,10 +89,105 @@ pub trait ComponentService {
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
 
+    fn component_directory(&self) -> &Path;
+
     fn handles_ifs_upload(&self) -> bool {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => false,
             GolemClientProtocol::Http => true,
+        }
+    }
+
+    async fn get_components(&self, request: GetComponentsRequest) -> crate::Result<Vec<Component>> {
+        match self.component_client() {
+            ComponentServiceClient::Grpc(mut client) => {
+                match client
+                    .get_components(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("get_components: no result"))?
+                {
+                    get_components_response::Result::Success(result) => Ok(result.components),
+                    get_components_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+            ComponentServiceClient::Http(client) => {
+                if request.project_id.is_some() {
+                    panic!("get_components: project id is not supported")
+                }
+                match client
+                    .get_components(request.component_name.as_deref())
+                    .await
+                {
+                    Ok(components) => Ok(components.into_iter().map(to_grpc_component).collect()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn get_component_metadata_all_versions(
+        &self,
+        request: GetComponentRequest,
+    ) -> crate::Result<Vec<Component>> {
+        match self.component_client() {
+            ComponentServiceClient::Grpc(mut client) => {
+                match client
+                    .get_component_metadata_all_versions(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("get_component_metadata_all_versions: no result"))?
+                {
+                    get_component_metadata_all_versions_response::Result::Success(result) => {
+                        Ok(result.components)
+                    }
+                    get_component_metadata_all_versions_response::Result::Error(error) => {
+                        Err(anyhow!("{error:?}"))
+                    }
+                }
+            }
+            ComponentServiceClient::Http(client) => match client
+                .get_component_metadata_all_versions(
+                    &request.component_id.unwrap().value.unwrap().into(),
+                )
+                .await
+            {
+                Ok(result) => Ok(result.into_iter().map(to_grpc_component).collect()),
+                Err(error) => Err(anyhow!("{error:?}")),
+            },
+        }
+    }
+
+    async fn get_latest_component_metadata(
+        &self,
+        request: GetLatestComponentRequest,
+    ) -> crate::Result<Component> {
+        match self.component_client() {
+            ComponentServiceClient::Grpc(mut client) => {
+                match client
+                    .get_latest_component_metadata(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("get_latest_component_metadata: no result"))?
+                {
+                    get_component_metadata_response::Result::Success(result) => result
+                        .component
+                        .ok_or_else(|| anyhow!("get_latest_component_metadata: missing component")),
+                    get_component_metadata_response::Result::Error(error) => {
+                        Err(anyhow!("{error:?}"))
+                    }
+                }
+            }
+            ComponentServiceClient::Http(client) => match client
+                .get_latest_component_metadata(&request.component_id.unwrap().value.unwrap().into())
+                .await
+            {
+                Ok(result) => Ok(to_grpc_component(result)),
+                Err(error) => Err(anyhow!("{error:?}")),
+            },
         }
     }
 
@@ -97,13 +196,13 @@ pub trait ComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
-    ) -> ComponentId {
+    ) -> Component {
         let mut retries = 5;
         loop {
-            let latest_component_id: Option<ComponentId> = match self.component_client() {
+            let latest_component: Option<Component> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
                     match client
                         .get_components(GetComponentsRequest {
@@ -126,15 +225,6 @@ pub trait ComponentService {
                                 .components
                                 .into_iter()
                                 .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version)
-                                .map(|component| {
-                                    component
-                                        .versioned_component_id
-                                        .expect("versioned_component_id field is missing")
-                                        .component_id
-                                        .expect("component_id field is missing")
-                                        .try_into()
-                                        .expect("component_id has unexpected format")
-                                })
                         }
                         Some(get_components_response::Result::Error(error)) => {
                             panic!(
@@ -150,9 +240,7 @@ pub trait ComponentService {
                             result
                                 .into_iter()
                                 .max_by_key(|component| component.versioned_component_id.version)
-                                .map(|component| {
-                                    ComponentId(component.versioned_component_id.component_id)
-                                })
+                                .map(to_grpc_component)
                         }
                         Err(error) => {
                             panic!(
@@ -163,8 +251,8 @@ pub trait ComponentService {
                 }
             };
 
-            if let Some(latest_component_id) = latest_component_id {
-                return latest_component_id;
+            if let Some(latest_component) = latest_component {
+                return latest_component;
             }
 
             match self
@@ -214,10 +302,10 @@ pub trait ComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
-        files: &[InitialComponentFile],
+        files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         _unverified: bool,
-    ) -> Result<ComponentId, AddComponentError> {
+    ) -> Result<Component, AddComponentError> {
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -227,7 +315,7 @@ pub trait ComponentService {
                 let component_type: golem_api_grpc::proto::golem::component::ComponentType =
                     component_type.into();
 
-                let files = files.iter().map(|f| f.clone().into()).collect();
+                let files = files.iter().map(|(_, f)| f.clone().into()).collect();
 
                 let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
                     data: Some(create_component_request::Data::Header(
@@ -282,21 +370,7 @@ pub trait ComponentService {
                     )),
                     Some(create_component_response::Result::Success(component)) => {
                         info!("Created component (GRPC) {component:?}");
-                        Ok(component
-                            .versioned_component_id
-                            .ok_or(AddComponentError::Other(
-                                "Missing versioned_component_id field".to_string(),
-                            ))?
-                            .component_id
-                            .ok_or(AddComponentError::Other(
-                                "Missing component_id field".to_string(),
-                            ))?
-                            .try_into()
-                            .map_err(|error| {
-                                AddComponentError::Other(format!(
-                                    "component_id has unexpected format: {error}"
-                                ))
-                            })?)
+                        Ok(component)
                     }
                     Some(create_component_response::Result::Error(error)) => match error.error {
                         Some(component_error::Error::AlreadyExists(_)) => {
@@ -309,7 +383,7 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
-                let archive = build_ifs_archive(Some(files)).await.map_err(|error| {
+                let archive = build_ifs_archive(self.component_directory(), Some(files)).await.map_err(|error| {
                     AddComponentError::Other(format!(
                         "Failed to build IFS archive golem-component-service add component: {error:?}"
                     ))
@@ -338,7 +412,7 @@ pub trait ComponentService {
                 {
                     Ok(component) => {
                         debug!("Created component (HTTP) {:?}", component);
-                        Ok(ComponentId(component.versioned_component_id.component_id))
+                        Ok(to_grpc_component(component))
                     }
                     Err(error) => {
                         if let golem_client::Error::Item(
@@ -360,7 +434,7 @@ pub trait ComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
-        files: Option<&[InitialComponentFile]>,
+        files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
     ) -> u64 {
         let mut file = File::open(local_path)
@@ -378,7 +452,7 @@ pub trait ComponentService {
                     files
                         .into_iter()
                         .flatten()
-                        .map(|f| f.clone().into())
+                        .map(|(_, f)| f.clone().into())
                         .collect::<Vec<_>>();
 
                 let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
@@ -437,7 +511,7 @@ pub trait ComponentService {
                 }
             }
             ComponentServiceClient::Http(client) => {
-                let archive = match build_ifs_archive(files).await {
+                let archive = match build_ifs_archive(self.component_directory(), files).await {
                     Ok(archive) => archive,
                     Err(error) => panic!(
                         "Failed to build IFS archive in golem-component-service update component: {error:?}"
@@ -865,7 +939,7 @@ impl Display for AddComponentError {
 }
 
 fn to_http_file_permissions(
-    files: &[InitialComponentFile],
+    files: &[(PathBuf, InitialComponentFile)],
 ) -> Option<golem_common::model::ComponentFilePathWithPermissionsList> {
     if files.is_empty() {
         None
@@ -873,7 +947,7 @@ fn to_http_file_permissions(
         Some(golem_client::model::ComponentFilePathWithPermissionsList {
             values: files
                 .iter()
-                .map(|file| ComponentFilePathWithPermissions {
+                .map(|(_source, file)| ComponentFilePathWithPermissions {
                     path: file.path.clone(),
                     permissions: file.permissions,
                 })
@@ -911,8 +985,42 @@ fn to_http_dynamic_linking(
     })
 }
 
+fn to_grpc_component(component: golem_client::model::Component) -> Component {
+    Component {
+        versioned_component_id: Some(VersionedComponentId {
+            component_id: Some(ComponentId(component.versioned_component_id.component_id).into()),
+            version: component.versioned_component_id.version,
+        }),
+        component_name: component.component_name,
+        component_size: component.component_size,
+        metadata: Some(component.metadata.into()),
+        project_id: None,
+        created_at: component.created_at.map(|ts| SystemTime::from(ts).into()),
+        component_type: component
+            .component_type
+            .map(|component_type| component_type as i32),
+        files: component
+            .files
+            .into_iter()
+            .map(|file| file.into())
+            .collect(),
+        installed_plugins: component
+            .installed_plugins
+            .into_iter()
+            .map(|plugin| PluginInstallation {
+                id: Some(PluginInstallationId(plugin.id).into()),
+                name: plugin.name,
+                version: plugin.version,
+                priority: plugin.priority,
+                parameters: plugin.parameters,
+            })
+            .collect(),
+    }
+}
+
 async fn build_ifs_archive(
-    files: Option<&[InitialComponentFile]>,
+    component_directory: &Path,
+    files: Option<&[(PathBuf, InitialComponentFile)]>,
 ) -> crate::Result<Option<(TempDir, PathBuf)>> {
     static ARCHIVE_NAME: &str = "ifs.zip";
 
@@ -927,11 +1035,13 @@ async fn build_ifs_archive(
     let temp_file = File::create(temp_dir.path().join(ARCHIVE_NAME)).await?;
     let mut zip_writer = ZipFileWriter::with_tokio(temp_file);
 
-    for file in files {
+    for (source_file, ifs_file) in files {
         zip_writer
             .write_entry_whole(
-                ZipEntryBuilder::new(file.key.0.clone().into(), Compression::Deflate),
-                &(fs::read(Path::new(file.path.as_path())).await?),
+                ZipEntryBuilder::new(ifs_file.path.to_string().into(), Compression::Deflate),
+                &(fs::read(&component_directory.join(source_file))
+                    .await
+                    .with_context(|| format!("source file path: {}", source_file.display()))?),
             )
             .await?;
     }

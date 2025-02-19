@@ -38,6 +38,7 @@ impl ApiDeploymentApi {
         payload: Json<ApiDeploymentRequest>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("deploy", site = payload.0.site.to_string());
+        let namespace = DefaultNamespace::default();
         let response = {
             let api_definition_infos = payload
                 .api_definitions
@@ -49,7 +50,7 @@ impl ApiDeploymentApi {
                 .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
             let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
-                namespace: DefaultNamespace::default(),
+                namespace: namespace.clone(),
                 api_definition_keys: api_definition_infos,
                 site: payload.site.clone(),
             };
@@ -61,7 +62,7 @@ impl ApiDeploymentApi {
 
             let data = self
                 .deployment_service
-                .get_by_site(&ApiSiteString::from(&payload.site))
+                .get_by_site(&namespace, &ApiSiteString::from(&payload.site))
                 .instrument(record.span.clone())
                 .await?;
 
@@ -117,7 +118,7 @@ impl ApiDeploymentApi {
 
             let value = self
                 .deployment_service
-                .get_by_site(&ApiSiteString(site))
+                .get_by_site(&DefaultNamespace::default(), &ApiSiteString(site))
                 .await?
                 .ok_or(ApiEndpointError::not_found(safe(
                     "Api deployment not found".to_string(),

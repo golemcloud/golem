@@ -12,7 +12,7 @@ use prometheus::Registry;
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
@@ -222,7 +222,7 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.shard_manager()
     }
 
-    fn component_directory(&self) -> PathBuf {
+    fn component_directory(&self) -> &Path {
         self.deps.component_directory()
     }
 

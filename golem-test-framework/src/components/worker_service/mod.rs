@@ -24,10 +24,25 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
+use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
+use golem_api_grpc::proto::golem::apidefinition::v1::api_definition_service_client::ApiDefinitionServiceClient as ApiDefinitionServiceGrpcClient;
+use golem_api_grpc::proto::golem::apidefinition::v1::{
+    api_definition_request, create_api_definition_request, create_api_definition_response,
+    get_all_api_definitions_response, get_api_definition_response,
+    get_api_definition_versions_response, update_api_definition_request,
+    update_api_definition_response, ApiDefinitionRequest, CreateApiDefinitionRequest,
+    DeleteApiDefinitionRequest, GetAllApiDefinitionsRequest, GetApiDefinitionRequest,
+    GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+};
+use golem_api_grpc::proto::golem::apidefinition::{
+    static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
+    GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
+};
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
 use golem_api_grpc::proto::golem::component::ComponentFilePermissions;
+use golem_api_grpc::proto::golem::rib::Expr;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     cancel_invocation_response, delete_worker_response, get_file_contents_response,
@@ -57,10 +72,18 @@ use golem_api_grpc::proto::golem::worker::{
     UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
     WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter,
 };
+use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
+use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
+use golem_client::api::ApiDeploymentClient as ApiDeploymentServiceHttpClient;
+use golem_client::api::ApiDeploymentClientLive as ApiDeploymentServiceHttpClientLive;
+use golem_client::api::ApiSecurityClient as ApiSecurityServiceHttpClient;
+use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive;
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
+use golem_client::model::{ApiDeployment, ApiDeploymentRequest, SecuritySchemeData};
 use golem_client::Context;
-use golem_common::model::WorkerEvent;
+use golem_common::model::{ComponentId, WorkerEvent};
+use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
@@ -90,9 +113,31 @@ pub enum WorkerServiceClient {
     Http(Arc<WorkerServiceHttpClientLive>),
 }
 
+#[derive(Clone)]
+pub enum ApiDefinitionServiceClient {
+    Grpc(ApiDefinitionServiceGrpcClient<Channel>),
+    Http(Arc<ApiDefinitionServiceHttpClientLive>),
+}
+
+#[derive(Clone)]
+pub enum ApiDeploymentServiceClient {
+    Grpc, // no GRPC API
+    Http(Arc<ApiDeploymentServiceHttpClientLive>),
+}
+
+#[derive(Clone)]
+pub enum ApiSecurityServiceClient {
+    Grpc, // no GRPC API
+    Http(Arc<ApiSecurityServiceHttpClientLive>),
+}
+
 #[async_trait]
 pub trait WorkerService {
-    fn client(&self) -> WorkerServiceClient;
+    fn client_protocol(&self) -> GolemClientProtocol;
+    fn worker_client(&self) -> WorkerServiceClient;
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient;
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
+    fn api_security_client(&self) -> ApiSecurityServiceClient;
 
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,
@@ -101,7 +146,7 @@ pub trait WorkerService {
         &self,
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.launch_new_worker(request).await?.into_inner())
             }
@@ -135,7 +180,7 @@ pub trait WorkerService {
         &self,
         request: DeleteWorkerRequest,
     ) -> crate::Result<DeleteWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.delete_worker(request).await?.into_inner())
             }
@@ -168,7 +213,7 @@ pub trait WorkerService {
         &self,
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.get_worker_metadata(request).await?.into_inner())
             }
@@ -203,7 +248,7 @@ pub trait WorkerService {
         &self,
         request: GetWorkersMetadataRequest,
     ) -> crate::Result<GetWorkersMetadataResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.get_workers_metadata(request).await?.into_inner())
             }
@@ -251,10 +296,10 @@ pub trait WorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => Ok(client
                 .invoke(InvokeRequest {
                     worker_id: Some(worker_id),
@@ -286,7 +331,7 @@ pub trait WorkerService {
     }
 
     async fn invoke_json(&self, request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.invoke_json(request).await?.into_inner())
             }
@@ -305,7 +350,7 @@ pub trait WorkerService {
                         &request.worker_id.unwrap().name.unwrap(),
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
-                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                        &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
                     .await
                 {
@@ -323,10 +368,10 @@ pub trait WorkerService {
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
-        invoke_parameters: Option<Vec<ValueAndType>>,
+        invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => Ok(client
                 .invoke_and_await(InvokeAndAwaitRequest {
                     worker_id: Some(worker_id),
@@ -350,7 +395,17 @@ pub trait WorkerService {
                 {
                     Ok(result) => Ok(InvokeAndAwaitResponse {
                         result: Some(invoke_and_await_response::Result::Success(InvokeResult {
-                            result: vec![Value::try_from(result.result).unwrap().into()],
+                            result: {
+                                match Value::try_from(result.result).unwrap() {
+                                    Value::Tuple(values) => {
+                                        values.into_iter().map(|value| value.into()).collect()
+                                    }
+                                    Value::Record(values) => {
+                                        values.into_iter().map(|value| value.into()).collect()
+                                    }
+                                    value => vec![value.into()],
+                                }
+                            },
                         })),
                     }),
                     Err(error) => Err(anyhow!("{error:?}")),
@@ -409,7 +464,7 @@ pub trait WorkerService {
         &self,
         request: InvokeAndAwaitJsonRequest,
     ) -> crate::Result<InvokeAndAwaitJsonResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.invoke_and_await_json(request).await?.into_inner())
             }
@@ -428,7 +483,7 @@ pub trait WorkerService {
                         &request.worker_id.unwrap().name.unwrap(),
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
-                        &invoke_json_parameters_to_http(Some(request.invoke_parameters)),
+                        &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
                     .await
                 {
@@ -447,7 +502,7 @@ pub trait WorkerService {
         &self,
         request: ConnectWorkerRequest,
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(client) => Ok(Box::new(
                 GrpcWorkerLogEventStream::new(client, request).await?,
             )),
@@ -461,7 +516,7 @@ pub trait WorkerService {
         &self,
         request: ResumeWorkerRequest,
     ) -> crate::Result<ResumeWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.resume_worker(request).await?.into_inner())
             }
@@ -492,7 +547,7 @@ pub trait WorkerService {
         &self,
         request: InterruptWorkerRequest,
     ) -> crate::Result<InterruptWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.interrupt_worker(request).await?.into_inner())
             }
@@ -524,7 +579,7 @@ pub trait WorkerService {
         &self,
         request: UpdateWorkerRequest,
     ) -> crate::Result<UpdateWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.update_worker(request).await?.into_inner())
             }
@@ -561,7 +616,7 @@ pub trait WorkerService {
     }
 
     async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.get_oplog(request).await?.into_inner())
             }
@@ -616,7 +671,7 @@ pub trait WorkerService {
         &self,
         request: SearchOplogRequest,
     ) -> crate::Result<SearchOplogResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.search_oplog(request).await?.into_inner())
             }
@@ -675,7 +730,7 @@ pub trait WorkerService {
         &self,
         request: ListDirectoryRequest,
     ) -> crate::Result<ListDirectoryResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.list_directory(request).await?.into_inner())
             }
@@ -738,7 +793,7 @@ pub trait WorkerService {
     }
 
     async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 let mut stream = client.get_file_contents(request).await?.into_inner();
                 let mut bytes = Vec::new();
@@ -785,7 +840,7 @@ pub trait WorkerService {
         &self,
         fork_worker_request: ForkWorkerRequest,
     ) -> crate::Result<ForkWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.fork_worker(fork_worker_request).await?.into_inner())
             }
@@ -799,7 +854,7 @@ pub trait WorkerService {
         &self,
         request: RevertWorkerRequest,
     ) -> crate::Result<RevertWorkerResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.revert_worker(request).await?.into_inner())
             }
@@ -828,7 +883,7 @@ pub trait WorkerService {
                                 })
                             }
                             _ => Err(anyhow!("RevertWorkerRequest.target is required"))?,
-                        }
+                        },
                     )
                     .await
                 {
@@ -843,7 +898,7 @@ pub trait WorkerService {
         &self,
         request: CancelInvocationRequest,
     ) -> crate::Result<CancelInvocationResponse> {
-        match self.client() {
+        match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
                 Ok(client.cancel_invocation(request).await?.into_inner())
             }
@@ -875,6 +930,279 @@ pub trait WorkerService {
         }
     }
 
+    async fn create_api_definition(
+        &self,
+        request: CreateApiDefinitionRequest,
+    ) -> crate::Result<ApiDefinition> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => {
+                match client
+                    .create_api_definition(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("create_api_definition: empty result"))?
+                {
+                    create_api_definition_response::Result::Success(result) => Ok(result),
+                    create_api_definition_response::Result::Error(error) => {
+                        Err(anyhow!("{error:?}"))
+                    }
+                }
+            }
+            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
+                create_api_definition_request::ApiDefinition::Definition(request) => {
+                    match client
+                        .create_definition_json(&grpc_api_definition_request_to_http(request))
+                        .await
+                    {
+                        Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                        Err(error) => Err(anyhow!("{error:?}")),
+                    }
+                }
+                create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
+                    .import_open_api_yaml(&serde_yaml::from_str(&open_api)?)
+                    .await
+                {
+                    Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                },
+            },
+        }
+    }
+
+    async fn update_api_definition(
+        &self,
+        request: UpdateApiDefinitionRequest,
+    ) -> crate::Result<ApiDefinition> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => {
+                match client
+                    .update_api_definition(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("update_api_definition: empty result"))?
+                {
+                    update_api_definition_response::Result::Success(result) => Ok(result),
+                    update_api_definition_response::Result::Error(error) => {
+                        Err(anyhow!("{error:?}"))
+                    }
+                }
+            }
+            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
+                update_api_definition_request::ApiDefinition::Definition(request) => {
+                    match client
+                        .update_definition_yaml(
+                            &request.id.clone().unwrap().value,
+                            &request.clone().version,
+                            &grpc_api_definition_request_to_http(ApiDefinitionRequest {
+                                id: request.id,
+                                version: request.version,
+                                draft: request.draft,
+                                definition: request.definition,
+                            }),
+                        )
+                        .await
+                    {
+                        Ok(result) => Ok(http_api_definition_to_grpc(result)),
+                        Err(error) => Err(anyhow!("{error:?}")),
+                    }
+                }
+                update_api_definition_request::ApiDefinition::Openapi(_) => {
+                    todo!() // TODO: see worker-service-base for how this is interpreted
+                }
+            },
+        }
+    }
+
+    async fn get_api_definition(
+        &self,
+        request: GetApiDefinitionRequest,
+    ) -> crate::Result<ApiDefinition> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => match client
+                .get_api_definition(request)
+                .await?
+                .into_inner()
+                .result
+                .ok_or_else(|| anyhow!("get_api_definition: empty result"))?
+            {
+                get_api_definition_response::Result::Success(result) => Ok(result),
+                get_api_definition_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+            },
+            ApiDefinitionServiceClient::Http(client) => {
+                match client
+                    .get_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .await
+                {
+                    Ok(definition) => Ok(http_api_definition_to_grpc(definition)),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn get_api_definition_versions(
+        &self,
+        request: GetApiDefinitionVersionsRequest,
+    ) -> crate::Result<Vec<ApiDefinition>> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => match client
+                .get_api_definition_versions(request)
+                .await?
+                .into_inner()
+                .result
+                .ok_or_else(|| anyhow!("get_api_definition_versions: empty result"))?
+            {
+                get_api_definition_versions_response::Result::Success(result) => {
+                    Ok(result.definitions)
+                }
+                get_api_definition_versions_response::Result::Error(error) => {
+                    Err(anyhow!("{error:?}"))
+                }
+            },
+            ApiDefinitionServiceClient::Http(client) => {
+                match client
+                    .list_definitions(request.api_definition_id.map(|id| id.value).as_deref())
+                    .await
+                {
+                    Ok(result) => Ok(result
+                        .into_iter()
+                        .map(http_api_definition_to_grpc)
+                        .collect()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn get_all_api_definitions(&self) -> crate::Result<Vec<ApiDefinition>> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => match client
+                .get_all_api_definitions(GetAllApiDefinitionsRequest {})
+                .await?
+                .into_inner()
+                .result
+                .ok_or_else(|| anyhow!("get_all_api_definitions: empty result"))?
+            {
+                get_all_api_definitions_response::Result::Success(result) => Ok(result.definitions),
+                get_all_api_definitions_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+            },
+            ApiDefinitionServiceClient::Http(client) => match client.list_definitions(None).await {
+                Ok(result) => Ok(result
+                    .into_iter()
+                    .map(http_api_definition_to_grpc)
+                    .collect()),
+                Err(error) => Err(anyhow!("{error:?}")),
+            },
+        }
+    }
+
+    async fn delete_api_definition(
+        &self,
+        request: DeleteApiDefinitionRequest,
+    ) -> crate::Result<()> {
+        match self.api_definition_client() {
+            ApiDefinitionServiceClient::Grpc(mut client) => {
+                match client
+                    .delete_api_definition(request)
+                    .await?
+                    .into_inner()
+                    .result
+                    .ok_or_else(|| anyhow!("delete_api_definition: empty result"))
+                {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+            ApiDefinitionServiceClient::Http(client) => {
+                match client
+                    .delete_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn create_or_update_api_deployment(
+        &self,
+        request: ApiDeploymentRequest,
+    ) -> crate::Result<ApiDeployment> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("create_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .deploy(&request)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn get_api_deployment(&self, site: &str) -> crate::Result<ApiDeployment> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("get_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .get_deployment(site)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn list_api_deployments(
+        &self,
+        api_definition_id: Option<&str>,
+    ) -> crate::Result<Vec<ApiDeployment>> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
+            ApiDeploymentServiceClient::Http(client) => client
+                .list_deployments(api_definition_id)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn delete_api_deployment(&self, site: &str) -> crate::Result<()> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
+            ApiDeploymentServiceClient::Http(client) => {
+                match client.delete_deployment(site).await {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
+    async fn create_api_security_scheme(
+        &self,
+        request: SecuritySchemeData,
+    ) -> crate::Result<SecuritySchemeData> {
+        match self.api_security_client() {
+            ApiSecurityServiceClient::Grpc => {
+                not_available_on_grpc_api("create_api_security_scheme")
+            }
+            ApiSecurityServiceClient::Http(client) => client
+                .create(&request)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
+    async fn get_api_security_scheme(
+        &self,
+        security_scheme_id: &str,
+    ) -> crate::Result<SecuritySchemeData> {
+        match self.api_security_client() {
+            ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
+            ApiSecurityServiceClient::Http(client) => client
+                .get(security_scheme_id)
+                .await
+                .map_err(|error| anyhow!("{error:?}")),
+        }
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -899,7 +1227,7 @@ pub trait WorkerService {
     async fn kill(&self);
 }
 
-async fn new_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<Channel> {
+async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<Channel> {
     let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))
         .expect("Failed to create worker service endpoint")
         .connect_timeout(Duration::from_secs(10));
@@ -912,7 +1240,7 @@ async fn new_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_http_client(host: &str, http_port: u16) -> Arc<WorkerServiceHttpClientLive> {
+fn new_worker_http_client(host: &str, http_port: u16) -> Arc<WorkerServiceHttpClientLive> {
     Arc::new(WorkerServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
@@ -922,7 +1250,7 @@ fn new_http_client(host: &str, http_port: u16) -> Arc<WorkerServiceHttpClientLiv
     })
 }
 
-async fn new_client(
+async fn new_worker_client(
     protocol: GolemClientProtocol,
     host: &str,
     grpc_port: u16,
@@ -930,9 +1258,110 @@ async fn new_client(
 ) -> WorkerServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
-            WorkerServiceClient::Grpc(new_grpc_client(host, grpc_port).await)
+            WorkerServiceClient::Grpc(new_worker_grpc_client(host, grpc_port).await)
         }
-        GolemClientProtocol::Http => WorkerServiceClient::Http(new_http_client(host, http_port)),
+        GolemClientProtocol::Http => {
+            WorkerServiceClient::Http(new_worker_http_client(host, http_port))
+        }
+    }
+}
+
+async fn new_api_definition_grpc_client(
+    host: &str,
+    grpc_port: u16,
+) -> ApiDefinitionServiceGrpcClient<Channel> {
+    let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))
+        .expect("Failed to create api definition service endpoint")
+        .connect_timeout(Duration::from_secs(10));
+    let channel = endpoint
+        .connect()
+        .await
+        .expect("Failed to connect to api definition service");
+    ApiDefinitionServiceGrpcClient::new(channel)
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
+}
+
+fn new_api_definition_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<ApiDefinitionServiceHttpClientLive> {
+    Arc::new(ApiDefinitionServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_api_definition_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    grpc_port: u16,
+    http_port: u16,
+) -> ApiDefinitionServiceClient {
+    match protocol {
+        GolemClientProtocol::Grpc => {
+            ApiDefinitionServiceClient::Grpc(new_api_definition_grpc_client(host, grpc_port).await)
+        }
+        GolemClientProtocol::Http => {
+            ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port))
+        }
+    }
+}
+
+fn new_api_deployment_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<ApiDeploymentServiceHttpClientLive> {
+    Arc::new(ApiDeploymentServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_api_deployment_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    _grpc_port: u16,
+    http_port: u16,
+) -> ApiDeploymentServiceClient {
+    match protocol {
+        GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
+        GolemClientProtocol::Http => {
+            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port))
+        }
+    }
+}
+
+fn new_api_security_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<ApiSecurityServiceHttpClientLive> {
+    Arc::new(ApiSecurityServiceHttpClientLive {
+        context: Context {
+            client: new_reqwest_client(),
+            base_url: Url::parse(&format!("http://{host}:{http_port}"))
+                .expect("Failed to parse url"),
+        },
+    })
+}
+
+async fn new_api_security_client(
+    protocol: GolemClientProtocol,
+    host: &str,
+    _grpc_port: u16,
+    http_port: u16,
+) -> ApiSecurityServiceClient {
+    match protocol {
+        GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
+        GolemClientProtocol::Http => {
+            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port))
+        }
     }
 }
 
@@ -1183,40 +1612,229 @@ fn grpc_filter_to_http_filter(filter: Filter) -> Vec<String> {
 }
 
 fn invoke_parameters_to_http(
-    parameters: Option<Vec<ValueAndType>>,
+    parameters: Vec<ValueAndType>,
 ) -> golem_client::model::InvokeParameters {
     golem_client::model::InvokeParameters {
-        params: match parameters {
-            Some(parameters) => parameters
-                .into_iter()
-                .map(|p| p.try_into().unwrap())
-                .collect(),
-            None => vec![],
-        },
+        params: parameters
+            .into_iter()
+            .map(|p| p.try_into().unwrap())
+            .collect(),
     }
 }
 
 fn invoke_json_parameters_to_http(
-    parameters: Option<Vec<String>>,
+    parameters: Vec<String>,
 ) -> golem_client::model::InvokeParameters {
     golem_client::model::InvokeParameters {
-        params: match parameters {
-            Some(parameters) => parameters
-                .into_iter()
-                .map(|p| serde_json::from_str(&p).unwrap())
-                .collect(),
-            None => vec![],
-        },
+        params: parameters
+            .into_iter()
+            .map(|p| serde_json::from_str(&p).unwrap())
+            .collect(),
     }
 }
 
-fn invoke_parameters_to_grpc(parameters: Option<Vec<ValueAndType>>) -> Option<InvokeParameters> {
-    parameters.map(|parameters| InvokeParameters {
+fn invoke_parameters_to_grpc(parameters: Vec<ValueAndType>) -> Option<InvokeParameters> {
+    Some(InvokeParameters {
         params: parameters
             .into_iter()
             .map(|param| param.value.into())
             .collect(),
     })
+}
+
+fn http_api_definition_to_grpc(
+    response: golem_client::model::HttpApiDefinitionResponseData,
+) -> ApiDefinition {
+    ApiDefinition {
+        id: Some(ApiDefinitionId { value: response.id }),
+        version: response.version,
+        draft: response.draft,
+        created_at: response.created_at.map(|ts| SystemTime::from(ts).into()),
+        definition: Some(Definition::Http(HttpApiDefinition {
+            routes: response
+                .routes
+                .into_iter()
+                .map(|route| HttpRoute {
+                    method: match route.method {
+                        golem_client::model::MethodPattern::Get => HttpMethod::Get,
+                        golem_client::model::MethodPattern::Connect => HttpMethod::Connect,
+                        golem_client::model::MethodPattern::Post => HttpMethod::Post,
+                        golem_client::model::MethodPattern::Delete => HttpMethod::Delete,
+                        golem_client::model::MethodPattern::Put => HttpMethod::Put,
+                        golem_client::model::MethodPattern::Patch => HttpMethod::Patch,
+                        golem_client::model::MethodPattern::Options => HttpMethod::Options,
+                        golem_client::model::MethodPattern::Trace => HttpMethod::Trace,
+                        golem_client::model::MethodPattern::Head => HttpMethod::Head,
+                    } as i32,
+                    path: route.path,
+                    binding: Some(GatewayBinding {
+                        component: route.binding.component_id.map(|versioned_component_id| {
+                            VersionedComponentId {
+                                component_id: ComponentId(versioned_component_id.component_id),
+                                version: versioned_component_id.version,
+                            }
+                            .into()
+                        }),
+                        worker_name: route.binding.worker_name.as_deref().map(to_grpc_rib_expr),
+                        response: route.binding.response.as_deref().map(to_grpc_rib_expr),
+                        idempotency_key: route
+                            .binding
+                            .idempotency_key
+                            .as_deref()
+                            .map(to_grpc_rib_expr),
+                        binding_type: route.binding.binding_type.map(
+                            |binding_type| match binding_type {
+                                golem_client::model::GatewayBindingType::Default => {
+                                    GatewayBindingType::Default
+                                }
+                                golem_client::model::GatewayBindingType::FileServer => {
+                                    GatewayBindingType::FileServer
+                                }
+                                golem_client::model::GatewayBindingType::HttpHandler => {
+                                    GatewayBindingType::HttpHandler
+                                }
+                                golem_client::model::GatewayBindingType::CorsPreflight => {
+                                    GatewayBindingType::CorsPreflight
+                                }
+                            } as i32,
+                        ),
+                        static_binding: route.binding.cors_preflight.map(|cors_preflight| {
+                            // TODO: should there be AuthCallback in the HTTP API? and how this relates to middleware
+                            StaticBinding {
+                                static_binding: Some(
+                                    static_binding::StaticBinding::HttpCorsPreflight(
+                                        CorsPreflight {
+                                            allow_origin: Some(cors_preflight.allow_origin),
+                                            allow_methods: Some(cors_preflight.allow_methods),
+                                            allow_headers: Some(cors_preflight.allow_headers),
+                                            expose_headers: cors_preflight.expose_headers,
+                                            max_age: cors_preflight.max_age,
+                                            allow_credentials: cors_preflight.allow_credentials,
+                                        },
+                                    ),
+                                ),
+                            }
+                        }),
+                    }),
+                    middleware: None, // TODO
+                })
+                .collect(),
+        })),
+    }
+}
+
+fn grpc_api_definition_request_to_http(
+    request: ApiDefinitionRequest,
+) -> golem_client::model::HttpApiDefinitionRequest {
+    golem_client::model::HttpApiDefinitionRequest {
+        id: request.id.unwrap().value,
+        version: request.version,
+        security: None, // TODO: is this missing in GRPC (or deprecated)?
+        routes: request
+            .definition
+            .map(|definition| match definition {
+                api_definition_request::Definition::Http(definition) => definition
+                    .routes
+                    .into_iter()
+                    .map(|route| {
+                        let binding = route.binding.unwrap();
+                        let cors_preflight = binding
+                            .static_binding
+                            .and_then(|binding| binding.static_binding)
+                            .map(|binding| match binding {
+                                static_binding::StaticBinding::HttpCorsPreflight(
+                                    cors_preflight,
+                                ) => cors_preflight,
+                                static_binding::StaticBinding::AuthCallback(_) => {
+                                    todo!() // TODO: is this supported on http?
+                                }
+                            });
+
+                        golem_client::model::RouteRequestData {
+                            method: match HttpMethod::try_from(route.method).unwrap() {
+                                HttpMethod::Get => golem_client::model::MethodPattern::Get,
+                                HttpMethod::Connect => golem_client::model::MethodPattern::Connect,
+                                HttpMethod::Post => golem_client::model::MethodPattern::Post,
+                                HttpMethod::Delete => golem_client::model::MethodPattern::Delete,
+                                HttpMethod::Put => golem_client::model::MethodPattern::Put,
+                                HttpMethod::Patch => golem_client::model::MethodPattern::Patch,
+                                HttpMethod::Options => golem_client::model::MethodPattern::Options,
+                                HttpMethod::Trace => golem_client::model::MethodPattern::Trace,
+                                HttpMethod::Head => golem_client::model::MethodPattern::Head,
+                            },
+                            path: route.path,
+                            binding: golem_client::model::GatewayBindingData {
+                                binding_type: binding.binding_type.map(|binding_type| {
+                                    match GatewayBindingType::try_from(binding_type).unwrap() {
+                                        GatewayBindingType::Default => {
+                                            golem_client::model::GatewayBindingType::Default
+                                        }
+                                        GatewayBindingType::FileServer => {
+                                            golem_client::model::GatewayBindingType::FileServer
+                                        }
+                                        GatewayBindingType::CorsPreflight => {
+                                            golem_client::model::GatewayBindingType::CorsPreflight
+                                        }
+                                        GatewayBindingType::AuthCallBack => {
+                                            panic!("auth callback is not supported on HTTP API")
+                                        }
+                                        GatewayBindingType::HttpHandler => {
+                                            golem_client::model::GatewayBindingType::HttpHandler
+                                        }
+                                    }
+                                }),
+                                component_id: binding.component.map(|version_component_id| {
+                                    golem_client::model::VersionedComponentId {
+                                        component_id: version_component_id
+                                            .component_id
+                                            .unwrap()
+                                            .value
+                                            .unwrap()
+                                            .into(),
+                                        version: version_component_id.version,
+                                    }
+                                }),
+                                worker_name: binding.worker_name.map(to_http_rib_expr),
+                                idempotency_key: binding.idempotency_key.map(to_http_rib_expr),
+                                response: binding.response.map(to_http_rib_expr),
+                                allow_origin: cors_preflight
+                                    .as_ref()
+                                    .and_then(|cp| cp.allow_origin.clone()),
+                                allow_methods: cors_preflight
+                                    .as_ref()
+                                    .and_then(|cp| cp.allow_methods.clone()),
+                                allow_headers: cors_preflight
+                                    .as_ref()
+                                    .and_then(|cp| cp.allow_headers.clone()),
+                                expose_headers: cors_preflight
+                                    .as_ref()
+                                    .and_then(|cp| cp.expose_headers.clone()),
+                                max_age: cors_preflight.as_ref().and_then(|cp| cp.max_age),
+                                allow_credentials: cors_preflight
+                                    .as_ref()
+                                    .and_then(|cp| cp.allow_credentials),
+                            },
+                            cors: None,     // TODO: map this from route.middleware?
+                            security: None, // TODO: map this from route.middleware?
+                        }
+                    })
+                    .collect(),
+            })
+            .unwrap_or_default(),
+        draft: request.draft,
+    }
+}
+
+fn to_grpc_rib_expr(expr: &str) -> Expr {
+    rib::Expr::from_text(expr).unwrap().into()
+}
+
+fn to_http_rib_expr(expr: Expr) -> String {
+    rib::Expr::try_from(expr).unwrap().to_string()
+}
+
+fn not_available_on_grpc_api<T>(endpoint: &str) -> crate::Result<T> {
+    Err(anyhow!("not available on GRPC API: {endpoint}"))
 }
 
 #[async_trait]

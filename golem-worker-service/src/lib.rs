@@ -18,6 +18,7 @@ use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use include_dir::{include_dir, Dir};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
@@ -36,6 +37,8 @@ pub mod service;
 
 #[cfg(test)]
 test_r::enable!();
+
+static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -114,6 +117,10 @@ impl WorkerService {
             api_endpoint,
             custom_request_port,
         })
+    }
+
+    pub fn db_migrations() -> Dir<'static> {
+        DB_MIGRATIONS.clone()
     }
 
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {

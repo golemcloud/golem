@@ -347,43 +347,47 @@ impl CliTestDependencies {
     ) -> Self {
         let params_clone = params.clone();
 
-        let rdb_and_component_service_join = tokio::spawn(async move {
-            let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
+        let rdb_and_component_service_join = {
+            let component_directory = PathBuf::from(&params.component_directory);
+            tokio::spawn(async move {
+                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
 
-            let component_compilation_service = if !compilation_service_disabled {
-                Some((
-                    DockerComponentCompilationService::NAME,
-                    DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                ))
-            } else {
-                None
-            };
+                let component_compilation_service = if !compilation_service_disabled {
+                    Some((
+                        DockerComponentCompilationService::NAME,
+                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
+                    ))
+                } else {
+                    None
+                };
 
-            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                DockerComponentService::new(
-                    component_compilation_service,
-                    rdb.clone(),
-                    params_clone.service_verbosity(),
-                    params.keep_containers,
-                    params.golem_client_protocol,
-                )
-                .await,
-            );
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    DockerComponentService::new(
+                        component_directory,
+                        component_compilation_service,
+                        rdb.clone(),
+                        params_clone.service_verbosity(),
+                        params.keep_containers,
+                        params.golem_client_protocol,
+                    )
+                    .await,
+                );
 
-            let component_compilation_service: Arc<
-                dyn ComponentCompilationService + Send + Sync + 'static,
-            > = Arc::new(
-                DockerComponentCompilationService::new(
-                    component_service.clone(),
-                    params.keep_containers,
-                    params_clone.service_verbosity(),
-                )
-                .await,
-            );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    DockerComponentCompilationService::new(
+                        component_service.clone(),
+                        params.keep_containers,
+                        params_clone.service_verbosity(),
+                    )
+                    .await,
+                );
 
-            (rdb, component_service, component_compilation_service)
-        });
+                (rdb, component_service, component_compilation_service)
+            })
+        };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
             Arc::new(DockerRedis::new(redis_prefix.to_string(), params.keep_containers).await);
@@ -452,7 +456,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             blob_storage,
             initial_component_files_service,
-            component_directory: Path::new(&params.component_directory).to_path_buf(),
+            component_directory: params.component_directory.clone().into(),
         }
     }
 
@@ -490,6 +494,7 @@ impl CliTestDependencies {
             let params = params.clone();
             let workspace_root = workspace_root.clone();
             let build_root = build_root.clone();
+            let component_directory = PathBuf::from(&params.component_directory);
 
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
@@ -502,6 +507,7 @@ impl CliTestDependencies {
                 };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     SpawnedComponentService::new(
+                        component_directory,
                         &build_root.join("golem-component-service"),
                         &workspace_root.join("golem-component-service"),
                         component_service_http_port,
@@ -638,6 +644,7 @@ impl CliTestDependencies {
         let rdb_and_component_service_join = {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
+            let component_directory = PathBuf::from(&params.component_directory);
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
@@ -652,6 +659,7 @@ impl CliTestDependencies {
                 };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     K8sComponentService::new(
+                        component_directory,
                         &namespace,
                         &routing_type,
                         Level::INFO,
@@ -782,6 +790,7 @@ impl CliTestDependencies {
             let namespace = namespace.clone();
             let routing_type = routing_type.clone();
             let service_annotations = service_annotations.clone();
+            let component_directory = PathBuf::from(&params.component_directory);
 
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
@@ -804,6 +813,7 @@ impl CliTestDependencies {
                 };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     K8sComponentService::new(
+                        component_directory,
                         &namespace,
                         &routing_type,
                         Level::INFO,
@@ -960,6 +970,7 @@ impl CliTestDependencies {
                     ));
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     ProvidedComponentService::new(
+                        params.component_directory.clone().into(),
                         component_service_host.clone(),
                         *component_service_http_port,
                         *component_service_grpc_port,
@@ -1125,8 +1136,8 @@ impl TestDependencies for CliTestDependencies {
         self.shard_manager.clone()
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.component_directory.clone()
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {

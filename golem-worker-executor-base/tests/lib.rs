@@ -125,8 +125,8 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         panic!("Not supported")
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.component_directory.clone()
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
@@ -255,8 +255,8 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         panic!("Not supported")
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.component_directory.clone()
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {

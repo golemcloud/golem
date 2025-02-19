@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_service::{new_client, WorkerService, WorkerServiceClient};
+use crate::components::worker_service::{
+    new_api_definition_client, new_api_deployment_client, new_api_security_client,
+    new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
+    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
+};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use tracing::info;
@@ -22,7 +26,11 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    client: WorkerServiceClient,
+    client_protocol: GolemClientProtocol,
+    worker_client: WorkerServiceClient,
+    api_definition_client: ApiDefinitionServiceClient,
+    api_deployment_client: ApiDeploymentServiceClient,
+    api_security_client: ApiSecurityServiceClient,
 }
 
 impl ProvidedWorkerService {
@@ -39,15 +47,53 @@ impl ProvidedWorkerService {
             http_port,
             grpc_port,
             custom_request_port,
-            client: new_client(client_protocol, &host, grpc_port, http_port).await,
+            client_protocol,
+            worker_client: new_worker_client(client_protocol, &host, grpc_port, http_port).await,
+            api_definition_client: new_api_definition_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
+            api_deployment_client: new_api_deployment_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
+            api_security_client: new_api_security_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+            )
+            .await,
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    fn client(&self) -> WorkerServiceClient {
-        self.client.clone()
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
+    fn worker_client(&self) -> WorkerServiceClient {
+        self.worker_client.clone()
+    }
+
+    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
+        self.api_definition_client.clone()
+    }
+
+    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
+        self.api_deployment_client.clone()
+    }
+
+    fn api_security_client(&self) -> ApiSecurityServiceClient {
+        self.api_security_client.clone()
     }
 
     fn private_host(&self) -> String {

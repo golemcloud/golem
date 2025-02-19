@@ -20,7 +20,7 @@ use crate::components::rdb::Rdb;
 use crate::components::{ChildProcessLogger, GolemEnvVars};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +28,7 @@ use tracing::info;
 use tracing::Level;
 
 pub struct SpawnedComponentService {
+    component_directory: PathBuf,
     http_port: u16,
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
@@ -39,6 +40,7 @@ pub struct SpawnedComponentService {
 
 impl SpawnedComponentService {
     pub async fn new(
+        component_directory: PathBuf,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -51,6 +53,7 @@ impl SpawnedComponentService {
         client_protocol: GolemClientProtocol,
     ) -> Self {
         Self::new_base(
+            component_directory,
             Box::new(GolemEnvVars()),
             executable,
             working_directory,
@@ -67,6 +70,7 @@ impl SpawnedComponentService {
     }
 
     pub async fn new_base(
+        component_directory: PathBuf,
         env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
@@ -121,6 +125,7 @@ impl SpawnedComponentService {
         .await;
 
         Self {
+            component_directory,
             http_port,
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
@@ -151,6 +156,10 @@ impl ComponentService for SpawnedComponentService {
 
     fn plugin_client(&self) -> PluginServiceClient {
         self.plugin_client.clone()
+    }
+
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn private_host(&self) -> String {

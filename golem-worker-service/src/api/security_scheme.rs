@@ -31,7 +31,7 @@ impl SecuritySchemeApi {
     ///
     /// Get a security scheme by name
     #[oai(
-        path = "/{security_scheme_identifier}",
+        path = "/:security_scheme_identifier",
         method = "get",
         operation_id = "get"
     )]

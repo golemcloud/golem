@@ -1044,6 +1044,10 @@ fn encode_host_function_request_as_value(
         "golem::rpc::wasm-rpc::invoke idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => no_payload(),
+        "golem::api::poll_promise" => {
+            let payload: PromiseId = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         "rdbms::mysql::db-connection::query"
         | "rdbms::mysql::db-connection::execute"
         | "rdbms::mysql::db-transaction::query"
@@ -1393,6 +1397,10 @@ fn encode_host_function_response_as_value(
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => {
             let payload = try_deserialize::<Result<(u64, u64), SerializableError>>(bytes)?
                 .map(|pair| Uuid::from_u64_pair(pair.0, pair.1));
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::poll_promise" => {
+            let payload: Result<Option<Vec<u8>>, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
         "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
