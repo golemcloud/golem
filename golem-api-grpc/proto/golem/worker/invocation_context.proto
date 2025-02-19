@@ -2,10 +2,25 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "google/protobuf/timestamp.proto";
 import "golem/worker/worker_id.proto";
 
 message InvocationContext {
   golem.worker.WorkerId parent = 1;
   repeated string args = 3;
   map<string, string> env = 4;
+  optional InvocationSpan span = 5;
+}
+
+message InvocationSpan {
+  string trace_id = 1;
+  string span_id = 2;
+  google.protobuf.Timestamp start = 3;
+  map<string, AttributeValue> attributes = 8;
+}
+
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+  }
 }

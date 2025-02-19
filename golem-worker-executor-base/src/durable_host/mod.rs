@@ -22,10 +22,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError, ListDirectoryResult, PersistenceLevel, ReadFileResult, SpanId, TrapType, WorkerConfig};
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -1858,6 +1855,9 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
+
+    invocation_context: InvocationContext,
+    current_span_id: SpanId
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {

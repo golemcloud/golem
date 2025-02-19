@@ -39,6 +39,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
+use crate::model::FlatInvocationContext;
 
 #[async_trait]
 pub trait WorkerProxy {
@@ -51,6 +52,7 @@ pub trait WorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_span: FlatInvocationContext
     ) -> Result<TypeAnnotatedValue, WorkerProxyError>;
 
     async fn invoke(
@@ -62,6 +64,7 @@ pub trait WorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_span: FlatInvocationContext
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
@@ -209,6 +212,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_span: FlatInvocationContext
     ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
@@ -238,6 +242,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
+                            span: Some(caller_span.clone().into())
                         }),
                     },
                     &self.access_token,
@@ -277,6 +282,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_span: FlatInvocationContext
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
@@ -304,6 +310,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
+                            span: Some(caller_span.clone().into())
                         }),
                     },
                     &self.access_token,

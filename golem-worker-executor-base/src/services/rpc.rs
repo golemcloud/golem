@@ -43,6 +43,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use crate::model::FlatInvocationContext;
 
 #[async_trait]
 pub trait Rpc {
@@ -57,6 +58,7 @@ pub trait Rpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<TypeAnnotatedValue, RpcError>;
 
     async fn invoke(
@@ -68,6 +70,7 @@ pub trait Rpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<(), RpcError>;
 
     async fn generate_unique_local_worker_id(
@@ -217,6 +220,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<TypeAnnotatedValue, RpcError> {
         Ok(self
             .worker_proxy
@@ -228,6 +232,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                invoke_span
             )
             .await?)
     }
@@ -241,6 +246,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
@@ -252,6 +258,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                invoke_span
             )
             .await?)
     }
@@ -571,6 +578,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<TypeAnnotatedValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
@@ -611,6 +619,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    invoke_span
                 )
                 .await
         }
@@ -625,6 +634,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        invoke_span: FlatInvocationContext
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh()); // TODO
 
@@ -664,6 +674,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    invoke_span
                 )
                 .await
         }
