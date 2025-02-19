@@ -22,6 +22,7 @@ use crate::model::{
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerError;
 use golem_client::model::{
@@ -36,9 +37,8 @@ use native_tls::TlsConnector;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio_tungstenite::{connect_async_tls_with_config, Connector};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite, Connector};
 use tracing::{debug, error, info, trace};
-use tungstenite::protocol::frame::Payload;
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
@@ -360,7 +360,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                 interval.tick().await;
 
                 let ping_result = write
-                    .send(Message::Ping(Payload::Vec(cnt.to_ne_bytes().to_vec())))
+                    .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
                     .await
                     .map_err(|err| GolemError(format!("Worker connection ping failure: {err}")));
 
@@ -398,7 +398,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                             }
                             Message::Binary(data) => {
                                 let parsed: serde_json::Result<WorkerEvent> =
-                                    serde_json::from_slice(data.as_slice());
+                                    serde_json::from_slice(data.as_ref());
                                 match parsed {
                                     Ok(parsed) => Some(parsed),
                                     Err(err) => {

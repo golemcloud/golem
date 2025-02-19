@@ -24,7 +24,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use version_compare::{CompOp, Version};
+use version_compare::{Cmp, Version};
 use walkdir::DirEntry;
 
 pub mod cli {
@@ -655,10 +655,10 @@ impl DetectedTool {
                     Some(version) => {
                         let comp_op = version.compare(&required_version);
                         match comp_op {
-                            CompOp::Eq => Ok(VersionRelation::OkEqual),
-                            CompOp::Lt => Ok(VersionRelation::KoOlder),
-                            CompOp::Gt if newer_accepted => Ok(VersionRelation::OkNewer),
-                            CompOp::Gt => Ok(VersionRelation::KoNewer),
+                            Cmp::Eq => Ok(VersionRelation::OkEqual),
+                            Cmp::Lt => Ok(VersionRelation::KoOlder),
+                            Cmp::Gt if newer_accepted => Ok(VersionRelation::OkNewer),
+                            Cmp::Gt => Ok(VersionRelation::KoNewer),
                             _ => Err(format!("Unexpected compare result: {}", comp_op.sign())),
                         }
                     }

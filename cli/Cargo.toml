@@ -15,26 +15,43 @@ exclude = [
 
 [workspace.dependencies]
 # Golem git deps
-golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
-golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.16" }
+# golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+# golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.18" }
+golem-component-compilation-service = { path = "../golem/golem-component-compilation-service" }
+golem-component-service = { path = "../golem/golem-component-service" }
+golem-component-service-base = { path = "../golem/golem-component-service-base" }
+golem-shard-manager = { path = "../golem/golem-shard-manager" }
+golem-worker-executor = { path = "../golem/golem-worker-executor" }
+golem-worker-executor-base = { path = "../golem/golem-worker-executor-base" }
+golem-worker-service = { path = "../golem/golem-worker-service" }
+golem-worker-service-base = { path = "../golem/golem-worker-service-base" }
 
 golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", rev = "3ab953070b7926aba50cc02a99ead84c38a80c95" }
 
 # Golem crates.io deps
 golem-api-grpc = "=1.1.16"
-golem-client = "=1.1.16"
-golem-common = "=1.1.16"
-golem-rib = "=1.1.16"
-golem-service-base = "=1.1.16"
-golem-test-framework = "=1.1.16"
-golem-wasm-ast = { version = "=1.1.16", default-features = false, features = ["analysis"] }
-golem-wasm-rpc = { version = "=1.1.16", default-features = false, features = ["host"] }
+# TODO
+# golem-client = "=1.1.16"
+# golem-common = "=1.1.16"
+# golem-rib = "=1.1.16"
+# golem-service-base = "=1.1.16"
+# golem-test-framework = "=1.1.16"
+# golem-wasm-ast = { version = "=1.1.16", default-features = false, features = ["analysis"] }
+# golem-wasm-rpc = { version = "=1.1.16", default-features = false, features = ["host"] }
+
+golem-client = { path = "../golem/golem-client" }
+golem-common = { path = "../golem/golem-common" }
+golem-rib = { path = "../golem/golem-rib" }
+golem-service-base = { path = "../golem/golem-service-base" }
+golem-test-framework = { path = "../golem/golem-test-framework" }
+golem-wasm-ast = { path = "../golem/wasm-ast", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { path = "../golem/wasm-rpc", default-features = false, features = ["host"] }
 
 golem-cloud-client = "=1.1.3"
 
@@ -126,10 +143,9 @@ tonic-health = "0.12.3"
 tower = "0.5.2"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
-tungstenite = "0.26.2"
 url = "2.5.4"
 uuid = "1.13.2"
-version-compare = "=0.1.1"
+version-compare = "0.2.0"
 wac-graph = "=0.6.1"
 walkdir = "2.5.0"
 wasm-wave = "0.225.0"

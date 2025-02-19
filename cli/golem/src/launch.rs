@@ -264,7 +264,8 @@ async fn run_component_service(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<golem_component_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
-    let migration_path = IncludedMigrationsDir::new(include_dir!(
+    // TODO:
+    /*let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"
     ));
 
@@ -275,6 +276,8 @@ async fn run_component_service(
         .start_endpoints(join_set)
         .instrument(span)
         .await
+     */
+    todo!()
 }
 
 async fn run_worker_executor(
@@ -294,7 +297,8 @@ async fn run_worker_service(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<golem_worker_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_worker_executor_base::metrics::register_all();
-    let migration_path = IncludedMigrationsDir::new(include_dir!(
+    // TODO:
+    /*let migration_path = IncludedMigrationsDir::new(include_dir!(
         "$CARGO_MANIFEST_DIR/../golem-worker-service/db/migration"
     ));
 
@@ -306,4 +310,6 @@ async fn run_worker_service(
         .start_endpoints(join_set)
         .instrument(span)
         .await
+     */
+    todo!()
 }
