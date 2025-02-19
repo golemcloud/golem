@@ -84,6 +84,30 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         golem_api_0_2_x::host::Host::await_promise(self, promise_id.into()).await
     }
 
+    async fn poll_promise(&mut self, promise_id: PromiseId) -> anyhow::Result<Option<Vec<u8>>> {
+        let durability = Durability::<Option<Vec<u8>>, SerializableError>::new(
+            self,
+            "golem::api",
+            "poll_promise",
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = if durability.is_live() {
+            let promise_id: golem_common::model::PromiseId = promise_id.into();
+            let result = self
+                .public_state
+                .promise_service
+                .poll(promise_id.clone())
+                .await;
+            durability.persist(self, promise_id, result.clone()).await
+        } else {
+            durability.replay(self).await
+        };
+
+        Ok(result?)
+    }
+
     async fn complete_promise(
         &mut self,
         promise_id: PromiseId,
