@@ -15,7 +15,7 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub(crate) fn bind_type(expr: &mut Expr) {
+pub(crate) fn bind_type_annotations(expr: &mut Expr) {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -129,7 +129,8 @@ mod internal {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => {
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Call(_, _, _, inferred_type) => {
                 *inferred_type = new_type;
             }
         }
@@ -153,7 +154,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Let(
             VariableId::global("x".to_string()),
@@ -179,7 +180,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Option(
             Some(Box::new(Expr::Number(
@@ -205,7 +206,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Result(
             Ok(Box::new(Expr::Number(
@@ -237,7 +238,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Result(
             Ok(Box::new(Expr::Number(
@@ -269,7 +270,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Result(
             Err(Box::new(Expr::Number(
@@ -300,7 +301,7 @@ mod type_binding_tests {
         "#;
 
         let mut expr = Expr::from_text(expr_str).unwrap();
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Result(
             Ok(Box::new(Expr::Number(
@@ -331,7 +332,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::SelectField(
             Box::new(Expr::SelectField(
@@ -360,7 +361,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::SelectIndex(
             Box::new(Expr::SelectField(
@@ -394,7 +395,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Let(
             VariableId::global("x".to_string()),
@@ -423,7 +424,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Let(
             VariableId::global("x".to_string()),
@@ -466,7 +467,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::Identifier(
@@ -505,7 +506,7 @@ mod type_binding_tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.bind_types();
+        expr.bind_type_annotations();
 
         let expected = Expr::Cond(
             Box::new(Expr::Identifier(

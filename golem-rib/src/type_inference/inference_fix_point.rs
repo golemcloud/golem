@@ -13,7 +13,7 @@
 // limitations under the License.
 use crate::Expr;
 
-// Given f executes inference, find expr where f(expr) = expr
+// Given `f` executes inference, find expr where `f(expr) = expr`
 pub fn type_inference_fix_point<F, E>(mut scan_and_infer: F, expr: &mut Expr) -> Result<(), E>
 where
     F: FnMut(&mut Expr) -> Result<(), E>,
@@ -34,7 +34,7 @@ where
 }
 
 mod internal {
-    use crate::type_inference::inference_fix_point::internal;
+
     use crate::{Expr, InferredType};
     use std::collections::VecDeque;
 
@@ -62,7 +62,7 @@ mod internal {
             let right = right_stack.pop();
 
             if let Some(right) = right {
-                if internal::non_equivalent_types(&left.inferred_type(), &right.inferred_type()) {
+                if non_equivalent_types(&left.inferred_type(), &right.inferred_type()) {
                     return false;
                 }
             }

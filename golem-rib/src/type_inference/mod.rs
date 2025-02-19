@@ -16,13 +16,15 @@ pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
-pub use global_variable_type_spec::*;
+pub use global_variable_type_binding::*;
 pub use identifier_inference::*;
+pub use identify_instance_creation::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
+pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
-pub(crate) use type_binding::*;
+pub(crate) use type_annotation_binding::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_reset::*;
@@ -32,19 +34,22 @@ pub use variable_binding_list_comprehension::*;
 pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
+pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
 mod expr_visitor;
 mod global_input_inference;
-mod global_variable_type_spec;
+mod global_variable_type_binding;
 mod identifier_inference;
+mod identify_instance_creation;
 mod inference_fix_point;
 mod inferred_expr;
+mod instance_type_binding;
 pub(crate) mod kind;
 mod rib_input_type;
 mod rib_output_type;
-mod type_binding;
+mod type_annotation_binding;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;
@@ -54,13 +59,14 @@ mod variable_binding_list_comprehension;
 mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
+mod worker_function_invocation;
 
 #[cfg(test)]
 mod type_inference_tests {
 
     mod global_variable {
         use crate::type_checker::Path;
-        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
         use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
         use test_r::test;
 
@@ -139,7 +145,7 @@ mod type_inference_tests {
 
     mod inline_type_annotations {
         use crate::type_checker::Path;
-        use crate::type_inference::global_variable_type_spec::GlobalVariableTypeSpec;
+        use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
         use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
         use test_r::test;
 
@@ -340,12 +346,13 @@ mod type_inference_tests {
             );
 
             let call_expr = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
                     None,
@@ -402,12 +409,13 @@ mod type_inference_tests {
             );
 
             let call_expr1 = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
                     None,
@@ -417,12 +425,13 @@ mod type_inference_tests {
             );
 
             let call_expr2 = Expr::Call(
-                CallType::Function(DynamicParsedFunctionName {
+                CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
                         function: "baz".to_string(),
                     },
                 }),
+                None,
                 vec![Expr::Identifier(
                     VariableId::local("y", 0),
                     None,
@@ -1475,12 +1484,13 @@ mod type_inference_tests {
                             InferredType::U64,
                         ))),
                         Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
                                 None,
@@ -1498,12 +1508,13 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "baz".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("y", 0),
                                 None,
@@ -2677,6 +2688,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("foo".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2691,6 +2703,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("bar".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2705,6 +2718,7 @@ mod type_inference_tests {
                         None,
                         Box::new(Expr::Call(
                             CallType::EnumConstructor("foo-bar".to_string()),
+                            None,
                             vec![],
                             InferredType::Enum(vec![
                                 "foo".to_string(),
@@ -2718,12 +2732,13 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "process".to_string(),
                                 },
                             }),
+                            None,
                             vec![
                                 Expr::Identifier(
                                     VariableId::local("query1", 0),
@@ -2783,6 +2798,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("success".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2808,6 +2824,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("failure".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2830,6 +2847,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("in-progress".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "success".to_string(),
@@ -2864,6 +2882,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2886,6 +2905,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2908,6 +2928,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2942,6 +2963,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2964,6 +2986,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -2986,6 +3009,7 @@ mod type_inference_tests {
                                 MatchArm {
                                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
+                                        None,
                                         vec![],
                                         InferredType::Enum(vec![
                                             "foo".to_string(),
@@ -3226,12 +3250,13 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(DynamicParsedFunctionName {
+                            CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),
+                            None,
                             vec![Expr::Identifier(
                                 VariableId::local("x", 0),
                                 None,

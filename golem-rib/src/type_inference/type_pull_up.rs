@@ -71,6 +71,11 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
+            Expr::InvokeMethodLazy { lhs, method, .. } => {
+                let lhs = lhs.to_string();
+                return Err(format!("Invalid method invocation `{}.{}`. Make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs));
+            }
+
             Expr::SelectField(expr, field, _, current_inferred_type) => {
                 internal::handle_select_field(
                     expr,
@@ -278,8 +283,14 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Call(call_type, exprs, inferred_type) => {
-                internal::handle_call(call_type, exprs, inferred_type, &mut inferred_type_stack);
+            Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
+                internal::handle_call(
+                    call_type,
+                    generic_type_parameter.clone(),
+                    exprs,
+                    inferred_type,
+                    &mut inferred_type_stack,
+                );
             }
 
             Expr::Unwrap(expr, inferred_type) => {
@@ -335,8 +346,9 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
 
+    use crate::generic_type_parameter::GenericTypeParameter;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InferredType, MatchArm, VariableId};
@@ -749,6 +761,7 @@ mod internal {
 
     pub(crate) fn handle_call(
         call_type: &CallType,
+        generic_type_parameter: Option<GenericTypeParameter>,
         arguments: &[Expr],
         inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
@@ -763,8 +776,11 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
-            CallType::Function(fun_name) => {
-                let mut function_name = fun_name.clone();
+            CallType::Function {
+                function_name,
+                worker,
+            } => {
+                let mut function_name = function_name.clone();
 
                 let resource_params = function_name.function.raw_resource_params_mut();
 
@@ -785,17 +801,106 @@ mod internal {
                         });
                 }
 
-                let new_call = Expr::Call(
-                    CallType::Function(function_name),
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+                let mut worker_in_inferred_type = None;
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    let worker = instance_type.worker_name();
+                    if let Some(worker) = worker {
+                        worker_in_inferred_type = Some(
+                            inferred_type_stack
+                                .pop_front()
+                                .unwrap_or(worker.deref().clone()),
+                        )
+                    }
+                };
+
+                let new_inferred_type = match worker_in_inferred_type {
+                    Some(worker) => match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            let mut new_instance_type = instance_type.clone();
+                            new_instance_type.set_worker_name(worker);
+
+                            InferredType::Instance {
+                                instance_type: new_instance_type,
+                            }
+                        }
+
+                        _ => inferred_type.clone(),
+                    },
+                    None => inferred_type.clone(),
+                };
+
+                // worker in the call type
+                let new_call = if let Some(worker) = worker {
+                    let worker = inferred_type_stack
+                        .pop_front()
+                        .unwrap_or(worker.deref().clone());
+
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: Some(Box::new(worker)),
+                        },
+                        None,
+                        new_arg_exprs,
+                        new_inferred_type,
+                    )
+                } else {
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: None,
+                        },
+                        None,
+                        new_arg_exprs,
+                        new_inferred_type,
+                    )
+                };
+
                 inferred_type_stack.push_front(new_call);
+            }
+
+            CallType::InstanceCreation(instance_creation) => {
+                let worker_name = instance_creation.worker_name();
+
+                if let Some(worker_name) = worker_name {
+                    let worker_name = inferred_type_stack.pop_front().unwrap_or(worker_name);
+
+                    let new_instance_creation = match instance_creation {
+                        InstanceCreationType::Worker { .. } => InstanceCreationType::Worker {
+                            worker_name: Some(Box::new(worker_name.clone())),
+                        },
+                        InstanceCreationType::Resource { resource_name, .. } => {
+                            InstanceCreationType::Resource {
+                                worker_name: Some(Box::new(worker_name.clone())),
+                                resource_name: resource_name.clone(),
+                            }
+                        }
+                    };
+
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(new_instance_creation.clone()),
+                        generic_type_parameter,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+                    inferred_type_stack.push_front(new_call);
+                } else {
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(instance_creation.clone()),
+                        generic_type_parameter,
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+
+                    inferred_type_stack.push_front(new_call);
+                }
             }
 
             CallType::VariantConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::VariantConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -805,6 +910,7 @@ mod internal {
             CallType::EnumConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::EnumConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -1278,6 +1384,8 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_call() {
         let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
+            None,
+            None,
             vec![Expr::untyped_number(BigDecimal::from(1))],
         );
         expr.pull_types_up().unwrap();
@@ -1322,7 +1430,7 @@ mod type_pull_up_tests {
                     InferredType::Unknown,
                 ),
                 Expr::Call(
-                    CallType::Function(DynamicParsedFunctionName {
+                    CallType::function_without_worker(DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "golem".to_string(),
                             package: "it".to_string(),
@@ -1347,6 +1455,7 @@ mod type_pull_up_tests {
                             method: "checkout".to_string(),
                         },
                     }),
+                    None,
                     vec![],
                     InferredType::Unknown,
                 ),

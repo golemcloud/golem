@@ -174,7 +174,7 @@ mod internal {
                 Some(branch)
             }
 
-            Expr::Call(CallType::EnumConstructor(name), _, _) => {
+            Expr::Call(CallType::EnumConstructor(name), _, _, _) => {
                 let cond = if let Some(t) = tag {
                     Expr::and(
                         t,

@@ -1,10 +1,13 @@
+pub(crate) use check_instance_returns::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
+mod check_instance_returns;
 mod check_number_types;
+mod check_worker_name;
 mod exhaustive_pattern_match;
 mod math;
 mod missing_fields;
@@ -15,6 +18,7 @@ mod type_mismatch_call_args;
 mod unresolved_types;
 
 use crate::type_checker::check_number_types::check_number_types;
+use crate::type_checker::check_worker_name::check_worker_name;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::math::check_types_in_math_expr;
 use crate::type_checker::type_mismatch_call_args::check_type_errors_in_function_call;
@@ -28,6 +32,8 @@ pub fn type_check(
         .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
     check_unresolved_types(expr).map_err(|unresolved_error| unresolved_error.to_string())?;
     check_number_types(expr)?;
+    check_instance_returns(expr)?;
+    check_worker_name(expr)?;
     check_types_in_math_expr(expr).map_err(|invalid_math_error| invalid_math_error.to_string())?;
     check_exhaustive_pattern_match(expr, function_type_registry)
         .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
@@ -52,7 +58,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -76,7 +82,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -93,7 +99,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -110,7 +116,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -127,7 +133,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -144,7 +150,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -161,7 +167,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -178,7 +184,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record();
+            let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -194,7 +200,7 @@ mod type_check_tests {
             NameTypePair,
         };
 
-        pub(crate) fn get_metadata_record() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_record_input_params() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {

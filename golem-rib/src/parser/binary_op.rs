@@ -324,6 +324,8 @@ mod test {
                                 function: "foo".to_string(),
                             }
                         },
+                        None,
+                        None,
                         vec![]
                     ),
                     Expr::call(
@@ -333,6 +335,8 @@ mod test {
                                 function: "bar".to_string(),
                             }
                         },
+                        None,
+                        None,
                         vec![]
                     ),
                 ),

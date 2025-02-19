@@ -1,6 +1,5 @@
 use crate::type_checker::Path;
 use crate::{Expr, InferredType, VariableId};
-use std::collections::VecDeque;
 
 // The goal is to be able to specify the types associated with an identifier.
 // i.e, `a.*` is always `Str`, or `a.b.*` is always `Str`, or `a.b.c` is always `Str`
@@ -53,334 +52,349 @@ pub struct GlobalVariableTypeSpec {
 //  The same algorithm above is tweaked even if users specified partial paths. Example:
 //  Everything under `a.b` (regardless of the existence of c and d) at their leafs follow the default type
 
-pub fn bind_global_variables_type(
+pub fn bind_global_variable_types(
     expr: &Expr,
     type_pecs: &Vec<GlobalVariableTypeSpec>,
 ) -> Result<Expr, String> {
     let mut result_expr = expr.clone();
 
     for spec in type_pecs {
-        result_expr = bind_with_type_spec(&result_expr, spec)?;
+        result_expr = internal::bind_global_variable_types(&result_expr, spec)?;
     }
 
     Ok(result_expr)
 }
 
-fn bind_with_type_spec(expr: &Expr, type_spec: &GlobalVariableTypeSpec) -> Result<Expr, String> {
-    let mut path = type_spec.path.clone();
+mod internal {
+    use crate::call_type::{CallType, InstanceCreationType};
 
-    let mut expr_queue = VecDeque::new();
+    use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::type_checker::{Path, PathElem};
+    use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
+    use std::collections::VecDeque;
+    use std::ops::Deref;
 
-    internal::make_expr_nodes_queue(expr, &mut expr_queue);
+    pub(crate) fn bind_global_variable_types(
+        expr: &Expr,
+        type_spec: &GlobalVariableTypeSpec,
+    ) -> Result<Expr, String> {
+        let mut path = type_spec.path.clone();
 
-    let mut temp_stack = VecDeque::new();
+        let mut expr_queue = VecDeque::new();
 
-    while let Some(expr) = expr_queue.pop_back() {
-        match expr {
-            expr @ Expr::Identifier(variable_id, type_name, _) => {
-                if variable_id == &type_spec.variable_id {
-                    if path.is_empty() {
-                        let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
+        make_expr_nodes_queue(expr, &mut expr_queue);
 
-                        if continue_traverse {
-                            temp_stack.push_front((expr.clone(), true));
+        let mut temp_stack = VecDeque::new();
+
+        while let Some(expr) = expr_queue.pop_back() {
+            match expr {
+                expr @ Expr::Identifier(variable_id, type_name, _) => {
+                    if variable_id == &type_spec.variable_id {
+                        if path.is_empty() {
+                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
+
+                            if continue_traverse {
+                                temp_stack.push_front((expr.clone(), true));
+                            } else {
+                                temp_stack.push_front((
+                                    Expr::Identifier(
+                                        variable_id.clone(),
+                                        type_name.clone(),
+                                        type_spec.inferred_type.clone(),
+                                    ),
+                                    false,
+                                ));
+                            }
                         } else {
-                            temp_stack.push_front((
-                                Expr::Identifier(
-                                    variable_id.clone(),
-                                    type_name.clone(),
-                                    type_spec.inferred_type.clone(),
-                                ),
-                                false,
-                            ));
+                            temp_stack.push_front((expr.clone(), true));
                         }
                     } else {
-                        temp_stack.push_front((expr.clone(), true));
+                        temp_stack.push_front((expr.clone(), false));
                     }
-                } else {
+                }
+
+                outer @ Expr::SelectField(inner_expr, field, type_name, current_inferred_type) => {
+                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
+
+                    handle_select_field(
+                        inner_expr,
+                        field,
+                        continue_search,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        &mut path,
+                        &type_spec.inferred_type,
+                        type_name,
+                    )?;
+                }
+
+                Expr::Tuple(tuple_elems, current_inferred_type) => {
+                    handle_tuple(tuple_elems, current_inferred_type, &mut temp_stack);
+                }
+
+                expr @ Expr::Flags(_, _) => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-            }
 
-            outer @ Expr::SelectField(inner_expr, field, type_name, current_inferred_type) => {
-                let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
+                Expr::SelectIndex(expr, index, type_name, current_inferred_type) => {
+                    handle_select_index(
+                        expr,
+                        index,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        type_name,
+                    )?;
+                }
 
-                internal::handle_select_field(
-                    inner_expr,
-                    field,
-                    continue_search,
-                    current_inferred_type,
+                Expr::Result(Ok(_), type_name, current_inferred_type) => {
+                    handle_result_ok(expr, current_inferred_type, &mut temp_stack, type_name);
+                }
+
+                Expr::Result(Err(_), type_name, current_inferred_type) => {
+                    handle_result_error(expr, current_inferred_type, &mut temp_stack, type_name);
+                }
+
+                Expr::Option(Some(expr), type_name, current_inferred_type) => {
+                    handle_option_some(expr, current_inferred_type, &mut temp_stack, type_name);
+                }
+
+                Expr::Option(None, type_name, current_inferred_type) => {
+                    temp_stack.push_front((
+                        Expr::Option(None, type_name.clone(), current_inferred_type.clone()),
+                        false,
+                    ));
+                }
+
+                Expr::Cond(pred, then, else_, current_inferred_type) => {
+                    handle_if_else(pred, then, else_, current_inferred_type, &mut temp_stack);
+                }
+
+                //
+                Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
+                    handle_pattern_match(
+                        predicate,
+                        match_arms,
+                        current_inferred_type,
+                        &mut temp_stack,
+                    );
+                }
+
+                Expr::Concat(exprs, _) => {
+                    handle_concat(exprs, &mut temp_stack);
+                }
+
+                Expr::ExprBlock(exprs, current_inferred_type) => {
+                    handle_multiple(exprs, current_inferred_type, &mut temp_stack);
+                }
+
+                Expr::Not(_, current_inferred_type) => {
+                    handle_not(expr, current_inferred_type, &mut temp_stack);
+                }
+
+                Expr::GreaterThan(left, right, current_inferred_type) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::GreaterThan,
+                    );
+                }
+
+                Expr::GreaterThanOrEqualTo(left, right, current_inferred_type) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::GreaterThanOrEqualTo,
+                    );
+                }
+
+                Expr::LessThanOrEqualTo(left, right, current_inferred_type) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::LessThanOrEqualTo,
+                    );
+                }
+                Expr::Plus(left, right, current_inferred_type) => {
+                    handle_math_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::Plus,
+                    );
+                }
+
+                Expr::Minus(left, right, current_inferred_type) => {
+                    handle_math_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::Minus,
+                    );
+                }
+
+                Expr::Multiply(left, right, current_inferred_type) => {
+                    handle_math_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::Multiply,
+                    );
+                }
+
+                Expr::Divide(left, right, current_inferred_type) => {
+                    handle_math_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::Divide,
+                    );
+                }
+
+                Expr::EqualTo(left, right, current_inferred_type) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::EqualTo,
+                    );
+                }
+
+                Expr::LessThan(left, right, current_inferred_type) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        current_inferred_type,
+                        &mut temp_stack,
+                        Expr::LessThan,
+                    );
+                }
+
+                Expr::Let(variable_id, typ, expr, inferred_type) => {
+                    handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
+                }
+                Expr::Sequence(exprs, type_name, current_inferred_type) => {
+                    handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
+                }
+                Expr::Record(expr, inferred_type) => {
+                    handle_record(expr, inferred_type, &mut temp_stack);
+                }
+                Expr::Literal(_, _) => {
+                    temp_stack.push_front((expr.clone(), false));
+                }
+                Expr::Number(_, _, _) => {
+                    temp_stack.push_front((expr.clone(), false));
+                }
+                Expr::Boolean(_, _) => {
+                    temp_stack.push_front((expr.clone(), false));
+                }
+                Expr::And(left, right, _) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        &InferredType::Bool,
+                        &mut temp_stack,
+                        Expr::And,
+                    );
+                }
+
+                Expr::Or(left, right, _) => {
+                    handle_comparison_op(
+                        left,
+                        right,
+                        &InferredType::Bool,
+                        &mut temp_stack,
+                        Expr::Or,
+                    );
+                }
+
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter,
+                    args,
+                    inferred_type,
+                } => handle_invoke_method(
+                    lhs,
+                    method,
+                    args,
+                    generic_type_parameter.clone(),
+                    inferred_type,
                     &mut temp_stack,
-                    &mut path,
-                    &type_spec.inferred_type,
-                    type_name,
-                )?;
-            }
+                ),
 
-            Expr::Tuple(tuple_elems, current_inferred_type) => {
-                internal::handle_tuple(tuple_elems, current_inferred_type, &mut temp_stack);
-            }
+                Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
+                    handle_call(
+                        call_type,
+                        exprs,
+                        generic_type_parameter,
+                        inferred_type,
+                        &mut temp_stack,
+                    );
+                }
 
-            expr @ Expr::Flags(_, _) => {
-                temp_stack.push_front((expr.clone(), false));
-            }
+                Expr::Unwrap(expr, inferred_type) => {
+                    handle_unwrap(expr, inferred_type, &mut temp_stack);
+                }
 
-            Expr::SelectIndex(expr, index, type_name, current_inferred_type) => {
-                internal::handle_select_index(
-                    expr,
-                    index,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    type_name,
-                )?;
-            }
+                Expr::Throw(_, _) => {
+                    temp_stack.push_front((expr.clone(), false));
+                }
 
-            Expr::Result(Ok(_), type_name, current_inferred_type) => {
-                internal::handle_result_ok(expr, current_inferred_type, &mut temp_stack, type_name);
-            }
+                Expr::GetTag(_, inferred_type) => {
+                    handle_get_tag(expr, inferred_type, &mut temp_stack);
+                }
 
-            Expr::Result(Err(_), type_name, current_inferred_type) => {
-                internal::handle_result_error(
-                    expr,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    type_name,
-                );
-            }
-
-            Expr::Option(Some(expr), type_name, current_inferred_type) => {
-                internal::handle_option_some(
-                    expr,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    type_name,
-                );
-            }
-
-            Expr::Option(None, type_name, current_inferred_type) => {
-                temp_stack.push_front((
-                    Expr::Option(None, type_name.clone(), current_inferred_type.clone()),
-                    false,
-                ));
-            }
-
-            Expr::Cond(pred, then, else_, current_inferred_type) => {
-                internal::handle_if_else(pred, then, else_, current_inferred_type, &mut temp_stack);
-            }
-
-            //
-            Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
-                internal::handle_pattern_match(
-                    predicate,
-                    match_arms,
-                    current_inferred_type,
-                    &mut temp_stack,
-                );
-            }
-
-            Expr::Concat(exprs, _) => {
-                internal::handle_concat(exprs, &mut temp_stack);
-            }
-
-            Expr::ExprBlock(exprs, current_inferred_type) => {
-                internal::handle_multiple(exprs, current_inferred_type, &mut temp_stack);
-            }
-
-            Expr::Not(_, current_inferred_type) => {
-                internal::handle_not(expr, current_inferred_type, &mut temp_stack);
-            }
-
-            Expr::GreaterThan(left, right, current_inferred_type) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::GreaterThan,
-                );
-            }
-
-            Expr::GreaterThanOrEqualTo(left, right, current_inferred_type) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::GreaterThanOrEqualTo,
-                );
-            }
-
-            Expr::LessThanOrEqualTo(left, right, current_inferred_type) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::LessThanOrEqualTo,
-                );
-            }
-            Expr::Plus(left, right, current_inferred_type) => {
-                internal::handle_math_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::Plus,
-                );
-            }
-
-            Expr::Minus(left, right, current_inferred_type) => {
-                internal::handle_math_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::Minus,
-                );
-            }
-
-            Expr::Multiply(left, right, current_inferred_type) => {
-                internal::handle_math_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::Multiply,
-                );
-            }
-
-            Expr::Divide(left, right, current_inferred_type) => {
-                internal::handle_math_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::Divide,
-                );
-            }
-
-            Expr::EqualTo(left, right, current_inferred_type) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::EqualTo,
-                );
-            }
-
-            Expr::LessThan(left, right, current_inferred_type) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    current_inferred_type,
-                    &mut temp_stack,
-                    Expr::LessThan,
-                );
-            }
-
-            Expr::Let(variable_id, typ, expr, inferred_type) => {
-                internal::handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
-            }
-            Expr::Sequence(exprs, type_name, current_inferred_type) => {
-                internal::handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
-            }
-            Expr::Record(expr, inferred_type) => {
-                internal::handle_record(expr, inferred_type, &mut temp_stack);
-            }
-            Expr::Literal(_, _) => {
-                temp_stack.push_front((expr.clone(), false));
-            }
-            Expr::Number(_, _, _) => {
-                temp_stack.push_front((expr.clone(), false));
-            }
-            Expr::Boolean(_, _) => {
-                temp_stack.push_front((expr.clone(), false));
-            }
-            Expr::And(left, right, _) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    &InferredType::Bool,
-                    &mut temp_stack,
-                    Expr::And,
-                );
-            }
-
-            Expr::Or(left, right, _) => {
-                internal::handle_comparison_op(
-                    left,
-                    right,
-                    &InferredType::Bool,
-                    &mut temp_stack,
-                    Expr::Or,
-                );
-            }
-
-            Expr::Call(call_type, exprs, inferred_type) => {
-                internal::handle_call(call_type, exprs, inferred_type, &mut temp_stack);
-            }
-
-            Expr::Unwrap(expr, inferred_type) => {
-                internal::handle_unwrap(expr, inferred_type, &mut temp_stack);
-            }
-
-            Expr::Throw(_, _) => {
-                temp_stack.push_front((expr.clone(), false));
-            }
-
-            Expr::GetTag(_, inferred_type) => {
-                internal::handle_get_tag(expr, inferred_type, &mut temp_stack);
-            }
-
-            Expr::ListComprehension {
-                iterated_variable,
-                iterable_expr,
-                yield_expr,
-                inferred_type,
-                ..
-            } => {
-                internal::handle_list_comprehension(
+                Expr::ListComprehension {
                     iterated_variable,
                     iterable_expr,
                     yield_expr,
                     inferred_type,
+                    ..
+                } => {
+                    handle_list_comprehension(
+                        iterated_variable,
+                        iterable_expr,
+                        yield_expr,
+                        inferred_type,
+                        &mut temp_stack,
+                    );
+                }
+
+                Expr::ListReduce {
+                    reduce_variable,
+                    iterated_variable,
+                    iterable_expr,
+                    init_value_expr,
+                    yield_expr,
+                    inferred_type,
+                } => handle_list_reduce(
+                    reduce_variable,
+                    iterated_variable,
+                    iterable_expr,
+                    init_value_expr,
+                    yield_expr,
+                    inferred_type,
                     &mut temp_stack,
-                );
+                ),
             }
-
-            Expr::ListReduce {
-                reduce_variable,
-                iterated_variable,
-                iterable_expr,
-                init_value_expr,
-                yield_expr,
-                inferred_type,
-            } => internal::handle_list_reduce(
-                reduce_variable,
-                iterated_variable,
-                iterable_expr,
-                init_value_expr,
-                yield_expr,
-                inferred_type,
-                &mut temp_stack,
-            ),
         }
+
+        temp_stack
+            .pop_front()
+            .map(|x| x.0)
+            .ok_or("Failed type inference during pull up".to_string())
     }
-
-    temp_stack
-        .pop_front()
-        .map(|x| x.0)
-        .ok_or("Failed type inference during pull up".to_string())
-}
-
-mod internal {
-    use crate::call_type::CallType;
-
-    use crate::type_checker::{Path, PathElem};
-    use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
-    use std::collections::VecDeque;
-    use std::ops::Deref;
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();
@@ -806,9 +820,77 @@ mod internal {
         temp_stack.push_front((new_binary, false));
     }
 
+    pub(crate) fn handle_invoke_method(
+        original_lhs_expr: &Expr,
+        method_name: &str,
+        args: &[Expr],
+        generic_type_parameter: Option<GenericTypeParameter>,
+        inferred_type: &InferredType,
+        temp_stack: &mut VecDeque<(Expr, bool)>,
+    ) {
+        let mut new_arg_exprs = vec![];
+
+        for expr in args.iter().rev() {
+            let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
+            new_arg_exprs.push(expr);
+        }
+
+        new_arg_exprs.reverse();
+
+        let new_lhs_expr = temp_stack
+            .pop_front()
+            .map(|x| x.0)
+            .unwrap_or(original_lhs_expr.clone());
+
+        if let InferredType::Instance { instance_type } = inferred_type {
+            if let Some(worker_expr) = instance_type.worker() {
+                let new_worker_expr = temp_stack
+                    .pop_front()
+                    .map(|x| x.0)
+                    .unwrap_or(worker_expr.clone());
+
+                let mut new_instance_type = instance_type.clone();
+                new_instance_type.set_worker_name(new_worker_expr.clone());
+
+                let new_call = Expr::InvokeMethodLazy {
+                    lhs: Box::new(new_lhs_expr),
+                    method: method_name.to_string(),
+                    generic_type_parameter,
+                    args: new_arg_exprs,
+                    inferred_type: InferredType::Instance {
+                        instance_type: new_instance_type,
+                    },
+                };
+
+                temp_stack.push_front((new_call, false));
+            } else {
+                let new_call = Expr::InvokeMethodLazy {
+                    lhs: Box::new(new_lhs_expr),
+                    method: method_name.to_string(),
+                    generic_type_parameter,
+                    args: new_arg_exprs,
+                    inferred_type: inferred_type.clone(),
+                };
+
+                temp_stack.push_front((new_call, false));
+            }
+        } else {
+            let new_call = Expr::InvokeMethodLazy {
+                lhs: Box::new(new_lhs_expr),
+                method: method_name.to_string(),
+                generic_type_parameter,
+                args: new_arg_exprs,
+                inferred_type: inferred_type.clone(),
+            };
+
+            temp_stack.push_front((new_call, false));
+        }
+    }
+
     pub(crate) fn handle_call(
         call_type: &CallType,
         arguments: &[Expr],
+        generic_type_parameter: &Option<GenericTypeParameter>,
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
     ) {
@@ -823,10 +905,49 @@ mod internal {
         new_arg_exprs.reverse();
 
         match call_type {
-            CallType::Function(fun_name) => {
-                let mut function_name = fun_name.clone();
+            CallType::InstanceCreation(instance_creation) => {
+                let worker_name = instance_creation.worker_name();
 
-                // The resource params in the function name was also in stack and need to be retrieved back
+                if let Some(worker_name) = worker_name {
+                    let worker_name = temp_stack.pop_front().map(|x| x.0).unwrap_or(worker_name);
+
+                    let new_instance_creation = match instance_creation {
+                        InstanceCreationType::Worker { .. } => InstanceCreationType::Worker {
+                            worker_name: Some(Box::new(worker_name.clone())),
+                        },
+                        InstanceCreationType::Resource { resource_name, .. } => {
+                            InstanceCreationType::Resource {
+                                worker_name: Some(Box::new(worker_name.clone())),
+                                resource_name: resource_name.clone(),
+                            }
+                        }
+                    };
+
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(new_instance_creation.clone()),
+                        generic_type_parameter.clone(),
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+                    temp_stack.push_front((new_call, false));
+                } else {
+                    let new_call = Expr::Call(
+                        CallType::InstanceCreation(instance_creation.clone()),
+                        generic_type_parameter.clone(),
+                        new_arg_exprs,
+                        inferred_type.clone(),
+                    );
+
+                    temp_stack.push_front((new_call, false));
+                }
+            }
+
+            CallType::Function {
+                function_name,
+                worker,
+            } => {
+                let mut function_name = function_name.clone();
+
                 let resource_params = function_name.function.raw_resource_params_mut();
 
                 if let Some(resource_params) = resource_params {
@@ -846,17 +967,71 @@ mod internal {
                         });
                 }
 
-                let new_call = Expr::Call(
-                    CallType::Function(function_name),
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+                let mut worker_in_inferred_type = None;
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    let worker = instance_type.worker_name();
+                    if let Some(worker) = worker {
+                        worker_in_inferred_type = Some(
+                            temp_stack
+                                .pop_front()
+                                .map(|x| x.0)
+                                .unwrap_or(worker.deref().clone()),
+                        )
+                    }
+                };
+
+                let new_inferred_type = match worker_in_inferred_type {
+                    Some(worker) => match inferred_type {
+                        InferredType::Instance { instance_type } => {
+                            let mut new_instance_type = instance_type.clone();
+                            new_instance_type.set_worker_name(worker);
+
+                            InferredType::Instance {
+                                instance_type: new_instance_type,
+                            }
+                        }
+
+                        _ => inferred_type.clone(),
+                    },
+                    None => inferred_type.clone(),
+                };
+
+                // worker in the call type
+                let new_call = if let Some(worker) = worker {
+                    let worker = temp_stack
+                        .pop_front()
+                        .map(|x| x.0)
+                        .unwrap_or(worker.deref().clone());
+
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: Some(Box::new(worker)),
+                        },
+                        None,
+                        new_arg_exprs,
+                        new_inferred_type,
+                    )
+                } else {
+                    Expr::Call(
+                        CallType::Function {
+                            function_name,
+                            worker: None,
+                        },
+                        None,
+                        new_arg_exprs,
+                        new_inferred_type,
+                    )
+                };
+
                 temp_stack.push_front((new_call, false));
             }
 
             CallType::VariantConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::VariantConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -866,6 +1041,7 @@ mod internal {
             CallType::EnumConstructor(str) => {
                 let new_call = Expr::Call(
                     CallType::EnumConstructor(str.clone()),
+                    None,
                     new_arg_exprs,
                     inferred_type.clone(),
                 );
@@ -977,7 +1153,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
+        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
         let expected = Expr::Identifier(
             VariableId::global("foo".to_string()),
@@ -1004,7 +1180,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
+        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(
@@ -1035,7 +1211,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
+        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(
@@ -1066,7 +1242,7 @@ mod tests {
             inferred_type: InferredType::Str,
         };
 
-        let result = expr.bind_global_variables_type(&vec![type_spec]).unwrap();
+        let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
         let expected = Expr::SelectField(
             Box::new(Expr::select_field(

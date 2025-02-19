@@ -15,6 +15,8 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
+// This function will assign ids to variables declared with `let` expressions,
+// and propagate these ids to the usage sites (`Expr::Identifier` nodes).
 pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
     let mut queue = VecDeque::new();
@@ -26,14 +28,15 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
             Expr::Let(variable_id, _, expr, _) => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
-                *variable_id = identifier_id_state.lookup(&field_name).unwrap();
+                if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
+                    *variable_id = latest_variable_id.clone();
+                }
                 queue.push_front(expr);
             }
 
             Expr::Identifier(variable_id, _, _) if !variable_id.is_match_binding() => {
                 let field_name = variable_id.name();
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
-                    // If there existed a let statement, this ensures global is changed to local
                     *variable_id = latest_variable_id.clone();
                 }
             }
@@ -100,12 +103,13 @@ mod name_binding_tests {
         );
 
         let call_expr = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -148,12 +152,13 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -163,12 +168,13 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("y", 0),
                 None,
@@ -211,12 +217,13 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 0),
                 None,
@@ -226,12 +233,13 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::local("x", 1),
                 None,

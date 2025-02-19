@@ -1,3 +1,4 @@
+use crate::call_type::CallType;
 use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
 use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -19,9 +20,12 @@ pub fn check_type_errors_in_function_call(
 
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Call(call_type, args, ..) => {
-                internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?;
-            }
+            Expr::Call(call_type, _, args, ..) => match call_type {
+                CallType::InstanceCreation(_) => {}
+                call_type => {
+                    internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?
+                }
+            },
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -125,12 +129,17 @@ mod internal {
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
     ) -> Result<(), FunctionCallTypeError> {
-        let registry_value = type_registry
-            .types
-            .get(&RegistryKey::from_call_type(call_type))
-            .ok_or(FunctionCallTypeError::InvalidFunctionCall {
+        let registry_key = RegistryKey::from_call_type(call_type).ok_or(
+            FunctionCallTypeError::InvalidFunctionCall {
                 function_call_name: call_type.to_string(),
-            })?;
+            },
+        )?;
+
+        let registry_value = type_registry.types.get(&registry_key).ok_or(
+            FunctionCallTypeError::InvalidFunctionCall {
+                function_call_name: call_type.to_string(),
+            },
+        )?;
 
         let expected_arg_types = registry_value.argument_types();
 

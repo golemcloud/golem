@@ -91,7 +91,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 internal::handle_record(expressions, inferred_type, &mut queue)?;
             }
 
-            Expr::Call(call_type, expressions, inferred_type) => {
+            Expr::Call(call_type, _, expressions, inferred_type) => {
                 internal::handle_call(call_type, expressions, inferred_type, &mut queue);
             }
 
@@ -363,9 +363,9 @@ mod internal {
     }
 
     pub(crate) fn handle_call<'a>(
-        call_type: &CallType,
+        call_type: &'a mut CallType,
         expressions: &'a mut Vec<Expr>,
-        inferred_type: &InferredType,
+        inferred_type: &'a mut InferredType,
         queue: &mut VecDeque<&'a mut Expr>,
     ) {
         match call_type {
@@ -387,11 +387,28 @@ mod internal {
                     }
                 }
             }
-            _ => {
-                for expr in expressions {
-                    queue.push_back(expr);
+            CallType::Function {
+                worker,
+                function_name,
+            } => {
+                if let Some(worker) = worker {
+                    queue.push_back(worker);
                 }
+
+                if let Some(expr) = function_name.raw_resource_params_mut() {
+                    queue.extend(expr);
+                }
+
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(function) = instance_type.worker_mut() {
+                        queue.push_back(function);
+                    }
+                }
+
+                queue.extend(expressions);
             }
+
+            _ => queue.extend(expressions),
         }
     }
 

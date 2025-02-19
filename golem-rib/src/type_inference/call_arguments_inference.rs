@@ -16,7 +16,9 @@ use crate::type_registry::FunctionTypeRegistry;
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub fn infer_call_arguments_type(
+// Resolving function arguments and return types based on function type registry
+// If the function call is a mere instance creation, then the return type i
+pub fn infer_function_call_types(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
@@ -24,9 +26,9 @@ pub fn infer_call_arguments_type(
     queue.push_back(expr);
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call(parsed_fn_name, args, inferred_type) => {
+            Expr::Call(call_type, _, args, inferred_type) => {
                 internal::resolve_call_argument_types(
-                    parsed_fn_name,
+                    call_type,
                     function_type_registry,
                     args,
                     inferred_type,
@@ -58,22 +60,25 @@ mod internal {
         let cloned = call_type.clone();
 
         match call_type {
-            CallType::Function(dynamic_parsed_function_name) => {
+            CallType::InstanceCreation(_) => Ok(()),
+            CallType::Function { function_name, .. } => {
                 let resource_constructor_registry_key =
-                    RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
+                    RegistryKey::resource_constructor_registry_key(function_name);
 
                 match resource_constructor_registry_key {
                     Some(resource_constructor_name) => handle_function_with_resource(
                         &resource_constructor_name,
-                        dynamic_parsed_function_name,
+                        function_name,
                         function_type_registry,
                         function_result_inferred_type,
                         args,
                     ),
                     None => {
-                        let registry_key = RegistryKey::from_call_type(&cloned);
+                        let registry_key = RegistryKey::from_call_type(&cloned)
+                            .ok_or(format!("Invalid function call: `{}`", function_name))?;
+
                         infer_args_and_result_type(
-                            &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),
+                            &FunctionDetails::Fqn(function_name.to_string()),
                             function_type_registry,
                             &registry_key,
                             args,
@@ -516,18 +521,19 @@ mod function_parameters_inference_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_call_arguments_type(&function_type_registry)
+        expr.infer_function_call_types(&function_type_registry)
             .unwrap();
 
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
         let call_expr = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
+            None,
             vec![Expr::Identifier(
                 VariableId::global("x".to_string()),
                 None,

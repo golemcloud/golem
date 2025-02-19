@@ -19,18 +19,11 @@ use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-// A type-registry is a mapping from a function name (global or part of an interface in WIT)
-// to the registry value that represents the type of the name.
-// Here, registry key names are called function names (and not really the names of the types),
-// as this is what the component-model parser output (golem-wasm-ast) gives us.
-// We make sure if we bump into any variant types (as part of processing the function parameter types),
-// we store them as a mapping from FunctionName(name_of_variant) to a registry value. If the variant
-// has parameters, then the RegistryValue is considered a function type itself with parameter types,
-// and a return type that the member variant represents. If the variant has no parameters,
-// then the RegistryValue is simply an AnalysedType representing the variant type itself.
-// RegistryKey is more aligned to the component metadata, and possess all the complexities that the component metadata
-// may have.
-#[derive(Clone, Debug, PartialEq)]
+// A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
+// The structure is raw and closer to the original component metadata.
+// FunctionTypeRegistry act as a set of all dependencies in Rib.
+// Currently it talks about only 1 component.
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }
@@ -62,15 +55,16 @@ impl FunctionTypeRegistry {
 
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
         match key {
-            CallType::Function(parsed_fn_name) => self
+            CallType::Function { function_name, .. } => self
                 .types
-                .get(&RegistryKey::fqn_registry_key(parsed_fn_name)),
+                .get(&RegistryKey::fqn_registry_key(function_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),
             CallType::EnumConstructor(enum_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(enum_name.clone())),
+            CallType::InstanceCreation(_) => None,
         }
     }
 
@@ -269,26 +263,29 @@ impl RegistryKey {
         })
     }
 
-    pub fn from_call_type(call_type: &CallType) -> RegistryKey {
+    pub fn from_call_type(call_type: &CallType) -> Option<RegistryKey> {
         match call_type {
             CallType::VariantConstructor(variant_name) => {
-                RegistryKey::FunctionName(variant_name.clone())
+                Some(RegistryKey::FunctionName(variant_name.clone()))
             }
-            CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
-            CallType::Function(function_name) => match function_name.site.interface_name() {
-                None => {
-                    RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers())
-                }
-                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+            CallType::EnumConstructor(enum_name) => {
+                Some(RegistryKey::FunctionName(enum_name.clone()))
+            }
+            CallType::Function { function_name, .. } => match function_name.site.interface_name() {
+                None => Some(RegistryKey::FunctionName(
+                    function_name.function_name_with_prefix_identifiers(),
+                )),
+                Some(interface_name) => Some(RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
                     function_name: function_name.function_name_with_prefix_identifiers(),
-                },
+                }),
             },
+            CallType::InstanceCreation(_) => None,
         }
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
     Variant {

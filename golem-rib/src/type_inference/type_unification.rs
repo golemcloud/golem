@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::CallType;
 use crate::{ArmPattern, Expr};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
@@ -220,18 +221,46 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Call(function_call, vec, inferred_type) => {
+            Expr::Call(function_call, _, vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
 
-                let unified_inferred_type = inferred_type.unify();
+                match function_call {
+                    // We don't care about anything inside instance creation
+                    CallType::InstanceCreation(_) => {}
+                    // Make sure worker expression in function
+                    CallType::Function {
+                        worker,
+                        function_name,
+                    } => {
+                        if let Some(worker) = worker {
+                            queue.push(worker);
+                        }
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(format!(
-                            "unable to infer the type of function return {}, {}",
-                            function_call, e
-                        ));
+                        let unified_inferred_type = inferred_type.unify();
+
+                        match unified_inferred_type {
+                            Ok(unified_type) => *inferred_type = unified_type,
+                            Err(e) => {
+                                errors.push(format!(
+                                    "unable to infer the type of function return {}, {}",
+                                    function_name, e
+                                ));
+                            }
+                        }
+                    }
+
+                    _ => {
+                        let unified_inferred_type = inferred_type.unify();
+
+                        match unified_inferred_type {
+                            Ok(unified_type) => *inferred_type = unified_type,
+                            Err(e) => {
+                                errors.push(format!(
+                                    "unable to infer the type of function return {}, {}",
+                                    function_call, e
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -427,6 +456,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(left);
                 queue.push(right);
             }
+            Expr::InvokeMethodLazy { .. } => {}
         }
     }
 

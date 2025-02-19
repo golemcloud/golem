@@ -211,7 +211,7 @@ mod internal {
                     }
                 }
                 arm_pattern @ ArmPattern::Literal(expr) => {
-                    if let Expr::Call(call_type, args, _) = expr.deref() {
+                    if let Expr::Call(call_type, _, args, _) = expr.deref() {
                         let ctor_name = call_type.to_string();
                         let arm_patterns = args
                             .iter()

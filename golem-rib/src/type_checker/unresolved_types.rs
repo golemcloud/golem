@@ -12,6 +12,21 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Let(_, _, expr, _) => {
                 queue.push_back(expr);
             }
+            Expr::InvokeMethodLazy {
+                lhs,
+                args,
+                inferred_type,
+                ..
+            } => {
+                queue.push_back(lhs);
+                for arg in args {
+                    queue.push_back(arg);
+                }
+
+                if inferred_type.un_resolved() {
+                    return Err(UnResolvedTypesError::new(expr));
+                }
+            }
             Expr::SelectField(expr, field, _, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
@@ -131,7 +146,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             expr @ Expr::Result(ok_err, _, _) => {
                 internal::unresolved_type_for_result(ok_err, expr)?
             }
-            Expr::Call(_, args, _) => {
+            Expr::Call(_, _, args, _) => {
                 for arg in args {
                     queue.push_back(arg);
                 }

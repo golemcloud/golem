@@ -93,12 +93,12 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR, VariableId,
+        InferredType, InstructionId, RibIR, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -304,13 +304,16 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(call_type, arguments, inferred_type) => {
+            Expr::Call(call_type, _, arguments, inferred_type) => {
                 for expr in arguments.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
 
                 match call_type {
-                    CallType::Function(parsed_function_name) => {
+                    CallType::Function {
+                        function_name,
+                        worker,
+                    } => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -320,14 +323,26 @@ mod internal {
                             )?)
                         };
 
-                        // Invoke Function after resolving the function name
-                        instructions
-                            .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
+                        // To be pushed to interpreter stack later
+                        let worker_name = match worker {
+                            Some(_) => WorkerNamePresence::Absent,
+                            None => WorkerNamePresence::Present,
+                        };
 
-                        let site = parsed_function_name.site.clone();
+                        instructions.push(RibIR::InvokeFunction(
+                            worker_name,
+                            arguments.len(),
+                            function_result_type,
+                        ));
+
+                        if let Some(worker_expr) = worker {
+                            stack.push(ExprState::from_expr(worker_expr));
+                        }
+
+                        let site = function_name.site.clone();
 
                         // Resolve the function name and update stack
-                        match &parsed_function_name.function {
+                        match &function_name.function {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(
                                     site,
@@ -439,6 +454,18 @@ mod internal {
                         }
                     }
 
+                    // There is nothing to do as such for instance creation
+                    CallType::InstanceCreation(instance_creation) => {
+                        instructions.push(RibIR::PushLit(match instance_creation {
+                            InstanceCreationType::Worker { .. } => {
+                                "create_worker".into_value_and_type()
+                            }
+                            InstanceCreationType::Resource { .. } => {
+                                "create_resource".into_value_and_type()
+                            }
+                        }));
+                    }
+
                     CallType::VariantConstructor(variant_name) => {
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
@@ -520,6 +547,9 @@ mod internal {
                     &analysed_type,
                 )
             }
+
+            // Invoke is always handled by the CallType::Function branch
+            Expr::InvokeMethodLazy { .. } => {}
 
             Expr::ListReduce {
                 reduce_variable,

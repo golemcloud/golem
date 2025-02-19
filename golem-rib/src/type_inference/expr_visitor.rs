@@ -1,5 +1,5 @@
-use crate::call_type::CallType;
-use crate::Expr;
+use crate::call_type::{CallType, InstanceCreationType};
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -67,9 +67,21 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Option(Some(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Result(Ok(expr), _, _) => queue.push_back(&mut *expr),
         Expr::Result(Err(expr), _, _) => queue.push_back(&mut *expr),
-        Expr::Call(call_type, arguments, _) => {
-            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+        Expr::Call(call_type, _, arguments, inferred_type) => {
+            let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
+            if let Some(exprs) = exprs {
                 queue.extend(exprs.iter_mut())
+            }
+
+            if let Some(worker) = worker {
+                queue.push_back(worker);
+            }
+
+            // The expr existing in the inferred type should be visited
+            if let InferredType::Instance { instance_type } = inferred_type {
+                if let Some(worker_expr) = instance_type.worker_mut() {
+                    queue.push_back(worker_expr);
+                }
             }
 
             queue.extend(arguments.iter_mut())
@@ -103,6 +115,22 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(iterable_expr);
             queue.push_back(init_value_expr);
             queue.push_back(yield_expr);
+        }
+
+        Expr::InvokeMethodLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
+            if let InferredType::Instance { instance_type } = inferred_type {
+                if let Some(worker_expr) = instance_type.worker_mut() {
+                    queue.push_back(worker_expr);
+                }
+            }
+
+            queue.push_back(lhs);
+            queue.extend(args.iter_mut());
         }
 
         Expr::GetTag(exr, _) => {
@@ -182,12 +210,45 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Option(Some(expr), _, _) => queue.push_back(expr),
         Expr::Result(Ok(expr), _, _) => queue.push_back(expr),
         Expr::Result(Err(expr), _, _) => queue.push_back(expr),
-        Expr::Call(call_type, arguments, _) => {
-            if let CallType::Function(dynamic) = call_type {
-                if let Some(params) = dynamic.function.raw_resource_params() {
+        Expr::Call(call_type, _, arguments, inferred_type) => {
+            if let CallType::Function {
+                function_name,
+                worker,
+            } = call_type
+            {
+                if let Some(params) = function_name.function.raw_resource_params() {
                     queue.extend(params.iter())
                 }
+
+                // Worker in InstanceType
+                if let InferredType::Instance { instance_type } = inferred_type {
+                    if let Some(worker_expr) = instance_type.worker() {
+                        queue.push_back(worker_expr);
+                    }
+                }
+
+                // Worker in Call Expression
+                if let Some(worker) = worker {
+                    queue.push_back(worker);
+                }
             }
+
+            if let CallType::InstanceCreation(instance_creation) = call_type {
+                match instance_creation {
+                    InstanceCreationType::Worker { worker_name, .. } => {
+                        if let Some(worker_name) = worker_name {
+                            queue.push_back(worker_name);
+                        }
+                    }
+
+                    InstanceCreationType::Resource { worker_name, .. } => {
+                        if let Some(worker_name) = worker_name {
+                            queue.push_back(worker_name);
+                        }
+                    }
+                }
+            }
+
             queue.extend(arguments.iter())
         }
         Expr::Unwrap(expr, _) => queue.push_back(expr),
@@ -219,6 +280,21 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         }
         Expr::GetTag(expr, _) => {
             queue.push_back(expr);
+        }
+        Expr::InvokeMethodLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
+            if let InferredType::Instance { instance_type } = inferred_type {
+                if let Some(worker_expr) = instance_type.worker() {
+                    queue.push_back(worker_expr);
+                }
+            }
+
+            queue.push_back(lhs);
+            queue.extend(args.iter());
         }
 
         Expr::Literal(_, _) => {}
@@ -323,10 +399,23 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Option(Some(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Result(Ok(expr), _, _) => queue.push_front(&mut *expr),
         Expr::Result(Err(expr), _, _) => queue.push_front(&mut *expr),
-        Expr::Call(call_type, arguments, _) => {
-            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+        Expr::Call(call_type, _, arguments, inferred_type) => {
+            let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
+
+            if let Some(exprs) = exprs {
                 for expr in exprs.iter_mut() {
                     queue.push_front(expr);
+                }
+            }
+
+            if let Some(worker) = worker {
+                queue.push_front(worker);
+            }
+
+            // The expr existing in the inferred type should be visited
+            if let InferredType::Instance { instance_type } = inferred_type {
+                if let Some(worker_expr) = instance_type.worker_mut() {
+                    queue.push_back(worker_expr);
                 }
             }
 
@@ -356,6 +445,23 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(yield_expr);
         }
 
+        Expr::InvokeMethodLazy {
+            lhs,
+            args,
+            inferred_type,
+            ..
+        } => {
+            if let InferredType::Instance { instance_type } = inferred_type {
+                if let Some(worker_expr) = instance_type.worker_mut() {
+                    queue.push_front(worker_expr);
+                }
+            }
+            queue.push_front(lhs);
+            for arg in args.iter_mut() {
+                queue.push_front(arg);
+            }
+        }
+
         Expr::Unwrap(expr, _) => queue.push_front(&mut *expr),
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
@@ -368,16 +474,30 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
 }
 
 mod internal {
-    use crate::call_type::CallType;
+    use crate::call_type::{CallType, InstanceCreationType};
     use crate::Expr;
 
-    pub(crate) fn get_expressions_in_call_mut(call_type: &mut CallType) -> Option<&mut Vec<Expr>> {
+    // (args, worker in calls, worker in inferred type)
+    pub(crate) fn get_expressions_in_call_type_mut(
+        call_type: &mut CallType,
+    ) -> (Option<&mut Vec<Expr>>, Option<&mut Box<Expr>>) {
         match call_type {
-            CallType::Function(dynamic_parsed_function_name) => dynamic_parsed_function_name
-                .function
-                .raw_resource_params_mut(),
+            CallType::Function {
+                function_name,
+                worker,
+            } => (
+                function_name.function.raw_resource_params_mut(),
+                worker.as_mut(),
+            ),
 
-            _ => None,
+            CallType::InstanceCreation(instance_creation) => match instance_creation {
+                InstanceCreationType::Worker { worker_name, .. } => (None, worker_name.as_mut()),
+
+                InstanceCreationType::Resource { worker_name, .. } => (None, worker_name.as_mut()),
+            },
+
+            CallType::VariantConstructor(_) => (None, None),
+            CallType::EnumConstructor(_) => (None, None),
         }
     }
 }

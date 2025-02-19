@@ -40,10 +40,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(CallType::Function(parsed_function_name), args, inferred_type) => {
-                    if variants.contains(&parsed_function_name.to_string()) {
+                Expr::Call(CallType::Function { function_name, .. }, _, args, inferred_type) => {
+                    if variants.contains(&function_name.to_string()) {
                         *expr = Expr::Call(
-                            CallType::VariantConstructor(parsed_function_name.to_string()),
+                            CallType::VariantConstructor(function_name.to_string()),
+                            None,
                             args.clone(),
                             inferred_type.clone(),
                         );
@@ -69,6 +70,7 @@ mod internal {
                     if variants.contains(&variable_id.name()) {
                         *expr = Expr::Call(
                             CallType::VariantConstructor(variable_id.name()),
+                            None,
                             vec![],
                             inferred_type.clone(),
                         );
@@ -101,15 +103,15 @@ mod internal {
                     }
                 }
 
-                Expr::Call(CallType::Function(parsed_function_name), exprs, inferred_type) => {
-                    let key = RegistryKey::FunctionName(parsed_function_name.to_string());
+                Expr::Call(CallType::Function { function_name, .. }, _, exprs, inferred_type) => {
+                    let key = RegistryKey::FunctionName(function_name.to_string());
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
                         let variant_inferred_type = InferredType::from_variant_cases(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
-                        variant_with_args.push(parsed_function_name.to_string());
+                        variant_with_args.push(function_name.to_string());
                     }
 
                     for expr in exprs {

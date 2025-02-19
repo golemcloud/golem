@@ -305,10 +305,17 @@ impl<W: Write> Writer<W> {
                 }
             },
 
-            Expr::Call(invocation_name, params, _) => {
+            Expr::Call(invocation_name, optional_type_parameter, params, _) => {
                 let function_name = invocation_name.to_string();
 
                 self.write_str(function_name)?;
+
+                if let Some(type_parameter) = optional_type_parameter {
+                    self.write_str("[")?;
+                    self.write_str(type_parameter.value.clone())?;
+                    self.write_str("]")?;
+                }
+
                 self.write_display("(")?;
                 for (idx, param) in params.iter().enumerate() {
                     if idx != 0 {
@@ -383,6 +390,10 @@ impl<W: Write> Writer<W> {
                 self.write_display("\n")?;
                 internal::write_yield_block(self, yield_expr)?;
                 self.write_display(" } ")
+            }
+
+            Expr::InvokeMethodLazy { .. } => {
+                todo!("Invoke write back not yet supported")
             }
         }
     }

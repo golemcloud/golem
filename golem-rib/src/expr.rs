@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
+use crate::call_type::{CallType, InstanceCreationType};
+use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
@@ -34,7 +35,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, Option<TypeName>, InferredType),
@@ -65,7 +66,29 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, Option<TypeName>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, Option<TypeName>, InferredType),
-    Call(CallType, Vec<Expr>, InferredType),
+    // instance[t]("my-worker") will be parsed sd Expr::Call("instance", Some(t), vec!["my-worker"])
+    // will be parsed as Expr::Call("instance", vec!["my-worker"]).
+    // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call(InstanceCreation,..)
+    // with inferred-type as `InstanceType`. This way any variables attached to the instance creation
+    // will be having the `InstanceType`.
+    Call(
+        CallType,
+        Option<GenericTypeParameter>,
+        Vec<Expr>,
+        InferredType,
+    ),
+    // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
+    // such that `my-worker-variable-expr` (lhs) will be of the type `InferredType::InstanceType`. `lhs` will
+    // be `Expr::Call(InstanceCreation)` with type `InferredType::InstanceType`.
+    // As part of a separate type inference phase this will be converted back to `Expr::Call` with fully
+    // qualified function names (the complex version) which further takes part in all other type inference phases.
+    InvokeMethodLazy {
+        lhs: Box<Expr>,
+        method: String,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+        inferred_type: InferredType,
+    },
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),
@@ -114,6 +137,10 @@ impl Expr {
     /// string interpolation (see error_message above) etc.
     ///
     pub fn from_text(input: &str) -> Result<Expr, String> {
+        if input.trim().ends_with(';') {
+            return Err("unexpected `;` at the end of rib expression. \nnote: `;` is used to separate expressions, but it should not appear after the last expression (which is the return value)".to_string());
+        }
+
         spaces()
             .with(block().skip(eof()))
             .easy_parse(position::Stream::new(input))
@@ -166,7 +193,7 @@ impl Expr {
     }
 
     pub fn is_function_call(&self) -> bool {
-        matches!(self, Expr::Call(_, _, _))
+        matches!(self, Expr::Call(_, _, _, _))
     }
 
     pub fn is_match_expr(&self) -> bool {
@@ -250,12 +277,36 @@ impl Expr {
         cond
     }
 
-    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, args: Vec<Expr>) -> Self {
+    pub fn call(
+        dynamic_parsed_fn_name: DynamicParsedFunctionName,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        worker_name: Option<Expr>,
+        args: Vec<Expr>,
+    ) -> Self {
         Expr::Call(
-            CallType::Function(dynamic_parsed_fn_name),
+            CallType::Function {
+                function_name: dynamic_parsed_fn_name,
+                worker: worker_name.map(Box::new),
+            },
+            generic_type_parameter,
             args,
             InferredType::Unknown,
         )
+    }
+
+    pub fn invoke_worker_function(
+        lhs: Expr,
+        function_name: String,
+        generic_type_parameter: Option<GenericTypeParameter>,
+        args: Vec<Expr>,
+    ) -> Self {
+        Expr::InvokeMethodLazy {
+            lhs: Box::new(lhs),
+            method: function_name,
+            generic_type_parameter,
+            args,
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn concat(expressions: Vec<Expr>) -> Self {
@@ -391,12 +442,16 @@ impl Expr {
         )
     }
 
-    pub fn bind_global_variables_type(
+    pub fn bind_global_variable_types(
         &self,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<Self, String> {
-        let result_expr = type_inference::bind_global_variables_type(self, type_spec)?;
+        let result_expr = type_inference::bind_global_variable_types(self, type_spec)?;
         Ok(result_expr)
+    }
+
+    pub fn bind_instance_types(&mut self) {
+        type_inference::bind_instance_types(self)
     }
 
     pub fn literal(value: impl AsRef<str>) -> Self {
@@ -588,7 +643,8 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
+            | Expr::Call(_, _, _, inferred_type)
+            | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -598,10 +654,25 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
-        self.infer_call_arguments_type(function_type_registry)
+        self.bind_instance_types();
+
+        // Identifying the first fix point with method calls to infer all
+        // worker function invocations as this forms the foundation for the rest of the
+        // compilation. This is compiler doing its best to infer all the calls such
+        // as worker invokes or instance calls etc.
+        type_inference::type_inference_fix_point(Self::resolve_method_calls, self)
             .map_err(|x| vec![x])?;
+
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+
+        self.bind_instance_types();
+        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        self.infer_function_call_types(function_type_registry)
+            .map_err(|x| vec![x])?;
+
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
+
         self.check_types(function_type_registry)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
@@ -613,10 +684,13 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
-        *self = self
-            .bind_global_variables_type(type_spec)
+        self.identify_instance_creation(function_type_registry)
             .map_err(|x| vec![x])?;
-        self.bind_types();
+        *self = self
+            .bind_global_variable_types(type_spec)
+            .map_err(|x| vec![x])?;
+
+        self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
@@ -627,8 +701,14 @@ impl Expr {
         Ok(())
     }
 
-    // An inference scan is a single cycle of to-and-fro scanning of Rib expression
-    // to infer the types
+    pub fn resolve_method_calls(&mut self) -> Result<(), String> {
+        self.bind_instance_types();
+        self.infer_worker_function_invokes()
+    }
+
+    // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
+    // Not all phases of compilation will be part of this scan.
+    // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
     pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
         self.push_types_down()?;
@@ -637,6 +717,10 @@ impl Expr {
         *self = expr;
         self.infer_global_inputs();
         Ok(())
+    }
+
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), String> {
+        type_inference::infer_worker_function_invokes(self)
     }
 
     // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.
@@ -661,11 +745,18 @@ impl Expr {
         type_inference::bind_variables_of_list_reduce(self);
     }
 
-    pub fn infer_call_arguments_type(
+    pub fn identify_instance_creation(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_inference::infer_call_arguments_type(self, function_type_registry)
+        type_inference::identify_instance_creation(self, function_type_registry)
+    }
+
+    pub fn infer_function_call_types(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        type_inference::infer_function_call_types(self, function_type_registry)
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {
@@ -684,8 +775,8 @@ impl Expr {
         type_inference::infer_global_inputs(self);
     }
 
-    pub fn bind_types(&mut self) {
-        type_inference::bind_type(self);
+    pub fn bind_type_annotations(&mut self) {
+        type_inference::bind_type_annotations(self);
     }
 
     pub fn check_types(
@@ -741,7 +832,8 @@ impl Expr {
             | Expr::Or(_, _, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => {
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
                 }
@@ -789,7 +881,8 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, inferred_type) => {
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Call(_, _, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
                 }
@@ -833,13 +926,12 @@ impl Expr {
         Expr::number(big_decimal, None, InferredType::number())
     }
 
-    // TODO; introduced to minimise the number of changes in tests.
     pub fn untyped_number_with_type_name(big_decimal: BigDecimal, type_name: TypeName) -> Expr {
         Expr::number(big_decimal, Some(type_name), InferredType::number())
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd)]
 pub struct Number {
     pub value: BigDecimal,
 }
@@ -870,7 +962,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -884,7 +976,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
@@ -1351,6 +1443,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 // This is not required and kept for backward compatibility
                 let legacy_invocation_name = expr.name;
                 let call_type = expr.call_type;
+                let generic_type_parameter = expr
+                    .generic_type_parameter
+                    .map(|tp| GenericTypeParameter { value: tp });
 
                 match (legacy_invocation_name, call_type) {
                     (Some(legacy), None) => {
@@ -1360,31 +1455,61 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
                                 Expr::call(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
-                                )?, params)
+                                )?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call(name.try_into()?, params)
+                                Expr::call(name.try_into()?, generic_type_parameter, None, params)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
+                                let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
+                                let call_type = CallType::InstanceCreation(instance_creation_type);
+                                Expr::Call(
+                                    call_type,
+                                    generic_type_parameter,
+                                    vec![],
+                                    InferredType::Unknown
+                                )
+                            }
                         }
                     }
                     (_, _) => Err("Missing both call type (and legacy invocation type)")?,
+                }
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(lazy_invoke) => {
+                let lhs_proto = lazy_invoke.lhs.ok_or("Missing lhs")?;
+                let lhs = Box::new((*lhs_proto).try_into()?);
+                let method = lazy_invoke.method;
+                let generic_type_parameter = lazy_invoke.generic_type_parameter;
+                let args: Vec<Expr> = lazy_invoke
+                    .args
+                    .into_iter()
+                    .map(Expr::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter: generic_type_parameter
+                        .map(|value| GenericTypeParameter { value }),
+                    args,
+                    inferred_type: InferredType::Unknown,
                 }
             }
         };
@@ -1667,13 +1792,16 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Call(function_name, args, _) => {
+                Expr::Call(function_name, generic_type_parameter, args, _) => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
-                        golem_api_grpc::proto::golem::rib::CallExpr {
-                            name: None,
+                        Box::new(golem_api_grpc::proto::golem::rib::CallExpr {
+                            name: None, // Kept for backward compatibility
                             params: args.into_iter().map(|expr| expr.into()).collect(),
-                            call_type: Some(function_name.into()),
-                        },
+                            generic_type_parameter: generic_type_parameter.map(|t| t.value),
+                            call_type: Some(Box::new(
+                                golem_api_grpc::proto::golem::rib::CallType::from(function_name),
+                            )),
+                        }),
                     ))
                 }
                 Expr::Unwrap(expr, _) => {
@@ -1741,6 +1869,22 @@ mod protobuf {
                         yield_expr: Some(Box::new((*yield_expr).into())),
                     }),
                 )),
+                Expr::InvokeMethodLazy {
+                    lhs,
+                    method,
+                    generic_type_parameter,
+                    args,
+                    ..
+                } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(Box::new(
+                        golem_api_grpc::proto::golem::rib::LazyInvokeMethodExpr {
+                            lhs: Some(Box::new((*lhs).into())),
+                            method,
+                            generic_type_parameter: generic_type_parameter.map(|t| t.value),
+                            args: args.into_iter().map(|expr| expr.into()).collect(),
+                        },
+                    )),
+                ),
             };
 
             golem_api_grpc::proto::golem::rib::Expr { expr }
@@ -2050,6 +2194,8 @@ mod tests {
                             method: "do-something-static".to_string(),
                         },
                     },
+                    None,
+                    None,
                     vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
                 ),
                 None,
