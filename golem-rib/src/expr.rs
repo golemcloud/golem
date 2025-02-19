@@ -531,9 +531,17 @@ impl Expr {
     }
 
     // An identifier by default is global until name-binding phase is run
-    pub fn identifier(name: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
+    pub fn identifier_global(name: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
         Expr::Identifier {
             variable_id: VariableId::global(name.as_ref().to_string()),
+            type_annotation,
+            inferred_type: InferredType::Unknown,
+        }
+    }
+
+    pub fn identifier_local(name: impl AsRef<str>,  id: u32,  type_annotation: Option<TypeName>) -> Self {
+        Expr::Identifier {
+            variable_id: VariableId::local(name.as_ref(), id),
             type_annotation,
             inferred_type: InferredType::Unknown,
         }
@@ -562,6 +570,19 @@ impl Expr {
     ) -> Self {
         Expr::Let {
             variable_id: VariableId::global(name.as_ref().to_string()),
+            type_annotation,
+            expr: Box::new(expr),
+            inferred_type: InferredType::Unknown,
+        }
+    }
+
+    pub fn let_binding_with_variable_id(
+        variable_id: VariableId,
+        expr: Expr,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
+        Expr::Let {
+            variable_id,
             type_annotation,
             expr: Box::new(expr),
             inferred_type: InferredType::Unknown,
@@ -1520,7 +1541,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => {
                 let type_name = type_name.map(TypeName::try_from).transpose()?;
 
-                Expr::identifier(name.as_str(), type_name)
+                Expr::identifier_global(name.as_str(), type_name)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
@@ -2366,7 +2387,7 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::concat(vec![Expr::identifier("foo", None)]))
+            Ok(Expr::concat(vec![Expr::identifier_global("foo", None)]))
         );
 
         let input = r#""${{foo}}""#;
@@ -2393,30 +2414,30 @@ mod tests {
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::let_binding(
                 "result",
-                Expr::greater_than(Expr::identifier("x", None), Expr::identifier("y", None)),
+                Expr::greater_than(Expr::identifier_global("x", None), Expr::identifier_global("y", None)),
                 None,
             ),
             Expr::let_binding(
                 "foo",
-                Expr::option(Some(Expr::identifier("result", None))),
+                Expr::option(Some(Expr::identifier_global("result", None))),
                 None,
             ),
             Expr::let_binding(
                 "bar",
-                Expr::ok(Expr::identifier("result", None), None),
+                Expr::ok(Expr::identifier_global("result", None), None),
                 None,
             ),
             Expr::let_binding(
                 "baz",
                 Expr::pattern_match(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
                             ),
-                            Expr::identifier("x", None),
+                            Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor("none", vec![]),
@@ -2429,19 +2450,19 @@ mod tests {
             Expr::let_binding(
                 "qux",
                 Expr::pattern_match(
-                    Expr::identifier("bar", None),
+                    Expr::identifier_global("bar", None),
                     vec![
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
                             ),
-                            Expr::identifier("x", None),
+                            Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("msg", None)))],
                             ),
                             Expr::boolean(false),
                         ),
@@ -2466,11 +2487,11 @@ mod tests {
                     },
                     None,
                     None,
-                    vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
+                    vec![Expr::identifier_global("baz", None), Expr::identifier_global("qux", None)],
                 ),
                 None,
             ),
-            Expr::identifier("result", None),
+            Expr::identifier_global("result", None),
         ])
     }
 

@@ -47,7 +47,7 @@ mod tests {
     fn test_not_identifier() {
         let input = "!foo";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::not(Expr::identifier("foo", None)), "")));
+        assert_eq!(result, Ok((Expr::not(Expr::identifier_global("foo", None)), "")));
     }
 
     #[test]
@@ -58,7 +58,7 @@ mod tests {
             result,
             Ok((
                 Expr::not(Expr::sequence(
-                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                    vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
                     None
                 )),
                 ""
@@ -72,7 +72,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::not(Expr::not(Expr::identifier("foo", None))), ""))
+            Ok((Expr::not(Expr::not(Expr::identifier_global("foo", None))), ""))
         );
     }
 }

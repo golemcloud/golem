@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn test_worker_function_invoke_1() {
         let expr = Expr::from_text("worker.function-name()").unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
 
         assert_eq!(
@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn test_worker_function_invoke_2() {
         let expr = Expr::from_text("worker.function-name[foo]()").unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
         let type_parameter = GenericTypeParameter {
             value: "foo".to_string(),
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_worker_function_invoke_3() {
         let expr = Expr::from_text(r#"worker.function-name[foo](foo, bar)"#).unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let type_parameter = GenericTypeParameter {
             value: "foo".to_string(),
         };
@@ -88,7 +88,7 @@ mod tests {
                 worker_variable,
                 function_name,
                 Some(type_parameter),
-                vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]
+                vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)]
             )
         );
     }
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_worker_function_invoke_4() {
         let expr = Expr::from_text(r#"worker.function-name(foo, bar)"#).unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
 
         assert_eq!(
@@ -105,7 +105,7 @@ mod tests {
                 worker_variable,
                 function_name,
                 None,
-                vec![Expr::identifier("foo", None), Expr::identifier("bar", None)]
+                vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)]
             )
         );
     }
@@ -117,7 +117,7 @@ mod tests {
           worker.function-name(foo, bar, baz)
         "#;
         let expr = Expr::from_text(rib_expr).unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
 
         let expected = Expr::expr_block(vec![
@@ -136,9 +136,9 @@ mod tests {
                 function_name,
                 None,
                 vec![
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None),
-                    Expr::identifier("baz", None),
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None),
                 ],
             ),
         ]);
@@ -152,7 +152,7 @@ mod tests {
           worker.function-name[foo](foo, bar, baz)
         "#;
         let expr = Expr::from_text(rib_expr).unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
         let type_parameter = GenericTypeParameter {
             value: "foo".to_string(),
@@ -174,9 +174,9 @@ mod tests {
                 function_name,
                 Some(type_parameter),
                 vec![
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None),
-                    Expr::identifier("baz", None),
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None),
                 ],
             ),
         ]);
@@ -190,7 +190,7 @@ mod tests {
           worker.function-name[bar](foo, bar, baz)
         "#;
         let expr = Expr::from_text(rib_expr).unwrap();
-        let worker_variable = Expr::identifier("worker", None);
+        let worker_variable = Expr::identifier_global("worker", None);
         let function_name = "function-name".to_string();
         let type_parameter1 = GenericTypeParameter {
             value: "foo".to_string(),
@@ -216,9 +216,9 @@ mod tests {
                 function_name,
                 Some(type_parameter2),
                 vec![
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None),
-                    Expr::identifier("baz", None),
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None),
                 ],
             ),
         ]);

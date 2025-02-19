@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::identifier("bar", None), None),
+                Expr::let_binding("foo", Expr::identifier_global("bar", None), None),
                 ""
             ))
         );
@@ -96,7 +96,7 @@ mod tests {
                 Expr::let_binding(
                     "foo",
                     Expr::sequence(
-                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
                         None
                     ),
                     None
@@ -115,7 +115,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("baz", None)),
+                    Expr::equal_to(Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)),
                     None
                 ),
                 ""
@@ -132,7 +132,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::option(Some(Expr::identifier("bar", None))),
+                    Expr::option(Some(Expr::identifier_global("bar", None))),
                     None
                 ),
                 ""
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar", None), None), None),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier_global("bar", None), None), None),
                 ""
             ))
         );
@@ -172,7 +172,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
+                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))]),
                     None
                 ),
                 ""

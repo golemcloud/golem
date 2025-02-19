@@ -93,13 +93,13 @@ mod tests {
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
                 None,
-                vec![Expr::identifier("x", None)],
+                vec![Expr::identifier_global("x", None)],
             ),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 None,
                 None,
-                vec![Expr::identifier("y", None)],
+                vec![Expr::identifier_global("y", None)],
             ),
         ]);
 
@@ -128,13 +128,13 @@ mod tests {
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
                     None,
-                    vec![Expr::identifier("x", None)],
+                    vec![Expr::identifier_global("x", None)],
                 ),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     None,
                     None,
-                    vec![Expr::identifier("y", None)],
+                    vec![Expr::identifier_global("y", None)],
                 ),
             ]),
             Expr::untyped_number(BigDecimal::from(1)),
@@ -159,11 +159,11 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::pattern_match(
-            Expr::identifier("foo", None),
+            Expr::identifier_global("foo", None),
             vec![MatchArm::new(
                 ArmPattern::Constructor(
                     "some".to_string(),
-                    vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                    vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
                 ),
                 Expr::expr_block(vec![
                     Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
@@ -172,13 +172,13 @@ mod tests {
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
                         None,
-                        vec![Expr::identifier("x", None)],
+                        vec![Expr::identifier_global("x", None)],
                     ),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         None,
                         None,
-                        vec![Expr::identifier("y", None)],
+                        vec![Expr::identifier_global("y", None)],
                     ),
                 ]),
             )],
@@ -210,11 +210,11 @@ mod tests {
                 None,
             ),
             Expr::pattern_match(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 vec![MatchArm::new(
                     ArmPattern::Constructor(
                         "some".to_string(),
-                        vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
                     ),
                     Expr::expr_block(vec![
                         Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
@@ -223,13 +223,13 @@ mod tests {
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,
                             None,
-                            vec![Expr::identifier("x", None)],
+                            vec![Expr::identifier_global("x", None)],
                         ),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             None,
                             None,
-                            vec![Expr::identifier("y", None)],
+                            vec![Expr::identifier_global("y", None)],
                         ),
                     ]),
                 )],

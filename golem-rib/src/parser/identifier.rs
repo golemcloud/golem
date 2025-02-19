@@ -41,7 +41,7 @@ where
                 .skip(spaces()),
         ),
     )
-        .map(|(variable, typ)| Expr::identifier(variable, typ))
+        .map(|(variable, typ)| Expr::identifier_global(variable, typ))
         .message("Invalid identifier")
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>
@@ -80,7 +80,7 @@ mod tests {
     fn test_identifier() {
         let input = "foo";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::identifier("foo", None)));
+        assert_eq!(result, Ok(Expr::identifier_global("foo", None)));
     }
 
     #[test]

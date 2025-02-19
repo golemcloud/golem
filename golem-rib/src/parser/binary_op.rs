@@ -70,7 +70,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::greater_than(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
                 ""
             ))
         );
@@ -84,8 +84,8 @@ mod test {
             result,
             Ok((
                 Expr::greater_than_or_equal_to(
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None)
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
                 ),
                 ""
             ))
@@ -99,7 +99,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::less_than(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
                 ""
             ))
         );
@@ -113,8 +113,8 @@ mod test {
             result,
             Ok((
                 Expr::less_than_or_equal_to(
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None)
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
                 ),
                 ""
             ))
@@ -128,7 +128,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::equal_to(Expr::identifier("foo", None), Expr::identifier("bar", None)),
+                Expr::equal_to(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
                 ""
             ))
         );
@@ -142,8 +142,8 @@ mod test {
             result,
             Expr::cond(
                 Expr::boolean(true),
-                Expr::greater_than(Expr::identifier("foo", None), Expr::identifier("bar", None)),
-                Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("foo", None)),
+                Expr::greater_than(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
+                Expr::equal_to(Expr::identifier_global("bar", None), Expr::identifier_global("foo", None)),
             ),
         );
     }
@@ -158,12 +158,12 @@ mod test {
                 Expr::sequence(
                     vec![
                         Expr::greater_than_or_equal_to(
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None)
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
                         ),
                         Expr::less_than(
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None)
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
                         )
                     ],
                     None
@@ -253,8 +253,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
-                    Expr::select_field(Expr::identifier("baz", None), "qux", None),
+                    Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+                    Expr::select_field(Expr::identifier_global("baz", None), "qux", None),
                 ),
                 ""
             ))
@@ -269,8 +269,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::select_index(Expr::identifier("foo", None), 1),
-                    Expr::select_index(Expr::identifier("bar", None), 2),
+                    Expr::select_index(Expr::identifier_global("foo", None), 1),
+                    Expr::select_index(Expr::identifier_global("bar", None), 2),
                 ),
                 ""
             ))
@@ -285,8 +285,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::ok(Expr::identifier("foo", None), None),
-                    Expr::ok(Expr::identifier("bar", None), None),
+                    Expr::ok(Expr::identifier_global("foo", None), None),
+                    Expr::ok(Expr::identifier_global("bar", None), None),
                 ),
                 ""
             ))
@@ -301,8 +301,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::option(Some(Expr::identifier("foo", None))),
-                    Expr::option(Some(Expr::identifier("bar", None))),
+                    Expr::option(Some(Expr::identifier_global("foo", None))),
+                    Expr::option(Some(Expr::identifier_global("bar", None))),
                 ),
                 ""
             ))
@@ -356,15 +356,15 @@ mod test {
                     (
                         "foo".to_string(),
                         Expr::greater_than(
-                            Expr::identifier("bar", None),
-                            Expr::identifier("baz", None)
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None)
                         )
                     ),
                     (
                         "baz".to_string(),
                         Expr::equal_to(
-                            Expr::identifier("bar", None),
-                            Expr::identifier("foo", None)
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("foo", None)
                         )
                     ),
                 ]),

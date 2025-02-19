@@ -72,7 +72,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::identifier("foo", None), None), ""))
+            Ok((Expr::ok(Expr::identifier_global("foo", None), None), ""))
         );
     }
 
@@ -82,7 +82,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::identifier("foo", None), None), ""))
+            Ok((Expr::err(Expr::identifier_global("foo", None), None), ""))
         );
     }
 
@@ -95,7 +95,7 @@ mod tests {
             Ok((
                 Expr::ok(
                     Expr::sequence(
-                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
                         None
                     ),
                     None
@@ -114,7 +114,7 @@ mod tests {
             Ok((
                 Expr::err(
                     Expr::sequence(
-                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
                         None
                     ),
                     None
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::ok(Expr::err(Expr::identifier("foo", None), None), None),
+                Expr::ok(Expr::err(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::err(Expr::ok(Expr::identifier("foo", None), None), None),
+                Expr::err(Expr::ok(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::ok(Expr::ok(Expr::identifier("foo", None), None), None),
+                Expr::ok(Expr::ok(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::err(Expr::err(Expr::identifier("foo", None), None), None),
+                Expr::err(Expr::err(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );

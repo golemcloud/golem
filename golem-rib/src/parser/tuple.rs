@@ -64,7 +64,7 @@ mod tests {
         let result = rib_expr()
             .easy_parse(position::Stream::new(input))
             .map(|x| x.0);
-        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier("foo", None)])));
+        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier_global("foo", None)])));
     }
 
     #[test]
@@ -75,8 +75,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None)
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
                 ]),
                 ""
             ))
@@ -92,11 +92,11 @@ mod tests {
             Ok((
                 Expr::tuple(vec![
                     Expr::sequence(
-                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
                         None
                     ),
                     Expr::sequence(
-                        vec![Expr::identifier("baz", None), Expr::identifier("qux", None)],
+                        vec![Expr::identifier_global("baz", None), Expr::identifier_global("qux", None)],
                         None
                     )
                 ]),
@@ -113,8 +113,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
-                    Expr::record(vec![("baz".to_string(), Expr::identifier("qux", None))])
+                    Expr::record(vec![("foo".to_string(), Expr::identifier_global("bar", None))]),
+                    Expr::record(vec![("baz".to_string(), Expr::identifier_global("qux", None))])
                 ]),
                 ""
             ))
@@ -143,12 +143,12 @@ mod tests {
             Ok((
                 Expr::tuple(vec![
                     Expr::tuple(vec![
-                        Expr::identifier("foo", None),
-                        Expr::identifier("bar", None)
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
                     ]),
                     Expr::tuple(vec![
-                        Expr::identifier("baz", None),
-                        Expr::identifier("qux", None)
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None)
                     ])
                 ]),
                 ""
@@ -164,8 +164,8 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::ok(Expr::identifier("foo", None), None),
-                    Expr::err(Expr::identifier("bar", None), None)
+                    Expr::ok(Expr::identifier_global("foo", None), None),
+                    Expr::err(Expr::identifier_global("bar", None), None)
                 ]),
                 ""
             ))
@@ -180,7 +180,7 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::option(Some(Expr::identifier("foo", None))),
+                    Expr::option(Some(Expr::identifier_global("foo", None))),
                     Expr::option(None)
                 ]),
                 ""
@@ -197,14 +197,14 @@ mod tests {
             Ok((
                 Expr::tuple(vec![
                     Expr::cond(
-                        Expr::identifier("foo", None),
-                        Expr::identifier("bar", None),
-                        Expr::identifier("baz", None)
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
                     ),
                     Expr::cond(
-                        Expr::identifier("qux", None),
-                        Expr::identifier("quux", None),
-                        Expr::identifier("quuz", None)
+                        Expr::identifier_global("qux", None),
+                        Expr::identifier_global("quux", None),
+                        Expr::identifier_global("quuz", None)
                     )
                 ]),
                 ""

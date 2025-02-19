@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_1() {
-        let left = Expr::identifier("x", None);
-        let right = Expr::identifier("x", None);
+        let left = Expr::identifier_global("x", None);
+        let right = Expr::identifier_global("x", None);
 
         assert!(equivalent_exprs(&left, &right));
     }
@@ -335,8 +335,8 @@ mod tests {
         ]);
         let right = InferredType::AllOf(vec![InferredType::Str, InferredType::Unknown]);
 
-        let left = Expr::identifier("x", None).add_infer_type(left);
-        let right = Expr::identifier("x", None).add_infer_type(right);
+        let left = Expr::identifier_global("x", None).add_infer_type(left);
+        let right = Expr::identifier_global("x", None).add_infer_type(right);
 
         assert!(equivalent_exprs(&left, &right));
     }
@@ -350,16 +350,16 @@ mod tests {
             InferredType::OneOf(vec![InferredType::U64, InferredType::U32]),
         ]);
 
-        let left = Expr::identifier("x", None).add_infer_type(left);
-        let right = Expr::identifier("x", None).add_infer_type(right);
+        let left = Expr::identifier_global("x", None).add_infer_type(left);
+        let right = Expr::identifier_global("x", None).add_infer_type(right);
 
         assert!(!equivalent_exprs(&left, &right));
     }
 
     #[test]
     fn test_expr_comparison_4() {
-        let left_identifier = Expr::identifier("x", None);
-        let right_identifier = Expr::identifier("x", None);
+        let left_identifier = Expr::identifier_global("x", None);
+        let right_identifier = Expr::identifier_global("x", None);
 
         let left = Expr::let_binding("x", left_identifier, None);
         let right = Expr::let_binding("x", right_identifier, None);
@@ -369,11 +369,11 @@ mod tests {
 
     #[test]
     fn test_expr_comparison_5() {
-        let left_identifier = Expr::identifier("x", None);
-        let right_identifier = Expr::identifier("x", None);
+        let left_identifier = Expr::identifier_global("x", None);
+        let right_identifier = Expr::identifier_global("x", None);
         let cond = Expr::greater_than(left_identifier, right_identifier);
-        let then_ = Expr::identifier("x", None);
-        let else_ = Expr::identifier("x", None);
+        let then_ = Expr::identifier_global("x", None);
+        let else_ = Expr::identifier_global("x", None);
 
         let left = Expr::cond(cond.clone(), then_.clone(), else_.clone());
         let right = Expr::cond(cond, then_, else_);
@@ -391,49 +391,23 @@ mod tests {
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
             .unwrap();
-        let expected = Expr::ExprBlock(
-            vec![
-                Expr::Let(
-                    VariableId::local("x", 0),
-                    Some(TypeName::U64),
-                    Box::new(Expr::Number(
-                        Number {
-                            value: BigDecimal::from(1),
-                        },
-                        None,
-                        InferredType::U64,
-                    )),
-                    InferredType::Unknown,
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding_with_variable_id(
+                VariableId::local("x", 0),
+                Expr::number(BigDecimal::from(1), None, InferredType::U64),
+                Some(TypeName::U64),
+            ),
+            Expr::cond(
+                Expr::equal_to(
+                    Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
+                    Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
                 ),
-                Expr::Cond(
-                    Box::new(Expr::EqualTo(
-                        Box::new(Expr::Identifier(
-                            VariableId::local("x", 0),
-                            None,
-                            InferredType::U64,
-                        )),
-                        Box::new(Expr::Identifier(
-                            VariableId::local("x", 0),
-                            None,
-                            InferredType::U64,
-                        )),
-                        InferredType::Bool,
-                    )),
-                    Box::new(Expr::Identifier(
-                        VariableId::local("x", 0),
-                        None,
-                        InferredType::U64,
-                    )),
-                    Box::new(Expr::Identifier(
-                        VariableId::global("y".to_string()),
-                        None,
-                        InferredType::U64,
-                    )),
-                    InferredType::U64,
-                ),
-            ],
-            InferredType::U64,
-        );
+                Expr::identifier_local("x", 0, None).with_inferred_type(InferredType::U64),
+                Expr::identifier_global("y", None).with_inferred_type(InferredType::U64),
+            )
+            .with_inferred_type(InferredType::U64),
+        ])
+        .with_inferred_type(InferredType::U64);
 
         assert_eq!(expr, expected)
     }
