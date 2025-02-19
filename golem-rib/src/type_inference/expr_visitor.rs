@@ -276,11 +276,11 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.extend(args.iter())
         }
         Expr::Unwrap { expr, .. } => queue.push_back(expr),
-        Expr::And{ lhs, rhs, ..} => {
+        Expr::And { lhs, rhs, .. } => {
             queue.push_back(lhs);
             queue.push_back(rhs);
         }
-        Expr::Or{lhs, rhs, ..} => {
+        Expr::Or { lhs, rhs, .. } => {
             queue.push_back(lhs);
             queue.push_back(rhs);
         }
@@ -302,7 +302,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.push_back(init_value_expr);
             queue.push_back(yield_expr);
         }
-        Expr::GetTag { expr, ..} => {
+        Expr::GetTag { expr, .. } => {
             queue.push_back(expr);
         }
         Expr::InvokeMethodLazy {
@@ -321,13 +321,13 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.extend(args.iter());
         }
 
-        Expr::Literal{..} => {}
-        Expr::Number{..} => {}
-        Expr::Flags{..} => {}
-        Expr::Identifier{..} => {}
-        Expr::Boolean{..} => {}
-        Expr::Option{expr: None, ..} => {}
-        Expr::Throw{..} => {}
+        Expr::Literal { .. } => {}
+        Expr::Number { .. } => {}
+        Expr::Flags { .. } => {}
+        Expr::Identifier { .. } => {}
+        Expr::Boolean { .. } => {}
+        Expr::Option { expr: None, .. } => {}
+        Expr::Throw { .. } => {}
     }
 }
 
@@ -404,11 +404,11 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs);
         }
-        Expr::And{lhs, rhs, ..} => {
+        Expr::And { lhs, rhs, .. } => {
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs)
         }
-        Expr::Or{lhs, rhs, ..} => {
+        Expr::Or { lhs, rhs, .. } => {
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs)
         }
@@ -447,7 +447,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_front(expr);
             }
         }
-        Expr::GetTag{ expr, .. } => {
+        Expr::GetTag { expr, .. } => {
             queue.push_front(&mut *expr);
         }
         Expr::ListComprehension {
@@ -486,14 +486,14 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             }
         }
 
-        Expr::Unwrap{expr, ..} => queue.push_front(&mut *expr),
-        Expr::Literal{..} => {}
-        Expr::Number{..} => {}
-        Expr::Flags{..} => {}
-        Expr::Identifier{..}=> {}
-        Expr::Boolean{..} => {}
-        Expr::Option{expr: None, ..} => {}
-        Expr::Throw{..} => {}
+        Expr::Unwrap { expr, .. } => queue.push_front(&mut *expr),
+        Expr::Literal { .. } => {}
+        Expr::Number { .. } => {}
+        Expr::Flags { .. } => {}
+        Expr::Identifier { .. } => {}
+        Expr::Boolean { .. } => {}
+        Expr::Option { expr: None, .. } => {}
+        Expr::Throw { .. } => {}
     }
 }
 

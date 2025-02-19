@@ -203,7 +203,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::record(vec![("foo".to_string(), Expr::identifier_global("bar", None))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 "foo",
                 None
             ))
@@ -217,7 +220,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::record(vec![("foo".to_string(), Expr::identifier_global("bar", None))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 "foo",
                 Some(TypeName::U32)
             ))
@@ -365,14 +371,18 @@ mod tests {
                     MatchArm::new(
                         ArmPattern::constructor(
                             "ok",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
                         Expr::identifier_global("x", None),
                     ),
                     MatchArm::new(
                         ArmPattern::constructor(
                             "err",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
                         Expr::identifier_global("x", None),
                     ),
@@ -383,7 +393,9 @@ mod tests {
                     MatchArm::new(
                         ArmPattern::constructor(
                             "some",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
                         Expr::identifier_global("x", None),
                     ),

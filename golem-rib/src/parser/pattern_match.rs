@@ -402,7 +402,9 @@ mod tests {
                     vec![MatchArm::new(
                         ArmPattern::Constructor(
                             "Foo".to_string(),
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
                         Expr::identifier_global("bar", None)
                     )]
@@ -426,14 +428,18 @@ mod tests {
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
                             Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
                             Expr::identifier_global("x", None),
                         ),
@@ -444,7 +450,9 @@ mod tests {
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
                             Expr::identifier_global("x", None),
                         ),

@@ -26,7 +26,12 @@ pub fn infer_function_call_types(
     queue.push_back(expr);
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call{ call_type, args, inferred_type, ..} => {
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
                 internal::resolve_call_argument_types(
                     call_type,
                     function_type_registry,
@@ -535,13 +540,13 @@ mod function_parameters_inference_tests {
             },
             None,
             None,
-            vec![Expr::identifier_global(
-                "x".to_string(),
-                None,
-            ).with_inferred_type(InferredType::U64)],
-        ).with_inferred_type(InferredType::Sequence(vec![]));
+            vec![Expr::identifier_global("x".to_string(), None)
+                .with_inferred_type(InferredType::U64)],
+        )
+        .with_inferred_type(InferredType::Sequence(vec![]));
 
-        let expected = Expr::expr_block(vec![let_binding, call_expr]).with_inferred_type(InferredType::Unknown);
+        let expected = Expr::expr_block(vec![let_binding, call_expr])
+            .with_inferred_type(InferredType::Unknown);
 
         assert_eq!(expr, expected);
     }

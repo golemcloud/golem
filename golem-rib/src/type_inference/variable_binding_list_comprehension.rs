@@ -52,7 +52,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Identifier{ variable_id, ..} => {
+                Expr::Identifier { variable_id, .. } => {
                     if variable.name() == variable_id.name() {
                         *variable_id = variable.clone();
                     }

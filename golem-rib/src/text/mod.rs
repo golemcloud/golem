@@ -94,8 +94,14 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_multiple() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::identifier_global("request", None)),
-            ("field".to_string(), Expr::identifier_global("request", None)),
+            (
+                "field".to_string(),
+                Expr::identifier_global("request", None),
+            ),
+            (
+                "field".to_string(),
+                Expr::identifier_global("request", None),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "{field: request, field: request}".to_string();
@@ -1280,7 +1286,8 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
-        let input_expr = Expr::select_field(Expr::identifier_global("request", None), "field", None);
+        let input_expr =
+            Expr::select_field(Expr::identifier_global("request", None), "field", None);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "request.field".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1580,7 +1587,11 @@ mod match_tests {
                     ),
                     Expr::cond(
                         Expr::equal_to(
-                            Expr::select_field(Expr::identifier_global("request", None), "foo", None),
+                            Expr::select_field(
+                                Expr::identifier_global("request", None),
+                                "foo",
+                                None,
+                            ),
                             Expr::literal("bar"),
                         ),
                         Expr::literal("success"),
@@ -1866,7 +1877,10 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_tuple() {
         let input_expr = Expr::cond(
-            Expr::equal_to(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
+            Expr::equal_to(
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+            ),
             Expr::tuple(vec![
                 Expr::identifier_global("foo", None),
                 Expr::identifier_global("bar", None),
@@ -1886,7 +1900,10 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_sequence() {
         let input_expr = Expr::cond(
-            Expr::equal_to(Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)),
+            Expr::equal_to(
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+            ),
             Expr::sequence(
                 vec![
                     Expr::identifier_global("request", None),
@@ -1895,7 +1912,10 @@ mod if_cond_tests {
                 None,
             ),
             Expr::sequence(
-                vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                ],
                 None,
             ),
         );

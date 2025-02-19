@@ -21,40 +21,67 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Let { type_annotation, expr, ..} => {
+            Expr::Let {
+                type_annotation,
+                expr,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     internal::override_type(expr, type_name.clone().into());
                 }
                 queue.push_back(expr);
             }
 
-            Expr::Number {  type_annotation, inferred_type, ..} => {
+            Expr::Number {
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
             }
 
-            Expr::SelectField{ expr,  type_annotation, inferred_type, ..} => {
+            Expr::SelectField {
+                expr,
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex { expr,  type_annotation, inferred_type, .. } => {
+            Expr::SelectIndex {
+                expr,
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
                 queue.push_back(expr);
             }
 
-            Expr::Identifier{ type_annotation, inferred_type, ..}  => {
+            Expr::Identifier {
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
             }
 
-            Expr::Option{ expr, type_annotation, inferred_type, ..} => {
+            Expr::Option {
+                expr,
+                type_annotation,
+                inferred_type,
+                ..
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
@@ -64,7 +91,11 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 }
             }
 
-            Expr::Result{ expr, type_annotation, inferred_type} => {
+            Expr::Result {
+                expr,
+                type_annotation,
+                inferred_type,
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
@@ -75,7 +106,11 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 }
             }
 
-            Expr::Sequence{ exprs, type_annotation, inferred_type} => {
+            Expr::Sequence {
+                exprs,
+                type_annotation,
+                inferred_type,
+            } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
                 }
@@ -158,11 +193,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding(
             "x",
-            Expr::number(
-                BigDecimal::from(1),
-                None,
-                InferredType::U64,
-            ),
+            Expr::number(BigDecimal::from(1), None, InferredType::U64),
             Some(TypeName::U64),
         );
 
@@ -185,8 +216,9 @@ mod type_binding_tests {
                 None,
                 InferredType::number(),
             )),
-            TypeName::Option(Box::new(TypeName::U64))
-        ).with_inferred_type(InferredType::Option(Box::new(InferredType::U64)),);
+            TypeName::Option(Box::new(TypeName::U64)),
+        )
+        .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)));
 
         assert_eq!(expr, expected);
     }

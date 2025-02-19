@@ -64,7 +64,10 @@ mod tests {
         let result = rib_expr()
             .easy_parse(position::Stream::new(input))
             .map(|x| x.0);
-        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier_global("foo", None)])));
+        assert_eq!(
+            result,
+            Ok(Expr::tuple(vec![Expr::identifier_global("foo", None)]))
+        );
     }
 
     #[test]
@@ -92,11 +95,17 @@ mod tests {
             Ok((
                 Expr::tuple(vec![
                     Expr::sequence(
-                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
                         None
                     ),
                     Expr::sequence(
-                        vec![Expr::identifier_global("baz", None), Expr::identifier_global("qux", None)],
+                        vec![
+                            Expr::identifier_global("baz", None),
+                            Expr::identifier_global("qux", None)
+                        ],
                         None
                     )
                 ]),
@@ -113,8 +122,14 @@ mod tests {
             result,
             Ok((
                 Expr::tuple(vec![
-                    Expr::record(vec![("foo".to_string(), Expr::identifier_global("bar", None))]),
-                    Expr::record(vec![("baz".to_string(), Expr::identifier_global("qux", None))])
+                    Expr::record(vec![(
+                        "foo".to_string(),
+                        Expr::identifier_global("bar", None)
+                    )]),
+                    Expr::record(vec![(
+                        "baz".to_string(),
+                        Expr::identifier_global("qux", None)
+                    )])
                 ]),
                 ""
             ))

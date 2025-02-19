@@ -95,7 +95,10 @@ mod tests {
             Ok((
                 Expr::ok(
                     Expr::sequence(
-                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
                         None
                     ),
                     None
@@ -114,7 +117,10 @@ mod tests {
             Ok((
                 Expr::err(
                     Expr::sequence(
-                        vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
                         None
                     ),
                     None

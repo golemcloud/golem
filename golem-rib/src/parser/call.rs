@@ -304,7 +304,10 @@ mod function_call_tests {
                 },
                 None,
                 None,
-                vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                vec![
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None),
+                ],
             ),
             "",
         ));
@@ -456,7 +459,10 @@ mod function_call_tests {
                 None,
                 None,
                 vec![
-                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))]),
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None),
+                    )]),
                     Expr::identifier_global("qux", None),
                 ],
             ),
@@ -480,8 +486,14 @@ mod function_call_tests {
                 None,
                 None,
                 vec![
-                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))]),
-                    Expr::record(vec![("qux".to_string(), Expr::identifier_global("quux", None))]),
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None),
+                    )]),
+                    Expr::record(vec![(
+                        "qux".to_string(),
+                        Expr::identifier_global("quux", None),
+                    )]),
                 ],
             ),
             "",
@@ -504,8 +516,14 @@ mod function_call_tests {
                 None,
                 None,
                 vec![
-                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))]),
-                    Expr::record(vec![("qux".to_string(), Expr::identifier_global("quux", None))]),
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None),
+                    )]),
+                    Expr::record(vec![(
+                        "qux".to_string(),
+                        Expr::identifier_global("quux", None),
+                    )]),
                     Expr::identifier_global("quuz", None),
                 ],
             ),
@@ -529,7 +547,10 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::sequence(
-                    vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                    vec![
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None),
+                    ],
                     None,
                 )],
             ),
@@ -554,7 +575,10 @@ mod function_call_tests {
                 None,
                 vec![
                     Expr::sequence(
-                        vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None),
+                        ],
                         None,
                     ),
                     Expr::identifier_global("qux", None),
@@ -581,7 +605,10 @@ mod function_call_tests {
                 None,
                 vec![
                     Expr::sequence(
-                        vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None),
+                        ],
                         None,
                     ),
                     Expr::sequence(

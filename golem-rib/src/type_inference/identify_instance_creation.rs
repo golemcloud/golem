@@ -42,7 +42,9 @@ mod internal {
         queue.push_front(expr);
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Let { variable_id, expr, ..} => {
+                Expr::Let {
+                    variable_id, expr, ..
+                } => {
                     queue.push_front(expr);
 
                     if variable_id.name() == "instance" {
@@ -52,7 +54,7 @@ mod internal {
                         );
                     }
                 }
-                Expr::Identifier{variable_id, ..}=> {
+                Expr::Identifier { variable_id, .. } => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         return Err(concat!(
                         "`instance` is a reserved keyword.\n ",

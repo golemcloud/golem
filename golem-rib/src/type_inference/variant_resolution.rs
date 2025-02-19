@@ -45,8 +45,9 @@ mod internal {
                         *expr = Expr::call(
                             CallType::VariantConstructor(function_name.to_string()),
                             None,
-                            args.clone()
-                        ).with_inferred_type(   inferred_type.clone(),);
+                            args.clone(),
+                        )
+                        .with_inferred_type(inferred_type.clone());
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -65,13 +66,18 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier{ variable_id,  inferred_type, ..} => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     if variants.contains(&variable_id.name()) {
                         *expr = Expr::call(
                             CallType::VariantConstructor(variable_id.name()),
                             None,
-                            vec![]
-                        ).with_inferred_type( inferred_type.clone(),);
+                            vec![],
+                        )
+                        .with_inferred_type(inferred_type.clone());
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -90,7 +96,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier{ variable_id, inferred_type, ..} => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     let key = RegistryKey::FunctionName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
                         function_type_registry.types.get(&key)
@@ -101,7 +111,12 @@ mod internal {
                     }
                 }
 
-                Expr::Call{ call_type: CallType::Function { function_name, .. },  args, inferred_type, ..} => {
+                Expr::Call {
+                    call_type: CallType::Function { function_name, .. },
+                    args,
+                    inferred_type,
+                    ..
+                } => {
                     let key = RegistryKey::FunctionName(function_name.to_string());
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)

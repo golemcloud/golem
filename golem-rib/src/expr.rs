@@ -465,7 +465,7 @@ impl Expr {
             call_type,
             generic_type_parameter,
             args,
-            inferred_type: InferredType::Unknown
+            inferred_type: InferredType::Unknown,
         }
     }
 
@@ -552,7 +552,11 @@ impl Expr {
         }
     }
 
-    pub fn identifier_local(name: impl AsRef<str>,  id: u32,  type_annotation: Option<TypeName>) -> Self {
+    pub fn identifier_local(
+        name: impl AsRef<str>,
+        id: u32,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::Identifier {
             variable_id: VariableId::local(name.as_ref(), id),
             type_annotation,
@@ -560,7 +564,10 @@ impl Expr {
         }
     }
 
-    pub fn identifier_with_variable_id(variable_id: VariableId, type_annotation: Option<TypeName>) -> Self {
+    pub fn identifier_with_variable_id(
+        variable_id: VariableId,
+        type_annotation: Option<TypeName>,
+    ) -> Self {
         Expr::Identifier {
             variable_id,
             type_annotation,
@@ -2128,11 +2135,13 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::ThrowExpr { message },
                     ))
                 }
-                Expr::GetTag { expr, ..} => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tag(
-                    Box::new(golem_api_grpc::proto::golem::rib::GetTagExpr {
-                        expr: Some(Box::new((*expr).into())),
-                    }),
-                )),
+                Expr::GetTag { expr, .. } => {
+                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tag(
+                        Box::new(golem_api_grpc::proto::golem::rib::GetTagExpr {
+                            expr: Some(Box::new((*expr).into())),
+                        }),
+                    ))
+                }
                 Expr::And { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::And(
                         Box::new(golem_api_grpc::proto::golem::rib::AndExpr {
@@ -2435,7 +2444,10 @@ mod tests {
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
             Expr::let_binding(
                 "result",
-                Expr::greater_than(Expr::identifier_global("x", None), Expr::identifier_global("y", None)),
+                Expr::greater_than(
+                    Expr::identifier_global("x", None),
+                    Expr::identifier_global("y", None),
+                ),
                 None,
             ),
             Expr::let_binding(
@@ -2456,7 +2468,9 @@ mod tests {
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None,
+                                )))],
                             ),
                             Expr::identifier_global("x", None),
                         ),
@@ -2476,14 +2490,18 @@ mod tests {
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None,
+                                )))],
                             ),
                             Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global("msg", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "msg", None,
+                                )))],
                             ),
                             Expr::boolean(false),
                         ),
@@ -2508,7 +2526,10 @@ mod tests {
                     },
                     None,
                     None,
-                    vec![Expr::identifier_global("baz", None), Expr::identifier_global("qux", None)],
+                    vec![
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None),
+                    ],
                 ),
                 None,
             ),

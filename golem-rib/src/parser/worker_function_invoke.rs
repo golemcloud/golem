@@ -88,7 +88,10 @@ mod tests {
                 worker_variable,
                 function_name,
                 Some(type_parameter),
-                vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)]
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ]
             )
         );
     }
@@ -105,7 +108,10 @@ mod tests {
                 worker_variable,
                 function_name,
                 None,
-                vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)]
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ]
             )
         );
     }

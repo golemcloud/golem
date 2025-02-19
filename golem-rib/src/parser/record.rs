@@ -110,7 +110,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![("foo".to_string(), Expr::identifier_global("bar", None))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 ""
             ))
         );
@@ -161,7 +164,10 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))])
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None)
+                    )])
                 )]),
                 ""
             ))
@@ -197,7 +203,10 @@ mod tests {
                 Expr::record(vec![(
                     "foo".to_string(),
                     Expr::sequence(
-                        vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None)
+                        ],
                         None
                     )
                 )]),
@@ -229,7 +238,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![("err".to_string(), Expr::identifier_global("bar", None))]),
+                Expr::record(vec![(
+                    "err".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 ""
             ))
         );

@@ -163,7 +163,9 @@ mod tests {
             vec![MatchArm::new(
                 ArmPattern::Constructor(
                     "some".to_string(),
-                    vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                    vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                        "x", None,
+                    )))],
                 ),
                 Expr::expr_block(vec![
                     Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
@@ -214,7 +216,9 @@ mod tests {
                 vec![MatchArm::new(
                     ArmPattern::Constructor(
                         "some".to_string(),
-                        vec![ArmPattern::Literal(Box::new(Expr::identifier_global("x", None)))],
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                            "x", None,
+                        )))],
                     ),
                     Expr::expr_block(vec![
                         Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),

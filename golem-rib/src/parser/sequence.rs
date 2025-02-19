@@ -85,7 +85,10 @@ mod tests {
             result,
             Ok((
                 Expr::sequence(
-                    vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ),
                 ""
@@ -135,11 +138,17 @@ mod tests {
                 Expr::sequence(
                     vec![
                         Expr::sequence(
-                            vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                            vec![
+                                Expr::identifier_global("foo", None),
+                                Expr::identifier_global("bar", None)
+                            ],
                             None
                         ),
                         Expr::sequence(
-                            vec![Expr::identifier_global("bar", None), Expr::identifier_global("bar", None)],
+                            vec![
+                                Expr::identifier_global("bar", None),
+                                Expr::identifier_global("bar", None)
+                            ],
                             None
                         )
                     ],

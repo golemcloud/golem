@@ -128,7 +128,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::option(Some(Expr::option(Some(Expr::identifier_global("foo", None))))),
+                Expr::option(Some(Expr::option(Some(Expr::identifier_global(
+                    "foo", None
+                ))))),
                 ""
             ))
         );
@@ -158,7 +160,10 @@ mod tests {
             result,
             Ok((
                 Expr::option(Some(Expr::sequence(
-                    vec![Expr::identifier_global("foo", None), Expr::identifier_global("bar", None)],
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ))),
                 ""

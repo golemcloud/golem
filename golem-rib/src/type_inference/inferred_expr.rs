@@ -48,10 +48,11 @@ impl InferredExpr {
         while let Some(expr) = queue.pop_back() {
             match expr {
                 Expr::Call {
-                    call_type: CallType::Function {
-                        function_name,
-                        worker,
-                    },
+                    call_type:
+                        CallType::Function {
+                            function_name,
+                            worker,
+                        },
                     ..
                 } => {
                     worker_calls.push(function_name.clone());

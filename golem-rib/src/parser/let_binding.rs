@@ -96,7 +96,10 @@ mod tests {
                 Expr::let_binding(
                     "foo",
                     Expr::sequence(
-                        vec![Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)],
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None)
+                        ],
                         None
                     ),
                     None
@@ -115,7 +118,10 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(Expr::identifier_global("bar", None), Expr::identifier_global("baz", None)),
+                    Expr::equal_to(
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ),
                     None
                 ),
                 ""
@@ -147,7 +153,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier_global("bar", None), None), None),
+                Expr::let_binding(
+                    "foo",
+                    Expr::ok(Expr::identifier_global("bar", None), None),
+                    None
+                ),
                 ""
             ))
         );
@@ -172,7 +182,10 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier_global("baz", None))]),
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None)
+                    )]),
                     None
                 ),
                 ""
