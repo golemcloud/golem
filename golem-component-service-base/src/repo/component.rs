@@ -635,6 +635,7 @@ impl<Owner: ComponentOwner> DbComponentRepo<sqlx::Postgres, Owner> {
                 file_permissions
             FROM component_files
             WHERE component_id = $1 AND version = $2
+            ORDER BY file_path
             "#,
         )
         .bind(component_id)
@@ -1015,6 +1016,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
+                ORDER BY cv.version
                 "#,
         )
         .bind(component_id)
@@ -1050,6 +1052,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
+                ORDER BY cv.version
                 "#,
         )
         .bind(component_id)
@@ -1084,6 +1087,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
+                ORDER BY cv.component_id, cv.version
                 "#,
         )
         .bind(namespace)
@@ -1117,6 +1121,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
+                ORDER BY cv.component_id, cv.version
                 "#,
         )
         .bind(namespace)
@@ -1307,6 +1312,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
+                ORDER BY cv.version
                 "#,
         )
         .bind(namespace)
@@ -1342,6 +1348,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
+                ORDER BY cv.version
                 "#,
         )
         .bind(namespace)
