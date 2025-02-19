@@ -293,7 +293,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Let{expr, ..} => {
+            Expr::Let { expr, .. } => {
                 queue.push(expr);
             }
             Expr::Literal(_, inferred_type) => {
@@ -332,7 +332,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
             Expr::Boolean(_, _) => {}
-            Expr::Concat{exprs, ..} => {
+            Expr::Concat { exprs, .. } => {
                 queue.extend(exprs);
             }
             Expr::ExprBlock(expr, inferred_type) => {

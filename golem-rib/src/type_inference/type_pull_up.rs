@@ -138,7 +138,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::Concat{exprs, ..} => {
+            Expr::Concat { exprs, .. } => {
                 internal::handle_concat(exprs, &mut inferred_type_stack);
             }
 
@@ -1469,7 +1469,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_unwrap() {
         let mut number = Expr::untyped_number(BigDecimal::from(1));
-        number.override_type_type_mut(InferredType::F64);
+        number.override_type_mut(InferredType::F64);
         let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(
@@ -1481,7 +1481,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_tag() {
         let mut number = Expr::untyped_number(BigDecimal::from(1));
-        number.override_type_type_mut(InferredType::F64);
+        number.override_type_mut(InferredType::F64);
         let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(

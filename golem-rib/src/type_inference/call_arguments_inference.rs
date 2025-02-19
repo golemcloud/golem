@@ -26,7 +26,7 @@ pub fn infer_function_call_types(
     queue.push_back(expr);
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call(call_type, _, args, inferred_type) => {
+            Expr::Call{ call_type, args, inferred_type, ..} => {
                 internal::resolve_call_argument_types(
                     call_type,
                     function_type_registry,
@@ -526,23 +526,22 @@ mod function_parameters_inference_tests {
 
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
-        let call_expr = Expr::Call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
+        let call_expr = Expr::call(
+            DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
-            }),
+            },
             None,
-            vec![Expr::Identifier(
-                VariableId::global("x".to_string()),
+            None,
+            vec![Expr::identifier(
+                "x".to_string(),
                 None,
-                InferredType::U64, // Call argument's types are updated
-            )],
-            InferredType::Sequence(vec![]), // Call Expressions return type is updated
-        );
+            ).override_type(InferredType::U64)],
+        ).override_type(InferredType::Sequence(vec![]));
 
-        let expected = Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Unknown);
+        let expected = Expr::expr_block(vec![let_binding, call_expr]).override_type(InferredType::Unknown);
 
         assert_eq!(expr, expected);
     }

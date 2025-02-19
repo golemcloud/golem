@@ -37,14 +37,14 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type) => {
+                Expr::Identifier { variable_id, inferred_type, ..} => {
                     if enum_cases.cases.contains(&variable_id.name()) {
-                        *expr = Expr::Call(
-                            CallType::EnumConstructor(variable_id.name()),
-                            None,
-                            vec![],
-                            inferred_type.clone(),
-                        );
+                        *expr = Expr::Call {
+                            call_type: CallType::EnumConstructor(variable_id.name()),
+                            generic_type_parameter: None,
+                            args: vec![],
+                            inferred_type: inferred_type.clone(),
+                        };
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -62,7 +62,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type) => {
+                Expr::Identifier{ variable_id,  inferred_type, ..} => {
                     // Retrieve the possible no-arg variant from the registry
                     let key = RegistryKey::FunctionName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =

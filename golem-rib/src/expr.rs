@@ -1065,7 +1065,13 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
-    pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
+    pub fn override_type(&self, new_inferred_type: InferredType) -> Expr {
+        let mut expr_copied = self.clone();
+        expr_copied.override_type_mut(new_inferred_type);
+        expr_copied
+    }
+
+    pub fn override_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, _, inferred_type)
             | Expr::Let(_, _, _, inferred_type)
@@ -1853,13 +1859,13 @@ mod protobuf {
                         },
                     ))
                 }
-                Expr::Tuple { exprs: expressions, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
-                        golem_api_grpc::proto::golem::rib::TupleExpr {
-                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
-                        },
-                    ))
-                }
+                Expr::Tuple {
+                    exprs: expressions, ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
+                    golem_api_grpc::proto::golem::rib::TupleExpr {
+                        exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
+                    },
+                )),
                 Expr::Literal { value, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                         golem_api_grpc::proto::golem::rib::LiteralExpr { value },
@@ -1896,33 +1902,35 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::BooleanExpr { value },
                     ))
                 }
-                Expr::Concat { exprs: expressions, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
-                        golem_api_grpc::proto::golem::rib::ConcatExpr {
-                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
-                        },
-                    ))
-                }
-                Expr::ExprBlock { exprs: expressions, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
-                        golem_api_grpc::proto::golem::rib::MultipleExpr {
-                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
-                        },
-                    ))
-                }
+                Expr::Concat {
+                    exprs: expressions, ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
+                    golem_api_grpc::proto::golem::rib::ConcatExpr {
+                        exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
+                    },
+                )),
+                Expr::ExprBlock {
+                    exprs: expressions, ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
+                    golem_api_grpc::proto::golem::rib::MultipleExpr {
+                        exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
+                    },
+                )),
                 Expr::Not { expr, .. } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(
                     Box::new(golem_api_grpc::proto::golem::rib::NotExpr {
                         expr: Some(Box::new((*expr).into())),
                     }),
                 )),
-                Expr::GreaterThan { lhs: left, rhs: right, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
-                        Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
-                        }),
-                    ))
-                }
+                Expr::GreaterThan {
+                    lhs: left,
+                    rhs: right,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                )),
                 Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::GreaterThanOrEqualToExpr {
@@ -1931,30 +1939,36 @@ mod protobuf {
                         },
                     )),
                 ),
-                Expr::LessThan { lhs: left, rhs: right, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
-                        Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
-                        }),
-                    ))
-                }
-                Expr::Plus { lhs: left, rhs: right, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Add(
-                        Box::new(golem_api_grpc::proto::golem::rib::AddExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
-                        }),
-                    ))
-                }
-                Expr::Minus { lhs: left, rhs: right, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(
-                        Box::new(golem_api_grpc::proto::golem::rib::SubtractExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
-                        }),
-                    ))
-                }
+                Expr::LessThan {
+                    lhs: left,
+                    rhs: right,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                )),
+                Expr::Plus {
+                    lhs: left,
+                    rhs: right,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Add(
+                    Box::new(golem_api_grpc::proto::golem::rib::AddExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                )),
+                Expr::Minus {
+                    lhs: left,
+                    rhs: right,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(
+                    Box::new(golem_api_grpc::proto::golem::rib::SubtractExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                )),
                 Expr::Divide { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Divide(
                         Box::new(golem_api_grpc::proto::golem::rib::DivideExpr {
@@ -1971,7 +1985,11 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::LessThanOrEqualTo { lhs: left, rhs: right, .. } => Some(
+                Expr::LessThanOrEqualTo {
+                    lhs: left,
+                    rhs: right,
+                    ..
+                } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                             left: Some(Box::new((*left).into())),
@@ -2068,7 +2086,7 @@ mod protobuf {
                         golem_api_grpc::proto::golem::rib::ThrowExpr { message },
                     ))
                 }
-                Expr::GetTag(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tag(
+                Expr::GetTag { expr, ..} => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tag(
                     Box::new(golem_api_grpc::proto::golem::rib::GetTagExpr {
                         expr: Some(Box::new((*expr).into())),
                     }),
