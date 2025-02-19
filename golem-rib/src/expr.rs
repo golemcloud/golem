@@ -68,7 +68,10 @@ pub enum Expr {
         expressions: Vec<Expr>,
         inferred_type: InferredType,
     },
-    Literal(String, InferredType),
+    Literal {
+        value: String,
+        inferred_type: InferredType,
+    },
     Number {
         number: Number,
         type_annotation: Option<TypeName>,
@@ -203,7 +206,7 @@ pub enum Expr {
         inferred_type: InferredType,
     },
     Throw {
-        expr: Box<Expr>,
+        message: String,
         inferred_type: InferredType,
     },
     GetTag {
@@ -229,7 +232,7 @@ pub enum Expr {
 impl Expr {
     pub fn as_record(&self) -> Option<Vec<(String, Expr)>> {
         match self {
-            Expr::Record(fields, _) => Some(
+            Expr::Record { fields, .. } => Some(
                 fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.deref().clone()))
@@ -267,27 +270,27 @@ impl Expr {
     }
 
     pub fn is_literal(&self) -> bool {
-        matches!(self, Expr::Literal(_, _))
+        matches!(self, Expr::Literal { .. })
     }
 
     pub fn is_number(&self) -> bool {
-        matches!(self, Expr::Number(_, _, _))
+        matches!(self, Expr::Number { .. })
     }
 
     pub fn is_record(&self) -> bool {
-        matches!(self, Expr::Record(_, _))
+        matches!(self, Expr::Record { .. })
     }
 
     pub fn is_result(&self) -> bool {
-        matches!(self, Expr::Result(_, _, _))
+        matches!(self, Expr::Result { .. })
     }
 
     pub fn is_option(&self) -> bool {
-        matches!(self, Expr::Option(_, _, _))
+        matches!(self, Expr::Option { .. })
     }
 
     pub fn is_tuple(&self) -> bool {
-        matches!(self, Expr::Tuple(_, _))
+        matches!(self, Expr::Tuple { .. })
     }
 
     pub fn is_list(&self) -> bool {
@@ -347,41 +350,78 @@ impl Expr {
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
         match self {
-            Expr::Option(Some(expr), _, _) => {
-                Some(("some".to_string(), Some(expr.deref().clone())))
+            Expr::Option {
+                expr: Some(expr), ..
+            } => Some(("some".to_string(), Some(expr.deref().clone()))),
+            Expr::Option { expr: None, .. } => Some(("some".to_string(), None)),
+            Expr::Result { expr: Ok(expr), .. } => {
+                Some(("ok".to_string(), Some(expr.deref().clone())))
             }
-            Expr::Option(None, _, _) => Some(("some".to_string(), None)),
-            Expr::Result(Ok(expr), _, _) => Some(("ok".to_string(), Some(expr.deref().clone()))),
-            Expr::Result(Err(expr), _, _) => Some(("err".to_string(), Some(expr.deref().clone()))),
+            Expr::Result {
+                expr: Err(expr), ..
+            } => Some(("err".to_string(), Some(expr.deref().clone()))),
             _ => None,
         }
     }
     pub fn unwrap(&self) -> Self {
-        Expr::Unwrap(Box::new(self.clone()), InferredType::Unknown)
+        Expr::Unwrap {
+            expr: Box::new(self.clone()),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn boolean(value: bool) -> Self {
-        Expr::Boolean(value, InferredType::Bool)
+        Expr::Boolean {
+            value,
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn and(left: Expr, right: Expr) -> Self {
-        Expr::And(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::And {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
+    }
+
+    pub fn throw(message: impl AsRef<str>) -> Self {
+        Expr::Throw {
+            message: message.as_ref().to_string(),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn plus(left: Expr, right: Expr) -> Self {
-        Expr::Plus(Box::new(left), Box::new(right), InferredType::number())
+        Expr::Plus {
+            left: Box::new(left),
+            right: Box::new(right),
+            inferred_type: InferredType::number(),
+        }
     }
 
     pub fn minus(left: Expr, right: Expr) -> Self {
-        Expr::Minus(Box::new(left), Box::new(right), InferredType::number())
+        Expr::Minus {
+            left: Box::new(left),
+            right: Box::new(right),
+            inferred_type: InferredType::number(),
+        }
     }
 
     pub fn divide(left: Expr, right: Expr) -> Self {
-        Expr::Divide(Box::new(left), Box::new(right), InferredType::number())
+        Expr::Divide {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::number(),
+        }
     }
 
     pub fn multiply(left: Expr, right: Expr) -> Self {
-        Expr::Multiply(Box::new(left), Box::new(right), InferredType::number())
+        Expr::Multiply {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::number(),
+        }
     }
 
     pub fn and_combine(conditions: Vec<Expr>) -> Option<Expr> {
@@ -389,7 +429,11 @@ impl Expr {
 
         for i in conditions {
             let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
-            cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
+            cond = Some(Expr::And {
+                lhs: left,
+                rhs: Box::new(i),
+                inferred_type: InferredType::Bool,
+            });
         }
 
         cond
@@ -401,15 +445,15 @@ impl Expr {
         worker_name: Option<Expr>,
         args: Vec<Expr>,
     ) -> Self {
-        Expr::Call(
-            CallType::Function {
+        Expr::Call {
+            call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
                 worker: worker_name.map(Box::new),
             },
             generic_type_parameter,
             args,
-            InferredType::Unknown,
-        )
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn invoke_worker_function(
@@ -428,61 +472,87 @@ impl Expr {
     }
 
     pub fn concat(expressions: Vec<Expr>) -> Self {
-        Expr::Concat(expressions, InferredType::Str)
+        Expr::Concat {
+            expressions,
+            inferred_type: InferredType::Str,
+        }
     }
 
     pub fn cond(cond: Expr, then: Expr, else_: Expr) -> Self {
-        Expr::Cond(
-            Box::new(cond),
-            Box::new(then),
-            Box::new(else_),
-            InferredType::Unknown,
-        )
+        Expr::Cond {
+            cond: Box::new(cond),
+            lhs: Box::new(then),
+            rhs: Box::new(else_),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn equal_to(left: Expr, right: Expr) -> Self {
-        Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::EqualTo {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn err(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
-        Expr::Result(
-            Err(Box::new(expr)),
+        Expr::Result {
+            expr: Err(Box::new(expr)),
             type_annotation,
-            InferredType::Result {
+            inferred_type: InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(inferred_type)),
             },
-        )
+        }
     }
 
     pub fn flags(flags: Vec<String>) -> Self {
-        Expr::Flags(flags.clone(), InferredType::Flags(flags))
+        Expr::Flags {
+            flags: flags.clone(),
+            inferred_type: InferredType::Flags(flags),
+        }
     }
 
     pub fn greater_than(left: Expr, right: Expr) -> Self {
-        Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::GreaterThan {
+            left: Box::new(left),
+            right: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn greater_than_or_equal_to(left: Expr, right: Expr) -> Self {
-        Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::GreaterThanOrEqualTo {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     // An identifier by default is global until name-binding phase is run
     pub fn identifier(name: impl AsRef<str>, type_annotation: Option<TypeName>) -> Self {
-        Expr::Identifier(
-            VariableId::global(name.as_ref().to_string()),
+        Expr::Identifier {
+            variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
-            InferredType::Unknown,
-        )
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn less_than(left: Expr, right: Expr) -> Self {
-        Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::LessThan {
+            left: Box::new(left),
+            right: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn less_than_or_equal_to(left: Expr, right: Expr) -> Self {
-        Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::LessThanOrEqualTo {
+            left: Box::new(left),
+            right: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn let_binding(
@@ -490,12 +560,12 @@ impl Expr {
         expr: Expr,
         type_annotation: Option<TypeName>,
     ) -> Self {
-        Expr::Let(
-            VariableId::global(name.as_ref().to_string()),
+        Expr::Let {
+            variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
-            Box::new(expr),
-            InferredType::Unknown,
-        )
+            expr: Box::new(expr),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn typed_list_reduce(
@@ -573,7 +643,10 @@ impl Expr {
     }
 
     pub fn literal(value: impl AsRef<str>) -> Self {
-        Expr::Literal(value.as_ref().to_string(), InferredType::Str)
+        Expr::Literal {
+            value: value.as_ref().to_string(),
+            inferred_type: InferredType::Str,
+        }
     }
 
     pub fn empty_expr() -> Self {
@@ -585,25 +658,31 @@ impl Expr {
             .last()
             .map_or(InferredType::Unknown, |e| e.inferred_type());
 
-        Expr::ExprBlock(expressions, inferred_type)
+        Expr::ExprBlock {
+            expressions,
+            inferred_type,
+        }
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn not(expr: Expr) -> Self {
-        Expr::Not(Box::new(expr), InferredType::Bool)
+        Expr::Not {
+            expr: Box::new(expr),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn ok(expr: Expr, type_annotation: Option<TypeName>) -> Self {
         let inferred_type = expr.inferred_type();
 
-        Expr::Result(
-            Ok(Box::new(expr)),
+        Expr::Result {
+            expr: Ok(Box::new(expr)),
             type_annotation,
-            InferredType::Result {
+            inferred_type: InferredType::Result {
                 ok: Some(Box::new(inferred_type)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
-        )
+        }
     }
 
     pub fn option(expr: Option<Expr>) -> Self {
@@ -612,11 +691,11 @@ impl Expr {
             None => InferredType::Unknown,
         };
 
-        Expr::Option(
-            expr.map(Box::new),
-            None,
-            InferredType::Option(Box::new(inferred_type)),
-        )
+        Expr::Option {
+            expr: expr.map(Box::new),
+            type_annotation: None,
+            inferred_type: InferredType::Option(Box::new(inferred_type)),
+        }
     }
 
     pub fn option_with_type_annotation(expr: Option<Expr>, type_annotation: TypeName) -> Self {
@@ -625,19 +704,27 @@ impl Expr {
             None => InferredType::Unknown,
         };
 
-        Expr::Option(
-            expr.map(Box::new),
-            Some(type_annotation),
-            InferredType::Option(Box::new(inferred_type)),
-        )
+        Expr::Option {
+            expr: expr.map(Box::new),
+            type_annotation: Some(type_annotation),
+            inferred_type: InferredType::Option(Box::new(inferred_type)),
+        }
     }
 
     pub fn or(left: Expr, right: Expr) -> Self {
-        Expr::Or(Box::new(left), Box::new(right), InferredType::Bool)
+        Expr::Or {
+            lhs: Box::new(left),
+            rhs: Box::new(right),
+            inferred_type: InferredType::Bool,
+        }
     }
 
     pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
-        Expr::PatternMatch(Box::new(expr), match_arms, InferredType::Unknown)
+        Expr::PatternMatch {
+            predicate: Box::new(expr),
+            match_arms,
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn record(expressions: Vec<(String, Expr)>) -> Self {
@@ -648,13 +735,13 @@ impl Expr {
                 .collect(),
         );
 
-        Expr::Record(
-            expressions
+        Expr::Record {
+            fields: expressions
                 .into_iter()
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
             inferred_type,
-        )
+        }
     }
 
     pub fn select_field(
@@ -662,12 +749,12 @@ impl Expr {
         field: impl AsRef<str>,
         type_annotation: Option<TypeName>,
     ) -> Self {
-        Expr::SelectField(
-            Box::new(expr),
-            field.as_ref().to_string(),
+        Expr::SelectField {
+            expr: Box::new(expr),
+            field: field.as_ref().to_string(),
             type_annotation,
-            InferredType::Unknown,
-        )
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn select_field_with_type_annotation(
@@ -675,16 +762,21 @@ impl Expr {
         field: impl AsRef<str>,
         type_annotation: TypeName,
     ) -> Self {
-        Expr::SelectField(
-            Box::new(expr),
-            field.as_ref().to_string(),
-            Some(type_annotation),
-            InferredType::Unknown,
-        )
+        Expr::SelectField {
+            expr: Box::new(expr),
+            field: field.as_ref().to_string(),
+            type_annotation: Some(type_annotation),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn select_index(expr: Expr, index: usize) -> Self {
-        Expr::SelectIndex(Box::new(expr), index, None, InferredType::Unknown)
+        Expr::SelectIndex {
+            expr: Box::new(expr),
+            index,
+            type_annotation: None,
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn select_index_with_type_annotation(
@@ -692,16 +784,19 @@ impl Expr {
         index: usize,
         type_annotation: TypeName,
     ) -> Self {
-        Expr::SelectIndex(
-            Box::new(expr),
+        Expr::SelectIndex {
+            expr: Box::new(expr),
             index,
-            Some(type_annotation),
-            InferredType::Unknown,
-        )
+            type_annotation: Some(type_annotation),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn get_tag(expr: Expr) -> Self {
-        Expr::GetTag(Box::new(expr), InferredType::Unknown)
+        Expr::GetTag {
+            expr: Box::new(expr),
+            inferred_type: InferredType::Unknown,
+        }
     }
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
@@ -712,7 +807,10 @@ impl Expr {
                 .collect(),
         );
 
-        Expr::Tuple(expressions, inferred_type)
+        Expr::Tuple {
+            expressions,
+            inferred_type,
+        }
     }
 
     pub fn sequence(expressions: Vec<Expr>, type_annotation: Option<TypeName>) -> Self {
@@ -722,46 +820,50 @@ impl Expr {
                 .map_or(InferredType::Unknown, |x| x.inferred_type()),
         ));
 
-        Expr::Sequence(expressions, type_annotation, inferred_type)
+        Expr::Sequence {
+            expressions,
+            type_annotation,
+            inferred_type,
+        }
     }
 
     pub fn inferred_type(&self) -> InferredType {
         match self {
-            Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, _, inferred_type)
-            | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, _, inferred_type)
-            | Expr::Record(_, inferred_type)
-            | Expr::Tuple(_, inferred_type)
-            | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, _, inferred_type)
-            | Expr::Flags(_, inferred_type)
-            | Expr::Identifier(_, _, inferred_type)
-            | Expr::Boolean(_, inferred_type)
-            | Expr::Concat(_, inferred_type)
-            | Expr::ExprBlock(_, inferred_type)
-            | Expr::Not(_, inferred_type)
-            | Expr::GreaterThan(_, _, inferred_type)
-            | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
-            | Expr::LessThanOrEqualTo(_, _, inferred_type)
-            | Expr::EqualTo(_, _, inferred_type)
-            | Expr::Plus(_, _, inferred_type)
-            | Expr::Minus(_, _, inferred_type)
-            | Expr::Divide(_, _, inferred_type)
-            | Expr::Multiply(_, _, inferred_type)
-            | Expr::LessThan(_, _, inferred_type)
-            | Expr::Cond(_, _, _, inferred_type)
-            | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, _, inferred_type)
-            | Expr::Unwrap(_, inferred_type)
-            | Expr::Throw(_, inferred_type)
-            | Expr::GetTag(_, inferred_type)
-            | Expr::And(_, _, inferred_type)
-            | Expr::Or(_, _, inferred_type)
+            Expr::Let { inferred_type, .. }
+            | Expr::SelectField { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
+            | Expr::Sequence { inferred_type, .. }
+            | Expr::Record { inferred_type, .. }
+            | Expr::Tuple { inferred_type, .. }
+            | Expr::Literal { inferred_type, .. }
+            | Expr::Number { inferred_type, .. }
+            | Expr::Flags { inferred_type, .. }
+            | Expr::Identifier { inferred_type, .. }
+            | Expr::Boolean { inferred_type, .. }
+            | Expr::Concat { inferred_type, .. }
+            | Expr::ExprBlock { inferred_type, .. }
+            | Expr::Not { inferred_type, .. }
+            | Expr::GreaterThan { inferred_type, .. }
+            | Expr::GreaterThanOrEqualTo { inferred_type, .. }
+            | Expr::LessThanOrEqualTo { inferred_type, .. }
+            | Expr::EqualTo { inferred_type, .. }
+            | Expr::Plus { inferred_type, .. }
+            | Expr::Minus { inferred_type, .. }
+            | Expr::Divide { inferred_type, .. }
+            | Expr::Multiply { inferred_type, .. }
+            | Expr::LessThan { inferred_type, .. }
+            | Expr::Cond { inferred_type, .. }
+            | Expr::PatternMatch { inferred_type, .. }
+            | Expr::Option { inferred_type, .. }
+            | Expr::Result { inferred_type, .. }
+            | Expr::Unwrap { inferred_type, .. }
+            | Expr::Throw { inferred_type, .. }
+            | Expr::GetTag { inferred_type, .. }
+            | Expr::And { inferred_type, .. }
+            | Expr::Or { inferred_type, .. }
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
-            | Expr::Call(_, _, _, inferred_type)
+            | Expr::Call { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
         }
     }
@@ -1033,11 +1135,11 @@ impl Expr {
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
     ) -> Expr {
-        Expr::Number(
-            Number { value: big_decimal },
+        Expr::Number {
+            number: Number { value: big_decimal },
             type_annotation,
             inferred_type,
-        )
+        }
     }
 
     pub fn untyped_number(big_decimal: BigDecimal) -> Expr {
@@ -1195,59 +1297,63 @@ impl ArmPattern {
     }
     // Helper to construct ok(v). Cannot be used if there is nested constructors such as ok(some(v)))
     pub fn ok(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(
-            Ok(Box::new(Expr::Identifier(
-                VariableId::global(binding_variable.to_string()),
-                None,
-                InferredType::Unknown,
-            ))),
-            None,
-            InferredType::Result {
+        ArmPattern::Literal(Box::new(Expr::Result {
+            expr: Ok(Box::new(Expr::Identifier {
+                variable_id: VariableId::global(binding_variable.to_string()),
+                type_annotation: None,
+                inferred_type: InferredType::Unknown,
+            })),
+            type_annotation: None,
+            inferred_type: InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
-        )))
+        }))
     }
 
     // Helper to construct err(v). Cannot be used if there is nested constructors such as err(some(v)))
     pub fn err(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(
-            Err(Box::new(Expr::Identifier(
-                VariableId::global(binding_variable.to_string()),
-                None,
-                InferredType::Unknown,
-            ))),
-            None,
-            InferredType::Result {
+        ArmPattern::Literal(Box::new(Expr::Result {
+            expr: Err(Box::new(Expr::Identifier {
+                variable_id: VariableId::global(binding_variable.to_string()),
+                type_annotation: None,
+                inferred_type: InferredType::Unknown,
+            })),
+            type_annotation: None,
+            inferred_type: InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
-        )))
+        }))
     }
 
     // Helper to construct some(v). Cannot be used if there is nested constructors such as some(ok(v)))
     pub fn some(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(
-            Some(Box::new(Expr::Identifier(
-                VariableId::local_with_no_id(binding_variable),
-                None,
-                InferredType::Unknown,
-            ))),
-            None,
-            InferredType::Unknown,
-        )))
+        ArmPattern::Literal(Box::new(Expr::Option {
+            expr: Some(Box::new(Expr::Identifier {
+                variable_id: VariableId::local_with_no_id(binding_variable),
+                type_annotation: None,
+                inferred_type: InferredType::Unknown,
+            })),
+            type_annotation: None,
+            inferred_type: InferredType::Unknown,
+        }))
     }
 
     pub fn none() -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(None, None, InferredType::Unknown)))
+        ArmPattern::Literal(Box::new(Expr::Option {
+            expr: None,
+            type_annotation: None,
+            inferred_type: InferredType::Unknown,
+        }))
     }
 
     pub fn identifier(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Identifier(
-            VariableId::global(binding_variable.to_string()),
-            None,
-            InferredType::Unknown,
-        )))
+        ArmPattern::Literal(Box::new(Expr::Identifier {
+            variable_id: VariableId::global(binding_variable.to_string()),
+            type_annotation: None,
+            inferred_type: InferredType::Unknown,
+        }))
     }
     pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), args)
@@ -1417,7 +1523,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
                 golem_api_grpc::proto::golem::rib::ThrowExpr { message },
-            ) => Expr::Throw(message, InferredType::Unknown),
+            ) => Expr::throw(message),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
@@ -1598,12 +1704,12 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                             golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                                 let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
                                 let call_type = CallType::InstanceCreation(instance_creation_type);
-                                Expr::Call(
+                                Expr::Call {
                                     call_type,
                                     generic_type_parameter,
-                                    vec![],
-                                    InferredType::Unknown
-                                )
+                                    args: vec![],
+                                    inferred_type: InferredType::Unknown
+                                }
                             }
                         }
                     }
@@ -1686,42 +1792,53 @@ mod protobuf {
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
-                Expr::Let(variable_id, type_name, expr, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Let(
-                        Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
-                            name: variable_id.name().to_string(),
-                            expr: Some(Box::new((*expr).into())),
-                            type_name: type_name.map(|t| t.into()),
-                        }),
-                    ))
-                }
-                Expr::SelectField(expr, field, type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
-                        Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
-                            expr: Some(Box::new((*expr).into())),
-                            field,
-                            type_name: type_name.map(|t| t.into()),
-                        }),
-                    ))
-                }
-                Expr::SelectIndex(expr, index, type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
-                        Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
-                            expr: Some(Box::new((*expr).into())),
-                            index: index as u64,
-                            type_name: type_name.map(|t| t.into()),
-                        }),
-                    ))
-                }
-                Expr::Sequence(exprs, type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                        golem_api_grpc::proto::golem::rib::SequenceExpr {
-                            exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
-                            type_name: type_name.map(|t| t.into()),
-                        },
-                    ))
-                }
-                Expr::Record(fields, _) => {
+                Expr::Let {
+                    variable_id,
+                    type_annotation,
+                    expr,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Let(
+                    Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
+                        name: variable_id.name().to_string(),
+                        expr: Some(Box::new((*expr).into())),
+                        type_name: type_annotation.map(|t| t.into()),
+                    }),
+                )),
+                Expr::SelectField {
+                    expr,
+                    field,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
+                        expr: Some(Box::new((*expr).into())),
+                        field,
+                        type_name: type_annotation.map(|t| t.into()),
+                    }),
+                )),
+                Expr::SelectIndex {
+                    expr,
+                    index,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
+                        expr: Some(Box::new((*expr).into())),
+                        index: index as u64,
+                        type_name: type_annotation.map(|t| t.into()),
+                    }),
+                )),
+                Expr::Sequence {
+                    expressions,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
+                    golem_api_grpc::proto::golem::rib::SequenceExpr {
+                        exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
+                        type_name: type_annotation.map(|t| t.into()),
+                    },
+                )),
+                Expr::Record { fields, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Record(
                         golem_api_grpc::proto::golem::rib::RecordExpr {
                             fields: fields
@@ -1736,65 +1853,69 @@ mod protobuf {
                         },
                     ))
                 }
-                Expr::Tuple(exprs, _) => {
+                Expr::Tuple { expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
                         golem_api_grpc::proto::golem::rib::TupleExpr {
-                            exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
                         },
                     ))
                 }
-                Expr::Literal(value, _) => {
+                Expr::Literal { value, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                         golem_api_grpc::proto::golem::rib::LiteralExpr { value },
                     ))
                 }
-                Expr::Number(number, type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Number(
-                        golem_api_grpc::proto::golem::rib::NumberExpr {
-                            number: Some(number.value.to_string()),
-                            float: None,
-                            type_name: type_name.map(|t| t.into()),
-                        },
-                    ))
-                }
-                Expr::Flags(values, _) => {
+                Expr::Number {
+                    number,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Number(
+                    golem_api_grpc::proto::golem::rib::NumberExpr {
+                        number: Some(number.value.to_string()),
+                        float: None,
+                        type_name: type_annotation.map(|t| t.into()),
+                    },
+                )),
+                Expr::Flags { flags, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
-                        golem_api_grpc::proto::golem::rib::FlagsExpr { values },
+                        golem_api_grpc::proto::golem::rib::FlagsExpr { values: flags },
                     ))
                 }
-                Expr::Identifier(variable_id, type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
-                        golem_api_grpc::proto::golem::rib::IdentifierExpr {
-                            name: variable_id.name(),
-                            type_name: type_name.map(|t| t.into()),
-                        },
-                    ))
-                }
-                Expr::Boolean(value, _) => {
+                Expr::Identifier {
+                    variable_id,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
+                    golem_api_grpc::proto::golem::rib::IdentifierExpr {
+                        name: variable_id.name(),
+                        type_name: type_annotation.map(|t| t.into()),
+                    },
+                )),
+                Expr::Boolean { value, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
                         golem_api_grpc::proto::golem::rib::BooleanExpr { value },
                     ))
                 }
-                Expr::Concat(exprs, _) => {
+                Expr::Concat { expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
                         golem_api_grpc::proto::golem::rib::ConcatExpr {
-                            exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
                         },
                     ))
                 }
-                Expr::ExprBlock(exprs, _) => {
+                Expr::ExprBlock { expressions, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
                         golem_api_grpc::proto::golem::rib::MultipleExpr {
-                            exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                            exprs: expressions.into_iter().map(|expr| expr.into()).collect(),
                         },
                     ))
                 }
-                Expr::Not(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(
+                Expr::Not { expr, .. } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(
                     Box::new(golem_api_grpc::proto::golem::rib::NotExpr {
                         expr: Some(Box::new((*expr).into())),
                     }),
                 )),
-                Expr::GreaterThan(left, right, _) => {
+                Expr::GreaterThan { left, right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
                         Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
                             left: Some(Box::new((*left).into())),
@@ -1802,15 +1923,15 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::GreaterThanOrEqualTo(left, right, _) => Some(
+                Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::GreaterThanOrEqualToExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         },
                     )),
                 ),
-                Expr::LessThan(left, right, _) => {
+                Expr::LessThan { left, right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
                         Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
                             left: Some(Box::new((*left).into())),
@@ -1818,7 +1939,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Plus(left, right, _) => {
+                Expr::Plus { left, right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Add(
                         Box::new(golem_api_grpc::proto::golem::rib::AddExpr {
                             left: Some(Box::new((*left).into())),
@@ -1826,7 +1947,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Minus(left, right, _) => {
+                Expr::Minus { left, right, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(
                         Box::new(golem_api_grpc::proto::golem::rib::SubtractExpr {
                             left: Some(Box::new((*left).into())),
@@ -1834,23 +1955,23 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Divide(left, right, _) => {
+                Expr::Divide { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Divide(
                         Box::new(golem_api_grpc::proto::golem::rib::DivideExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         }),
                     ))
                 }
-                Expr::Multiply(left, right, _) => {
+                Expr::Multiply { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiply(
                         Box::new(golem_api_grpc::proto::golem::rib::MultiplyExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         }),
                     ))
                 }
-                Expr::LessThanOrEqualTo(left, right, _) => Some(
+                Expr::LessThanOrEqualTo { left, right, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                             left: Some(Box::new((*left).into())),
@@ -1858,41 +1979,49 @@ mod protobuf {
                         },
                     )),
                 ),
-                Expr::EqualTo(left, right, _) => {
+                Expr::EqualTo { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(
                         Box::new(golem_api_grpc::proto::golem::rib::EqualToExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         }),
                     ))
                 }
-                Expr::Cond(left, cond, right, _) => {
+                Expr::Cond { cond, lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
                         Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
-                            left: Some(Box::new((*left).into())),
+                            left: Some(Box::new((*lhs).into())),
                             cond: Some(Box::new((*cond).into())),
-                            right: Some(Box::new((*right).into())),
+                            right: Some(Box::new((*rhs).into())),
                         }),
                     ))
                 }
-                Expr::PatternMatch(expr, arms, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(
-                        Box::new(golem_api_grpc::proto::golem::rib::PatternMatchExpr {
-                            expr: Some(Box::new((*expr).into())),
-                            patterns: arms.into_iter().map(|a| a.into()).collect(),
-                        }),
-                    ))
-                }
-                Expr::Option(expr, optional_type_name, _) => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
-                        Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
-                            expr: expr.map(|expr| Box::new((*expr).into())),
-                            type_name: optional_type_name.map(|t| t.into()),
-                        }),
-                    ))
-                }
-                Expr::Result(expr, type_name, _) => {
-                    let type_name = type_name.map(|t| t.into());
+                Expr::PatternMatch {
+                    predicate,
+                    match_arms,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(
+                    Box::new(golem_api_grpc::proto::golem::rib::PatternMatchExpr {
+                        expr: Some(Box::new((*predicate).into())),
+                        patterns: match_arms.into_iter().map(|a| a.into()).collect(),
+                    }),
+                )),
+                Expr::Option {
+                    expr,
+                    type_annotation,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
+                    Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
+                        expr: expr.map(|expr| Box::new((*expr).into())),
+                        type_name: type_annotation.map(|t| t.into()),
+                    }),
+                )),
+                Expr::Result {
+                    expr,
+                    type_annotation,
+                    ..
+                } => {
+                    let type_name = type_annotation.map(|t| t.into());
 
                     let result = match expr {
                         Ok(expr) => golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(
@@ -1910,26 +2039,31 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Call(function_name, generic_type_parameter, args, _) => {
+                Expr::Call {
+                    call_type,
+                    generic_type_parameter,
+                    args,
+                    ..
+                } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
                         Box::new(golem_api_grpc::proto::golem::rib::CallExpr {
                             name: None, // Kept for backward compatibility
                             params: args.into_iter().map(|expr| expr.into()).collect(),
                             generic_type_parameter: generic_type_parameter.map(|t| t.value),
                             call_type: Some(Box::new(
-                                golem_api_grpc::proto::golem::rib::CallType::from(function_name),
+                                golem_api_grpc::proto::golem::rib::CallType::from(call_type),
                             )),
                         }),
                     ))
                 }
-                Expr::Unwrap(expr, _) => {
+                Expr::Unwrap { expr, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(
                         Box::new(golem_api_grpc::proto::golem::rib::UnwrapExpr {
                             expr: Some(Box::new((*expr).into())),
                         }),
                     ))
                 }
-                Expr::Throw(message, _) => {
+                Expr::Throw { message, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
                         golem_api_grpc::proto::golem::rib::ThrowExpr { message },
                     ))
@@ -1939,20 +2073,20 @@ mod protobuf {
                         expr: Some(Box::new((*expr).into())),
                     }),
                 )),
-                Expr::And(left, right, _) => {
+                Expr::And { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::And(
                         Box::new(golem_api_grpc::proto::golem::rib::AndExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         }),
                     ))
                 }
 
-                Expr::Or(left, right, _) => {
+                Expr::Or { lhs, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Or(Box::new(
                         golem_api_grpc::proto::golem::rib::OrExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         },
                     )))
                 }
