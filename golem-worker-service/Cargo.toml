@@ -21,7 +21,7 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-common = { path = "../golem-common" }
 golem-service-base = { path = "../golem-service-base" }
-golem-rib = {path = "../golem-rib"}
+golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
@@ -36,6 +36,7 @@ figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
+include_dir = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true }

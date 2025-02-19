@@ -20,6 +20,7 @@ use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
 use golem_service_base::migration::Migrations;
+use include_dir::{include_dir, Dir};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
@@ -38,6 +39,8 @@ pub mod metrics;
 pub mod service;
 
 const VERSION: &str = golem_version!();
+
+static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[cfg(test)]
 test_r::enable!();
@@ -117,6 +120,10 @@ impl ComponentService {
             grpc_port,
             endpoint,
         })
+    }
+
+    pub fn db_migrations() -> Dir<'static> {
+        DB_MIGRATIONS.clone()
     }
 
     pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {

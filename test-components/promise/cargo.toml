@@ -1,5 +1,5 @@
 [package]
-name = "file-service"
+name = "promise"
 version = "0.0.1"
 edition = "2021"
 
@@ -21,8 +21,7 @@ wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
 path = "wit"
 
 [package.metadata.component.target.dependencies]
-"golem:api" = { path = "wit/deps/golem" }
+"golem:api" = { path = "wit/deps/golem-1.x" }
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }
-

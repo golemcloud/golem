@@ -454,11 +454,28 @@ async fn promise(
     let component_id = executor.component("promise").store().await;
     let worker_id = executor.start_worker(&component_id, "promise-1").await;
 
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{create}", vec![])
+        .await
+        .unwrap();
+    let promise_id = ValueAndType::new(result[0].clone(), PromiseId::get_type());
+    println!("promise_id: {:?}", promise_id);
+
+    let poll1 = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
+        .await;
+
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
+    let promise_id_clone = promise_id.clone();
+
     let fiber = tokio::spawn(async move {
         executor_clone
-            .invoke_and_await(&worker_id_clone, "run", vec![])
+            .invoke_and_await(
+                &worker_id_clone,
+                "golem:it/api.{await}",
+                vec![promise_id_clone],
+            )
             .await
     });
 
@@ -492,9 +509,20 @@ async fn promise(
 
     let result = fiber.await.unwrap();
 
+    let poll2 = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
+        .await;
+
     drop(executor);
 
     check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
+    check!(poll1 == Ok(vec![Value::Option(None)]));
+    check!(
+        poll2
+            == Ok(vec![Value::Option(Some(Box::new(Value::List(vec![
+                Value::U8(42)
+            ]))))])
+    );
 }
 
 #[test]
