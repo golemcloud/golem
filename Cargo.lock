@@ -3089,6 +3089,7 @@ dependencies = [
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
+ "include_dir",
  "lazy_static",
  "mappable-rc",
  "opentelemetry 0.27.1",
@@ -3542,6 +3543,7 @@ dependencies = [
  "http 1.2.0",
  "humantime-serde",
  "hyper 1.5.2",
+ "include_dir",
  "lazy_static",
  "nom",
  "openapiv3",
@@ -4287,6 +4289,25 @@ checksum = "daca1df1c957320b2cf139ac61e7bd64fed304c5040df000a745aa1de3b4ef71"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
