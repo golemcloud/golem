@@ -64,7 +64,7 @@ impl<AuthCtx, Namespace: HasAccountId + Send + Sync> HttpApiDefinitionsLookup<Na
     ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
         let http_api_defs = self
             .deployment_service
-            .get_definitions_by_site(host)
+            .get_all_definitions_by_site(host)
             .await
             .map_err(|err| {
                 error!("Error getting API definitions from the repo: {}", err);

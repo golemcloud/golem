@@ -20,7 +20,6 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::Tracing;
@@ -30,10 +29,10 @@ use axum::Router;
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, FilterComparator, IdempotencyKey,
-    InitialComponentFile, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    AccountId, ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
+    ComponentId, FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator,
+    TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
+    WorkerStatus,
 };
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_wasm_ast::analysis::analysed_type;
@@ -1597,31 +1596,23 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let file1_key = deps
-        .add_initial_component_file(
+    let component_files = deps
+        .add_initial_component_files(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = deps
-        .add_initial_component_file(
-            &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key,
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = deps
         .component("initial-file-read-write")
@@ -1655,36 +1646,28 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let file1_key = deps
-        .add_initial_component_file(
+    let component_files = deps
+        .add_initial_component_files(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = deps
-        .add_initial_component_file(
-            &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-        InitialComponentFile {
-            key: file2_key,
-            path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = deps
         .component("initial-file-read-write")
@@ -1741,31 +1724,23 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let file1_key = deps
-        .add_initial_component_file(
+    let component_files = deps
+        .add_initial_component_files(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = deps
-        .add_initial_component_file(
-            &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
-        )
-        .await;
-
-    let component_files: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key,
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = deps
         .component("initial-file-read-write")
@@ -1801,36 +1776,28 @@ async fn worker_initial_files_after_automatic_worker_update(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let file1_key = deps
-        .add_initial_component_file(
+    let component_files_1 = deps
+        .add_initial_component_files(
             &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
         )
         .await;
-    let file2_key = deps
-        .add_initial_component_file(
-            &AccountId::placeholder(),
-            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
-        )
-        .await;
-
-    let component_files1: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key.clone(),
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
 
     let component_id = deps
         .component("initial-file-read-write")
         .unique()
-        .with_files(&component_files1)
+        .with_files(&component_files_1)
         .store()
         .await;
 
@@ -1843,29 +1810,34 @@ async fn worker_initial_files_after_automatic_worker_update(
         .await
         .unwrap();
 
-    let component_files2: Vec<InitialComponentFile> = vec![
-        InitialComponentFile {
-            key: file1_key.clone(),
-            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-        InitialComponentFile {
-            key: file2_key.clone(),
-            path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadWrite,
-        },
-    ];
+    let component_files_2 = deps
+        .add_initial_component_files(
+            &AccountId::placeholder(),
+            &[
+                (
+                    "initial-file-read-write/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/bar/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+                (
+                    "initial-file-read-write/files/baz.txt",
+                    "/baz.txt",
+                    ComponentFilePermissions::ReadWrite,
+                ),
+            ],
+        )
+        .await;
 
     let target_version = deps
         .update_component_with_files(
             &component_id,
             "initial-file-read-write",
-            Some(&component_files2),
+            Some(&component_files_2),
         )
         .await;
     deps.auto_update_worker(&worker_id, target_version).await;
