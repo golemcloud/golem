@@ -64,7 +64,9 @@ mod internal {
                         match first {
                             LiteralTerm::Static(s) => Expr::literal(s),
                             LiteralTerm::Dynamic(expr) => match expr {
-                                Expr::Literal { value, .. } => Expr::literal(value),
+                                Expr::Literal {
+                                    value, source_span, ..
+                                } => Expr::literal(value).with_source_span(source_span.clone()),
                                 _ => Expr::concat(vec![expr.clone()]),
                             },
                         }

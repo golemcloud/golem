@@ -1197,8 +1197,42 @@ impl Expr {
 
     pub fn source_span(&self) -> SourceSpan {
         match self {
-            Expr::Let { source_span, .. } => source_span.clone(),
-            _ => SourceSpan::default(),
+            Expr::Identifier { source_span, .. }
+            | Expr::Let { source_span, .. }
+            | Expr::SelectField { source_span, .. }
+            | Expr::SelectIndex { source_span, .. }
+            | Expr::Sequence { source_span, .. }
+            | Expr::Record { source_span, .. }
+            | Expr::Tuple { source_span, .. }
+            | Expr::Literal { source_span, .. }
+            | Expr::Number { source_span, .. }
+            | Expr::Flags { source_span, .. }
+            | Expr::Boolean { source_span, .. }
+            | Expr::Concat { source_span, .. }
+            | Expr::ExprBlock { source_span, .. }
+            | Expr::Not { source_span, .. }
+            | Expr::GreaterThan { source_span, .. }
+            | Expr::GreaterThanOrEqualTo { source_span, .. }
+            | Expr::LessThanOrEqualTo { source_span, .. }
+            | Expr::EqualTo { source_span, .. }
+            | Expr::LessThan { source_span, .. }
+            | Expr::Plus { source_span, .. }
+            | Expr::Minus { source_span, .. }
+            | Expr::Divide { source_span, .. }
+            | Expr::Multiply { source_span, .. }
+            | Expr::Cond { source_span, .. }
+            | Expr::PatternMatch { source_span, .. }
+            | Expr::Option { source_span, .. }
+            | Expr::Result { source_span, .. }
+            | Expr::Unwrap { source_span, .. }
+            | Expr::Throw { source_span, .. }
+            | Expr::And { source_span, .. }
+            | Expr::Or { source_span, .. }
+            | Expr::GetTag { source_span, .. }
+            | Expr::ListComprehension { source_span, .. }
+            | Expr::ListReduce { source_span, .. }
+            | Expr::InvokeMethodLazy { source_span, .. }
+            | Expr::Call { source_span, .. } => source_span.clone(),
         }
     }
 

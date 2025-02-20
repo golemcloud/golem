@@ -13,6 +13,13 @@ impl SourceSpan {
     pub fn new(start: SourcePosition, end: SourcePosition) -> SourceSpan {
         SourceSpan { start, end }
     }
+
+    pub fn merge(&self, right: SourceSpan) -> SourceSpan {
+        SourceSpan {
+            start: self.start.clone(),
+            end: right.end,
+        }
+    }
 }
 
 /// These instances are important as source span shouldn't take part in any comparison
@@ -121,18 +128,23 @@ mod tests {
             "foo";
           let y =
             "bar";
-          "${x} ${y}"
-        "#,
+          "${x} ${y}""#,
         )
         .unwrap();
 
-        let spans: Vec<RibSourceSpanDebug> = if let Expr::ExprBlock { exprs, .. } = rib_expr {
+        let mut parent_span = None;
+
+        let spans: Vec<RibSourceSpanDebug> = if let Expr::ExprBlock {
+            exprs, source_span, ..
+        } = rib_expr
+        {
+            parent_span = Some(source_span);
             exprs.iter().map(|expr| expr.source_span().into()).collect()
         } else {
             vec![]
         };
 
-        let expected = vec![
+        let expected_spans = vec![
             RibSourceSpanDebug {
                 start_line: 2,
                 start_column: 11,
@@ -146,13 +158,22 @@ mod tests {
                 end_column: 18,
             },
             RibSourceSpanDebug {
-                start_line: 0,
-                start_column: 0,
-                end_line: 0,
-                end_column: 0,
+                start_line: 6,
+                start_column: 11,
+                end_line: 6,
+                end_column: 22,
             },
         ];
 
-        assert_eq!(spans, expected);
+        let expected_parent_span = RibSourceSpanDebug {
+            start_line: 2,
+            start_column: 11,
+            end_line: 6,
+            end_column: 22,
+        };
+
+        assert_eq!(spans, expected_spans);
+
+        assert_eq!(parent_span.map(|x| x.into()), Some(expected_parent_span));
     }
 }

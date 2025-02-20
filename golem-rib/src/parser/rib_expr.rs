@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser;
 use combine::parser::char;
 use combine::parser::char::spaces;
+use combine::{parser, position};
 use combine::{ParseError, Parser};
 
 use super::binary_op::BinaryOp;
@@ -39,26 +39,40 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces()
-        .with(
-            (internal::simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| {
-                // FIXME: Respect operator precedence
-                rest.into_iter().fold(expr, |acc, (op, next)| match op {
-                    BinaryOp::GreaterThan => Expr::greater_than(acc, next),
-                    BinaryOp::LessThan => Expr::less_than(acc, next),
-                    BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
-                    BinaryOp::GreaterThanOrEqualTo => Expr::greater_than_or_equal_to(acc, next),
-                    BinaryOp::EqualTo => Expr::equal_to(acc, next),
-                    BinaryOp::And => Expr::and(acc, next),
-                    BinaryOp::Or => Expr::or(acc, next),
-                    BinaryOp::Add => Expr::plus(acc, next),
-                    BinaryOp::Subtract => Expr::minus(acc, next),
-                    BinaryOp::Multiply => Expr::multiply(acc, next),
-                    BinaryOp::Divide => Expr::divide(acc, next),
-                })
-            }),
+    position()
+        .and(
+            spaces()
+                .with(
+                    (internal::simple_expr(), internal::rib_expr_rest()).map(|(expr, rest)| {
+                        // FIXME: Respect operator precedence
+                        rest.into_iter().fold(expr, |acc, (op, next)| match op {
+                            BinaryOp::GreaterThan => Expr::greater_than(acc, next),
+                            BinaryOp::LessThan => Expr::less_than(acc, next),
+                            BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
+                            BinaryOp::GreaterThanOrEqualTo => {
+                                Expr::greater_than_or_equal_to(acc, next)
+                            }
+                            BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                            BinaryOp::And => Expr::and(acc, next),
+                            BinaryOp::Or => Expr::or(acc, next),
+                            BinaryOp::Add => Expr::plus(acc, next),
+                            BinaryOp::Subtract => Expr::minus(acc, next),
+                            BinaryOp::Multiply => Expr::multiply(acc, next),
+                            BinaryOp::Divide => Expr::divide(acc, next),
+                        })
+                    }),
+                )
+                .skip(spaces()),
         )
-        .skip(spaces())
+        .and(position())
+        .map(|((start, expr), end)| {
+            let start_pos: Input::Position = start;
+            let start = start_pos.get_source_position();
+            let end_pos: Input::Position = end;
+            let end = end_pos.get_source_position();
+            let span = crate::rib_source_span::SourceSpan::new(start, end);
+            expr.with_source_span(span)
+        })
 }
 
 mod internal {
@@ -86,10 +100,10 @@ mod internal {
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
     use crate::parser::worker_function_invoke::worker_function_invoke;
-    use crate::rib_source_span::{GetSourcePosition, SourceSpan};
+    use crate::rib_source_span::GetSourcePosition;
     use crate::Expr;
     use combine::parser::char::spaces;
-    use combine::{attempt, choice, many, parser, position, ParseError, Parser, Stream};
+    use combine::{attempt, choice, many, parser, ParseError, Parser, Stream};
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -100,41 +114,29 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        position()
-            .and(
-                spaces()
-                    .with(choice((
-                        list_comprehension(),
-                        list_aggregation(),
-                        pattern_match(),
-                        attempt(worker_function_invoke()),
-                        let_binding(),
-                        conditional(),
-                        selection_expr(),
-                        flag_or_record(),
-                        multi_line_block(),
-                        tuple(),
-                        sequence(),
-                        boolean_literal(),
-                        literal(),
-                        not(),
-                        option(),
-                        result(),
-                        attempt(call()),
-                        identifier(),
-                        number(),
-                    )))
-                    .skip(spaces()),
-            )
-            .and(position())
-            .map(|((start, expr), end)| {
-                let start_pos: Input::Position = start;
-                let start = start_pos.get_source_position();
-                let end_pos: Input::Position = end;
-                let end = end_pos.get_source_position();
-                let span = SourceSpan::new(start, end);
-                expr.with_source_span(span)
-            })
+        spaces()
+            .with(choice((
+                list_comprehension(),
+                list_aggregation(),
+                pattern_match(),
+                attempt(worker_function_invoke()),
+                let_binding(),
+                conditional(),
+                selection_expr(),
+                flag_or_record(),
+                multi_line_block(),
+                tuple(),
+                sequence(),
+                boolean_literal(),
+                literal(),
+                not(),
+                option(),
+                result(),
+                attempt(call()),
+                identifier(),
+                number(),
+            )))
+            .skip(spaces())
     }
 
     parser! {
