@@ -980,10 +980,9 @@ impl ComponentServiceLocalFileSystem {
                     component_id, component_version
                 )))?
             }
-            None => Err(GolemError::unknown(format!(
-                "No versions found for id: {}",
-                component_id
-            )))?,
+            None => Err(GolemError::unknown(
+                "Could not find any component with the given id",
+            ))?,
         };
 
         Ok(metadata.into())
