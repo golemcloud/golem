@@ -27,28 +27,45 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::SelectField(expr, field, _, inferred_type) => {
+            Expr::SelectField {
+                expr,
+                field,
+                inferred_type,
+                ..
+            } => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_field(field.clone()));
                 }
             }
-            Expr::SelectIndex(expr, index, _, inferred_type) => {
+            Expr::SelectIndex {
+                expr,
+                index,
+                inferred_type,
+                ..
+            } => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).at_index(*index));
                 }
             }
-            Expr::Sequence(exprs, _, inferred_type) => {
+            Expr::Sequence {
+                exprs,
+                inferred_type,
+                ..
+            } => {
                 internal::unresolved_types_in_list(exprs)?;
 
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Record(fields, inferred_type) => {
+            Expr::Record {
+                exprs,
+                inferred_type,
+            } => {
                 internal::unresolved_types_in_record(
-                    &fields
+                    &exprs
                         .iter()
                         .map(|(k, v)| (k.clone(), v.deref().clone()))
                         .collect(),
@@ -66,76 +83,95 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Number(_, _, inferred_type) => {
+            Expr::Number { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).with_additional_message(
-                        "Number literals must have a type annotation. Example: `1u64`",
+                        "Number literals must have a type annotation. Example: `1: u64`",
                     ));
                 }
             }
-            Expr::Flags(_, inferred_type) => {
+            Expr::Flags { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Identifier(_, _, inferred_type) => {
+            Expr::Identifier { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).with_additional_message(
                         format!("`{}` is unknown identifier", expr).as_str(),
                     ));
                 }
             }
-            Expr::Boolean(_, inferred_type) => {
+            Expr::Boolean { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Concat(exprs, inferred_type) => {
+            Expr::Concat {
+                exprs,
+                inferred_type,
+            } => {
                 internal::unresolved_type_for_concat(exprs)?;
 
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::ExprBlock(exprs, _) => {
+            Expr::ExprBlock { exprs, .. } => {
                 for expr in exprs {
                     queue.push_back(expr);
                 }
             }
-            Expr::Not(expr, inferred_type) => {
+            Expr::Not {
+                expr,
+                inferred_type,
+            } => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::GreaterThan(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)?;
+            Expr::GreaterThan { lhs, rhs, .. } => {
+                internal::unresolved_type_for_binary_op(lhs, rhs)?;
             }
-            Expr::And(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Plus(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Minus(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Multiply(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Divide(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Or(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::GreaterThanOrEqualTo(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)?;
+            Expr::And { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Plus { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Minus { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Multiply { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Divide { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Or { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
+                internal::unresolved_type_for_binary_op(lhs, rhs)?;
             }
-            Expr::LessThanOrEqualTo(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)?;
+            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
+                internal::unresolved_type_for_binary_op(lhs, rhs)?;
             }
-            Expr::EqualTo(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::LessThan(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
-            Expr::Cond(cond, left, right, inferred_type) => {
-                internal::unresolved_type_for_if_condition(cond, left, right)?;
+            Expr::EqualTo { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::LessThan { lhs, rhs, .. } => internal::unresolved_type_for_binary_op(lhs, rhs)?,
+            Expr::Cond {
+                cond,
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
+                internal::unresolved_type_for_if_condition(cond, lhs, rhs)?;
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::PatternMatch(cond, arms, _) => {
-                internal::unresolved_type_for_pattern_match(cond, arms)?;
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                ..
+            } => {
+                internal::unresolved_type_for_pattern_match(predicate, match_arms)?;
             }
-            Expr::Option(option, _, inferred_type) => {
-                if let Some(expr) = option {
+            Expr::Option {
+                expr,
+                inferred_type,
+                ..
+            } => {
+                if let Some(expr) = expr {
                     queue.push_back(expr);
                 }
 
@@ -143,17 +179,17 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            expr @ Expr::Result(ok_err, _, _) => {
-                internal::unresolved_type_for_result(ok_err, expr)?
+            parent_expr @ Expr::Result { expr, .. } => {
+                internal::unresolved_type_for_result(expr, parent_expr)?
             }
-            Expr::Call(_, _, args, _) => {
+            Expr::Call { args, .. } => {
                 for arg in args {
                     queue.push_back(arg);
                 }
             }
-            Expr::Unwrap(_, _) => {}
-            Expr::Throw(_, _) => {}
-            Expr::GetTag(_, _) => {}
+            Expr::Unwrap { .. } => {}
+            Expr::Throw { .. } => {}
+            Expr::GetTag { .. } => {}
             Expr::ListComprehension {
                 iterable_expr,
                 yield_expr,
@@ -411,14 +447,14 @@ mod unresolved_types_tests {
     fn test_unresolved_type_record() {
         let expr = Expr::from_text("{a: 1, b: \"hello\"}").unwrap();
         compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in the record at path `a`. Number literals must have a type annotation. Example: `1u64`");
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in `a`. Number literals must have a type annotation. Example: `1: u64`");
     }
 
     #[test]
     fn test_unresolved_type_nested_record() {
         let expr = Expr::from_text("{foo: {a: 1, b: \"hello\"}}").unwrap();
         compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in the record at path `foo.a`. Number literals must have a type annotation. Example: `1u64`");
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in `foo.a`. Number literals must have a type annotation. Example: `1: u64`");
     }
 
     #[test]
@@ -427,7 +463,7 @@ mod unresolved_types_tests {
         compile(&expr, &vec![]).unwrap_err();
         assert_eq!(
             compile(&expr, &vec![]).unwrap_err().to_string(),
-            "Unable to determine the type of `hello` in the record at path `foo.b[1]`. `hello` is unknown identifier. Invalid element in Tuple"
+            "Unable to determine the type of `hello` in `foo.b[1]`. `hello` is unknown identifier. Invalid element in Tuple"
         );
     }
 

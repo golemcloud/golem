@@ -500,7 +500,7 @@ impl ParsedFunctionReference {
 // In `DynamicParsedFunctionName` the resource parameters are `Expr` (Rib) while they are `String`
 // in `ParsedFunctionName`.
 // `Expr` implies the real values are yet to be computed, while `String`
-// in ParsedFunctionName is a textual representation of the "real" values.
+// in ParsedFunctionName is a textual representation of the evaluated values.
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}

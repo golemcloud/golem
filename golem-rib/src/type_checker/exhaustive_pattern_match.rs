@@ -14,8 +14,8 @@ pub fn check_exhaustive_pattern_match(
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::PatternMatch(_, patterns, _) => {
-                let match_arm = patterns
+            Expr::PatternMatch { match_arms, .. } => {
+                let match_arm = match_arms
                     .iter()
                     .map(|p| p.arm_pattern.clone())
                     .collect::<Vec<_>>();

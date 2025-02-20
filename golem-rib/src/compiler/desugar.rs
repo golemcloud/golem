@@ -39,7 +39,7 @@ mod internal {
             let mut expr = Expr::cond(
                 branch.condition.clone(),
                 branch.body.clone(),
-                Expr::Throw("No match found".to_string(), InferredType::Unknown),
+                Expr::throw("No match found".to_string()),
             );
 
             for branch in if_branches.iter().skip(1).rev() {
@@ -157,13 +157,17 @@ mod internal {
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
-            Expr::Identifier(identifier, _, inferred_type) => {
-                let assign_var = Expr::Let(
-                    identifier.clone(),
+            Expr::Identifier {
+                variable_id,
+                inferred_type,
+                ..
+            } => {
+                let assign_var = Expr::let_binding_with_variable_id(
+                    variable_id.clone(),
+                    pred_expr.clone(),
                     None,
-                    Box::new(pred_expr.clone()),
-                    inferred_type.clone(),
-                );
+                )
+                .with_inferred_type(inferred_type.clone());
 
                 let block = Expr::expr_block(vec![assign_var, resolution.clone()]);
 
@@ -174,7 +178,10 @@ mod internal {
                 Some(branch)
             }
 
-            Expr::Call(CallType::EnumConstructor(name), _, _, _) => {
+            Expr::Call {
+                call_type: CallType::EnumConstructor(name),
+                ..
+            } => {
                 let cond = if let Some(t) = tag {
                     Expr::and(
                         t,
@@ -508,12 +515,12 @@ mod internal {
         tag: Option<Expr>,
         pred_expr_inferred_type: InferredType,
     ) -> Option<IfThenBranch> {
-        let binding = Expr::Let(
+        let binding = Expr::let_binding_with_variable_id(
             VariableId::global(name.to_string()),
+            pred_expr.clone(),
             None,
-            Box::new(pred_expr.clone()),
-            pred_expr.inferred_type(),
-        );
+        )
+        .with_inferred_type(pred_expr.inferred_type());
 
         let block = Expr::expr_block(vec![binding, resolution.clone()]);
         get_conditions(
@@ -600,70 +607,48 @@ mod desugar_tests {
         use crate::{Expr, InferredType, Number, TypeName, VariableId};
         use bigdecimal::BigDecimal;
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
-            Expr::Cond(
-                Box::new(Expr::EqualTo(
-                    Box::new(Expr::GetTag(
-                        Box::new(Expr::Identifier(
-                            VariableId::local("x", 0),
-                            None,
-                            InferredType::Option(Box::new(InferredType::U64)),
-                        )),
-                        InferredType::Unknown,
-                    )),
-                    Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
-                    InferredType::Bool,
-                )),
-                Box::new(Expr::ExprBlock(
-                    vec![
-                        Expr::Let(
-                            VariableId::match_identifier("x".to_string(), 1),
-                            None,
-                            Box::new(Expr::Unwrap(
-                                Box::new(Expr::Identifier(
-                                    VariableId::local("x", 0),
-                                    None,
-                                    InferredType::Option(Box::new(InferredType::U64)),
-                                )),
-                                InferredType::Unknown,
-                            )),
-                            InferredType::U64,
+            Expr::cond(
+                Expr::equal_to(
+                    Expr::get_tag(
+                        Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
+                            .with_inferred_type(InferredType::Option(Box::new(InferredType::U64))),
+                    ),
+                    Expr::literal("some".to_string()),
+                )
+                .with_inferred_type(InferredType::Bool),
+                Expr::expr_block(vec![
+                    Expr::let_binding_with_variable_id(
+                        VariableId::match_identifier("x".to_string(), 1),
+                        Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
+                            .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)))
+                            .unwrap(),
+                        None,
+                    )
+                    .with_inferred_type(InferredType::U64),
+                    Expr::identifier_with_variable_id(
+                        VariableId::match_identifier("x".to_string(), 1),
+                        None,
+                    )
+                    .with_inferred_type(InferredType::U64),
+                ])
+                .with_inferred_type(InferredType::U64),
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::get_tag(
+                            Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
+                                .with_inferred_type(InferredType::Option(Box::new(
+                                    InferredType::U64,
+                                ))),
                         ),
-                        Expr::Identifier(
-                            VariableId::match_identifier("x".to_string(), 1),
-                            None,
-                            InferredType::U64,
-                        ),
-                    ],
-                    InferredType::U64,
-                )),
-                Box::new(Expr::Cond(
-                    Box::new(Expr::EqualTo(
-                        Box::new(Expr::GetTag(
-                            Box::new(Expr::Identifier(
-                                VariableId::local("x", 0),
-                                None,
-                                InferredType::Option(Box::new(InferredType::U64)),
-                            )),
-                            InferredType::Unknown,
-                        )),
-                        Box::new(Expr::Literal("none".to_string(), InferredType::Str)),
-                        InferredType::Bool,
-                    )),
-                    Box::new(Expr::Number(
-                        Number {
-                            value: BigDecimal::from(1),
-                        },
-                        Some(TypeName::U64),
-                        InferredType::U64,
-                    )),
-                    Box::new(Expr::Throw(
-                        "No match found".to_string(),
-                        InferredType::Unknown,
-                    )),
-                    InferredType::U64,
-                )),
-                InferredType::U64,
+                        Expr::literal("none".to_string()),
+                    )
+                    .with_inferred_type(InferredType::Bool),
+                    Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+                    Expr::throw("No match found".to_string()),
+                )
+                .with_inferred_type(InferredType::U64),
             )
+            .with_inferred_type(InferredType::U64)
         }
     }
 }

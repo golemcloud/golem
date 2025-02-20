@@ -1114,6 +1114,8 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
+    // `with_inferred_type` overrides the existing inferred_type and returns a new expr
+    // This is different to `merge_inferred_type` where it tries to combine the new inferred type with the existing one.
     pub fn with_inferred_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.override_type_mut(new_inferred_type);

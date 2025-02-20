@@ -40,7 +40,7 @@ where
             string("else").skip(spaces()),
             rib_expr().skip(spaces()),
         )
-            .map(|(cond, _, then_expr, _, else_expr)| Expr::cond(cond, then_expr, else_expr)),
+            .map(|(cond, _, lhs, _, rhs)| Expr::cond(cond, lhs, rhs)),
     )
 }
 

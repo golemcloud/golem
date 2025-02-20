@@ -394,8 +394,6 @@ impl InstanceType {
     }
 }
 
-// TODO; This can be resource type too and not fully qualified function name
-// But we will add this as part of tests
 #[derive(Debug, Clone)]
 pub struct Function {
     pub function_name: FunctionName,
