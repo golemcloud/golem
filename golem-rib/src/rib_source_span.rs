@@ -88,3 +88,71 @@ impl GetSourcePosition for SourcePosition {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{rib_source_span::RibSourceSpan, Expr};
+    use test_r::test;
+
+    #[derive(Debug, PartialEq)]
+    struct RibSourceSpanDebug {
+        start_line: i32,
+        start_column: i32,
+        end_line: i32,
+        end_column: i32,
+    }
+
+    impl From<RibSourceSpan> for RibSourceSpanDebug {
+        fn from(span: RibSourceSpan) -> Self {
+            Self {
+                start_line: span.start.line,
+                start_column: span.start.column,
+                end_line: span.end.line,
+                end_column: span.end.column,
+            }
+        }
+    }
+
+    #[test]
+    fn test_rib_source_span() {
+        let rib_expr = Expr::from_text(
+            r#"
+          let x =
+            "foo";
+          let y =
+            "bar";
+          "${x} ${y}"
+        "#,
+        )
+        .unwrap();
+
+        let spans: Vec<RibSourceSpanDebug> = if let Expr::ExprBlock { exprs, .. } = rib_expr {
+            exprs.iter().map(|expr| expr.source_span().into()).collect()
+        } else {
+            vec![]
+        };
+
+        let expected = vec![
+            RibSourceSpanDebug {
+                start_line: 2,
+                start_column: 11,
+                end_line: 3,
+                end_column: 18,
+            },
+            RibSourceSpanDebug {
+                start_line: 4,
+                start_column: 11,
+                end_line: 5,
+                end_column: 18,
+            },
+            RibSourceSpanDebug {
+                start_line: 0,
+                start_column: 0,
+                end_line: 0,
+                end_column: 0,
+            },
+        ];
+
+        assert_eq!(spans, expected);
+    }
+}

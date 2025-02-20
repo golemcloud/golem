@@ -1118,6 +1118,13 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
+    pub fn source_span(&self) -> RibSourceSpan {
+        match self {
+            Expr::Let { source_span, .. } => source_span.clone(),
+            _ => RibSourceSpan::default(),
+        }
+    }
+
     pub fn with_source_span(&self, new_source_span: RibSourceSpan) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.with_source_span_mut(new_source_span);
