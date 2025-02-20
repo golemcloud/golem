@@ -14,9 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
-use combine::easy::ParseError;
 use combine::stream::position;
-use combine::stream::position::{SourcePosition, Stream};
+use combine::stream::position::Stream;
 use combine::EasyParser;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
