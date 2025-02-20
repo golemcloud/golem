@@ -539,7 +539,7 @@ mod function_parameters_inference_tests {
             },
             None,
             None,
-            vec![Expr::identifier_global("x".to_string(), None)
+            vec![Expr::identifier_global("x", None)
                 .with_inferred_type(InferredType::U64)],
         )
         .with_inferred_type(InferredType::Sequence(vec![]));

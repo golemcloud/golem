@@ -1278,7 +1278,7 @@ mod tests {
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
         let expected =
-            Expr::identifier_global("foo".to_string(), None).with_inferred_type(InferredType::Str);
+            Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }
@@ -1303,7 +1303,7 @@ mod tests {
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-            "baz".to_string(),
+            "baz",
             None,
         )
         .with_inferred_type(InferredType::Str);
@@ -1330,7 +1330,7 @@ mod tests {
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-            "baz".to_string(),
+            "baz",
             None,
         )
         .with_inferred_type(InferredType::Str);
@@ -1357,7 +1357,7 @@ mod tests {
 
         let expected = Expr::select_field(
             Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-            "baz".to_string(),
+            "baz",
             None,
         )
         .with_inferred_type(InferredType::Str);
@@ -1392,7 +1392,7 @@ mod tests {
                 expr: Box::new(
                     Expr::select_field(
                         Expr::select_field(
-                            Expr::identifier_global("foo".to_string(), None).with_inferred_type(
+                            Expr::identifier_global("foo", None).with_inferred_type(
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1401,14 +1401,14 @@ mod tests {
                                     ]),
                                 )]),
                             ),
-                            "bar".to_string(),
+                            "bar",
                             None,
                         )
                         .with_inferred_type(InferredType::Record(vec![
                             ("number".to_string(), InferredType::U64),
                             ("user-id".to_string(), InferredType::Str),
                         ])),
-                        "user-id".to_string(),
+                        "user-id",
                         None,
                     )
                     .with_inferred_type(InferredType::Str),
@@ -1421,7 +1421,7 @@ mod tests {
                 expr: Box::new(
                     Expr::select_field(
                         Expr::select_field(
-                            Expr::identifier_global("foo".to_string(), None).with_inferred_type(
+                            Expr::identifier_global("foo", None).with_inferred_type(
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1430,14 +1430,14 @@ mod tests {
                                     ]),
                                 )]),
                             ),
-                            "bar".to_string(),
+                            "bar",
                             None,
                         )
                         .with_inferred_type(InferredType::Record(vec![
                             ("number".to_string(), InferredType::U64),
                             ("user-id".to_string(), InferredType::Str),
                         ])),
-                        "number".to_string(),
+                        "number",
                         None,
                     )
                     .with_inferred_type(InferredType::U64),

@@ -619,7 +619,7 @@ mod type_push_down_tests {
         expr.push_types_down().unwrap();
         let expected = Expr::record(vec![(
             "titles".to_string(),
-            Expr::identifier_global("x".to_string(), None).with_inferred_type(InferredType::U64),
+            Expr::identifier_global("x", None).with_inferred_type(InferredType::U64),
         )])
         .with_inferred_type(InferredType::AllOf(vec![
             InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),

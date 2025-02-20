@@ -292,10 +292,10 @@ mod type_binding_tests {
         let expected = Expr::select_field(
             Expr::select_field(
                 Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
-                "bar".to_string(),
+                "bar",
                 None,
             ),
-            "baz".to_string(),
+            "baz",
             Some(TypeName::U32),
         )
         .with_inferred_type(InferredType::U32);
@@ -317,10 +317,10 @@ mod type_binding_tests {
             Expr::select_field(
                 Expr::select_field(
                     Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
-                    "bar".to_string(),
+                    "bar",
                     None,
                 ),
-                "baz".to_string(),
+                "baz",
                 None,
             ),
             1,

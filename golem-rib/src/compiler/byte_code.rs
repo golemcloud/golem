@@ -1130,7 +1130,7 @@ mod compiler_tests {
             (String::from("bar_key"), InferredType::Str),
         ]));
 
-        let expr = Expr::select_field(record, "bar_key".to_string(), None)
+        let expr = Expr::select_field(record, "bar_key", None)
             .with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
