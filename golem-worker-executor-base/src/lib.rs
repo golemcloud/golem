@@ -583,7 +583,17 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
 /// type Foo<T: GolemTypes> = FooPoly<T::PluginOwner>
 /// ```
 pub trait GolemTypes: 'static {
-    type ComponentOwner: ComponentOwner<PluginOwner = Self::PluginOwner>;
+    // TODO:
+    // Optimally we would like to have a constraint on the associated type here:
+    //
+    // `type ComponentOwner: ComponentOwner<PluginOwner = Self::PluginOwner>;`
+    //
+    // This does currently now work nicely for two reasons:
+    // * PluginOwner / PluginScope bring a lot of baggage. Especially the AuthCtx can make it difficult to move implementations to a central location
+    // * cloud-worker-executor currently mixes Oss and Cloud types here. Optimally it would fully use cloud types.
+    //
+    // Once these two issues are addressed, introduce the contraint here.
+    type ComponentOwner: ComponentOwner;
 
     type PluginOwner: PluginOwner;
     type PluginScope: PluginScope;
