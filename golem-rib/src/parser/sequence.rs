@@ -71,7 +71,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![Expr::identifier("foo", None)], None),
+                Expr::sequence(vec![Expr::identifier_global("foo", None)], None),
                 ""
             ))
         );
@@ -85,7 +85,10 @@ mod tests {
             result,
             Ok((
                 Expr::sequence(
-                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ),
                 ""
@@ -102,8 +105,8 @@ mod tests {
             Ok((
                 Expr::sequence(
                     vec![
-                        Expr::not(Expr::identifier("foo", None)),
-                        Expr::not(Expr::identifier("bar", None))
+                        Expr::not(Expr::identifier_global("foo", None)),
+                        Expr::not(Expr::identifier_global("bar", None))
                     ],
                     None
                 ),
@@ -135,11 +138,17 @@ mod tests {
                 Expr::sequence(
                     vec![
                         Expr::sequence(
-                            vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                            vec![
+                                Expr::identifier_global("foo", None),
+                                Expr::identifier_global("bar", None)
+                            ],
                             None
                         ),
                         Expr::sequence(
-                            vec![Expr::identifier("bar", None), Expr::identifier("bar", None)],
+                            vec![
+                                Expr::identifier_global("bar", None),
+                                Expr::identifier_global("bar", None)
+                            ],
                             None
                         )
                     ],
@@ -160,9 +169,9 @@ mod tests {
             Ok((
                 Expr::sequence(
                     vec![
-                        Expr::option(Some(Expr::identifier("x", None))),
-                        Expr::option(Some(Expr::identifier("y", None))),
-                        Expr::option(Some(Expr::identifier("z", None)))
+                        Expr::option(Some(Expr::identifier_global("x", None))),
+                        Expr::option(Some(Expr::identifier_global("y", None))),
+                        Expr::option(Some(Expr::identifier_global("z", None)))
                     ],
                     None
                 ),
@@ -181,9 +190,9 @@ mod tests {
             Ok((
                 Expr::sequence(
                     vec![
-                        Expr::ok(Expr::identifier("x", None), None),
-                        Expr::ok(Expr::identifier("y", None), None),
-                        Expr::ok(Expr::identifier("z", None), None)
+                        Expr::ok(Expr::identifier_global("x", None), None),
+                        Expr::ok(Expr::identifier_global("y", None), None),
+                        Expr::ok(Expr::identifier_global("z", None), None)
                     ],
                     None
                 ),
@@ -203,14 +212,14 @@ mod tests {
                 Expr::sequence(
                     vec![
                         Expr::cond(
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None),
-                            Expr::identifier("baz", None)
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None)
                         ),
                         Expr::cond(
-                            Expr::identifier("qux", None),
-                            Expr::identifier("quux", None),
-                            Expr::identifier("quuz", None)
+                            Expr::identifier_global("qux", None),
+                            Expr::identifier_global("quux", None),
+                            Expr::identifier_global("quuz", None)
                         )
                     ],
                     None
@@ -231,12 +240,12 @@ mod tests {
                 Expr::sequence(
                     vec![
                         Expr::tuple(vec![
-                            Expr::identifier("foo", None),
-                            Expr::identifier("bar", None)
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
                         ]),
                         Expr::tuple(vec![
-                            Expr::identifier("baz", None),
-                            Expr::identifier("qux", None)
+                            Expr::identifier_global("baz", None),
+                            Expr::identifier_global("qux", None)
                         ])
                     ],
                     None

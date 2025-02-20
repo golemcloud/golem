@@ -24,7 +24,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
         let expr_str = &mut expr.to_string();
 
         match expr {
-            Expr::Number(_, _, inferred_type) => {
+            Expr::Number { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -35,8 +35,12 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Record(vec, inferred_type) => {
-                queue.extend(vec.iter_mut().map(|(_, expr)| &mut **expr));
+            Expr::Record {
+                exprs,
+                inferred_type,
+                ..
+            } => {
+                queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr));
 
                 let unified_inferred_type = inferred_type.unify();
 
@@ -50,8 +54,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Tuple(vec, inferred_type) => {
-                queue.extend(vec.iter_mut());
+            Expr::Tuple {
+                exprs,
+                inferred_type,
+            } => {
+                queue.extend(exprs.iter_mut());
 
                 let unified_inferred_type = inferred_type.unify();
 
@@ -65,8 +72,12 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Sequence(vec, _, inferred_type) => {
-                queue.extend(vec.iter_mut());
+            Expr::Sequence {
+                exprs,
+                inferred_type,
+                ..
+            } => {
+                queue.extend(exprs.iter_mut());
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -79,7 +90,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Option(Some(expr), _, inferred_type) => {
+            Expr::Option {
+                expr: Some(expr),
+                inferred_type,
+                ..
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -94,7 +109,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Option(None, _, inferred_type) => {
+            Expr::Option { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -108,7 +123,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Result(Ok(expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Ok(expr),
+                inferred_type,
+                ..
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -122,7 +141,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Result(Err(expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Err(expr),
+                inferred_type,
+                ..
+            } => {
                 queue.push(expr);
 
                 let unified_inferred_type = inferred_type.unify();
@@ -137,10 +160,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Cond(cond, then, else_, inferred_type) => {
+            Expr::Cond {
+                cond,
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
                 queue.push(cond);
-                queue.push(then);
-                queue.push(else_);
+                queue.push(lhs);
+                queue.push(rhs);
 
                 let unified_inferred_type = inferred_type.unify();
 
@@ -201,9 +229,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::PatternMatch(expr, arms, inferred_type) => {
-                queue.push(expr);
-                for arm in arms.iter_mut().rev() {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                inferred_type,
+            } => {
+                queue.push(predicate);
+                for arm in match_arms.iter_mut().rev() {
                     let arm_resolution_expr = &mut *arm.arm_resolution_expr;
                     let arm_pattern: &mut ArmPattern = &mut arm.arm_pattern;
                     internal::push_arm_pattern_expr(arm_pattern, &mut queue);
@@ -221,10 +253,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Call(function_call, _, vec, inferred_type) => {
-                queue.extend(vec.iter_mut());
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
+                queue.extend(args.iter_mut());
 
-                match function_call {
+                match call_type {
                     // We don't care about anything inside instance creation
                     CallType::InstanceCreation(_) => {}
                     // Make sure worker expression in function
@@ -257,14 +294,18 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             Err(e) => {
                                 errors.push(format!(
                                     "unable to infer the type of function return {}, {}",
-                                    function_call, e
+                                    call_type, e
                                 ));
                             }
                         }
                     }
                 }
             }
-            Expr::SelectField(expr, _, _, inferred_type) => {
+            Expr::SelectField {
+                expr,
+                inferred_type,
+                ..
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -278,7 +319,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::SelectIndex(expr, _, _, inferred_type) => {
+            Expr::SelectIndex {
+                expr,
+                inferred_type,
+                ..
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -293,10 +338,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Let(_, _, expr, _) => {
+            Expr::Let { expr, .. } => {
                 queue.push(expr);
             }
-            Expr::Literal(_, inferred_type) => {
+            Expr::Literal { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -306,7 +351,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Flags(_, inferred_type) => {
+            Expr::Flags { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -319,7 +364,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Identifier(_, _, inferred_type) => {
+            Expr::Identifier { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -331,12 +376,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Boolean(_, _) => {}
-            Expr::Concat(exprs, _) => {
+            Expr::Boolean { .. } => {}
+            Expr::Concat { exprs, .. } => {
                 queue.extend(exprs);
             }
-            Expr::ExprBlock(expr, inferred_type) => {
-                queue.extend(expr);
+            Expr::ExprBlock {
+                exprs,
+                inferred_type,
+            } => {
+                queue.extend(exprs);
 
                 let unified_inferred_type = inferred_type.unify();
 
@@ -345,7 +393,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Not(expr, inferred_type) => {
+            Expr::Not {
+                expr,
+                inferred_type,
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -356,7 +407,10 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Unwrap(expr, inferred_type) => {
+            Expr::Unwrap {
+                expr,
+                inferred_type,
+            } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
 
@@ -368,7 +422,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Throw(_, inferred_type) => {
+            Expr::Throw { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -379,7 +433,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::GetTag(_, inferred_type) => {
+            Expr::GetTag { inferred_type, .. } => {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
@@ -390,71 +444,67 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::GreaterThan(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+            Expr::GreaterThan { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
             }
 
-            Expr::Plus(left, right, inferred_type) => internal::handle_math_op(
-                &mut queue,
-                left,
-                right,
+            Expr::Plus {
+                lhs,
+                rhs,
                 inferred_type,
-                &mut errors,
-                expr_str,
-            ),
+            } => {
+                internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
+            }
 
-            Expr::Minus(left, right, inferred_type) => internal::handle_math_op(
-                &mut queue,
-                left,
-                right,
+            Expr::Minus {
+                lhs,
+                rhs,
                 inferred_type,
-                &mut errors,
-                expr_str,
-            ),
+            } => {
+                internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
+            }
 
-            Expr::Divide(left, right, inferred_type) => internal::handle_math_op(
-                &mut queue,
-                left,
-                right,
+            Expr::Divide {
+                lhs,
+                rhs,
                 inferred_type,
-                &mut errors,
-                expr_str,
-            ),
+            } => {
+                internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
+            }
 
-            Expr::Multiply(left, right, inferred_type) => internal::handle_math_op(
-                &mut queue,
-                left,
-                right,
+            Expr::Multiply {
+                lhs,
+                rhs,
                 inferred_type,
-                &mut errors,
-                expr_str,
-            ),
-
-            Expr::And(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
-            }
-            Expr::Or(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+            } => {
+                internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
             }
 
-            Expr::GreaterThanOrEqualTo(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+            Expr::And { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
             }
-            Expr::LessThanOrEqualTo(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+            Expr::Or { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
             }
-            Expr::EqualTo(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+
+            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
             }
-            Expr::LessThan(left, right, _) => {
-                queue.push(left);
-                queue.push(right);
+            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
+            }
+            Expr::EqualTo { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
+            }
+            Expr::LessThan { lhs, rhs, .. } => {
+                queue.push(lhs);
+                queue.push(rhs);
             }
             Expr::InvokeMethodLazy { .. } => {}
         }

@@ -317,6 +317,9 @@ mod type_inference_tests {
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            call, expr_block, identifier, let_binding, number,
+        };
         use crate::{Expr, InferredType, Number, ParsedFunctionSite, VariableId};
 
         #[test]
@@ -332,10 +335,10 @@ mod type_inference_tests {
 
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let let_binding = Expr::Let(
+            let let_binding = let_binding(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(
+                Box::new(number(
                     Number {
                         value: BigDecimal::from(1),
                     },
@@ -345,7 +348,7 @@ mod type_inference_tests {
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
 
-            let call_expr = Expr::Call(
+            let call_expr = call(
                 CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -353,7 +356,7 @@ mod type_inference_tests {
                     },
                 }),
                 None,
-                vec![Expr::Identifier(
+                vec![identifier(
                     VariableId::local("x", 0),
                     None,
                     InferredType::U64, // Variable identified to be a U64
@@ -361,8 +364,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let expected =
-                Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Sequence(vec![]));
+            let expected = expr_block(vec![let_binding, call_expr], InferredType::Sequence(vec![]));
 
             assert_eq!(expr, expected);
         }
@@ -382,10 +384,10 @@ mod type_inference_tests {
 
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let let_binding1 = Expr::Let(
+            let let_binding1 = let_binding(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(
+                Box::new(number(
                     Number {
                         value: BigDecimal::from(1),
                     },
@@ -395,10 +397,10 @@ mod type_inference_tests {
                 InferredType::Unknown,
             );
 
-            let let_binding2 = Expr::Let(
+            let let_binding2 = let_binding(
                 VariableId::local("y", 0),
                 None,
-                Box::new(Expr::Number(
+                Box::new(number(
                     Number {
                         value: BigDecimal::from(2),
                     },
@@ -408,7 +410,7 @@ mod type_inference_tests {
                 InferredType::Unknown,
             );
 
-            let call_expr1 = Expr::Call(
+            let call_expr1 = call(
                 CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -416,7 +418,7 @@ mod type_inference_tests {
                     },
                 }),
                 None,
-                vec![Expr::Identifier(
+                vec![identifier(
                     VariableId::local("x", 0),
                     None,
                     InferredType::U64,
@@ -424,7 +426,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let call_expr2 = Expr::Call(
+            let call_expr2 = call(
                 CallType::function_without_worker(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -432,7 +434,7 @@ mod type_inference_tests {
                     },
                 }),
                 None,
-                vec![Expr::Identifier(
+                vec![identifier(
                     VariableId::local("y", 0),
                     None,
                     InferredType::U32,
@@ -440,7 +442,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![let_binding1, let_binding2, call_expr1, call_expr2],
                 InferredType::Sequence(vec![]),
             );
@@ -454,6 +456,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -468,12 +473,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -482,7 +487,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::U64),
+                    identifier(VariableId::local("x", 0), None, InferredType::U64),
                 ],
                 InferredType::U64,
             );
@@ -502,15 +507,15 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::Str),
+                    identifier(VariableId::local("x", 0), None, InferredType::Str),
                 ],
                 InferredType::Str,
             );
@@ -524,6 +529,10 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            equal_to, expr_block, greater_than, greater_than_or_equal_to, identifier, less_than,
+            less_than_or_equal_to, let_binding, number,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -542,12 +551,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -556,10 +565,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(2),
                             },
@@ -568,65 +577,65 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::GreaterThan(
-                        Box::new(Expr::Identifier(
+                    greater_than(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     ),
-                    Expr::GreaterThanOrEqualTo(
-                        Box::new(Expr::Identifier(
+                    greater_than_or_equal_to(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     ),
-                    Expr::LessThan(
-                        Box::new(Expr::Identifier(
+                    less_than(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     ),
-                    Expr::LessThanOrEqualTo(
-                        Box::new(Expr::Identifier(
+                    less_than_or_equal_to(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Bool,
                     ),
-                    Expr::EqualTo(
-                        Box::new(Expr::Identifier(
+                    equal_to(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
@@ -789,6 +798,9 @@ mod type_inference_tests {
         use test_r::test;
 
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            concat, expr_block, identifier, let_binding,
+        };
         use crate::{Expr, InferredType, VariableId};
 
         #[test]
@@ -803,24 +815,24 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
                         Box::new(Expr::literal("2")),
                         InferredType::Unknown,
                     ),
-                    Expr::Concat(
+                    concat(
                         vec![
-                            Expr::Identifier(VariableId::local("x", 0), None, InferredType::Str),
-                            Expr::Identifier(VariableId::local("y", 0), None, InferredType::Str),
+                            identifier(VariableId::local("x", 0), None, InferredType::Str),
+                            identifier(VariableId::local("y", 0), None, InferredType::Str),
                         ],
                         InferredType::Str,
                     ),
@@ -835,6 +847,9 @@ mod type_inference_tests {
         use test_r::test;
 
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding,
+        };
         use crate::{Expr, InferredType, VariableId};
 
         #[test]
@@ -849,15 +864,15 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
                         Box::new(Expr::boolean(true)),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("x", 0), None, InferredType::Bool),
+                    identifier(VariableId::local("x", 0), None, InferredType::Bool),
                 ],
                 InferredType::Bool,
             );
@@ -871,6 +886,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            cond, expr_block, greater_than, identifier, let_binding, number,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -887,12 +905,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -901,10 +919,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(2),
                             },
@@ -913,38 +931,38 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("res1", 0),
                         None,
                         Box::new(Expr::literal("foo")),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("res2", 0),
                         None,
                         Box::new(Expr::literal("bar")),
                         InferredType::Unknown,
                     ),
-                    Expr::Cond(
-                        Box::new(Expr::GreaterThan(
-                            Box::new(Expr::Identifier(
+                    cond(
+                        Box::new(greater_than(
+                            Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::U64,
                             )),
-                            Box::new(Expr::Identifier(
+                            Box::new(identifier(
                                 VariableId::local("y", 0),
                                 None,
                                 InferredType::U64,
                             )),
                             InferredType::Bool,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("res1", 0),
                             None,
                             InferredType::Str,
                         )),
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("res2", 0),
                             None,
                             InferredType::Str,
@@ -964,6 +982,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -979,25 +1000,25 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::Str,
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("y", 0), None, InferredType::Str),
+                    identifier(VariableId::local("y", 0), None, InferredType::Str),
                 ],
                 InferredType::Str,
             );
@@ -1019,12 +1040,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -1033,27 +1054,27 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("z", 0),
                         None,
-                        Box::new(Expr::Identifier(
+                        Box::new(identifier(
                             VariableId::local("y", 0),
                             None,
                             InferredType::U64,
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(VariableId::local("z", 0), None, InferredType::U64),
+                    identifier(VariableId::local("z", 0), None, InferredType::U64),
                 ],
                 InferredType::U64,
             );
@@ -1067,6 +1088,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, sequence,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -1081,28 +1105,28 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::List(Box::new(TypeName::U64))),
-                        Box::new(Expr::Sequence(
+                        Box::new(sequence(
                             vec![
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(1),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(2),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(3),
                                     },
@@ -1115,7 +1139,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("x", 0),
                         None,
                         InferredType::List(Box::new(InferredType::U64)),
@@ -1133,6 +1157,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, select_index, sequence,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -1147,28 +1174,28 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::List(Box::new(TypeName::U64))),
-                        Box::new(Expr::Sequence(
+                        Box::new(sequence(
                             vec![
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(1),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(2),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(3),
                                     },
@@ -1181,8 +1208,8 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::SelectIndex(
-                        Box::new(Expr::Identifier(
+                    select_index(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
@@ -1204,6 +1231,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, record, select_field,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -1219,12 +1249,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("n", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -1233,13 +1263,13 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("n", 0),
                                     None,
                                     InferredType::U64,
@@ -1249,8 +1279,8 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::SelectField(
-                        Box::new(Expr::Identifier(
+                    select_field(
+                        Box::new(identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
@@ -1272,6 +1302,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, tuple,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -1286,14 +1319,14 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::Tuple(vec![TypeName::U64, TypeName::Str])),
-                        Box::new(Expr::Tuple(
+                        Box::new(tuple(
                             vec![
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(1),
                                     },
@@ -1306,7 +1339,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("x", 0),
                         None,
                         InferredType::Tuple(vec![InferredType::U64, InferredType::Str]),
@@ -1323,6 +1356,9 @@ mod type_inference_tests {
         use test_r::test;
 
         use crate::parser::type_name::TypeName;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, option, pattern_match,
+        };
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId,
         };
@@ -1344,12 +1380,12 @@ mod type_inference_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -1358,11 +1394,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("z", 0),
                         None,
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("y", 0),
                                 None,
                                 InferredType::U64,
@@ -1372,8 +1408,8 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(identifier(
                             VariableId::local("z", 0),
                             None,
                             InferredType::Option(Box::new(InferredType::U64)),
@@ -1382,21 +1418,17 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::constructor(
                                     "some",
-                                    vec![ArmPattern::literal(Expr::Identifier(
+                                    vec![ArmPattern::literal(identifier(
                                         VariableId::match_identifier("z".to_string(), 1),
                                         None,
                                         InferredType::U64,
                                     ))],
                                 ),
-                                Expr::Identifier(
-                                    VariableId::local("y", 0),
-                                    None,
-                                    InferredType::U64,
-                                ),
+                                identifier(VariableId::local("y", 0), None, InferredType::U64),
                             ),
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(0),
                                     },
@@ -1422,6 +1454,10 @@ mod type_inference_tests {
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            call, expr_block, identifier, let_binding, number, option, pattern_match, record,
+            select_field, select_index, sequence,
+        };
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
             ParsedFunctionSite, VariableId,
@@ -1442,10 +1478,10 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let let_binding1 = Expr::Let(
+            let let_binding1 = let_binding(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(
+                Box::new(number(
                     Number {
                         value: BigDecimal::from(1),
                     },
@@ -1455,10 +1491,10 @@ mod type_inference_tests {
                 InferredType::Unknown,
             );
 
-            let let_binding2 = Expr::Let(
+            let let_binding2 = let_binding(
                 VariableId::local("y", 0),
                 None,
-                Box::new(Expr::Number(
+                Box::new(number(
                     Number {
                         value: BigDecimal::from(2),
                     },
@@ -1468,22 +1504,22 @@ mod type_inference_tests {
                 InferredType::Unknown,
             );
 
-            let match_expr_expected = Expr::PatternMatch(
-                Box::new(Expr::Identifier(
+            let match_expr_expected = pattern_match(
+                Box::new(identifier(
                     VariableId::local("x", 0),
                     None,
                     InferredType::U64,
                 )),
                 vec![
                     MatchArm::new(
-                        ArmPattern::Literal(Box::new(Expr::Number(
+                        ArmPattern::Literal(Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
                             None,
                             InferredType::U64,
                         ))),
-                        Expr::Call(
+                        call(
                             CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -1491,7 +1527,7 @@ mod type_inference_tests {
                                 },
                             }),
                             None,
-                            vec![Expr::Identifier(
+                            vec![identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::U64,
@@ -1500,14 +1536,14 @@ mod type_inference_tests {
                         ),
                     ),
                     MatchArm::new(
-                        ArmPattern::Literal(Box::new(Expr::Number(
+                        ArmPattern::Literal(Box::new(number(
                             Number {
                                 value: BigDecimal::from(2),
                             },
                             None,
                             InferredType::U64, // because predicate is u64
                         ))),
-                        Expr::Call(
+                        call(
                             CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -1515,7 +1551,7 @@ mod type_inference_tests {
                                 },
                             }),
                             None,
-                            vec![Expr::Identifier(
+                            vec![identifier(
                                 VariableId::local("y", 0),
                                 None,
                                 InferredType::U32,
@@ -1527,7 +1563,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![let_binding1, let_binding2, match_expr_expected],
                 InferredType::Sequence(vec![]),
             );
@@ -1570,12 +1606,12 @@ mod type_inference_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -1584,10 +1620,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(2),
                             },
@@ -1596,9 +1632,9 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::U64,
@@ -1610,15 +1646,15 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::Constructor(
                                     "some".to_string(),
-                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                    vec![ArmPattern::Literal(Box::new(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::U64,
                                     )))],
                                 ),
-                                Expr::Option(
-                                    Some(Box::new(Expr::Option(
-                                        Some(Box::new(Expr::Identifier(
+                                option(
+                                    Some(Box::new(option(
+                                        Some(Box::new(identifier(
                                             VariableId::match_identifier("x".to_string(), 1),
                                             None,
                                             InferredType::U64,
@@ -1634,9 +1670,9 @@ mod type_inference_tests {
                             ),
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
-                                Expr::Option(
-                                    Some(Box::new(Expr::Option(
-                                        Some(Box::new(Expr::Identifier(
+                                option(
+                                    Some(Box::new(option(
+                                        Some(Box::new(identifier(
                                             VariableId::local("y", 0),
                                             None,
                                             InferredType::U64,
@@ -1677,20 +1713,20 @@ mod type_inference_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -1705,7 +1741,7 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::Constructor(
                                     "some".to_string(),
-                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                    vec![ArmPattern::Literal(Box::new(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::Record(vec![(
@@ -1714,7 +1750,7 @@ mod type_inference_tests {
                                         )]),
                                     )))],
                                 ),
-                                Expr::Identifier(
+                                identifier(
                                     VariableId::match_identifier("x".to_string(), 1),
                                     None,
                                     InferredType::Record(vec![(
@@ -1725,7 +1761,7 @@ mod type_inference_tests {
                             ),
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
-                                Expr::Record(
+                                record(
                                     vec![("foo".to_string(), Box::new(Expr::literal("baz")))],
                                     InferredType::Record(vec![(
                                         "foo".to_string(),
@@ -1758,20 +1794,20 @@ mod type_inference_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -1786,7 +1822,7 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::constructor(
                                     "some",
-                                    vec![ArmPattern::literal(Expr::Identifier(
+                                    vec![ArmPattern::literal(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::Record(vec![(
@@ -1795,8 +1831,8 @@ mod type_inference_tests {
                                         )]),
                                     ))],
                                 ),
-                                Expr::SelectField(
-                                    Box::new(Expr::Identifier(
+                                select_field(
+                                    Box::new(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::Record(vec![(
@@ -1845,37 +1881,37 @@ mod type_inference_tests {
             expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
                 .unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         Some(TypeName::List(Box::new(TypeName::U64))),
-                        Box::new(Expr::Sequence(
+                        Box::new(sequence(
                             vec![
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(1),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(2),
                                     },
                                     None,
                                     InferredType::U64,
                                 ),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(3),
                                     },
@@ -1888,9 +1924,9 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -1905,7 +1941,7 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::Constructor(
                                     "some".to_string(),
-                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                    vec![ArmPattern::Literal(Box::new(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::Record(vec![(
@@ -1914,8 +1950,8 @@ mod type_inference_tests {
                                         )]),
                                     )))],
                                 ),
-                                Expr::SelectField(
-                                    Box::new(Expr::Identifier(
+                                select_field(
+                                    Box::new(identifier(
                                         VariableId::match_identifier("x".to_string(), 1),
                                         None,
                                         InferredType::Record(vec![(
@@ -1935,9 +1971,9 @@ mod type_inference_tests {
                         ],
                         InferredType::Str,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("y", 0),
                                 None,
                                 InferredType::List(Box::new(InferredType::U64)),
@@ -1951,14 +1987,14 @@ mod type_inference_tests {
                             MatchArm::new(
                                 ArmPattern::Constructor(
                                     "some".to_string(),
-                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                    vec![ArmPattern::Literal(Box::new(identifier(
                                         VariableId::match_identifier("y".to_string(), 3),
                                         None,
                                         InferredType::List(Box::new(InferredType::U64)),
                                     )))],
                                 ),
-                                Expr::SelectIndex(
-                                    Box::new(Expr::Identifier(
+                                select_index(
+                                    Box::new(identifier(
                                         VariableId::match_identifier("y".to_string(), 3),
                                         None,
                                         InferredType::List(Box::new(InferredType::U64)),
@@ -1970,7 +2006,7 @@ mod type_inference_tests {
                             ),
                             MatchArm::new(
                                 ArmPattern::constructor("none", vec![]),
-                                Expr::Number(
+                                number(
                                     Number {
                                         value: BigDecimal::from(0),
                                     },
@@ -1994,6 +2030,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, number, option,
+        };
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
@@ -2008,13 +2047,13 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::Option(Box::new(TypeName::U64))),
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Number(
+                        Box::new(option(
+                            Some(Box::new(number(
                                 Number {
                                     value: BigDecimal::from(1),
                                 },
@@ -2026,7 +2065,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("x", 0),
                         None,
                         InferredType::Option(Box::new(InferredType::U64)),
@@ -2051,13 +2090,13 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::Option(Box::new(TypeName::U64))),
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Number(
+                        Box::new(option(
+                            Some(Box::new(number(
                                 Number {
                                     value: BigDecimal::from(1),
                                 },
@@ -2069,11 +2108,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                        Box::new(option(
+                            Some(Box::new(identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::Option(Box::new(InferredType::U64)),
@@ -2085,7 +2124,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("y", 0),
                         None,
                         InferredType::Option(Box::new(InferredType::Option(Box::new(
@@ -2105,6 +2144,9 @@ mod type_inference_tests {
 
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            cond, expr_block, identifier, let_binding, number, record,
+        };
         use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
         use golem_wasm_ast::analysis::analysed_type::{list, option, str};
 
@@ -2121,12 +2163,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("number", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(
+                        Box::new(number(
                             Number {
                                 value: BigDecimal::from(1),
                             },
@@ -2135,13 +2177,13 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("number", 0),
                                     None,
                                     InferredType::U64,
@@ -2151,7 +2193,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("x", 0),
                         None,
                         InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
@@ -2178,21 +2220,21 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Cond(
+                        Box::new(cond(
                             Box::new(Expr::boolean(true)),
-                            Box::new(Expr::Number(
+                            Box::new(number(
                                 Number {
                                     value: BigDecimal::from(1),
                                 },
                                 Some(TypeName::U64),
                                 InferredType::U64,
                             )),
-                            Box::new(Expr::Number(
+                            Box::new(number(
                                 Number {
                                     value: BigDecimal::from(20),
                                 },
@@ -2203,18 +2245,18 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::ExprBlock(
+                        Box::new(expr_block(
                             vec![
-                                Expr::Let(
+                                let_binding(
                                     VariableId::local("z", 0),
                                     None,
-                                    Box::new(Expr::Record(
+                                    Box::new(record(
                                         vec![(
                                             "x".to_string(),
-                                            Box::new(Expr::Identifier(
+                                            Box::new(identifier(
                                                 VariableId::local("x", 0),
                                                 None,
                                                 InferredType::U64,
@@ -2227,7 +2269,7 @@ mod type_inference_tests {
                                     )),
                                     InferredType::Unknown,
                                 ),
-                                Expr::Identifier(
+                                identifier(
                                     VariableId::local("z", 0),
                                     None,
                                     InferredType::Record(vec![(
@@ -2240,7 +2282,7 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Identifier(
+                    identifier(
                         VariableId::local("y", 0),
                         None,
                         InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
@@ -2299,6 +2341,9 @@ mod type_inference_tests {
     }
 
     mod list_aggregation_tests {
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, plus, sequence,
+        };
         use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, TypeName, VariableId};
         use bigdecimal::BigDecimal;
         use test_r::test;
@@ -2318,12 +2363,12 @@ mod type_inference_tests {
             let inferred_expr =
                 InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("ages", 0),
                         Some(TypeName::List(Box::new(TypeName::U64))),
-                        Box::new(Expr::Sequence(
+                        Box::new(sequence(
                             vec![
                                 Expr::number(BigDecimal::from(1), None, InferredType::U64),
                                 Expr::number(BigDecimal::from(2), None, InferredType::U64),
@@ -2337,24 +2382,24 @@ mod type_inference_tests {
                     Expr::typed_list_reduce(
                         VariableId::list_reduce_identifier("z"),
                         VariableId::list_comprehension_identifier("a"),
-                        Expr::Identifier(
+                        identifier(
                             VariableId::local("ages", 0),
                             None,
                             InferredType::List(Box::new(InferredType::U64)),
                         ),
                         Expr::number(BigDecimal::from(0), Some(TypeName::U64), InferredType::U64),
-                        Expr::ExprBlock(
+                        expr_block(
                             vec![
-                                Expr::Let(
+                                let_binding(
                                     VariableId::local("result", 0),
                                     None,
-                                    Box::new(Expr::Plus(
-                                        Box::new(Expr::Identifier(
+                                    Box::new(plus(
+                                        Box::new(identifier(
                                             VariableId::list_reduce_identifier("z"),
                                             None,
                                             InferredType::U64,
                                         )),
-                                        Box::new(Expr::Identifier(
+                                        Box::new(identifier(
                                             VariableId::list_comprehension_identifier("a"),
                                             None,
                                             InferredType::U64,
@@ -2363,11 +2408,7 @@ mod type_inference_tests {
                                     )),
                                     InferredType::Unknown,
                                 ),
-                                Expr::Identifier(
-                                    VariableId::local("result", 0),
-                                    None,
-                                    InferredType::U64,
-                                ),
+                                identifier(VariableId::local("result", 0), None, InferredType::U64),
                             ],
                             InferredType::U64,
                         ),
@@ -2382,6 +2423,9 @@ mod type_inference_tests {
     }
 
     mod list_comprehension_tests {
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, sequence,
+        };
         use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, VariableId};
         use test_r::test;
 
@@ -2401,12 +2445,12 @@ mod type_inference_tests {
             let inferred_expr =
                 InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Sequence(
+                        Box::new(sequence(
                             vec![Expr::literal("foo"), Expr::literal("bar")],
                             None,
                             InferredType::List(Box::new(InferredType::Str)),
@@ -2415,13 +2459,13 @@ mod type_inference_tests {
                     ),
                     Expr::typed_list_comprehension(
                         VariableId::list_comprehension_identifier("i"),
-                        Expr::Identifier(
+                        identifier(
                             VariableId::local("x", 0),
                             None,
                             InferredType::List(Box::new(InferredType::Str)),
                         ),
-                        Expr::ExprBlock(
-                            vec![Expr::Identifier(
+                        expr_block(
+                            vec![identifier(
                                 VariableId::list_comprehension_identifier("i"),
                                 None,
                                 InferredType::Str,
@@ -2442,6 +2486,9 @@ mod type_inference_tests {
         use test_r::test;
 
         use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            expr_block, identifier, let_binding, record, result,
+        };
         use crate::{Expr, InferredType, VariableId};
 
         #[test]
@@ -2456,12 +2503,12 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
-            let expected = Expr::ExprBlock(
+            let expected = expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("p", 0),
                         None,
-                        Box::new(Expr::Result(
+                        Box::new(result(
                             Err(Box::new(Expr::literal("foo"))),
                             None,
                             InferredType::Result {
@@ -2471,10 +2518,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("q", 0),
                         None,
-                        Box::new(Expr::Result(
+                        Box::new(result(
                             Ok(Box::new(Expr::literal("bar"))),
                             None,
                             InferredType::Result {
@@ -2484,11 +2531,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Record(
+                    record(
                         vec![
                             (
                                 "a".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("p", 0),
                                     None,
                                     InferredType::Result {
@@ -2499,7 +2546,7 @@ mod type_inference_tests {
                             ),
                             (
                                 "b".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("q", 0),
                                     None,
                                     InferredType::Result {
@@ -2552,18 +2599,255 @@ mod type_inference_tests {
 
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
+        use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            ParsedFunctionSite, VariableId,
+            Number, ParsedFunctionSite, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::{option, u64};
+        use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
         use golem_wasm_rpc::{Value, ValueAndType};
+
+        pub(crate) fn result(
+            expr: Result<Box<Expr>, Box<Expr>>,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Result {
+                expr,
+                type_annotation,
+                inferred_type,
+            }
+        }
+        pub(crate) fn plus(lhs: Box<Expr>, rhs: Box<Expr>, inferred_type: InferredType) -> Expr {
+            Expr::Plus {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn pattern_match(
+            predicate: Box<Expr>,
+            match_arms: Vec<MatchArm>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                inferred_type,
+            }
+        }
+        pub(crate) fn literal(value: String, inferred_type: InferredType) -> Expr {
+            Expr::Literal {
+                value,
+                inferred_type,
+            }
+        }
+        pub(crate) fn tuple(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
+            Expr::Tuple {
+                exprs,
+                inferred_type,
+            }
+        }
+        pub(crate) fn option(
+            expr: Option<Box<Expr>>,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Option {
+                expr,
+                type_annotation,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn select_field(
+            expr: Box<Expr>,
+            field: String,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::SelectField {
+                expr,
+                field,
+                type_annotation,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn select_index(
+            expr: Box<Expr>,
+            index: usize,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::SelectIndex {
+                expr,
+                index,
+                type_annotation,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn sequence(
+            exprs: Vec<Expr>,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Sequence {
+                exprs,
+                type_annotation,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn cond(
+            cond: Box<Expr>,
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Cond {
+                cond,
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+        pub(crate) fn greater_than(
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::GreaterThan {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn greater_than_or_equal_to(
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::GreaterThanOrEqualTo {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn less_than(
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::LessThan {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn less_than_or_equal_to(
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::LessThanOrEqualTo {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn equal_to(
+            lhs: Box<Expr>,
+            rhs: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::EqualTo {
+                lhs,
+                rhs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn concat(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
+            Expr::Concat {
+                exprs,
+                inferred_type,
+            }
+        }
+        pub(crate) fn call(
+            call_type: CallType,
+            generic_type_parameter: Option<GenericTypeParameter>,
+            args: Vec<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Call {
+                call_type,
+                generic_type_parameter,
+                args,
+                inferred_type,
+            }
+        }
+        pub(crate) fn number(
+            value: Number,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Number {
+                number: value,
+                type_annotation,
+                inferred_type,
+            }
+        }
+        pub(crate) fn identifier(
+            variable_id: VariableId,
+            type_annotation: Option<TypeName>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Identifier {
+                variable_id,
+                type_annotation,
+                inferred_type,
+            }
+        }
+        pub(crate) fn record(exprs: Vec<(String, Box<Expr>)>, inferred_type: InferredType) -> Expr {
+            Expr::Record {
+                exprs,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn let_binding(
+            variable_id: VariableId,
+            type_annotation: Option<TypeName>,
+            expr: Box<Expr>,
+            inferred_type: InferredType,
+        ) -> Expr {
+            Expr::Let {
+                variable_id,
+                type_annotation,
+                expr,
+                inferred_type,
+            }
+        }
+
+        pub(crate) fn expr_block(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
+            Expr::ExprBlock {
+                exprs,
+                inferred_type,
+            }
+        }
 
         pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
             let metadata = vec![
@@ -2624,7 +2908,10 @@ mod type_inference_tests {
         }
 
         pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
-            ValueAndType::new(Value::Option(None), option(typ.clone()))
+            ValueAndType::new(
+                Value::Option(None),
+                golem_wasm_ast::analysis::analysed_type::option(typ.clone()),
+            )
         }
 
         pub(crate) fn get_analysed_exports(
@@ -2652,14 +2939,14 @@ mod type_inference_tests {
         }
 
         pub(crate) fn expected_expr_for_enum_test() -> Expr {
-            Expr::ExprBlock(
+            expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("user", 0),
                         Some(TypeName::Str),
-                        Box::new(Expr::SelectField(
-                            Box::new(Expr::SelectField(
-                                Box::new(Expr::Identifier(
+                        Box::new(select_field(
+                            Box::new(select_field(
+                                Box::new(identifier(
                                     VariableId::global("request".to_string()),
                                     None,
                                     InferredType::Record(vec![(
@@ -2683,10 +2970,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("query1", 0),
                         None,
-                        Box::new(Expr::Call(
+                        Box::new(call(
                             CallType::EnumConstructor("foo".to_string()),
                             None,
                             vec![],
@@ -2698,10 +2985,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("query2", 0),
                         None,
-                        Box::new(Expr::Call(
+                        Box::new(call(
                             CallType::EnumConstructor("bar".to_string()),
                             None,
                             vec![],
@@ -2713,10 +3000,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("query3", 0),
                         None,
-                        Box::new(Expr::Call(
+                        Box::new(call(
                             CallType::EnumConstructor("foo-bar".to_string()),
                             None,
                             vec![],
@@ -2728,10 +3015,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
-                        Box::new(Expr::Call(
+                        Box::new(call(
                             CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -2740,7 +3027,7 @@ mod type_inference_tests {
                             }),
                             None,
                             vec![
-                                Expr::Identifier(
+                                identifier(
                                     VariableId::local("query1", 0),
                                     None,
                                     InferredType::Enum(vec![
@@ -2749,7 +3036,7 @@ mod type_inference_tests {
                                         "foo-bar".to_string(),
                                     ]),
                                 ),
-                                Expr::Identifier(
+                                identifier(
                                     VariableId::local("query2", 0),
                                     None,
                                     InferredType::Enum(vec![
@@ -2758,7 +3045,7 @@ mod type_inference_tests {
                                         "foo-bar".to_string(),
                                     ]),
                                 ),
-                                Expr::Identifier(
+                                identifier(
                                     VariableId::local("query3", 0),
                                     None,
                                     InferredType::Enum(vec![
@@ -2767,11 +3054,7 @@ mod type_inference_tests {
                                         "foo-bar".to_string(),
                                     ]),
                                 ),
-                                Expr::Identifier(
-                                    VariableId::local("user", 0),
-                                    None,
-                                    InferredType::Str,
-                                ),
+                                identifier(VariableId::local("user", 0), None, InferredType::Str),
                             ],
                             InferredType::Enum(vec![
                                 "success".to_string(),
@@ -2781,11 +3064,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier(
+                        Box::new(pattern_match(
+                            Box::new(identifier(
                                 VariableId::local("result", 0),
                                 None,
                                 InferredType::Enum(vec![
@@ -2796,7 +3079,7 @@ mod type_inference_tests {
                             )),
                             vec![
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("success".to_string()),
                                         None,
                                         vec![],
@@ -2806,13 +3089,10 @@ mod type_inference_tests {
                                             "in-progress".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal(
-                                                "success ".to_string(),
-                                                InferredType::Str,
-                                            ),
-                                            Expr::Identifier(
+                                            literal("success ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -2822,7 +3102,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("failure".to_string()),
                                         None,
                                         vec![],
@@ -2832,10 +3112,10 @@ mod type_inference_tests {
                                             "in-progress".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal("failed ".to_string(), InferredType::Str),
-                                            Expr::Identifier(
+                                            literal("failed ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -2845,7 +3125,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("in-progress".to_string()),
                                         None,
                                         vec![],
@@ -2855,7 +3135,7 @@ mod type_inference_tests {
                                             "in-progress".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                    arm_resolution_expr: Box::new(literal(
                                         "in-progress".to_string(),
                                         InferredType::Str,
                                     )),
@@ -2865,11 +3145,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier(
+                        Box::new(pattern_match(
+                            Box::new(identifier(
                                 VariableId::local("query2", 0),
                                 None,
                                 InferredType::Enum(vec![
@@ -2880,7 +3160,7 @@ mod type_inference_tests {
                             )),
                             vec![
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("foo".to_string()),
                                         None,
                                         vec![],
@@ -2890,10 +3170,10 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal("y foo ".to_string(), InferredType::Str),
-                                            Expr::Identifier(
+                                            literal("y foo ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -2903,7 +3183,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("bar".to_string()),
                                         None,
                                         vec![],
@@ -2913,10 +3193,10 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal("y bar ".to_string(), InferredType::Str),
-                                            Expr::Identifier(
+                                            literal("y bar ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -2926,7 +3206,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
                                         None,
                                         vec![],
@@ -2936,7 +3216,7 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                    arm_resolution_expr: Box::new(literal(
                                         "y foo-bar".to_string(),
                                         InferredType::Str,
                                     )),
@@ -2946,11 +3226,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("z", 0),
                         None,
-                        Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier(
+                        Box::new(pattern_match(
+                            Box::new(identifier(
                                 VariableId::local("query3", 0),
                                 None,
                                 InferredType::Enum(vec![
@@ -2961,7 +3241,7 @@ mod type_inference_tests {
                             )),
                             vec![
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("foo".to_string()),
                                         None,
                                         vec![],
@@ -2971,10 +3251,10 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal("z foo ".to_string(), InferredType::Str),
-                                            Expr::Identifier(
+                                            literal("z foo ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -2984,7 +3264,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("bar".to_string()),
                                         None,
                                         vec![],
@@ -2994,10 +3274,10 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                    arm_resolution_expr: Box::new(concat(
                                         vec![
-                                            Expr::Literal("z bar ".to_string(), InferredType::Str),
-                                            Expr::Identifier(
+                                            literal("z bar ".to_string(), InferredType::Str),
+                                            identifier(
                                                 VariableId::local("user", 0),
                                                 None,
                                                 InferredType::Str,
@@ -3007,7 +3287,7 @@ mod type_inference_tests {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                    arm_pattern: ArmPattern::Literal(Box::new(call(
                                         CallType::EnumConstructor("foo-bar".to_string()),
                                         None,
                                         vec![],
@@ -3017,7 +3297,7 @@ mod type_inference_tests {
                                             "foo-bar".to_string(),
                                         ]),
                                     ))),
-                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                    arm_resolution_expr: Box::new(literal(
                                         "z foo-bar".to_string(),
                                         InferredType::Str,
                                     )),
@@ -3027,11 +3307,11 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Record(
+                    record(
                         vec![
                             (
                                 "x".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("x", 0),
                                     None,
                                     InferredType::Str,
@@ -3039,7 +3319,7 @@ mod type_inference_tests {
                             ),
                             (
                                 "y".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("y", 0),
                                     None,
                                     InferredType::Str,
@@ -3047,7 +3327,7 @@ mod type_inference_tests {
                             ),
                             (
                                 "z".to_string(),
-                                Box::new(Expr::Identifier(
+                                Box::new(identifier(
                                     VariableId::local("z", 0),
                                     None,
                                     InferredType::Str,
@@ -3070,23 +3350,23 @@ mod type_inference_tests {
         }
 
         pub(crate) fn expected_expr_for_select_index() -> Expr {
-            Expr::ExprBlock(
+            expr_block(
                 vec![
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("x", 0),
                         None,
-                        Box::new(Expr::Record(
+                        Box::new(record(
                             vec![(
                                 "body".to_string(),
-                                Box::new(Expr::Record(
+                                Box::new(record(
                                     vec![
                                         ("id".to_string(), Box::new(Expr::literal("bId"))),
                                         ("name".to_string(), Box::new(Expr::literal("bName"))),
                                         (
                                             "titles".to_string(),
-                                            Box::new(Expr::SelectField(
-                                                Box::new(Expr::SelectField(
-                                                    Box::new(Expr::Identifier(
+                                            Box::new(select_field(
+                                                Box::new(select_field(
+                                                    Box::new(identifier(
                                                         VariableId::global("request".to_string()),
                                                         None,
                                                         InferredType::Record(vec![(
@@ -3145,9 +3425,9 @@ mod type_inference_tests {
                                         ),
                                         (
                                             "address".to_string(),
-                                            Box::new(Expr::SelectField(
-                                                Box::new(Expr::SelectField(
-                                                    Box::new(Expr::Identifier(
+                                            Box::new(select_field(
+                                                Box::new(select_field(
+                                                    Box::new(identifier(
                                                         VariableId::global("request".to_string()),
                                                         None,
                                                         InferredType::Record(vec![(
@@ -3246,10 +3526,10 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::Let(
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
-                        Box::new(Expr::Call(
+                        Box::new(call(
                             CallType::function_without_worker(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -3257,7 +3537,7 @@ mod type_inference_tests {
                                 },
                             }),
                             None,
-                            vec![Expr::Identifier(
+                            vec![identifier(
                                 VariableId::local("x", 0),
                                 None,
                                 InferredType::Record(vec![(
@@ -3285,8 +3565,8 @@ mod type_inference_tests {
                         )),
                         InferredType::Unknown,
                     ),
-                    Expr::PatternMatch(
-                        Box::new(Expr::Identifier(
+                    pattern_match(
+                        Box::new(identifier(
                             VariableId::local("result", 0),
                             None,
                             InferredType::Option(Box::new(InferredType::Option(Box::new(
@@ -3297,7 +3577,7 @@ mod type_inference_tests {
                             MatchArm {
                                 arm_pattern: ArmPattern::constructor(
                                     "some",
-                                    vec![ArmPattern::literal(Expr::Identifier(
+                                    vec![ArmPattern::literal(identifier(
                                         VariableId::MatchIdentifier(MatchIdentifier::new(
                                             "value".to_string(),
                                             1,
@@ -3310,10 +3590,10 @@ mod type_inference_tests {
                             },
                             MatchArm {
                                 arm_pattern: ArmPattern::constructor("none", vec![]),
-                                arm_resolution_expr: Box::new(Expr::SelectIndex(
-                                    Box::new(Expr::SelectField(
-                                        Box::new(Expr::SelectField(
-                                            Box::new(Expr::Identifier(
+                                arm_resolution_expr: Box::new(select_index(
+                                    Box::new(select_field(
+                                        Box::new(select_field(
+                                            Box::new(identifier(
                                                 VariableId::local("x", 0),
                                                 None,
                                                 InferredType::Record(vec![(

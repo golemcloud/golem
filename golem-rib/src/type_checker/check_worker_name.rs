@@ -9,7 +9,7 @@ pub fn check_worker_name(expr: &Expr) -> Result<(), String> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call(call_type, _, _, _) => match call_type {
+            Expr::Call { call_type, .. } => match call_type {
                 CallType::InstanceCreation(InstanceCreationType::Worker { worker_name }) => {
                     internal::check_worker_name(worker_name)?;
                 }

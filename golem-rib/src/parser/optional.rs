@@ -55,7 +55,7 @@ where
         ),
     )
         .and_then(|(expr, type_name)| match expr {
-            Expr::Option(expr, _, _) => {
+            Expr::Option { expr, .. } => {
                 if let Some(type_name) = type_name {
                     Ok(Expr::option_with_type_annotation(
                         expr.map(|x| x.deref().clone()),
@@ -84,7 +84,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::option(Some(Expr::identifier("foo", None))), ""))
+            Ok((Expr::option(Some(Expr::identifier_global("foo", None))), ""))
         );
     }
 
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::option_with_type_annotation(
-                Some(Expr::identifier("foo", None)),
+                Some(Expr::identifier_global("foo", None)),
                 TypeName::Option(Box::new(TypeName::Str))
             ))
         );
@@ -128,7 +128,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::option(Some(Expr::option(Some(Expr::identifier("foo", None))))),
+                Expr::option(Some(Expr::option(Some(Expr::identifier_global(
+                    "foo", None
+                ))))),
                 ""
             ))
         );
@@ -142,7 +144,7 @@ mod tests {
             result,
             Ok(Expr::option_with_type_annotation(
                 Some(Expr::option_with_type_annotation(
-                    Some(Expr::identifier("foo", None)),
+                    Some(Expr::identifier_global("foo", None)),
                     TypeName::Option(Box::new(TypeName::Str))
                 )),
                 TypeName::Option(Box::new(TypeName::Option(Box::new(TypeName::Str))))
@@ -158,7 +160,10 @@ mod tests {
             result,
             Ok((
                 Expr::option(Some(Expr::sequence(
-                    vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ))),
                 ""

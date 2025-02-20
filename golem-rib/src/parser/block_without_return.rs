@@ -57,7 +57,10 @@ mod tests {
         let expected = vec![
             Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
             Expr::let_binding("y", Expr::untyped_number(BigDecimal::from(2)), None),
-            Expr::plus(Expr::identifier("x", None), Expr::identifier("y", None)),
+            Expr::plus(
+                Expr::identifier_global("x", None),
+                Expr::identifier_global("y", None),
+            ),
         ];
         assert_eq!(expr, expected);
     }

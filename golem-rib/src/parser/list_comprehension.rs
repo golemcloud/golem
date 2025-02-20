@@ -70,7 +70,7 @@ mod tests {
             Expr::list_comprehension(
                 VariableId::list_comprehension_identifier("x"),
                 Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None),
-                Expr::expr_block(vec![Expr::identifier("x", None)]),
+                Expr::expr_block(vec![Expr::identifier_global("x", None)]),
             )
         );
     }
@@ -95,8 +95,8 @@ mod tests {
                 ),
                 Expr::list_comprehension(
                     VariableId::list_comprehension_identifier("p"),
-                    Expr::identifier("x", None),
-                    Expr::expr_block(vec![Expr::identifier("p", None)]),
+                    Expr::identifier_global("x", None),
+                    Expr::expr_block(vec![Expr::identifier_global("p", None)]),
                 )
             ])
         );

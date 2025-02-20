@@ -32,6 +32,7 @@ parser! {
 mod internal {
     use combine::parser::char::{char, digit, letter};
     use combine::{many1, optional, ParseError};
+    use std::ops::Deref;
 
     use super::*;
     use crate::parser::errors::RibParseError;
@@ -60,7 +61,7 @@ mod internal {
                 choice((
                     attempt(select_field()),
                     attempt(select_index()),
-                    attempt(identifier_text().map(|x| Expr::identifier(x, None))),
+                    attempt(identifier_text().map(|x| Expr::identifier_global(x, None))),
                 )),
                 optional(
                     char_(':')
@@ -73,19 +74,38 @@ mod internal {
                     let expr = build_selector(base, opt);
 
                     match expr {
-                        Some(Expr::SelectField(field, name, inner_typ, inferred_typ)) => {
+                        Some(Expr::SelectField {
+                            field,
+                            expr,
+                            type_annotation: inner_typ,
+                            ..
+                        }) => {
                             if let Some(typ) = optional {
-                                Ok(Expr::SelectField(field, name, Some(typ), inferred_typ))
+                                Ok(Expr::select_field(expr.deref().clone(), field, Some(typ)))
                             } else {
-                                Ok(Expr::SelectField(field, name, inner_typ, inferred_typ))
+                                Ok(Expr::select_field(expr.deref().clone(), field, inner_typ))
                             }
                         }
 
-                        Some(Expr::SelectIndex(field, index, inner_typ, inferred_type)) => {
+                        Some(Expr::SelectIndex {
+                            expr,
+                            index,
+                            type_annotation: inner_typ,
+                            inferred_type,
+                        }) => {
                             if let Some(typ) = optional {
-                                Ok(Expr::SelectIndex(field, index, Some(typ), inferred_type))
+                                Ok(Expr::select_index_with_type_annotation(
+                                    expr.deref().clone(),
+                                    index,
+                                    typ,
+                                ))
                             } else {
-                                Ok(Expr::SelectIndex(field, index, inner_typ, inferred_type))
+                                Ok(Expr::SelectIndex {
+                                    expr,
+                                    index,
+                                    type_annotation: inner_typ,
+                                    inferred_type,
+                                })
                             }
                         }
 
@@ -102,26 +122,36 @@ mod internal {
     // We also propagate any type name in between towards the outer.
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
-            Expr::Identifier(variable_id, _, _) => {
+            Expr::Identifier { variable_id, .. } => {
                 Some(Expr::select_field(base, variable_id.name().as_str(), None))
             }
-            Expr::SelectField(second, last, type_name, inferred_type) => {
+            Expr::SelectField {
+                expr: second,
+                field: last,
+                type_annotation: type_name,
+                inferred_type,
+            } => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectField(
-                    Box::new(inner_select),
-                    last,
-                    type_name,
+                Some(Expr::SelectField {
+                    expr: Box::new(inner_select),
+                    field: last,
+                    type_annotation: type_name,
                     inferred_type,
-                ))
+                })
             }
-            Expr::SelectIndex(second, last_index, type_name, inferred_type) => {
+            Expr::SelectIndex {
+                expr: second,
+                index: last_index,
+                type_annotation: type_name,
+                inferred_type,
+            } => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectIndex(
-                    Box::new(inner_select),
-                    last_index,
-                    type_name,
+                Some(Expr::SelectIndex {
+                    expr: Box::new(inner_select),
+                    index: last_index,
+                    type_annotation: type_name,
                     inferred_type,
-                ))
+                })
             }
             _ => None,
         }
@@ -137,7 +167,7 @@ mod internal {
         choice((
             attempt(select_index()),
             attempt(record()),
-            attempt(field_name().map(|s| Expr::identifier(s.as_str(), None))),
+            attempt(field_name().map(|s| Expr::identifier_global(s.as_str(), None))),
         ))
     }
 
@@ -175,7 +205,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 "bar",
                 None
             ))
@@ -189,7 +219,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 "bar",
                 Some(TypeName::U32)
             ))
@@ -203,7 +233,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 "foo",
                 None
             ))
@@ -217,7 +250,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
                 "foo",
                 Some(TypeName::U32)
             ))
@@ -231,7 +267,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                 "baz",
                 None
             ))
@@ -245,7 +281,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_field(
-                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                 "baz",
                 Some(TypeName::U32)
             ))
@@ -267,7 +303,7 @@ mod tests {
             result,
             Ok(Expr::select_index(
                 Expr::select_field(
-                    Expr::select_index(Expr::identifier("foo", None), 0),
+                    Expr::select_index(Expr::identifier_global("foo", None), 0),
                     "bar",
                     None
                 ),
@@ -284,7 +320,7 @@ mod tests {
             result,
             Ok(Expr::select_index_with_type_annotation(
                 Expr::select_field(
-                    Expr::select_index(Expr::identifier("foo", None), 0),
+                    Expr::select_index(Expr::identifier_global("foo", None), 0),
                     "bar",
                     None
                 ),
@@ -302,7 +338,7 @@ mod tests {
             result,
             Ok(Expr::select_field(
                 Expr::select_index(
-                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                    Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                     0
                 ),
                 "baz",
@@ -317,7 +353,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::greater_than(
-                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                 Expr::literal("bar")
             ))
         );
@@ -329,7 +365,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::greater_than(
-                Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                 Expr::untyped_number(BigDecimal::from(1))
             ))
         );
@@ -343,11 +379,11 @@ mod tests {
             result,
             Ok(Expr::cond(
                 Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                    Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                     Expr::untyped_number(BigDecimal::from(1))
                 ),
-                Expr::select_field(Expr::identifier("foo", None), "bar", None),
-                Expr::select_field(Expr::identifier("foo", None), "baz", None)
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("foo", None), "baz", None)
             ))
         );
     }
@@ -359,37 +395,43 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::pattern_match(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 vec![
-                    MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar", None)),
+                    MatchArm::new(ArmPattern::WildCard, Expr::identifier_global("bar", None)),
                     MatchArm::new(
                         ArmPattern::constructor(
                             "ok",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
-                        Expr::identifier("x", None),
+                        Expr::identifier_global("x", None),
                     ),
                     MatchArm::new(
                         ArmPattern::constructor(
                             "err",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
-                        Expr::identifier("x", None),
+                        Expr::identifier_global("x", None),
                     ),
                     MatchArm::new(
                         ArmPattern::constructor("none", vec![]),
-                        Expr::identifier("foo", None),
+                        Expr::identifier_global("foo", None),
                     ),
                     MatchArm::new(
                         ArmPattern::constructor(
                             "some",
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
-                        Expr::identifier("x", None),
+                        Expr::identifier_global("x", None),
                     ),
                     MatchArm::new(
-                        ArmPattern::Literal(Box::new(Expr::identifier("foo", None))),
-                        Expr::select_field(Expr::identifier("foo", None), "bar", None),
+                        ArmPattern::Literal(Box::new(Expr::identifier_global("foo", None))),
+                        Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                     ),
                 ]
             ))

@@ -44,7 +44,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
 
                             let worker_name = instance_type.worker_name().as_deref().cloned();
 
-                            let new_call = Expr::call(
+                            let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
                                 None,
                                 worker_name,
@@ -70,8 +70,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
 
-                            *expr =
-                                Expr::Call(new_call_type, None, args.clone(), new_inferred_type);
+                            *expr = Expr::call(new_call_type, None, args.clone())
+                                .with_inferred_type(new_inferred_type);
                         }
                         // If resource method is called, we could convert to strict call
                         // however it can only be possible if the instance type of LHS is
@@ -102,7 +102,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                     let worker_name =
                                         instance_type.worker_name().as_deref().cloned();
 
-                                    let new_call = Expr::call(
+                                    let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
                                         None,
                                         worker_name,

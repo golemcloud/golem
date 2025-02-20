@@ -49,8 +49,10 @@ where
         ),
     )
         .and_then(|(expr, type_name)| match expr {
-            Expr::Result(Ok(expr), _, _) => Ok(Expr::ok(*expr, type_name)),
-            Expr::Result(Err(expr), _, _) => Ok(Expr::err(*expr, type_name)),
+            Expr::Result { expr: Ok(expr), .. } => Ok(Expr::ok(*expr, type_name)),
+            Expr::Result {
+                expr: Err(expr), ..
+            } => Ok(Expr::err(*expr, type_name)),
             _ => Err(RibParseError::Message(
                 "Invalid syntax for Result type".to_string(),
             )),
@@ -72,7 +74,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::identifier("foo", None), None), ""))
+            Ok((Expr::ok(Expr::identifier_global("foo", None), None), ""))
         );
     }
 
@@ -82,7 +84,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::identifier("foo", None), None), ""))
+            Ok((Expr::err(Expr::identifier_global("foo", None), None), ""))
         );
     }
 
@@ -95,7 +97,10 @@ mod tests {
             Ok((
                 Expr::ok(
                     Expr::sequence(
-                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
                         None
                     ),
                     None
@@ -114,7 +119,10 @@ mod tests {
             Ok((
                 Expr::err(
                     Expr::sequence(
-                        vec![Expr::identifier("foo", None), Expr::identifier("bar", None)],
+                        vec![
+                            Expr::identifier_global("foo", None),
+                            Expr::identifier_global("bar", None)
+                        ],
                         None
                     ),
                     None
@@ -131,7 +139,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::ok(Expr::err(Expr::identifier("foo", None), None), None),
+                Expr::ok(Expr::err(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -144,7 +152,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::err(Expr::ok(Expr::identifier("foo", None), None), None),
+                Expr::err(Expr::ok(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -157,7 +165,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::ok(Expr::ok(Expr::identifier("foo", None), None), None),
+                Expr::ok(Expr::ok(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );
@@ -170,7 +178,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::err(Expr::err(Expr::identifier("foo", None), None), None),
+                Expr::err(Expr::err(Expr::identifier_global("foo", None), None), None),
                 ""
             ))
         );

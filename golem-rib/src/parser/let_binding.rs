@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::identifier("bar", None), None),
+                Expr::let_binding("foo", Expr::identifier_global("bar", None), None),
                 ""
             ))
         );
@@ -96,7 +96,10 @@ mod tests {
                 Expr::let_binding(
                     "foo",
                     Expr::sequence(
-                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
+                        vec![
+                            Expr::identifier_global("bar", None),
+                            Expr::identifier_global("baz", None)
+                        ],
                         None
                     ),
                     None
@@ -115,7 +118,10 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("baz", None)),
+                    Expr::equal_to(
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ),
                     None
                 ),
                 ""
@@ -132,7 +138,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::option(Some(Expr::identifier("bar", None))),
+                    Expr::option(Some(Expr::identifier_global("bar", None))),
                     None
                 ),
                 ""
@@ -147,7 +153,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar", None), None), None),
+                Expr::let_binding(
+                    "foo",
+                    Expr::ok(Expr::identifier_global("bar", None), None),
+                    None
+                ),
                 ""
             ))
         );
@@ -172,7 +182,10 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
+                    Expr::record(vec![(
+                        "bar".to_string(),
+                        Expr::identifier_global("baz", None)
+                    )]),
                     None
                 ),
                 ""
@@ -189,11 +202,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U8)
                 ),
                 ""
@@ -210,11 +219,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U16)
                 ),
                 ""
@@ -231,11 +236,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U32)
                 ),
                 ""
@@ -252,11 +253,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U64)
                 ),
                 ""
@@ -273,11 +270,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S8,)
                 ),
                 ""
@@ -294,11 +287,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S16)
                 ),
                 ""
@@ -315,11 +304,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S32)
                 ),
                 ""
@@ -336,11 +321,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S64,)
                 ),
                 ""
@@ -357,11 +338,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::F32)
                 ),
                 ""
@@ -378,11 +355,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::F64)
                 ),
                 ""
@@ -399,11 +372,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::Chr)
                 ),
                 ""
@@ -420,11 +389,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::Str)
                 ),
                 ""
@@ -441,11 +406,8 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::Sequence(
-                        vec![],
-                        None,
-                        InferredType::List(Box::new(InferredType::Unknown))
-                    ),
+                    Expr::sequence(vec![], None)
+                        .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
                     Some(TypeName::List(Box::new(TypeName::U8)))
                 ),
                 ""

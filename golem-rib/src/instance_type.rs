@@ -393,6 +393,7 @@ impl InstanceType {
         }
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct Function {
     pub function_name: FunctionName,

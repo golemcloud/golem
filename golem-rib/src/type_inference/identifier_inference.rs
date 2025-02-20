@@ -37,14 +37,20 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, existing_type) => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     if let Some(new_inferred_type) = identifier_lookup.lookup(variable_id) {
-                        *existing_type = existing_type.merge(new_inferred_type)
+                        *inferred_type = inferred_type.merge(new_inferred_type)
                     }
 
-                    identifier_lookup.update(variable_id.clone(), existing_type.clone());
+                    identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
-                Expr::Let(variable_id, _, expr, _) => {
+                Expr::Let {
+                    variable_id, expr, ..
+                } => {
                     if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                         expr.add_infer_type_mut(inferred_type);
                     }
@@ -65,7 +71,9 @@ mod internal {
 
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Let(variable_id, _, expr, _) => {
+                Expr::Let {
+                    variable_id, expr, ..
+                } => {
                     if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                         expr.add_infer_type_mut(inferred_type);
                     }
@@ -73,12 +81,16 @@ mod internal {
                     identifier_lookup.update(variable_id.clone(), expr.inferred_type());
                     queue.push_front(expr)
                 }
-                Expr::Identifier(variable_id, _, existing_type) => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     if let Some(new_inferred_type) = identifier_lookup.lookup(variable_id) {
-                        *existing_type = existing_type.merge(new_inferred_type)
+                        *inferred_type = inferred_type.merge(new_inferred_type)
                     }
 
-                    identifier_lookup.update(variable_id.clone(), existing_type.clone());
+                    identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
 
                 _ => expr.visit_children_mut_top_down(&mut queue),
@@ -94,8 +106,8 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::PatternMatch(_, arms, _) => {
-                    for arm in arms {
+                Expr::PatternMatch { match_arms, .. } => {
+                    for arm in match_arms {
                         process_arm(arm)
                     }
                 }
@@ -169,7 +181,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type) => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     if !inferred_type.is_unknown() {
                         state.update(variable_id.clone(), inferred_type.clone())
                     }
@@ -189,9 +205,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type)
-                    if variable_id.is_match_binding() =>
-                {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } if variable_id.is_match_binding() => {
                     if let Some(new_inferred_type) = state.lookup(variable_id) {
                         *inferred_type = inferred_type.merge(new_inferred_type)
                     }

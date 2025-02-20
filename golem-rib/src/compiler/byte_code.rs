@@ -109,122 +109,129 @@ mod internal {
         instruction_id: &mut InstructionId,
     ) -> Result<(), String> {
         match expr {
-            Expr::Unwrap(inner_expr, _) => {
-                stack.push(ExprState::from_expr(inner_expr.deref()));
+            Expr::Unwrap { expr, .. } => {
+                stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Deconstruct);
             }
-            Expr::Throw(msg, _) => {
-                instructions.push(RibIR::Throw(msg.to_string()));
+            Expr::Throw { message, .. } => {
+                instructions.push(RibIR::Throw(message.to_string()));
             }
-            Expr::Identifier(variable_id, _, _) => {
+            Expr::Identifier { variable_id, .. } => {
                 instructions.push(RibIR::LoadVar(variable_id.clone()));
             }
-            Expr::Literal(str, _) => {
-                let value_and_type = str.clone().into_value_and_type();
+            Expr::Literal { value, .. } => {
+                let value_and_type = value.clone().into_value_and_type();
                 instructions.push(RibIR::PushLit(value_and_type));
             }
-            Expr::Number(num, _, inferred_type) => {
+            Expr::Number {
+                number,
+                inferred_type,
+                ..
+            } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
-                let value_and_type = num.to_val(&analysed_type).ok_or(format!(
+                let value_and_type = number.to_val(&analysed_type).ok_or(format!(
                     "Internal error: convert a number to wasm value using {:?}",
                     analysed_type
                 ))?;
 
                 instructions.push(RibIR::PushLit(value_and_type));
             }
-            Expr::EqualTo(lhs, rhs, _) => {
+            Expr::EqualTo { lhs, rhs, .. } => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::EqualTo);
             }
-            Expr::GreaterThan(lhs, rhs, _) => {
+            Expr::GreaterThan { lhs, rhs, .. } => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::GreaterThan);
             }
-            Expr::LessThan(lhs, rhs, _) => {
+            Expr::LessThan { lhs, rhs, .. } => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::LessThan);
             }
-            Expr::GreaterThanOrEqualTo(lhs, rhs, _) => {
+            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::GreaterThanOrEqualTo);
             }
-            Expr::LessThanOrEqualTo(lhs, rhs, _) => {
+            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::LessThanOrEqualTo);
             }
-            Expr::Plus(lhs, rhs, inferred_type) => {
+            Expr::Plus {
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::Plus(analysed_type));
             }
-            Expr::Minus(lhs, rhs, inferred_type) => {
+            Expr::Minus {
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::Minus(analysed_type));
             }
-            Expr::Divide(lhs, rhs, inferred_type) => {
+            Expr::Divide {
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::Divide(analysed_type));
             }
-            Expr::Multiply(lhs, rhs, inferred_type) => {
+            Expr::Multiply {
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::Multiply(analysed_type));
             }
-            Expr::And(lhs, rhs, _) => {
+            Expr::And { lhs, rhs, .. } => {
                 // This optimization isn't optional, it's required for the correct functioning of the interpreter
                 let optimised_expr = Expr::cond(
-                    Expr::EqualTo(
-                        lhs.clone(),
-                        Box::new(Expr::Boolean(true, InferredType::Bool)),
-                        InferredType::Bool,
-                    ),
-                    Expr::EqualTo(
-                        rhs.clone(),
-                        Box::new(Expr::Boolean(true, InferredType::Bool)),
-                        InferredType::Bool,
-                    ),
-                    Expr::Boolean(false, InferredType::Bool),
+                    Expr::equal_to(lhs.deref().clone(), Expr::boolean(true)),
+                    Expr::equal_to(rhs.deref().clone(), Expr::boolean(true)),
+                    Expr::boolean(false),
                 );
 
                 stack.push(ExprState::from_expr(&optimised_expr));
             }
 
-            Expr::Or(lhs, rhs, _) => {
+            Expr::Or { lhs, rhs, .. } => {
                 let optimised_expr = Expr::cond(
-                    Expr::EqualTo(
-                        lhs.clone(),
-                        Box::new(Expr::Boolean(true, InferredType::Bool)),
-                        InferredType::Bool,
-                    ),
-                    Expr::Boolean(true, InferredType::Bool),
-                    Expr::EqualTo(
-                        rhs.clone(),
-                        Box::new(Expr::Boolean(true, InferredType::Bool)),
-                        InferredType::Bool,
-                    ),
+                    Expr::equal_to(lhs.deref().clone(), Expr::boolean(true)),
+                    Expr::boolean(true),
+                    Expr::equal_to(rhs.deref().clone(), Expr::boolean(true)),
                 );
 
                 stack.push(ExprState::from_expr(&optimised_expr));
             }
 
-            Expr::Record(fields, inferred_type) => {
+            Expr::Record {
+                exprs,
+                inferred_type,
+            } => {
                 // Push field instructions in reverse order
-                for (field_name, field_expr) in fields.iter().rev() {
+                for (field_name, field_expr) in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(field_expr.as_ref()));
                     instructions.push(RibIR::UpdateRecord(field_name.clone()));
                 }
@@ -232,7 +239,11 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::CreateAndPushRecord(analysed_type?));
             }
-            Expr::Sequence(exprs, _, inferred_type) => {
+            Expr::Sequence {
+                exprs,
+                inferred_type,
+                ..
+            } => {
                 // Push all expressions in reverse order
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
@@ -241,41 +252,51 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 instructions.push(RibIR::PushList(analysed_type, exprs.len()));
             }
-            Expr::ExprBlock(exprs, _) => {
+            Expr::ExprBlock { exprs, .. } => {
                 // Push all expressions in reverse order
                 for expr in exprs.iter() {
                     stack.push(ExprState::from_expr(expr));
                 }
             }
-            Expr::Let(variable_id, _, inner_expr, _) => {
-                stack.push(ExprState::from_expr(inner_expr.deref()));
+            Expr::Let {
+                variable_id, expr, ..
+            } => {
+                stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::AssignVar(variable_id.clone()));
             }
-            Expr::PatternMatch(pred, match_arms, inferred_type) => {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                inferred_type,
+            } => {
                 let desugared_pattern_match =
-                    desugar_pattern_match(pred.deref(), match_arms, inferred_type.clone())
+                    desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
                         .ok_or("Desugar pattern match failed".to_string())?;
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
-            Expr::Cond(if_expr, then_expr, else_expr, _) => {
+            Expr::Cond { cond, lhs, rhs, .. } => {
                 handle_if_condition(
                     instruction_id,
-                    if_expr.deref(),
-                    then_expr.deref(),
-                    else_expr.deref(),
+                    cond.deref(),
+                    lhs.deref(),
+                    rhs.deref(),
                     stack,
                 );
             }
 
-            Expr::SelectField(record_expr, field_name, _, _) => {
-                stack.push(ExprState::from_expr(record_expr.deref()));
-                instructions.push(RibIR::SelectField(field_name.clone()));
+            Expr::SelectField { expr, field, .. } => {
+                stack.push(ExprState::from_expr(expr.deref()));
+                instructions.push(RibIR::SelectField(field.clone()));
             }
-            Expr::SelectIndex(sequence_expr, index, _, _) => {
-                stack.push(ExprState::from_expr(sequence_expr.deref()));
+            Expr::SelectIndex { expr, index, .. } => {
+                stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::SelectIndex(*index));
             }
-            Expr::Option(Some(inner_expr), _, inferred_type) => {
+            Expr::Option {
+                expr: Some(inner_expr),
+                inferred_type,
+                ..
+            } => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushSome(convert_to_analysed_type(
                     expr,
@@ -283,12 +304,16 @@ mod internal {
                 )?));
             }
 
-            Expr::Option(None, _, inferred_type) => {
+            Expr::Option { inferred_type, .. } => {
                 let optional = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::PushNone(optional.ok()));
             }
 
-            Expr::Result(Ok(inner_expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Ok(inner_expr),
+                inferred_type,
+                ..
+            } => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushOkResult(convert_to_analysed_type(
                     expr,
@@ -296,7 +321,11 @@ mod internal {
                 )?));
             }
 
-            Expr::Result(Err(inner_expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Err(inner_expr),
+                inferred_type,
+                ..
+            } => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushErrResult(convert_to_analysed_type(
                     expr,
@@ -304,8 +333,13 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(call_type, _, arguments, inferred_type) => {
-                for expr in arguments.iter().rev() {
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
+                for expr in args.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
 
@@ -331,7 +365,7 @@ mod internal {
 
                         instructions.push(RibIR::InvokeFunction(
                             worker_name,
-                            arguments.len(),
+                            args.len(),
                             function_result_type,
                         ));
 
@@ -481,10 +515,14 @@ mod internal {
                 }
             }
 
-            Expr::Flags(flag_values, inferred_type) => match inferred_type {
+            Expr::Flags {
+                flags,
+                inferred_type,
+                ..
+            } => match inferred_type {
                 InferredType::Flags(all_flags) => {
                     let mut bitmap = Vec::new();
-                    let flag_values_set: HashSet<&String> = HashSet::from_iter(flag_values.iter());
+                    let flag_values_set: HashSet<&String> = HashSet::from_iter(flags.iter());
                     for flag in all_flags.iter() {
                         bitmap.push(flag_values_set.contains(flag));
                     }
@@ -502,31 +540,34 @@ mod internal {
                     ));
                 }
             },
-            Expr::Boolean(bool, _) => {
-                instructions.push(RibIR::PushLit(bool.into_value_and_type()));
+            Expr::Boolean { value, .. } => {
+                instructions.push(RibIR::PushLit(value.into_value_and_type()));
             }
-            Expr::GetTag(expr, _) => {
+            Expr::GetTag { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 stack.push(ExprState::from_ir(RibIR::GetTag));
             }
 
-            Expr::Concat(exprs, _) => {
+            Expr::Concat { exprs, .. } => {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
                 instructions.push(RibIR::Concat(exprs.len()));
             }
 
-            Expr::Not(expr, _) => {
+            Expr::Not { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Negate);
             }
 
-            Expr::Tuple(exprs, analysed_type) => {
+            Expr::Tuple {
+                exprs,
+                inferred_type,
+            } => {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
-                let analysed_type = convert_to_analysed_type(expr, analysed_type)?;
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
 
@@ -586,9 +627,8 @@ mod internal {
 
     // We create a temporary stack of expressions that we pop one by one,
     // while injecting some pre-defined IRs such as Jump in certain cases
-    // This injection of new IRs in a stack can be found cumbersome compared
-    // to simple recursion where we create the instructions earlier, and add an IR on
-    // to the final instruction set, however, comes with the cost of stack safety
+    // A stack is required on one side to maintain the order of expressions
+    // As soon a `Expr` becomes `Instruction` the instruction stack will be in order.
     pub(crate) enum ExprState {
         Expr(Expr),
         Instruction(RibIR),
@@ -727,14 +767,14 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId};
+    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{list, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::IntoValueAndType;
 
     #[test]
     fn test_instructions_for_literal() {
-        let literal = Expr::Literal("hello".to_string(), InferredType::Str);
+        let literal = Expr::literal("hello");
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry, &vec![]).unwrap();
 
@@ -754,7 +794,8 @@ mod compiler_tests {
         let inferred_input_type = InferredType::Str;
         let variable_id = VariableId::local("request", 0);
         let empty_registry = FunctionTypeRegistry::empty();
-        let expr = Expr::Identifier(variable_id.clone(), None, inferred_input_type);
+        let expr = Expr::identifier_with_variable_id(variable_id.clone(), None)
+            .with_inferred_type(inferred_input_type);
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
@@ -770,16 +811,11 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_assign_variable() {
-        let literal = Expr::Literal("hello".to_string(), InferredType::Str);
+        let literal = Expr::literal("hello");
 
         let variable_id = VariableId::local("request", 0);
 
-        let expr = Expr::Let(
-            variable_id.clone(),
-            None,
-            Box::new(literal),
-            InferredType::Unknown,
-        );
+        let expr = Expr::let_binding_with_variable_id(variable_id.clone(), literal, None);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -800,20 +836,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_equal_to() {
-        let number_f32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::F32,
-        );
-        let number_u32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::U32,
-        );
+        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -839,20 +863,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than() {
-        let number_f32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::F32,
-        );
-        let number_u32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(2),
-            },
-            None,
-            InferredType::U32,
-        );
+        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number(BigDecimal::from(2), None, InferredType::U32);
 
         let expr = Expr::greater_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -878,20 +890,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than() {
-        let number_f32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::F32,
-        );
-        let number_u32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::U32,
-        );
+        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::less_than(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -917,20 +917,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
-        let number_f32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::F32,
-        );
-        let number_u32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::U32,
-        );
+        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -956,20 +944,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than_or_equal_to() {
-        let number_f32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::F32,
-        );
-        let number_u32 = Expr::Number(
-            Number {
-                value: BigDecimal::from(1),
-            },
-            None,
-            InferredType::U32,
-        );
+        let number_f32 = Expr::number(BigDecimal::from(1), None, InferredType::F32);
+        let number_u32 = Expr::number(BigDecimal::from(1), None, InferredType::U32);
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
         let empty_registry = FunctionTypeRegistry::empty();
@@ -995,22 +971,14 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_record() {
-        let expr = Expr::Record(
-            vec![
-                (
-                    "foo_key".to_string(),
-                    Box::new(Expr::Literal("foo_value".to_string(), InferredType::Str)),
-                ),
-                (
-                    "bar_key".to_string(),
-                    Box::new(Expr::Literal("bar_value".to_string(), InferredType::Str)),
-                ),
-            ],
-            InferredType::Record(vec![
-                (String::from("foo_key"), InferredType::Str),
-                (String::from("bar_key"), InferredType::Str),
-            ]),
-        );
+        let expr = Expr::record(vec![
+            ("foo_key".to_string(), Expr::literal("foo_value")),
+            ("bar_key".to_string(), Expr::literal("bar_value")),
+        ])
+        .with_inferred_type(InferredType::Record(vec![
+            (String::from("foo_key"), InferredType::Str),
+            (String::from("bar_key"), InferredType::Str),
+        ]));
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1048,13 +1016,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_multiple() {
-        let expr = Expr::ExprBlock(
-            vec![
-                Expr::Literal("foo".to_string(), InferredType::Str),
-                Expr::Literal("bar".to_string(), InferredType::Str),
-            ],
-            InferredType::Unknown,
-        );
+        let expr = Expr::expr_block(vec![Expr::literal("foo"), Expr::literal("bar")]);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1075,16 +1037,11 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_if_conditional() {
-        let if_expr = Expr::Literal("pred".to_string(), InferredType::Bool);
-        let then_expr = Expr::Literal("then".to_string(), InferredType::Str);
-        let else_expr = Expr::Literal("else".to_string(), InferredType::Str);
+        let if_expr = Expr::literal("pred").with_inferred_type(InferredType::Bool);
+        let then_expr = Expr::literal("then");
+        let else_expr = Expr::literal("else");
 
-        let expr = Expr::Cond(
-            Box::new(if_expr),
-            Box::new(then_expr),
-            Box::new(else_expr),
-            InferredType::Str,
-        );
+        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1110,21 +1067,16 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_nested_if_else() {
-        let if_expr = Expr::Literal("if-pred1".to_string(), InferredType::Bool);
-        let then_expr = Expr::Literal("then1".to_string(), InferredType::Str);
-        let else_expr = Expr::Cond(
-            Box::new(Expr::Literal("else-pred2".to_string(), InferredType::Bool)),
-            Box::new(Expr::Literal("else-then2".to_string(), InferredType::Str)),
-            Box::new(Expr::Literal("else-else2".to_string(), InferredType::Str)),
-            InferredType::Str,
-        );
+        let if_expr = Expr::literal("if-pred1").with_inferred_type(InferredType::Bool);
+        let then_expr = Expr::literal("then1").with_inferred_type(InferredType::Str);
+        let else_expr = Expr::cond(
+            Expr::literal("else-pred2").with_inferred_type(InferredType::Bool),
+            Expr::literal("else-then2"),
+            Expr::literal("else-else2"),
+        )
+        .with_inferred_type(InferredType::Str);
 
-        let expr = Expr::Cond(
-            Box::new(if_expr),
-            Box::new(then_expr),
-            Box::new(else_expr),
-            InferredType::Str,
-        );
+        let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1157,29 +1109,17 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_select_field() {
-        let record = Expr::Record(
-            vec![
-                (
-                    "foo_key".to_string(),
-                    Box::new(Expr::Literal("foo_value".to_string(), InferredType::Str)),
-                ),
-                (
-                    "bar_key".to_string(),
-                    Box::new(Expr::Literal("bar_value".to_string(), InferredType::Str)),
-                ),
-            ],
-            InferredType::Record(vec![
-                (String::from("foo_key"), InferredType::Str),
-                (String::from("bar_key"), InferredType::Str),
-            ]),
-        );
+        let record = Expr::record(vec![
+            ("foo_key".to_string(), Expr::literal("foo_value")),
+            ("bar_key".to_string(), Expr::literal("bar_value")),
+        ])
+        .with_inferred_type(InferredType::Record(vec![
+            (String::from("foo_key"), InferredType::Str),
+            (String::from("bar_key"), InferredType::Str),
+        ]));
 
-        let expr = Expr::SelectField(
-            Box::new(record),
-            "bar_key".to_string(),
-            None,
-            InferredType::Str,
-        );
+        let expr =
+            Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1218,16 +1158,10 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_select_index() {
-        let sequence = Expr::Sequence(
-            vec![
-                Expr::Literal("foo".to_string(), InferredType::Str),
-                Expr::Literal("bar".to_string(), InferredType::Str),
-            ],
-            None,
-            InferredType::List(Box::new(InferredType::Str)),
-        );
+        let sequence = Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
+            .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
 
-        let expr = Expr::SelectIndex(Box::new(sequence), 1, None, InferredType::Str);
+        let expr = Expr::select_index(sequence, 1).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1250,33 +1184,24 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_expr_arm_pattern_match() {
-        let expr = Expr::PatternMatch(
-            Box::new(Expr::Literal("pred".to_string(), InferredType::Str)),
+        let expr = Expr::pattern_match(
+            Expr::literal("pred"),
             vec![
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::Literal(
-                        "arm1_pattern_expr".to_string(),
-                        InferredType::Str,
-                    ))),
-                    Expr::Literal("arm1_resolution_expr".to_string(), InferredType::Str),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm1_pattern_expr"))),
+                    Expr::literal("arm1_resolution_expr"),
                 ),
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::Literal(
-                        "arm2_pattern_expr".to_string(),
-                        InferredType::Str,
-                    ))),
-                    Expr::Literal("arm2_resolution_expr".to_string(), InferredType::Str),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm2_pattern_expr"))),
+                    Expr::literal("arm2_resolution_expr"),
                 ),
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::Literal(
-                        "arm3_pattern_expr".to_string(),
-                        InferredType::Str,
-                    ))),
-                    Expr::Literal("arm3_resolution_expr".to_string(), InferredType::Str),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm3_pattern_expr"))),
+                    Expr::literal("arm3_resolution_expr"),
                 ),
             ],
-            InferredType::Str,
-        );
+        )
+        .with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();

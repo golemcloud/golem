@@ -26,7 +26,12 @@ pub fn infer_function_call_types(
     queue.push_back(expr);
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::Call(call_type, _, args, inferred_type) => {
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
                 internal::resolve_call_argument_types(
                     call_type,
                     function_type_registry,
@@ -481,10 +486,9 @@ mod function_parameters_inference_tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionSite, VariableId};
+    use crate::{Expr, InferredType, ParsedFunctionSite};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
@@ -526,23 +530,23 @@ mod function_parameters_inference_tests {
 
         let let_binding = Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None);
 
-        let call_expr = Expr::Call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
+        let call_expr = Expr::call_worker_function(
+            DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
-            }),
+            },
             None,
-            vec![Expr::Identifier(
-                VariableId::global("x".to_string()),
-                None,
-                InferredType::U64, // Call argument's types are updated
-            )],
-            InferredType::Sequence(vec![]), // Call Expressions return type is updated
-        );
+            None,
+            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::U64)],
+        )
+        .with_inferred_type(InferredType::Sequence(vec![]));
 
-        let expected = Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Unknown);
+        let expected = Expr::ExprBlock {
+            exprs: vec![let_binding, call_expr],
+            inferred_type: InferredType::Unknown,
+        };
 
         assert_eq!(expr, expected);
     }

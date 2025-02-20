@@ -60,7 +60,7 @@ mod internal {
                         match first {
                             LiteralTerm::Static(s) => Expr::literal(s),
                             LiteralTerm::Dynamic(expr) => match expr {
-                                Expr::Literal(s, _) => Expr::literal(s),
+                                Expr::Literal { value, .. } => Expr::literal(value),
                                 _ => Expr::concat(vec![expr.clone()]),
                             },
                         }
@@ -146,7 +146,7 @@ mod literal_parse_tests {
             result,
             Expr::concat(vec![
                 Expr::literal("foo-"),
-                Expr::identifier("bar", None),
+                Expr::identifier_global("bar", None),
                 Expr::literal("-baz"),
             ])
         );
@@ -160,10 +160,10 @@ mod literal_parse_tests {
             result,
             Expr::cond(
                 Expr::equal_to(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     Expr::concat(vec![
                         Expr::literal("bar-"),
-                        Expr::identifier("worker_id", None)
+                        Expr::identifier_global("worker_id", None)
                     ])
                 ),
                 Expr::untyped_number(BigDecimal::from(1)),
@@ -180,9 +180,9 @@ mod literal_parse_tests {
             result,
             Expr::concat(vec![
                 Expr::literal("\n\t<>/!@#%&^&*()_+[]; ',."),
-                Expr::identifier("bar", None),
+                Expr::identifier_global("bar", None),
                 Expr::literal("-ba!z-"),
-                Expr::identifier("qux", None),
+                Expr::identifier_global("qux", None),
             ])
         );
     }

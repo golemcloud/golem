@@ -42,7 +42,9 @@ mod internal {
         queue.push_front(expr);
         while let Some(expr) = queue.pop_front() {
             match expr {
-                Expr::Let(variable_id, _, expr, _) => {
+                Expr::Let {
+                    variable_id, expr, ..
+                } => {
                     queue.push_front(expr);
 
                     if variable_id.name() == "instance" {
@@ -52,7 +54,7 @@ mod internal {
                         );
                     }
                 }
-                Expr::Identifier(variable_id, _, _) => {
+                Expr::Identifier { variable_id, .. } => {
                     if variable_id.name() == "instance" && variable_id.is_global() {
                         return Err(concat!(
                         "`instance` is a reserved keyword.\n ",
@@ -80,7 +82,12 @@ mod internal {
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(call_type, generic_type_parameter, args, inferred_type) => {
+                Expr::Call {
+                    call_type,
+                    generic_type_parameter,
+                    args,
+                    inferred_type,
+                } => {
                     let type_parameter = generic_type_parameter
                         .clone()
                         .map(|type_parameter| TypeParameter::from_str(&type_parameter.value))

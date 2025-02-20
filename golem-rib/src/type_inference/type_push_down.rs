@@ -24,7 +24,12 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 
     while let Some(expr) = queue.pop_back() {
         match expr {
-            Expr::SelectField(expr, field, _, inferred_type) => {
+            Expr::SelectField {
+                expr,
+                field,
+                inferred_type,
+                ..
+            } => {
                 let field_type = inferred_type.clone();
                 let record_type = vec![(field.to_string(), field_type)];
                 let inferred_record_type = InferredType::Record(record_type);
@@ -33,66 +38,109 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
 
-            Expr::SelectIndex(expr, _, _, inferred_type) => {
+            Expr::SelectIndex {
+                expr,
+                inferred_type,
+                ..
+            } => {
                 let field_type = inferred_type.clone();
                 let inferred_record_type = InferredType::List(Box::new(field_type));
                 expr.add_infer_type_mut(inferred_record_type);
                 queue.push_back(expr);
             }
-            Expr::Cond(cond, then, else_, inferred_type) => {
-                then.add_infer_type_mut(inferred_type.clone());
-                else_.add_infer_type_mut(inferred_type.clone());
+            Expr::Cond {
+                cond,
+                lhs,
+                rhs,
+                inferred_type,
+            } => {
+                lhs.add_infer_type_mut(inferred_type.clone());
+                rhs.add_infer_type_mut(inferred_type.clone());
 
                 cond.add_infer_type_mut(InferredType::Bool);
                 queue.push_back(cond);
-                queue.push_back(then);
-                queue.push_back(else_);
+                queue.push_back(lhs);
+                queue.push_back(rhs);
             }
-            Expr::Not(expr, inferred_type) => {
+            Expr::Not {
+                expr,
+                inferred_type,
+            } => {
                 expr.add_infer_type_mut(inferred_type.clone());
                 queue.push_back(expr);
             }
-            Expr::Option(Some(expr), _, inferred_type) => {
+            Expr::Option {
+                expr: Some(expr),
+                inferred_type,
+                ..
+            } => {
                 internal::handle_option(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::Result(Ok(expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Ok(expr),
+                inferred_type,
+                ..
+            } => {
                 internal::handle_ok(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::Result(Err(expr), _, inferred_type) => {
+            Expr::Result {
+                expr: Err(expr),
+                inferred_type,
+                ..
+            } => {
                 internal::handle_err(expr, inferred_type)?;
                 queue.push_back(expr);
             }
 
-            Expr::PatternMatch(pred, match_arms, inferred_type) => {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                inferred_type,
+            } => {
                 for MatchArm {
                     arm_resolution_expr,
                     arm_pattern,
                 } in match_arms
                 {
-                    let predicate_type = pred.inferred_type();
-                    internal::update_arm_pattern_type(arm_pattern, &predicate_type, pred)?;
+                    let predicate_type = predicate.inferred_type();
+                    internal::update_arm_pattern_type(arm_pattern, &predicate_type, predicate)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
             }
 
-            Expr::Tuple(exprs, inferred_type) => {
+            Expr::Tuple {
+                exprs,
+                inferred_type,
+            } => {
                 internal::handle_tuple(exprs, inferred_type, &mut queue)?;
             }
-            Expr::Sequence(expressions, _, inferred_type) => {
-                internal::handle_sequence(expressions, inferred_type, &mut queue)?;
+            Expr::Sequence {
+                exprs,
+                inferred_type,
+                ..
+            } => {
+                internal::handle_sequence(exprs, inferred_type, &mut queue)?;
             }
 
-            Expr::Record(expressions, inferred_type) => {
-                internal::handle_record(expressions, inferred_type, &mut queue)?;
+            Expr::Record {
+                exprs,
+                inferred_type,
+            } => {
+                internal::handle_record(exprs, inferred_type, &mut queue)?;
             }
 
-            Expr::Call(call_type, _, expressions, inferred_type) => {
-                internal::handle_call(call_type, expressions, inferred_type, &mut queue);
+            Expr::Call {
+                call_type,
+                args,
+                inferred_type,
+                ..
+            } => {
+                internal::handle_call(call_type, args, inferred_type, &mut queue);
             }
 
             Expr::ListComprehension {
@@ -195,7 +243,7 @@ mod internal {
     }
 
     fn update_yield_expr_in_list_comprehension(
-        variable_id: &mut VariableId,
+        variable: &mut VariableId,
         iterable_type: &InferredType,
         yield_expr: &mut Expr,
     ) -> Result<(), String> {
@@ -210,11 +258,14 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, _, existing_inferred_type) => {
-                        if let VariableId::ListComprehension(l) = v {
-                            if l.name == variable_id.name() {
-                                *existing_inferred_type =
-                                    existing_inferred_type.merge(iterable_variable_type.clone())
+                    Expr::Identifier {
+                        variable_id,
+                        inferred_type,
+                        ..
+                    } => {
+                        if let VariableId::ListComprehension(l) = variable_id {
+                            if l.name == variable.name() {
+                                *inferred_type = inferred_type.merge(iterable_variable_type.clone())
                             }
                         }
                     }
@@ -245,16 +296,18 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier(v, _, existing_inferred_type) => {
-                        if let VariableId::ListComprehension(l) = v {
+                    Expr::Identifier {
+                        variable_id,
+                        inferred_type,
+                        ..
+                    } => {
+                        if let VariableId::ListComprehension(l) = variable_id {
                             if l.name == iterated_variable.name() {
-                                *existing_inferred_type =
-                                    existing_inferred_type.merge(iterable_variable_type.clone())
+                                *inferred_type = inferred_type.merge(iterable_variable_type.clone())
                             }
-                        } else if let VariableId::ListReduce(l) = v {
+                        } else if let VariableId::ListReduce(l) = variable_id {
                             if l.name == reduce_variable.name() {
-                                *existing_inferred_type =
-                                    existing_inferred_type.merge(init_value_expr_type.clone())
+                                *inferred_type = inferred_type.merge(init_value_expr_type.clone())
                             }
                         }
                     }
@@ -550,67 +603,62 @@ mod internal {
 mod type_push_down_tests {
     use test_r::test;
 
-    use crate::{Expr, InferredType, VariableId};
+    use crate::{Expr, InferredType};
 
     #[test]
     fn test_push_down_for_record() {
-        let mut expr = Expr::Record(
-            vec![("titles".to_string(), Box::new(Expr::identifier("x", None)))],
-            InferredType::AllOf(vec![
-                InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
-                InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
-            ]),
-        );
+        let mut expr = Expr::record(vec![(
+            "titles".to_string(),
+            Expr::identifier_global("x", None),
+        )])
+        .with_inferred_type(InferredType::AllOf(vec![
+            InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
+            InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
+        ]));
 
         expr.push_types_down().unwrap();
-        let expected = Expr::Record(
-            vec![(
-                "titles".to_string(),
-                Box::new(Expr::Identifier(
-                    VariableId::global("x".to_string()),
-                    None,
-                    InferredType::U64,
-                )),
-            )],
-            InferredType::AllOf(vec![
-                InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
-                InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
-            ]),
-        );
+        let expected = Expr::record(vec![(
+            "titles".to_string(),
+            Expr::identifier_global("x", None).with_inferred_type(InferredType::U64),
+        )])
+        .with_inferred_type(InferredType::AllOf(vec![
+            InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
+            InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
+        ]));
         assert_eq!(expr, expected);
     }
 
     #[test]
     fn test_push_down_for_sequence() {
-        let mut expr = Expr::Sequence(
-            vec![Expr::identifier("x", None), Expr::identifier("y", None)],
-            None,
-            InferredType::AllOf(vec![
-                InferredType::List(Box::new(InferredType::U32)),
-                InferredType::List(Box::new(InferredType::U64)),
-            ]),
-        );
-
-        expr.push_types_down().unwrap();
-        let expected = Expr::Sequence(
+        let mut expr = Expr::sequence(
             vec![
-                Expr::Identifier(
-                    VariableId::global("x".to_string()),
-                    None,
-                    InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
-                ),
-                Expr::Identifier(
-                    VariableId::global("y".to_string()),
-                    None,
-                    InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
-                ),
+                Expr::identifier_global("x", None),
+                Expr::identifier_global("y", None),
             ],
             None,
-            InferredType::AllOf(vec![
+        )
+        .with_inferred_type(InferredType::AllOf(vec![
+            InferredType::List(Box::new(InferredType::U32)),
+            InferredType::List(Box::new(InferredType::U64)),
+        ]));
+
+        expr.push_types_down().unwrap();
+        let expected =
+            Expr::sequence(
+                vec![
+                    Expr::identifier_global("x", None).with_inferred_type(InferredType::AllOf(
+                        vec![InferredType::U32, InferredType::U64],
+                    )),
+                    Expr::identifier_global("y", None).with_inferred_type(InferredType::AllOf(
+                        vec![InferredType::U32, InferredType::U64],
+                    )),
+                ],
+                None,
+            )
+            .with_inferred_type(InferredType::AllOf(vec![
                 InferredType::List(Box::new(InferredType::U32)),
                 InferredType::List(Box::new(InferredType::U64)),
-            ]),
-        );
+            ]));
         assert_eq!(expr, expected);
     }
 }

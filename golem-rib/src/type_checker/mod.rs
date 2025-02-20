@@ -62,7 +62,7 @@ mod type_check_tests {
 
             let result = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, string>>, b: u64, c: list<s32>, d: record<da: s32>>. Unable to determine the type of `3` in the record at path `x`. Number literals must have a type annotation. Example: `1u64`";
+            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, string>>, b: u64, c: list<s32>, d: record<da: s32>>. Unable to determine the type of `3` in `x`. Number literals must have a type annotation. Example: `1: u64`";
             assert_eq!(result, expected);
         }
     }

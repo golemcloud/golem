@@ -88,20 +88,24 @@ mod internal {
 
         while let Some(expr) = expr_queue.pop_back() {
             match expr {
-                expr @ Expr::Identifier(variable_id, type_name, _) => {
+                expr @ Expr::Identifier {
+                    variable_id,
+                    type_annotation,
+                    ..
+                } => {
                     if variable_id == &type_spec.variable_id {
                         if path.is_empty() {
-                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
+                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, .. }) if expr0.as_ref() == expr);
 
                             if continue_traverse {
                                 temp_stack.push_front((expr.clone(), true));
                             } else {
                                 temp_stack.push_front((
-                                    Expr::Identifier(
-                                        variable_id.clone(),
-                                        type_name.clone(),
-                                        type_spec.inferred_type.clone(),
-                                    ),
+                                    Expr::Identifier {
+                                        variable_id: variable_id.clone(),
+                                        type_annotation: type_annotation.clone(),
+                                        inferred_type: type_spec.inferred_type.clone(),
+                                    },
                                     false,
                                 ));
                             }
@@ -113,208 +117,313 @@ mod internal {
                     }
                 }
 
-                outer @ Expr::SelectField(inner_expr, field, type_name, current_inferred_type) => {
-                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
+                outer @ Expr::SelectField {
+                    expr,
+                    field,
+                    type_annotation,
+                    inferred_type,
+                } => {
+                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, ..}) if expr0.as_ref() == outer);
 
                     handle_select_field(
-                        inner_expr,
+                        expr,
                         field,
                         continue_search,
-                        current_inferred_type,
+                        inferred_type,
                         &mut temp_stack,
                         &mut path,
                         &type_spec.inferred_type,
-                        type_name,
+                        type_annotation,
                     )?;
                 }
 
-                Expr::Tuple(tuple_elems, current_inferred_type) => {
-                    handle_tuple(tuple_elems, current_inferred_type, &mut temp_stack);
+                Expr::Tuple {
+                    exprs,
+                    inferred_type,
+                } => {
+                    handle_tuple(exprs, inferred_type, &mut temp_stack);
                 }
 
-                expr @ Expr::Flags(_, _) => {
+                expr @ Expr::Flags { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
 
-                Expr::SelectIndex(expr, index, type_name, current_inferred_type) => {
+                Expr::SelectIndex {
+                    expr,
+                    index,
+                    type_annotation,
+                    inferred_type,
+                } => {
                     handle_select_index(
                         expr,
                         index,
-                        current_inferred_type,
+                        inferred_type,
                         &mut temp_stack,
-                        type_name,
+                        type_annotation,
                     )?;
                 }
 
-                Expr::Result(Ok(_), type_name, current_inferred_type) => {
-                    handle_result_ok(expr, current_inferred_type, &mut temp_stack, type_name);
+                Expr::Result {
+                    expr: Ok(_),
+                    type_annotation,
+                    inferred_type,
+                } => {
+                    handle_result_ok(expr, inferred_type, &mut temp_stack, type_annotation);
                 }
 
-                Expr::Result(Err(_), type_name, current_inferred_type) => {
-                    handle_result_error(expr, current_inferred_type, &mut temp_stack, type_name);
+                Expr::Result {
+                    expr: Err(_),
+                    type_annotation,
+                    inferred_type,
+                } => {
+                    handle_result_error(expr, inferred_type, &mut temp_stack, type_annotation);
                 }
 
-                Expr::Option(Some(expr), type_name, current_inferred_type) => {
-                    handle_option_some(expr, current_inferred_type, &mut temp_stack, type_name);
+                Expr::Option {
+                    expr: Some(expr),
+                    type_annotation,
+                    inferred_type,
+                } => {
+                    handle_option_some(expr, inferred_type, &mut temp_stack, type_annotation);
                 }
 
-                Expr::Option(None, type_name, current_inferred_type) => {
+                Expr::Option {
+                    type_annotation,
+                    inferred_type,
+                    ..
+                } => {
                     temp_stack.push_front((
-                        Expr::Option(None, type_name.clone(), current_inferred_type.clone()),
+                        Expr::Option {
+                            expr: None,
+                            type_annotation: type_annotation.clone(),
+                            inferred_type: inferred_type.clone(),
+                        },
                         false,
                     ));
                 }
 
-                Expr::Cond(pred, then, else_, current_inferred_type) => {
-                    handle_if_else(pred, then, else_, current_inferred_type, &mut temp_stack);
+                Expr::Cond {
+                    cond,
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_if_else(cond, lhs, rhs, inferred_type, &mut temp_stack);
                 }
 
                 //
-                Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
-                    handle_pattern_match(
-                        predicate,
-                        match_arms,
-                        current_inferred_type,
-                        &mut temp_stack,
-                    );
+                Expr::PatternMatch {
+                    predicate,
+                    match_arms,
+                    inferred_type,
+                    ..
+                } => {
+                    handle_pattern_match(predicate, match_arms, inferred_type, &mut temp_stack);
                 }
 
-                Expr::Concat(exprs, _) => {
+                Expr::Concat { exprs, .. } => {
                     handle_concat(exprs, &mut temp_stack);
                 }
 
-                Expr::ExprBlock(exprs, current_inferred_type) => {
-                    handle_multiple(exprs, current_inferred_type, &mut temp_stack);
+                Expr::ExprBlock {
+                    exprs,
+                    inferred_type,
+                    ..
+                } => {
+                    handle_multiple(exprs, inferred_type, &mut temp_stack);
                 }
 
-                Expr::Not(_, current_inferred_type) => {
-                    handle_not(expr, current_inferred_type, &mut temp_stack);
+                Expr::Not { inferred_type, .. } => {
+                    handle_not(expr, inferred_type, &mut temp_stack);
                 }
 
-                Expr::GreaterThan(left, right, current_inferred_type) => {
-                    handle_comparison_op(
-                        left,
-                        right,
-                        current_inferred_type,
+                Expr::GreaterThan {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::GreaterThan {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::GreaterThanOrEqualTo {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::GreaterThanOrEqualTo {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::LessThanOrEqualTo {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::LessThanOrEqualTo {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+                Expr::Plus {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::Plus {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::Minus {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::Minus {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::Multiply {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::Multiply {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::Divide {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::Divide {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::EqualTo {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::EqualTo {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::LessThan {
+                    lhs,
+                    rhs,
+                    inferred_type,
+                } => {
+                    handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
+                        Expr::LessThan {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        }
+                    });
+                }
+
+                Expr::Let {
+                    variable_id,
+                    type_annotation,
+                    expr,
+                    inferred_type,
+                } => {
+                    handle_let(
+                        variable_id,
+                        expr,
+                        type_annotation,
+                        inferred_type,
                         &mut temp_stack,
-                        Expr::GreaterThan,
                     );
                 }
-
-                Expr::GreaterThanOrEqualTo(left, right, current_inferred_type) => {
-                    handle_comparison_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::GreaterThanOrEqualTo,
-                    );
+                Expr::Sequence {
+                    exprs,
+                    type_annotation,
+                    inferred_type,
+                    ..
+                } => {
+                    handle_sequence(exprs, inferred_type, &mut temp_stack, type_annotation);
                 }
-
-                Expr::LessThanOrEqualTo(left, right, current_inferred_type) => {
-                    handle_comparison_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::LessThanOrEqualTo,
-                    );
+                Expr::Record {
+                    exprs,
+                    inferred_type,
+                } => {
+                    handle_record(exprs, inferred_type, &mut temp_stack);
                 }
-                Expr::Plus(left, right, current_inferred_type) => {
-                    handle_math_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::Plus,
-                    );
-                }
-
-                Expr::Minus(left, right, current_inferred_type) => {
-                    handle_math_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::Minus,
-                    );
-                }
-
-                Expr::Multiply(left, right, current_inferred_type) => {
-                    handle_math_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::Multiply,
-                    );
-                }
-
-                Expr::Divide(left, right, current_inferred_type) => {
-                    handle_math_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::Divide,
-                    );
-                }
-
-                Expr::EqualTo(left, right, current_inferred_type) => {
-                    handle_comparison_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::EqualTo,
-                    );
-                }
-
-                Expr::LessThan(left, right, current_inferred_type) => {
-                    handle_comparison_op(
-                        left,
-                        right,
-                        current_inferred_type,
-                        &mut temp_stack,
-                        Expr::LessThan,
-                    );
-                }
-
-                Expr::Let(variable_id, typ, expr, inferred_type) => {
-                    handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
-                }
-                Expr::Sequence(exprs, type_name, current_inferred_type) => {
-                    handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
-                }
-                Expr::Record(expr, inferred_type) => {
-                    handle_record(expr, inferred_type, &mut temp_stack);
-                }
-                Expr::Literal(_, _) => {
+                Expr::Literal { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Number(_, _, _) => {
+                Expr::Number { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Boolean(_, _) => {
+                Expr::Boolean { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::And(left, right, _) => {
+                Expr::And { lhs, rhs, .. } => {
                     handle_comparison_op(
-                        left,
-                        right,
+                        lhs,
+                        rhs,
                         &InferredType::Bool,
                         &mut temp_stack,
-                        Expr::And,
+                        |a, b, c| Expr::And {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        },
                     );
                 }
 
-                Expr::Or(left, right, _) => {
+                Expr::Or { lhs, rhs, .. } => {
                     handle_comparison_op(
-                        left,
-                        right,
+                        lhs,
+                        rhs,
                         &InferredType::Bool,
                         &mut temp_stack,
-                        Expr::Or,
+                        |a, b, c| Expr::Or {
+                            lhs: a,
+                            rhs: b,
+                            inferred_type: c,
+                        },
                     );
                 }
 
@@ -333,25 +442,36 @@ mod internal {
                     &mut temp_stack,
                 ),
 
-                Expr::Call(call_type, generic_type_parameter, exprs, inferred_type) => {
+                Expr::Call {
+                    call_type,
+                    generic_type_parameter,
+                    args,
+                    inferred_type,
+                } => {
                     handle_call(
                         call_type,
-                        exprs,
+                        args,
                         generic_type_parameter,
                         inferred_type,
                         &mut temp_stack,
                     );
                 }
 
-                Expr::Unwrap(expr, inferred_type) => {
+                Expr::Unwrap {
+                    expr,
+                    inferred_type,
+                } => {
                     handle_unwrap(expr, inferred_type, &mut temp_stack);
                 }
 
-                Expr::Throw(_, _) => {
+                Expr::Throw { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
 
-                Expr::GetTag(_, inferred_type) => {
+                Expr::GetTag {
+                    expr,
+                    inferred_type,
+                } => {
                     handle_get_tag(expr, inferred_type, &mut temp_stack);
                 }
 
@@ -490,7 +610,7 @@ mod internal {
         new_tuple_elems.reverse();
 
         // Reform tuple
-        let new_tuple = Expr::Tuple(new_tuple_elems, current_tuple_type.clone());
+        let new_tuple = Expr::tuple(new_tuple_elems).with_inferred_type(current_tuple_type.clone());
         result_expr_queue.push_front((new_tuple, false));
     }
 
@@ -524,33 +644,21 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::SelectField(
-                        Box::new(expr.clone()),
-                        field.to_string(),
-                        type_name.clone(),
-                        new_type,
-                    ),
+                    Expr::select_field(expr.clone(), field, type_name.clone())
+                        .with_inferred_type(new_type),
                     continue_search,
                 ));
             } else {
                 temp_stack.push_front((
-                    Expr::SelectField(
-                        Box::new(expr.clone()),
-                        field.to_string(),
-                        type_name.clone(),
-                        current_field_type.clone(),
-                    ),
+                    Expr::select_field(expr.clone(), field, type_name.clone())
+                        .with_inferred_type(current_field_type.clone()),
                     true,
                 ));
             }
         } else {
             temp_stack.push_front((
-                Expr::SelectField(
-                    Box::new(expr.clone()),
-                    field.to_string(),
-                    type_name.clone(),
-                    current_field_type.clone(),
-                ),
+                Expr::select_field(expr.clone(), field, type_name.clone())
+                    .with_inferred_type(current_field_type.clone()),
                 false,
             ));
         }
@@ -569,12 +677,12 @@ mod internal {
             .pop_front()
             .unwrap_or((original_selection_expr.clone(), false));
 
-        let new_select_index = Expr::SelectIndex(
-            Box::new(expr.0.clone()),
-            *index,
-            type_name.clone(),
-            current_index_type.clone(),
-        );
+        let new_select_index = Expr::SelectIndex {
+            expr: Box::new(expr.0.clone()),
+            index: *index,
+            type_annotation: type_name.clone(),
+            inferred_type: current_index_type.clone(),
+        };
         temp_stack.push_front((new_select_index, false));
 
         Ok(())
@@ -590,11 +698,11 @@ mod internal {
             .pop_front()
             .unwrap_or((original_ok_expr.clone(), false));
 
-        let new_result = Expr::Result(
-            Ok(Box::new(ok_expr.0.clone())),
-            type_name.clone(),
-            current_ok_type.clone(),
-        );
+        let new_result = Expr::Result {
+            expr: Ok(Box::new(ok_expr.0.clone())),
+            type_annotation: type_name.clone(),
+            inferred_type: current_ok_type.clone(),
+        };
         temp_stack.push_front((new_result, true));
     }
 
@@ -609,11 +717,11 @@ mod internal {
             .map(|x| x.0)
             .unwrap_or(original_error_expr.clone());
 
-        let new_result = Expr::Result(
-            Err(Box::new(expr.clone())),
-            type_name.clone(),
-            current_error_type.clone(),
-        );
+        let new_result = Expr::Result {
+            expr: Err(Box::new(expr.clone())),
+            type_annotation: type_name.clone(),
+            inferred_type: current_error_type.clone(),
+        };
 
         temp_stack.push_front((new_result, false));
     }
@@ -627,11 +735,11 @@ mod internal {
         let expr = temp_stack
             .pop_front()
             .unwrap_or((original_some_expr.clone(), false));
-        let new_option = Expr::Option(
-            Some(Box::new(expr.0.clone())),
-            type_name.clone(),
-            current_some_type.clone(),
-        );
+        let new_option = Expr::Option {
+            expr: Some(Box::new(expr.0.clone())),
+            type_annotation: type_name.clone(),
+            inferred_type: current_some_type.clone(),
+        };
         temp_stack.push_front((new_option, false));
     }
 
@@ -652,12 +760,12 @@ mod internal {
             .pop_front()
             .unwrap_or((original_predicate.clone(), false));
 
-        let new_expr = Expr::Cond(
-            Box::new(cond_expr.0),
-            Box::new(then_expr.0.clone()),
-            Box::new(else_expr.0.clone()),
-            current_inferred_type.clone(),
-        );
+        let new_expr = Expr::Cond {
+            cond: Box::new(cond_expr.0),
+            lhs: Box::new(then_expr.0.clone()),
+            rhs: Box::new(else_expr.0.clone()),
+            inferred_type: current_inferred_type.clone(),
+        };
 
         temp_stack.push_front((new_expr, false));
     }
@@ -707,11 +815,11 @@ mod internal {
             .map(|x| x.0)
             .unwrap_or(predicate.clone());
 
-        let new_expr = Expr::PatternMatch(
-            Box::new(pred.clone()),
-            new_match_arms,
-            current_inferred_type.clone(),
-        );
+        let new_expr = Expr::PatternMatch {
+            predicate: Box::new(pred.clone()),
+            match_arms: new_match_arms,
+            inferred_type: current_inferred_type.clone(),
+        };
 
         temp_stack.push_front((new_expr, false));
     }
@@ -725,7 +833,10 @@ mod internal {
 
         new_exprs.reverse();
 
-        let new_concat = Expr::Concat(new_exprs, InferredType::Str);
+        let new_concat = Expr::Concat {
+            exprs: new_exprs,
+            inferred_type: InferredType::Str,
+        };
         temp_stack.push_front((new_concat, false));
     }
 
@@ -746,7 +857,10 @@ mod internal {
 
         new_exprs.reverse();
 
-        let new_multiple = Expr::ExprBlock(new_exprs, current_inferred_type.clone());
+        let new_multiple = Expr::ExprBlock {
+            exprs: new_exprs,
+            inferred_type: current_inferred_type.clone(),
+        };
         temp_stack.push_front((new_multiple, false));
     }
 
@@ -759,7 +873,10 @@ mod internal {
             .pop_front()
             .map(|x| x.0)
             .unwrap_or(original_not_expr.clone());
-        let new_not = Expr::Not(Box::new(expr), current_not_type.clone());
+        let new_not = Expr::Not {
+            expr: Box::new(expr),
+            inferred_type: current_not_type.clone(),
+        };
         temp_stack.push_front((new_not, false));
     }
 
@@ -923,20 +1040,20 @@ mod internal {
                         }
                     };
 
-                    let new_call = Expr::Call(
-                        CallType::InstanceCreation(new_instance_creation.clone()),
-                        generic_type_parameter.clone(),
-                        new_arg_exprs,
-                        inferred_type.clone(),
-                    );
+                    let new_call = Expr::Call {
+                        call_type: CallType::InstanceCreation(new_instance_creation.clone()),
+                        generic_type_parameter: generic_type_parameter.clone(),
+                        args: new_arg_exprs,
+                        inferred_type: inferred_type.clone(),
+                    };
                     temp_stack.push_front((new_call, false));
                 } else {
-                    let new_call = Expr::Call(
-                        CallType::InstanceCreation(instance_creation.clone()),
-                        generic_type_parameter.clone(),
-                        new_arg_exprs,
-                        inferred_type.clone(),
-                    );
+                    let new_call = Expr::Call {
+                        call_type: CallType::InstanceCreation(instance_creation.clone()),
+                        generic_type_parameter: generic_type_parameter.clone(),
+                        args: new_arg_exprs,
+                        inferred_type: inferred_type.clone(),
+                    };
 
                     temp_stack.push_front((new_call, false));
                 }
@@ -1004,47 +1121,47 @@ mod internal {
                         .map(|x| x.0)
                         .unwrap_or(worker.deref().clone());
 
-                    Expr::Call(
-                        CallType::Function {
+                    Expr::Call {
+                        call_type: CallType::Function {
                             function_name,
                             worker: Some(Box::new(worker)),
                         },
-                        None,
-                        new_arg_exprs,
-                        new_inferred_type,
-                    )
+                        generic_type_parameter: generic_type_parameter.clone(),
+                        args: new_arg_exprs,
+                        inferred_type: new_inferred_type,
+                    }
                 } else {
-                    Expr::Call(
-                        CallType::Function {
+                    Expr::Call {
+                        call_type: CallType::Function {
                             function_name,
                             worker: None,
                         },
-                        None,
-                        new_arg_exprs,
-                        new_inferred_type,
-                    )
+                        generic_type_parameter: generic_type_parameter.clone(),
+                        args: new_arg_exprs,
+                        inferred_type: new_inferred_type,
+                    }
                 };
 
                 temp_stack.push_front((new_call, false));
             }
 
             CallType::VariantConstructor(str) => {
-                let new_call = Expr::Call(
-                    CallType::VariantConstructor(str.clone()),
-                    None,
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+                let new_call = Expr::Call {
+                    call_type: CallType::VariantConstructor(str.clone()),
+                    generic_type_parameter: None,
+                    args: new_arg_exprs,
+                    inferred_type: inferred_type.clone(),
+                };
                 temp_stack.push_front((new_call, false));
             }
 
             CallType::EnumConstructor(str) => {
-                let new_call = Expr::Call(
-                    CallType::EnumConstructor(str.clone()),
-                    None,
-                    new_arg_exprs,
-                    inferred_type.clone(),
-                );
+                let new_call = Expr::Call {
+                    call_type: CallType::EnumConstructor(str.clone()),
+                    generic_type_parameter: None,
+                    args: new_arg_exprs,
+                    inferred_type: inferred_type.clone(),
+                };
                 temp_stack.push_front((new_call, false));
             }
         }
@@ -1056,7 +1173,9 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
     ) {
         let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
-        let new_unwrap = Expr::Unwrap(Box::new(expr.clone()), current_inferred_type.clone());
+        let new_unwrap = expr
+            .unwrap()
+            .with_inferred_type(current_inferred_type.clone());
         temp_stack.push_front((new_unwrap, false));
     }
 
@@ -1066,7 +1185,8 @@ mod internal {
         temp_stack: &mut VecDeque<(Expr, bool)>,
     ) {
         let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
-        let new_get_tag = Expr::GetTag(Box::new(expr.clone()), current_inferred_type.clone());
+        let new_get_tag =
+            Expr::get_tag(expr.clone()).with_inferred_type(current_inferred_type.clone());
         temp_stack.push_front((new_get_tag, false));
     }
 
@@ -1081,12 +1201,12 @@ mod internal {
             .pop_front()
             .map(|x| x.0)
             .unwrap_or(original_expr.clone());
-        let new_let = Expr::Let(
-            original_variable_id.clone(),
-            optional_type.clone(),
-            Box::new(expr),
-            current_inferred_type.clone(),
-        );
+        let new_let = Expr::Let {
+            variable_id: original_variable_id.clone(),
+            type_annotation: optional_type.clone(),
+            expr: Box::new(expr),
+            inferred_type: current_inferred_type.clone(),
+        };
         temp_stack.push_front((new_let, false));
     }
 
@@ -1105,7 +1225,8 @@ mod internal {
 
         new_exprs.reverse();
 
-        let expr = Expr::Sequence(new_exprs, type_name.clone(), current_inferred_type.clone());
+        let expr = Expr::sequence(new_exprs, type_name.clone())
+            .with_inferred_type(current_inferred_type.clone());
 
         temp_stack.push_front((expr, false));
     }
@@ -1122,12 +1243,13 @@ mod internal {
                 .pop_front()
                 .map(|x| x.0)
                 .unwrap_or(expr.deref().clone());
-            new_exprs.push((field.clone(), Box::new(expr.clone())));
+            new_exprs.push((field.clone(), expr.clone()));
         }
 
         new_exprs.reverse();
 
-        let new_record = Expr::Record(new_exprs.to_vec(), current_inferred_type.clone());
+        let new_record =
+            Expr::record(new_exprs.to_vec()).with_inferred_type(current_inferred_type.clone());
         temp_stack.push_front((new_record, false));
     }
 }
@@ -1155,11 +1277,7 @@ mod tests {
 
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
-        let expected = Expr::Identifier(
-            VariableId::global("foo".to_string()),
-            None,
-            InferredType::Str,
-        );
+        let expected = Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }
@@ -1182,16 +1300,12 @@ mod tests {
 
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
-        let expected = Expr::SelectField(
-            Box::new(Expr::select_field(
-                Expr::identifier("foo", None),
-                "bar",
-                None,
-            )),
-            "baz".to_string(),
+        let expected = Expr::select_field(
+            Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+            "baz",
             None,
-            InferredType::Str,
-        );
+        )
+        .with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }
@@ -1213,16 +1327,12 @@ mod tests {
 
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
-        let expected = Expr::SelectField(
-            Box::new(Expr::select_field(
-                Expr::identifier("foo", None),
-                "bar",
-                None,
-            )),
-            "baz".to_string(),
+        let expected = Expr::select_field(
+            Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+            "baz",
             None,
-            InferredType::Str,
-        );
+        )
+        .with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }
@@ -1244,16 +1354,12 @@ mod tests {
 
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
-        let expected = Expr::SelectField(
-            Box::new(Expr::select_field(
-                Expr::identifier("foo", None),
-                "bar",
-                None,
-            )),
-            "baz".to_string(),
+        let expected = Expr::select_field(
+            Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+            "baz",
             None,
-            InferredType::Str,
-        );
+        )
+        .with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }
@@ -1278,16 +1384,14 @@ mod tests {
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
             .unwrap();
 
-        let expected = Expr::ExprBlock(
-            vec![
-                Expr::Let(
-                    VariableId::Local("res".to_string(), Some(Id(0))),
-                    None,
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::SelectField(
-                            Box::new(Expr::Identifier(
-                                VariableId::Global("foo".to_string()),
-                                None,
+        let expected = Expr::expr_block(vec![
+            Expr::Let {
+                variable_id: VariableId::Local("res".to_string(), Some(Id(0))),
+                type_annotation: None,
+                expr: Box::new(
+                    Expr::select_field(
+                        Expr::select_field(
+                            Expr::identifier_global("foo", None).with_inferred_type(
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1295,28 +1399,28 @@ mod tests {
                                         ("user-id".to_string(), InferredType::Str),
                                     ]),
                                 )]),
-                            )),
-                            "bar".to_string(),
+                            ),
+                            "bar",
                             None,
-                            InferredType::Record(vec![
-                                ("number".to_string(), InferredType::U64),
-                                ("user-id".to_string(), InferredType::Str),
-                            ]),
-                        )),
-                        "user-id".to_string(),
+                        )
+                        .with_inferred_type(InferredType::Record(vec![
+                            ("number".to_string(), InferredType::U64),
+                            ("user-id".to_string(), InferredType::Str),
+                        ])),
+                        "user-id",
                         None,
-                        InferredType::Str,
-                    )),
-                    InferredType::Unknown,
+                    )
+                    .with_inferred_type(InferredType::Str),
                 ),
-                Expr::Let(
-                    VariableId::Local("hello".to_string(), Some(Id(0))),
-                    Some(TypeName::U64),
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::SelectField(
-                            Box::new(Expr::Identifier(
-                                VariableId::Global("foo".to_string()),
-                                None,
+                inferred_type: InferredType::Unknown,
+            },
+            Expr::Let {
+                variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
+                type_annotation: Some(TypeName::U64),
+                expr: Box::new(
+                    Expr::select_field(
+                        Expr::select_field(
+                            Expr::identifier_global("foo", None).with_inferred_type(
                                 InferredType::Record(vec![(
                                     "bar".to_string(),
                                     InferredType::Record(vec![
@@ -1324,28 +1428,28 @@ mod tests {
                                         ("user-id".to_string(), InferredType::Str),
                                     ]),
                                 )]),
-                            )),
-                            "bar".to_string(),
+                            ),
+                            "bar",
                             None,
-                            InferredType::Record(vec![
-                                ("number".to_string(), InferredType::U64),
-                                ("user-id".to_string(), InferredType::Str),
-                            ]),
-                        )),
-                        "number".to_string(),
+                        )
+                        .with_inferred_type(InferredType::Record(vec![
+                            ("number".to_string(), InferredType::U64),
+                            ("user-id".to_string(), InferredType::Str),
+                        ])),
+                        "number",
                         None,
-                        InferredType::U64,
-                    )),
-                    InferredType::Unknown,
+                    )
+                    .with_inferred_type(InferredType::U64),
                 ),
-                Expr::Identifier(
-                    VariableId::Local("hello".to_string(), Some(Id(0))),
-                    None,
-                    InferredType::U64,
-                ),
-            ],
-            InferredType::U64,
-        );
+                inferred_type: InferredType::Unknown,
+            },
+            Expr::Identifier {
+                variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
+                type_annotation: None,
+                inferred_type: InferredType::U64,
+            },
+        ])
+        .with_inferred_type(InferredType::U64);
 
         assert_eq!(expr, expected);
     }

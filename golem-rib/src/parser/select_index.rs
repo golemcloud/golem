@@ -91,7 +91,7 @@ mod internal {
         >,
     {
         number().map(|s: Expr| match s {
-            Expr::Number(number, _, _) => {
+            Expr::Number { number, .. } => {
                 if number.value < BigDecimal::from(0) {
                     panic!("Cannot use a negative number to index",)
                 } else {
@@ -128,7 +128,10 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((Expr::select_index(Expr::identifier("foo", None), 0), ""))
+            Ok((
+                Expr::select_index(Expr::identifier_global("foo", None), 0),
+                ""
+            ))
         );
     }
 
@@ -139,7 +142,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::select_index(Expr::select_index(Expr::identifier("foo", None), 0), 1),
+                Expr::select_index(
+                    Expr::select_index(Expr::identifier_global("foo", None), 0),
+                    1
+                ),
                 ""
             ))
         );

@@ -319,10 +319,10 @@ mod tests {
             result,
             Ok((
                 Expr::pattern_match(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     vec![MatchArm::new(
                         ArmPattern::WildCard,
-                        Expr::identifier("bar", None)
+                        Expr::identifier_global("bar", None)
                     )]
                 ),
                 ""
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::pattern_match(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 vec![MatchArm::new(
                     ArmPattern::custom_constructor(
                         "foo",
@@ -349,7 +349,7 @@ mod tests {
                             ArmPattern::identifier("iden")
                         ]
                     ),
-                    Expr::identifier("bar", None)
+                    Expr::identifier_global("bar", None)
                 )]
             ))
         );
@@ -363,7 +363,7 @@ mod tests {
             result,
             Ok((
                 Expr::pattern_match(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     vec![MatchArm::new(
                         ArmPattern::As(
                             "abc".to_string(),
@@ -382,7 +382,7 @@ mod tests {
                                 ]
                             ))
                         ),
-                        Expr::identifier("bar", None)
+                        Expr::identifier_global("bar", None)
                     )]
                 ),
                 ""
@@ -398,13 +398,15 @@ mod tests {
             result,
             Ok((
                 Expr::pattern_match(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     vec![MatchArm::new(
                         ArmPattern::Constructor(
                             "Foo".to_string(),
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))]
                         ),
-                        Expr::identifier("bar", None)
+                        Expr::identifier_global("bar", None)
                     )]
                 ),
                 ""
@@ -420,33 +422,39 @@ mod tests {
             result,
             Ok((
                 Expr::pattern_match(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     vec![
-                        MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar", None)),
+                        MatchArm::new(ArmPattern::WildCard, Expr::identifier_global("bar", None)),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
-                            Expr::identifier("x", None),
+                            Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
-                            Expr::identifier("x", None),
+                            Expr::identifier_global("x", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor("none", vec![]),
-                            Expr::identifier("foo", None),
+                            Expr::identifier_global("foo", None),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                    "x", None
+                                )))],
                             ),
-                            Expr::identifier("x", None),
+                            Expr::identifier_global("x", None),
                         ),
                     ]
                 ),

@@ -20,7 +20,9 @@ pub fn check_type_errors_in_function_call(
 
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Call(call_type, _, args, ..) => match call_type {
+            Expr::Call {
+                call_type, args, ..
+            } => match call_type {
                 CallType::InstanceCreation(_) => {}
                 call_type => {
                     internal::check_type_mismatch_in_function_call(call_type, args, type_registry)?
@@ -169,7 +171,8 @@ mod internal {
             }
 
             // Find possible missing fields in the arguments that are records
-            let missing_fields = type_checker::find_missing_fields(actual_arg, &expected_arg_type);
+            let missing_fields =
+                type_checker::find_missing_fields_in_record(actual_arg, &expected_arg_type);
 
             if !missing_fields.is_empty() {
                 return Err(FunctionCallTypeError::MissingRecordFields {

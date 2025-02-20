@@ -40,7 +40,7 @@ where
             string("else").skip(spaces()),
             rib_expr().skip(spaces()),
         )
-            .map(|(cond, _, then_expr, _, else_expr)| Expr::cond(cond, then_expr, else_expr)),
+            .map(|(cond, _, lhs, _, rhs)| Expr::cond(cond, lhs, rhs)),
     )
 }
 
@@ -60,9 +60,9 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None),
-                    Expr::identifier("baz", None)
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
                 ),
                 ""
             ))
@@ -77,9 +77,9 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo", None),
-                    Expr::sequence(vec![Expr::identifier("bar", None)], None),
-                    Expr::sequence(vec![Expr::identifier("baz", None)], None)
+                    Expr::identifier_global("foo", None),
+                    Expr::sequence(vec![Expr::identifier_global("bar", None)], None),
+                    Expr::sequence(vec![Expr::identifier_global("baz", None)], None)
                 ),
                 ""
             ))
@@ -94,12 +94,12 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo", None),
-                    Expr::identifier("bar", None),
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
                     Expr::cond(
-                        Expr::identifier("baz", None),
-                        Expr::identifier("qux", None),
-                        Expr::identifier("quux", None)
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None),
+                        Expr::identifier_global("quux", None)
                     )
                 ),
                 ""
@@ -115,13 +115,13 @@ mod tests {
             result,
             Ok((
                 Expr::cond(
-                    Expr::identifier("foo", None),
+                    Expr::identifier_global("foo", None),
                     Expr::cond(
-                        Expr::identifier("bar", None),
-                        Expr::identifier("baz", None),
-                        Expr::identifier("qux", None)
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None)
                     ),
-                    Expr::identifier("quux", None)
+                    Expr::identifier_global("quux", None)
                 ),
                 ""
             ))

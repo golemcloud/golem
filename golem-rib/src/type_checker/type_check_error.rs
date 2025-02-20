@@ -62,7 +62,7 @@ impl Display for UnResolvedTypesError {
             Some(PathType::RecordPath(path)) => {
                 write!(
                     f,
-                    "Unable to determine the type of `{}` in the record at path `{}`",
+                    "Unable to determine the type of `{}` in `{}`",
                     self.unresolved_expr, path
                 )
             }
