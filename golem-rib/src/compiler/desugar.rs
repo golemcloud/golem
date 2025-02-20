@@ -617,7 +617,7 @@ mod desugar_tests {
                         Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
                             .with_inferred_type(InferredType::Option(Box::new(InferredType::U64))),
                     ),
-                    Expr::literal("some".to_string()),
+                    Expr::literal("some"),
                 )
                 .with_inferred_type(InferredType::Bool),
                 Expr::expr_block(vec![
@@ -644,11 +644,11 @@ mod desugar_tests {
                                     InferredType::U64,
                                 ))),
                         ),
-                        Expr::literal("none".to_string()),
+                        Expr::literal("none"),
                     )
                     .with_inferred_type(InferredType::Bool),
                     Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
-                    Expr::throw("No match found".to_string()),
+                    Expr::throw("No match found"),
                 )
                 .with_inferred_type(InferredType::U64),
             )

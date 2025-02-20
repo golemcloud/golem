@@ -1474,11 +1474,11 @@ mod type_pull_up_tests {
                 Expr::record(vec![
                     (
                         "foo".to_string(),
-                        Expr::literal("afs".to_string()).with_inferred_type(InferredType::Str),
+                        Expr::literal("afs").with_inferred_type(InferredType::Str),
                     ),
                     (
                         "bar".to_string(),
-                        Expr::literal("al".to_string()).with_inferred_type(InferredType::Str),
+                        Expr::literal("al").with_inferred_type(InferredType::Str),
                     ),
                 ])
                 .with_inferred_type(InferredType::Record(vec![

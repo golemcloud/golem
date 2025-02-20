@@ -774,7 +774,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_literal() {
-        let literal = Expr::literal("hello".to_string());
+        let literal = Expr::literal("hello");
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry, &vec![]).unwrap();
 
@@ -811,7 +811,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_assign_variable() {
-        let literal = Expr::literal("hello".to_string());
+        let literal = Expr::literal("hello");
 
         let variable_id = VariableId::local("request", 0);
 
@@ -974,11 +974,11 @@ mod compiler_tests {
         let expr = Expr::record(vec![
             (
                 "foo_key".to_string(),
-                Expr::literal("foo_value".to_string()),
+                Expr::literal("foo_value"),
             ),
             (
                 "bar_key".to_string(),
-                Expr::literal("bar_value".to_string()),
+                Expr::literal("bar_value"),
             ),
         ])
         .with_inferred_type(InferredType::Record(vec![
@@ -1043,9 +1043,9 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_if_conditional() {
-        let if_expr = Expr::literal("pred".to_string()).with_inferred_type(InferredType::Bool);
-        let then_expr = Expr::literal("then".to_string());
-        let else_expr = Expr::literal("else".to_string());
+        let if_expr = Expr::literal("pred").with_inferred_type(InferredType::Bool);
+        let then_expr = Expr::literal("then");
+        let else_expr = Expr::literal("else");
 
         let expr = Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::Str);
 
@@ -1073,12 +1073,12 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_nested_if_else() {
-        let if_expr = Expr::literal("if-pred1".to_string()).with_inferred_type(InferredType::Bool);
-        let then_expr = Expr::literal("then1".to_string()).with_inferred_type(InferredType::Str);
+        let if_expr = Expr::literal("if-pred1").with_inferred_type(InferredType::Bool);
+        let then_expr = Expr::literal("then1").with_inferred_type(InferredType::Str);
         let else_expr = Expr::cond(
-            Expr::literal("else-pred2".to_string()).with_inferred_type(InferredType::Bool),
-            Expr::literal("else-then2".to_string()),
-            Expr::literal("else-else2".to_string()),
+            Expr::literal("else-pred2").with_inferred_type(InferredType::Bool),
+            Expr::literal("else-then2"),
+            Expr::literal("else-else2"),
         )
         .with_inferred_type(InferredType::Str);
 
@@ -1118,11 +1118,11 @@ mod compiler_tests {
         let record = Expr::record(vec![
             (
                 "foo_key".to_string(),
-                Expr::literal("foo_value".to_string()),
+                Expr::literal("foo_value"),
             ),
             (
                 "bar_key".to_string(),
-                Expr::literal("bar_value".to_string()),
+                Expr::literal("bar_value"),
             ),
         ])
         .with_inferred_type(InferredType::Record(vec![
@@ -1172,8 +1172,8 @@ mod compiler_tests {
     fn test_instructions_for_select_index() {
         let sequence = Expr::sequence(
             vec![
-                Expr::literal("foo".to_string()),
-                Expr::literal("bar".to_string()),
+                Expr::literal("foo"),
+                Expr::literal("bar"),
             ],
             None,
         )
@@ -1203,19 +1203,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_expr_arm_pattern_match() {
         let expr = Expr::pattern_match(
-            Expr::literal("pred".to_string()),
+            Expr::literal("pred"),
             vec![
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::literal("arm1_pattern_expr".to_string()))),
-                    Expr::literal("arm1_resolution_expr".to_string()),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm1_pattern_expr"))),
+                    Expr::literal("arm1_resolution_expr"),
                 ),
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::literal("arm2_pattern_expr".to_string()))),
-                    Expr::literal("arm2_resolution_expr".to_string()),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm2_pattern_expr"))),
+                    Expr::literal("arm2_resolution_expr"),
                 ),
                 MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::literal("arm3_pattern_expr".to_string()))),
-                    Expr::literal("arm3_resolution_expr".to_string()),
+                    ArmPattern::Literal(Box::new(Expr::literal("arm3_pattern_expr"))),
+                    Expr::literal("arm3_resolution_expr"),
                 ),
             ],
         )
