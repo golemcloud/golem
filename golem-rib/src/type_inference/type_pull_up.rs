@@ -584,7 +584,7 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::rib_source_span::{SourceSpan};
+    use crate::rib_source_span::SourceSpan;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
