@@ -18,10 +18,10 @@ use combine::{
     sep_by1, ParseError, Parser, Stream,
 };
 
+use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
-use super::rib_expr::rib_expr;
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -41,7 +41,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -68,7 +68,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     many1(letter().or(char_('_').or(char_('-'))))
         .map(|s: Vec<char>| s.into_iter().collect())
@@ -86,7 +86,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     (
         field_key().skip(spaces()),
@@ -114,9 +114,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::identifier_global("bar", None)
-                )]))
+                "foo".to_string(),
+                Expr::identifier_global("bar", None)
+            )]))
         );
     }
 
@@ -127,9 +127,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![
-                    ("foo".to_string(), Expr::identifier_global("bar", None)),
-                    ("baz".to_string(), Expr::identifier_global("qux", None))
-                ]))
+                ("foo".to_string(), Expr::identifier_global("bar", None)),
+                ("baz".to_string(), Expr::identifier_global("qux", None))
+            ]))
         );
     }
 
@@ -139,7 +139,10 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::record(vec![("foo".to_string(), Expr::literal("bar"))]))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::literal("bar")
+            )]))
         );
     }
 
@@ -157,12 +160,12 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::record(vec![(
-                        "bar".to_string(),
-                        Expr::identifier_global("baz", None)
-                    )])
-                )]))
+                "foo".to_string(),
+                Expr::record(vec![(
+                    "bar".to_string(),
+                    Expr::identifier_global("baz", None)
+                )])
+            )]))
         );
     }
 
@@ -173,12 +176,12 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::tuple(vec![
-                        Expr::identifier_global("bar", None),
-                        Expr::identifier_global("baz", None)
-                    ])
-                )]))
+                "foo".to_string(),
+                Expr::tuple(vec![
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
+                ])
+            )]))
         );
     }
 
@@ -189,15 +192,15 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("bar", None),
-                            Expr::identifier_global("baz", None)
-                        ],
-                        None
-                    )
-                )]))
+                "foo".to_string(),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ],
+                    None
+                )
+            )]))
         );
     }
 
@@ -208,9 +211,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::ok(Expr::identifier_global("bar", None), None)
-                )]))
+                "foo".to_string(),
+                Expr::ok(Expr::identifier_global("bar", None), None)
+            )]))
         );
     }
 
@@ -221,9 +224,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::record(vec![(
-                    "err".to_string(),
-                    Expr::identifier_global("bar", None)
-                )]))
+                "err".to_string(),
+                Expr::identifier_global("bar", None)
+            )]))
         );
     }
 }

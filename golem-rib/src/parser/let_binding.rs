@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{alpha_num, char};
-use combine::{attempt, not_followed_by, optional, parser::char::{char as char_, spaces, string}, position, ParseError, Parser};
-use combine::stream::position::SourcePosition;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier_text;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
 use crate::rib_source_span::GetSourcePosition;
+use combine::parser::char::{alpha_num, char};
+use combine::stream::position::SourcePosition;
+use combine::{
+    attempt, not_followed_by, optional,
+    parser::char::{char as char_, spaces, string},
+    position, ParseError, Parser,
+};
 
 pub fn let_binding<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -45,9 +49,7 @@ where
             char_('=').skip(spaces()),
             rib_expr(),
         )
-            .map(|(var, optional_type, _, expr)| {
-                Expr::let_binding(var, expr, optional_type)
-            }),
+            .map(|(var, optional_type, _, expr)| Expr::let_binding(var, expr, optional_type)),
     )
 }
 
@@ -58,7 +60,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     identifier_text().message("Unable to parse binding variable")
 }
@@ -67,8 +69,6 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-    use combine::stream::position;
     use crate::parser::type_name::TypeName;
     use crate::{InferredType, VariableId};
 
@@ -80,7 +80,11 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::let_binding("foo", Expr::identifier_global("bar", None), None))
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_global("bar", None),
+                None
+            ))
         );
     }
 
@@ -91,16 +95,16 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("bar", None),
-                            Expr::identifier_global("baz", None)
-                        ],
-                        None
-                    ),
+                "foo",
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ],
                     None
-                ))
+                ),
+                None
+            ))
         );
     }
 
@@ -111,13 +115,13 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::equal_to(
-                        Expr::identifier_global("bar", None),
-                        Expr::identifier_global("baz", None)
-                    ),
-                    None
-                ))
+                "foo",
+                Expr::equal_to(
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
+                ),
+                None
+            ))
         );
     }
 
@@ -127,12 +131,11 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(
-                Expr::let_binding(
-                    "foo",
-                    Expr::option(Some(Expr::identifier_global("bar", None))),
-                    None
-                ))
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::identifier_global("bar", None))),
+                None
+            ))
         );
     }
 
@@ -143,10 +146,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::ok(Expr::identifier_global("bar", None), None),
-                    None
-                ))
+                "foo",
+                Expr::ok(Expr::identifier_global("bar", None), None),
+                None
+            ))
         );
     }
 
@@ -167,13 +170,13 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::record(vec![(
-                        "bar".to_string(),
-                        Expr::identifier_global("baz", None)
-                    )]),
-                    None
-                ))
+                "foo",
+                Expr::record(vec![(
+                    "bar".to_string(),
+                    Expr::identifier_global("baz", None)
+                )]),
+                None
+            ))
         );
     }
 
@@ -184,10 +187,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::U8)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U8)
+            ))
         );
     }
 
@@ -198,10 +201,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::U16)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U16)
+            ))
         );
     }
 
@@ -212,10 +215,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::U32)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U32)
+            ))
         );
     }
 
@@ -226,10 +229,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::U64)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U64)
+            ))
         );
     }
 
@@ -240,10 +243,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::S8,)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S8,)
+            ))
         );
     }
 
@@ -254,10 +257,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::S16)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S16)
+            ))
         );
     }
 
@@ -268,10 +271,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::S32)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S32)
+            ))
         );
     }
 
@@ -282,10 +285,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::S64,)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S64,)
+            ))
         );
     }
 
@@ -296,10 +299,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::F32)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::F32)
+            ))
         );
     }
 
@@ -310,10 +313,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::F64)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::F64)
+            ))
         );
     }
 
@@ -324,10 +327,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::Chr)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::Chr)
+            ))
         );
     }
 
@@ -338,10 +341,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
-                    Some(TypeName::Str)
-                ))
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::Str)
+            ))
         );
     }
 
@@ -352,11 +355,11 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::let_binding(
-                    "foo",
-                    Expr::sequence(vec![], None)
-                        .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
-                    Some(TypeName::List(Box::new(TypeName::U8)))
-                ))
+                "foo",
+                Expr::sequence(vec![], None)
+                    .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
+                Some(TypeName::List(Box::new(TypeName::U8)))
+            ))
         );
     }
 }

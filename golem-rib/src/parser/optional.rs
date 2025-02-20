@@ -25,8 +25,8 @@ use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::type_name::parse_type_name;
-use combine::parser::char::char as char_;
 use crate::rib_source_span::GetSourcePosition;
+use combine::parser::char::char as char_;
 
 pub fn option<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -34,7 +34,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     (
         choice((
@@ -129,9 +129,9 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::option(Some(Expr::option(Some(Expr::identifier_global(
-                    "foo", None
-                ))))))
+            Ok(Expr::option(Some(Expr::option(Some(
+                Expr::identifier_global("foo", None)
+            )))))
         );
     }
 
@@ -158,12 +158,12 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::option(Some(Expr::sequence(
-                    vec![
-                        Expr::identifier_global("foo", None),
-                        Expr::identifier_global("bar", None)
-                    ],
-                    None
-                ))))
+                vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ],
+                None
+            ))))
         );
     }
 

@@ -2,10 +2,10 @@ use crate::call_type::CallType;
 use crate::parser::identifier::identifier;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{ParseError, Parser};
-use crate::rib_source_span::GetSourcePosition;
 
 pub fn worker_function_invoke<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -13,7 +13,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     (identifier().skip(spaces()), char('.'), rib_expr())
         .and_then(|(worker_variable, _, call)| match call {

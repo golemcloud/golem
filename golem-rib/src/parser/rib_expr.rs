@@ -17,10 +17,10 @@ use combine::parser::char;
 use combine::parser::char::spaces;
 use combine::{ParseError, Parser};
 
+use super::binary_op::BinaryOp;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
-use super::binary_op::BinaryOp;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
 parser! {
@@ -37,7 +37,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -86,10 +86,10 @@ mod internal {
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
     use crate::parser::worker_function_invoke::worker_function_invoke;
+    use crate::rib_source_span::{GetSourcePosition, RibSourceSpan};
     use crate::Expr;
     use combine::parser::char::spaces;
-    use combine::{attempt, choice, many, parser, ParseError, Parser, Stream};
-    use crate::rib_source_span::GetSourcePosition;
+    use combine::{attempt, choice, many, parser, position, ParseError, Parser, Stream};
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -100,29 +100,41 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        spaces()
-            .with(choice((
-                list_comprehension(),
-                list_aggregation(),
-                pattern_match(),
-                attempt(worker_function_invoke()),
-                let_binding(),
-                conditional(),
-                selection_expr(),
-                flag_or_record(),
-                multi_line_block(),
-                tuple(),
-                sequence(),
-                boolean_literal(),
-                literal(),
-                not(),
-                option(),
-                result(),
-                attempt(call()),
-                identifier(),
-                number(),
-            )))
-            .skip(spaces())
+        position()
+            .and(
+                spaces()
+                    .with(choice((
+                        list_comprehension(),
+                        list_aggregation(),
+                        pattern_match(),
+                        attempt(worker_function_invoke()),
+                        let_binding(),
+                        conditional(),
+                        selection_expr(),
+                        flag_or_record(),
+                        multi_line_block(),
+                        tuple(),
+                        sequence(),
+                        boolean_literal(),
+                        literal(),
+                        not(),
+                        option(),
+                        result(),
+                        attempt(call()),
+                        identifier(),
+                        number(),
+                    )))
+                    .skip(spaces()),
+            )
+            .and(position())
+            .map(|((start, expr), end)| {
+                let start_pos: Input::Position = start;
+                let start = start_pos.get_source_position();
+                let end_pos: Input::Position = end;
+                let end = end_pos.get_source_position();
+                let span = RibSourceSpan::new(start, end);
+                expr.with_source_span(span)
+            })
     }
 
     parser! {
@@ -139,7 +151,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         many((binary_op(), simple_expr()))
     }
@@ -158,7 +170,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
     }
@@ -169,7 +181,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         choice((attempt(select_field()), attempt(select_index())))
             .message("Unable to parse selection expression")

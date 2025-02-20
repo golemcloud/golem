@@ -1,9 +1,9 @@
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
+use crate::rib_source_span::GetSourcePosition;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{sep_by, ParseError, Parser};
-use crate::rib_source_span::GetSourcePosition;
 
 pub fn block<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -11,7 +11,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
         if expressions.len() == 1 {

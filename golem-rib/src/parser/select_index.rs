@@ -29,7 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces().with(
         (
@@ -73,7 +73,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         many1(
             (
@@ -92,7 +92,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         number().map(|s: Expr| match s {
             Expr::Number { number, .. } => {
@@ -112,7 +112,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         choice((attempt(sequence()), attempt(identifier())))
     }
@@ -144,9 +144,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::select_index(
-                    Expr::select_index(Expr::identifier_global("foo", None), 0),
-                    1
-                ))
+                Expr::select_index(Expr::identifier_global("foo", None), 0),
+                1
+            ))
         );
     }
 }

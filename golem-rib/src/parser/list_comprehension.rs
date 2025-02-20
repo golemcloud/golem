@@ -16,10 +16,10 @@ use crate::parser::block_without_return::block_without_return;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier_text;
 use crate::parser::rib_expr::rib_expr as expr;
+use crate::rib_source_span::GetSourcePosition;
 use crate::{Expr, VariableId};
 use combine::parser::char::{alpha_num, char, spaces, string};
 use combine::{attempt, not_followed_by, optional, ParseError, Parser, Stream};
-use crate::rib_source_span::GetSourcePosition;
 
 pub fn list_comprehension<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -27,7 +27,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     (
         attempt(

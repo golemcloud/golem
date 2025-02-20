@@ -23,8 +23,8 @@ use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use crate::parser::errors::RibParseError;
-use crate::{InferredNumber, InferredType};
 use crate::rib_source_span::GetSourcePosition;
+use crate::{InferredNumber, InferredType};
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.
@@ -395,7 +395,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     choice((
         attempt(string("bool").map(|_| TypeName::Bool)),
@@ -421,7 +421,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     string("list")
         .skip(spaces())
@@ -439,7 +439,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     string("option")
         .skip(spaces())
@@ -463,7 +463,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     string("result")
         .skip(spaces())
@@ -514,7 +514,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     string("tuple")
         .skip(spaces())
@@ -532,7 +532,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces().with(choice((
         attempt(parse_basic_type()),
@@ -717,16 +717,20 @@ mod protobuf {
 
 #[cfg(test)]
 mod type_name_tests {
-    use combine::EasyParser;
     use combine::stream::position;
+    use combine::EasyParser;
     use test_r::test;
 
     use super::*;
 
     fn parse_and_compare(input: &str, expected: TypeName) {
         let written = format!("{}", expected);
-        let result1 = parse_type_name().easy_parse(position::Stream::new(input)).map(|x| x.0);
-        let result2 = parse_type_name().easy_parse(position::Stream::new(written.as_str())).map(|x| x.0);
+        let result1 = parse_type_name()
+            .easy_parse(position::Stream::new(input))
+            .map(|x| x.0);
+        let result2 = parse_type_name()
+            .easy_parse(position::Stream::new(written.as_str()))
+            .map(|x| x.0);
         assert_eq!(result1, Ok(expected.clone()));
         assert_eq!(result2, Ok(expected));
     }

@@ -30,7 +30,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     let flag_name = many1(letter().or(char_('_')).or(digit()).or(char_('-')))
         .map(|s: Vec<char>| s.into_iter().collect());

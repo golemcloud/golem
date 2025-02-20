@@ -343,7 +343,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 expr,
                 type_annotation,
                 inferred_type,
-                source_span
+                source_span,
             } => {
                 internal::handle_let(
                     variable_id,
@@ -351,7 +351,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     type_annotation,
                     inferred_type,
                     &mut inferred_type_stack,
-                    source_span
+                    source_span,
                 );
             }
             Expr::Sequence {
@@ -486,12 +486,12 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::rib_source_span::RibSourceSpan;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
-    use crate::rib_source_span::RibSourceSpan;
 
     pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
         let mut stack = VecDeque::new();
@@ -1070,7 +1070,7 @@ mod internal {
         optional_type: &Option<TypeName>,
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
-        source_span: &Option<RibSourceSpan>,
+        source_span: &RibSourceSpan,
     ) {
         let expr = inferred_type_stack
             .pop_front()
@@ -1080,7 +1080,8 @@ mod internal {
             expr,
             optional_type.clone(),
         )
-        .with_inferred_type(current_inferred_type.clone()).with_source_span(source_span.clone());
+        .with_inferred_type(current_inferred_type.clone())
+        .with_source_span(source_span.clone());
         inferred_type_stack.push_front(new_let);
     }
 

@@ -14,6 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
+use combine::easy::ParseError;
+use combine::stream::position::{SourcePosition, Stream};
 use combine::stream::{easy, position};
 use combine::{stream, EasyParser};
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
@@ -21,8 +23,6 @@ use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
-use combine::easy::ParseError;
-use combine::stream::position::{SourcePosition, Stream};
 
 #[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
@@ -518,15 +518,12 @@ impl DynamicParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result =
-            parser.easy_parse(Stream::new(name));
+        let result = parser.easy_parse(Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.to_string())
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }
@@ -631,15 +628,15 @@ impl ParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(DynamicParsedFunctionName, Stream<&str, SourcePosition>), ParseError<Stream<&str, SourcePosition>>> =
-            parser.easy_parse(position::Stream::new(name));
+        let result: Result<
+            (DynamicParsedFunctionName, Stream<&str, SourcePosition>),
+            ParseError<Stream<&str, SourcePosition>>,
+        > = parser.easy_parse(position::Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.to_string())
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }

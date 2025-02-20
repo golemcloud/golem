@@ -69,11 +69,11 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::rib_source_span::RibSourceSpan;
     use crate::type_checker::{Path, PathElem};
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
-    use crate::rib_source_span::RibSourceSpan;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
@@ -368,7 +368,7 @@ mod internal {
                     type_annotation,
                     expr,
                     inferred_type,
-                    source_span
+                    source_span,
                 } => {
                     handle_let(
                         variable_id,
@@ -376,7 +376,7 @@ mod internal {
                         type_annotation,
                         inferred_type,
                         &mut temp_stack,
-                        source_span
+                        source_span,
                     );
                 }
                 Expr::Sequence {
@@ -1199,7 +1199,7 @@ mod internal {
         optional_type: &Option<TypeName>,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
-        source_span: &Option<RibSourceSpan>,
+        source_span: &RibSourceSpan,
     ) {
         let expr = temp_stack
             .pop_front()
@@ -1210,7 +1210,7 @@ mod internal {
             type_annotation: optional_type.clone(),
             expr: Box::new(expr),
             inferred_type: current_inferred_type.clone(),
-            source_span: source_span.clone()
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_let, false));
     }
@@ -1262,6 +1262,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rib_source_span::RibSourceSpan;
     use crate::{FunctionTypeRegistry, Id, TypeName};
     use test_r::test;
 
@@ -1418,7 +1419,7 @@ mod tests {
                     .with_inferred_type(InferredType::Str),
                 ),
                 inferred_type: InferredType::Unknown,
-                source_span: None,
+                source_span: RibSourceSpan::default(),
             },
             Expr::Let {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
@@ -1448,7 +1449,7 @@ mod tests {
                     .with_inferred_type(InferredType::U64),
                 ),
                 inferred_type: InferredType::Unknown,
-                source_span: None
+                source_span: RibSourceSpan::default(),
             },
             Expr::Identifier {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),

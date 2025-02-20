@@ -1,9 +1,9 @@
 use crate::parser::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 use crate::type_parameter::TypeParameter;
 use combine::stream::Stream;
 use combine::{attempt, choice, ParseError, Parser};
 use internal::*;
-use crate::rib_source_span::GetSourcePosition;
 
 // Parser for TypeParameter
 pub fn type_parameter<Input>() -> impl Parser<Input, Output = TypeParameter>
@@ -13,7 +13,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     choice((
         attempt(fully_qualified_interface_name().map(TypeParameter::FullyQualifiedInterface)),
@@ -24,11 +24,11 @@ where
 
 mod internal {
     use crate::parser::RibParseError;
+    use crate::rib_source_span::GetSourcePosition;
     use crate::type_parameter::{FullyQualifiedInterfaceName, InterfaceName, PackageName};
     use combine::parser::char::{alpha_num, char as char_};
     use combine::stream::Stream;
     use combine::{many1, optional, ParseError, Parser};
-    use crate::rib_source_span::GetSourcePosition;
 
     pub(crate) fn fully_qualified_interface_name<Input>(
     ) -> impl Parser<Input, Output = FullyQualifiedInterfaceName>
@@ -38,7 +38,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         (package_name().skip(char_('/')), interface_name()).map(|(package_name, interface_name)| {
             FullyQualifiedInterfaceName {
@@ -55,7 +55,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         let namespace = many1(alpha_num().or(char_('-')).or(char_('_')));
         let package_name = many1(alpha_num().or(char_('-')).or(char_('_')));
@@ -77,7 +77,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         let name = many1(alpha_num().or(char_('-')).or(char_('_')));
         let version = optional(char_('@').with(version()));
@@ -92,7 +92,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         many1(alpha_num().or(char_('.')).or(char_('-'))).map(|s: Vec<char>| s.into_iter().collect())
     }

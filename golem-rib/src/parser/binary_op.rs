@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::string;
 use combine::{attempt, choice, ParseError, Parser};
-use crate::rib_source_span::GetSourcePosition;
 
 pub fn binary_op<Input>() -> impl Parser<Input, Output = BinaryOp>
 where
@@ -23,7 +23,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     choice((
         attempt(string(">=")).map(|_| BinaryOp::GreaterThanOrEqualTo),
@@ -72,9 +72,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::greater_than(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ))
         );
     }
 
@@ -85,9 +85,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::greater_than_or_equal_to(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ))
         );
     }
 
@@ -98,9 +98,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::less_than(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ))
         );
     }
 
@@ -111,9 +111,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::less_than_or_equal_to(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ))
         );
     }
 
@@ -124,9 +124,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ))
         );
     }
 
@@ -157,18 +157,18 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::sequence(
-                    vec![
-                        Expr::greater_than_or_equal_to(
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        ),
-                        Expr::less_than(
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        )
-                    ],
-                    None
-                ))
+                vec![
+                    Expr::greater_than_or_equal_to(
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ),
+                    Expr::less_than(
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    )
+                ],
+                None
+            ))
         );
     }
 
@@ -179,15 +179,15 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::record(vec![(
-                        "foo".to_string(),
-                        Expr::untyped_number(BigDecimal::from(1))
-                    )]),
-                    Expr::record(vec![(
-                        "foo".to_string(),
-                        Expr::untyped_number(BigDecimal::from(2))
-                    )]),
-                ))
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::untyped_number(BigDecimal::from(1))
+                )]),
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::untyped_number(BigDecimal::from(2))
+                )]),
+            ))
         );
     }
 
@@ -198,21 +198,21 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::sequence(
-                        vec![
-                            Expr::untyped_number(BigDecimal::from(1)),
-                            Expr::untyped_number(BigDecimal::from(2))
-                        ],
-                        None
-                    ),
-                    Expr::sequence(
-                        vec![
-                            Expr::untyped_number(BigDecimal::from(3)),
-                            Expr::untyped_number(BigDecimal::from(4))
-                        ],
-                        None
-                    ),
-                ))
+                Expr::sequence(
+                    vec![
+                        Expr::untyped_number(BigDecimal::from(1)),
+                        Expr::untyped_number(BigDecimal::from(2))
+                    ],
+                    None
+                ),
+                Expr::sequence(
+                    vec![
+                        Expr::untyped_number(BigDecimal::from(3)),
+                        Expr::untyped_number(BigDecimal::from(4))
+                    ],
+                    None
+                ),
+            ))
         );
     }
 
@@ -223,15 +223,15 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::tuple(vec![
-                        Expr::untyped_number(BigDecimal::from(1)),
-                        Expr::untyped_number(BigDecimal::from(2))
-                    ]),
-                    Expr::tuple(vec![
-                        Expr::untyped_number(BigDecimal::from(3)),
-                        Expr::untyped_number(BigDecimal::from(4))
-                    ]),
-                ))
+                Expr::tuple(vec![
+                    Expr::untyped_number(BigDecimal::from(1)),
+                    Expr::untyped_number(BigDecimal::from(2))
+                ]),
+                Expr::tuple(vec![
+                    Expr::untyped_number(BigDecimal::from(3)),
+                    Expr::untyped_number(BigDecimal::from(4))
+                ]),
+            ))
         );
     }
 
@@ -242,9 +242,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
-                    Expr::select_field(Expr::identifier_global("baz", None), "qux", None),
-                ))
+                Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
+                Expr::select_field(Expr::identifier_global("baz", None), "qux", None),
+            ))
         );
     }
 
@@ -255,9 +255,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::select_index(Expr::identifier_global("foo", None), 1),
-                    Expr::select_index(Expr::identifier_global("bar", None), 2),
-                ))
+                Expr::select_index(Expr::identifier_global("foo", None), 1),
+                Expr::select_index(Expr::identifier_global("bar", None), 2),
+            ))
         );
     }
 
@@ -268,9 +268,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::ok(Expr::identifier_global("foo", None), None),
-                    Expr::ok(Expr::identifier_global("bar", None), None),
-                ))
+                Expr::ok(Expr::identifier_global("foo", None), None),
+                Expr::ok(Expr::identifier_global("bar", None), None),
+            ))
         );
     }
 
@@ -281,9 +281,9 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::option(Some(Expr::identifier_global("foo", None))),
-                    Expr::option(Some(Expr::identifier_global("bar", None))),
-                ))
+                Expr::option(Some(Expr::identifier_global("foo", None))),
+                Expr::option(Some(Expr::identifier_global("bar", None))),
+            ))
         );
     }
 
@@ -294,29 +294,29 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::equal_to(
-                    Expr::call_worker_function(
-                        DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "foo".to_string(),
-                            }
-                        },
-                        None,
-                        None,
-                        vec![]
-                    ),
-                    Expr::call_worker_function(
-                        DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "bar".to_string(),
-                            }
-                        },
-                        None,
-                        None,
-                        vec![]
-                    ),
-                ))
+                Expr::call_worker_function(
+                    DynamicParsedFunctionName {
+                        site: ParsedFunctionSite::Global,
+                        function: DynamicParsedFunctionReference::Function {
+                            function: "foo".to_string(),
+                        }
+                    },
+                    None,
+                    None,
+                    vec![]
+                ),
+                Expr::call_worker_function(
+                    DynamicParsedFunctionName {
+                        site: ParsedFunctionSite::Global,
+                        function: DynamicParsedFunctionReference::Function {
+                            function: "bar".to_string(),
+                        }
+                    },
+                    None,
+                    None,
+                    vec![]
+                ),
+            ))
         );
     }
 
@@ -327,21 +327,21 @@ mod test {
         assert_eq!(
             result,
             Ok(Expr::record(vec![
-                    (
-                        "foo".to_string(),
-                        Expr::greater_than(
-                            Expr::identifier_global("bar", None),
-                            Expr::identifier_global("baz", None)
-                        )
-                    ),
-                    (
-                        "baz".to_string(),
-                        Expr::equal_to(
-                            Expr::identifier_global("bar", None),
-                            Expr::identifier_global("foo", None)
-                        )
-                    ),
-                ]))
+                (
+                    "foo".to_string(),
+                    Expr::greater_than(
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    )
+                ),
+                (
+                    "baz".to_string(),
+                    Expr::equal_to(
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("foo", None)
+                    )
+                ),
+            ]))
         );
     }
 }

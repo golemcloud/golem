@@ -16,6 +16,7 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
+use crate::rib_source_span::RibSourceSpan;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
@@ -34,7 +35,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::rib_source_span::RibSourceSpan;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -42,7 +42,7 @@ pub enum Expr {
         variable_id: VariableId,
         type_annotation: Option<TypeName>,
         expr: Box<Expr>,
-        source_span: Option<RibSourceSpan>,
+        source_span: RibSourceSpan,
         inferred_type: InferredType,
     },
     SelectField {
@@ -602,7 +602,7 @@ impl Expr {
             variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
             expr: Box::new(expr),
-            source_span: None,
+            source_span: RibSourceSpan::default(),
             inferred_type: InferredType::Unknown,
         }
     }
@@ -616,7 +616,7 @@ impl Expr {
             variable_id,
             type_annotation,
             expr: Box::new(expr),
-            source_span: None,
+            source_span: RibSourceSpan::default(),
             inferred_type: InferredType::Unknown,
         }
     }
@@ -1118,13 +1118,13 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
-    pub fn with_source_span(&self, source_span: Option<RibSourceSpan>) -> Expr {
+    pub fn with_source_span(&self, new_source_span: RibSourceSpan) -> Expr {
         let mut expr_copied = self.clone();
-        expr_copied.with_source_span_mut(source_span);
+        expr_copied.with_source_span_mut(new_source_span);
         expr_copied
     }
 
-    pub fn with_source_span_mut(&mut self, new_source_span: Option<RibSourceSpan>) {
+    pub fn with_source_span_mut(&mut self, new_source_span: RibSourceSpan) {
         match self {
             Expr::Let { source_span, .. } => {
                 *source_span = new_source_span;

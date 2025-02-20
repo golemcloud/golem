@@ -35,11 +35,11 @@ mod internal {
     use crate::expr::Expr;
     use crate::parser::block::block;
     use crate::parser::errors::RibParseError;
+    use crate::rib_source_span::GetSourcePosition;
     use combine::parser::char::char as char_;
     use combine::parser::char::spaces;
     use combine::parser::repeat::many;
     use combine::{between, choice, many1, none_of, ParseError, Parser};
-    use crate::rib_source_span::GetSourcePosition;
 
     pub fn literal_<Input>() -> impl Parser<Input, Output = Expr>
     where
@@ -47,7 +47,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         spaces()
             .with(
@@ -82,7 +82,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         many1(none_of("\"${}".chars()))
             .map(LiteralTerm::Static)
@@ -95,7 +95,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         between(
             char_('$').with(char_('{')).skip(spaces()),

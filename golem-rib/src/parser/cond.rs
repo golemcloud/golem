@@ -26,7 +26,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     // Use attempt only for the initial "if" to resolve ambiguity with identifiers
     attempt(
@@ -61,10 +61,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::cond(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None),
-                    Expr::identifier_global("baz", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+                Expr::identifier_global("baz", None)
+            ))
         );
     }
 
@@ -75,10 +75,10 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::cond(
-                    Expr::identifier_global("foo", None),
-                    Expr::sequence(vec![Expr::identifier_global("bar", None)], None),
-                    Expr::sequence(vec![Expr::identifier_global("baz", None)], None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::sequence(vec![Expr::identifier_global("bar", None)], None),
+                Expr::sequence(vec![Expr::identifier_global("baz", None)], None)
+            ))
         );
     }
 
@@ -89,14 +89,14 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::cond(
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None),
-                    Expr::cond(
-                        Expr::identifier_global("baz", None),
-                        Expr::identifier_global("qux", None),
-                        Expr::identifier_global("quux", None)
-                    )
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None),
+                Expr::cond(
+                    Expr::identifier_global("baz", None),
+                    Expr::identifier_global("qux", None),
+                    Expr::identifier_global("quux", None)
+                )
+            ))
         );
     }
 
@@ -107,14 +107,14 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::cond(
-                    Expr::identifier_global("foo", None),
-                    Expr::cond(
-                        Expr::identifier_global("bar", None),
-                        Expr::identifier_global("baz", None),
-                        Expr::identifier_global("qux", None)
-                    ),
-                    Expr::identifier_global("quux", None)
-                ))
+                Expr::identifier_global("foo", None),
+                Expr::cond(
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None),
+                    Expr::identifier_global("qux", None)
+                ),
+                Expr::identifier_global("quux", None)
+            ))
         );
     }
 }

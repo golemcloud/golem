@@ -29,7 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -84,20 +84,14 @@ mod tests {
     fn test_number() {
         let input = "123";
         let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::untyped_number(BigDecimal::from(123)))
-        );
+        assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(123))));
     }
 
     #[test]
     fn test_negative_number() {
         let input = "-123";
         let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::untyped_number(BigDecimal::from(-123)))
-        );
+        assert_eq!(result, Ok(Expr::untyped_number(BigDecimal::from(-123))));
     }
 
     #[test]
@@ -106,7 +100,9 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::untyped_number(BigDecimal::from_str("123.456").unwrap()))
+            Ok(Expr::untyped_number(
+                BigDecimal::from_str("123.456").unwrap()
+            ))
         );
     }
 

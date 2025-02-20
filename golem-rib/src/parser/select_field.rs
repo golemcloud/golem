@@ -40,12 +40,12 @@ mod internal {
     use crate::parser::identifier::identifier_text;
     use crate::parser::select_index::select_index;
     use crate::parser::type_name::parse_type_name;
+    use crate::rib_source_span::GetSourcePosition;
     use combine::{
         attempt,
         parser::char::{char as char_, spaces},
         Parser,
     };
-    use crate::rib_source_span::GetSourcePosition;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
@@ -55,7 +55,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         spaces().with(
             (
@@ -166,7 +166,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         choice((
             attempt(select_index()),
@@ -181,7 +181,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
-        Input::Position: GetSourcePosition
+        Input::Position: GetSourcePosition,
     {
         text().message("Unable to parse field name")
     }

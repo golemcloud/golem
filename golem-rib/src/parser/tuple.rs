@@ -18,10 +18,10 @@ use combine::{
     sep_by, ParseError, Parser,
 };
 
+use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
-use super::rib_expr::rib_expr;
 
 pub fn tuple<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -29,7 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
-    Input::Position: GetSourcePosition
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -78,9 +78,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ]))
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ]))
         );
     }
 
@@ -91,21 +91,21 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        ],
-                        None
-                    ),
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("baz", None),
-                            Expr::identifier_global("qux", None)
-                        ],
-                        None
-                    )
-                ]))
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
+                    None
+                ),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None)
+                    ],
+                    None
+                )
+            ]))
         );
     }
 
@@ -116,15 +116,15 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::record(vec![(
-                        "foo".to_string(),
-                        Expr::identifier_global("bar", None)
-                    )]),
-                    Expr::record(vec![(
-                        "baz".to_string(),
-                        Expr::identifier_global("qux", None)
-                    )])
-                ]))
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
+                Expr::record(vec![(
+                    "baz".to_string(),
+                    Expr::identifier_global("qux", None)
+                )])
+            ]))
         );
     }
 
@@ -134,7 +134,10 @@ mod tests {
         let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok(Expr::tuple(vec![Expr::literal("foo"), Expr::literal("bar")]))
+            Ok(Expr::tuple(vec![
+                Expr::literal("foo"),
+                Expr::literal("bar")
+            ]))
         );
     }
 
@@ -145,15 +148,15 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::tuple(vec![
-                        Expr::identifier_global("foo", None),
-                        Expr::identifier_global("bar", None)
-                    ]),
-                    Expr::tuple(vec![
-                        Expr::identifier_global("baz", None),
-                        Expr::identifier_global("qux", None)
-                    ])
-                ]))
+                Expr::tuple(vec![
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
+                ]),
+                Expr::tuple(vec![
+                    Expr::identifier_global("baz", None),
+                    Expr::identifier_global("qux", None)
+                ])
+            ]))
         );
     }
 
@@ -164,9 +167,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::ok(Expr::identifier_global("foo", None), None),
-                    Expr::err(Expr::identifier_global("bar", None), None)
-                ]))
+                Expr::ok(Expr::identifier_global("foo", None), None),
+                Expr::err(Expr::identifier_global("bar", None), None)
+            ]))
         );
     }
 
@@ -177,9 +180,9 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::option(Some(Expr::identifier_global("foo", None))),
-                    Expr::option(None)
-                ]))
+                Expr::option(Some(Expr::identifier_global("foo", None))),
+                Expr::option(None)
+            ]))
         );
     }
 
@@ -190,17 +193,17 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::tuple(vec![
-                    Expr::cond(
-                        Expr::identifier_global("foo", None),
-                        Expr::identifier_global("bar", None),
-                        Expr::identifier_global("baz", None)
-                    ),
-                    Expr::cond(
-                        Expr::identifier_global("qux", None),
-                        Expr::identifier_global("quux", None),
-                        Expr::identifier_global("quuz", None)
-                    )
-                ]))
+                Expr::cond(
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
+                ),
+                Expr::cond(
+                    Expr::identifier_global("qux", None),
+                    Expr::identifier_global("quux", None),
+                    Expr::identifier_global("quuz", None)
+                )
+            ]))
         );
     }
 }
