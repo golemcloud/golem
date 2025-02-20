@@ -187,23 +187,17 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::Result(
-            Ok(Box::new(Expr::Number(
-                Number {
-                    value: BigDecimal::from(1),
-                },
-                None,
-                InferredType::number(),
-            ))),
+        let expected = Expr::ok(
+            Expr::number(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: Some(Box::new(TypeName::Str)),
             }),
-            InferredType::Result {
-                ok: Some(Box::new(InferredType::U64)),
-                error: Some(Box::new(InferredType::Str)),
-            },
-        );
+        )
+        .with_inferred_type(InferredType::Result {
+            ok: Some(Box::new(InferredType::U64)),
+            error: Some(Box::new(InferredType::Str)),
+        });
 
         assert_eq!(expr, expected);
     }
@@ -219,23 +213,17 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::Result(
-            Ok(Box::new(Expr::Number(
-                Number {
-                    value: BigDecimal::from(1),
-                },
-                None,
-                InferredType::number(),
-            ))),
+        let expected = Expr::ok(
+            Expr::number(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: None,
             }),
-            InferredType::Result {
-                ok: Some(Box::new(InferredType::U64)),
-                error: None,
-            },
-        );
+        )
+        .with_inferred_type(InferredType::Result {
+            ok: Some(Box::new(InferredType::U64)),
+            error: None,
+        });
 
         assert_eq!(expr, expected);
     }
@@ -251,23 +239,17 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::Result(
-            Err(Box::new(Expr::Number(
-                Number {
-                    value: BigDecimal::from(1),
-                },
-                None,
-                InferredType::number(),
-            ))),
+        let expected = Expr::err(
+            Expr::number(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: Some(Box::new(TypeName::U64)),
             }),
-            InferredType::Result {
-                ok: None,
-                error: Some(Box::new(InferredType::U64)),
-            },
-        );
+        )
+        .with_inferred_type(InferredType::Result {
+            ok: None,
+            error: Some(Box::new(InferredType::U64)),
+        });
 
         assert_eq!(expr, expected);
     }
@@ -282,23 +264,17 @@ mod type_binding_tests {
         let mut expr = Expr::from_text(expr_str).unwrap();
         expr.bind_type_annotations();
 
-        let expected = Expr::Result(
-            Ok(Box::new(Expr::Number(
-                Number {
-                    value: BigDecimal::from(1),
-                },
-                None,
-                InferredType::number(),
-            ))),
+        let expected = Expr::ok(
+            Expr::number(BigDecimal::from(1), None, InferredType::number()),
             Some(TypeName::Result {
                 ok: None,
                 error: None,
             }),
-            InferredType::Result {
-                ok: None,
-                error: None,
-            },
-        );
+        )
+        .with_inferred_type(InferredType::Result {
+            ok: None,
+            error: None,
+        });
 
         assert_eq!(expr, expected);
     }
@@ -313,21 +289,16 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::SelectField(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::Identifier(
-                    VariableId::Global("foo".to_string()),
-                    None,
-                    InferredType::Unknown,
-                )),
+        let expected = Expr::select_field(
+            Expr::select_field(
+                Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
                 "bar".to_string(),
                 None,
-                InferredType::Unknown,
-            )),
+            ),
             "baz".to_string(),
             Some(TypeName::U32),
-            InferredType::U32,
-        );
+        )
+        .with_inferred_type(InferredType::U32);
 
         assert_eq!(expr, expected);
     }
@@ -342,26 +313,20 @@ mod type_binding_tests {
 
         expr.bind_type_annotations();
 
-        let expected = Expr::SelectIndex(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::SelectField(
-                    Box::new(Expr::Identifier(
-                        VariableId::Global("foo".to_string()),
-                        None,
-                        InferredType::Unknown,
-                    )),
+        let expected = Expr::select_index_with_type_annotation(
+            Expr::select_field(
+                Expr::select_field(
+                    Expr::identifier_with_variable_id(VariableId::Global("foo".to_string()), None),
                     "bar".to_string(),
                     None,
-                    InferredType::Unknown,
-                )),
+                ),
                 "baz".to_string(),
                 None,
-                InferredType::Unknown,
-            )),
+            ),
             1,
-            Some(TypeName::U32),
-            InferredType::U32,
-        );
+            TypeName::U32,
+        )
+        .with_inferred_type(InferredType::U32);
 
         assert_eq!(expr, expected);
     }

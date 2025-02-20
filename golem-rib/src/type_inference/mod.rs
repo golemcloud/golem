@@ -2909,7 +2909,7 @@ mod type_inference_tests {
         }
 
         pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
-            ValueAndType::new(Value::Option(None), option(typ.clone()))
+            ValueAndType::new(Value::Option(None), golem_wasm_ast::analysis::analysed_type::option(typ.clone()))
         }
 
         pub(crate) fn get_analysed_exports(
