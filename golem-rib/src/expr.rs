@@ -2036,11 +2036,7 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::LessThanOrEqualTo {
-                    lhs,
-                    rhs,
-                    ..
-                } => Some(
+                Expr::LessThanOrEqualTo { lhs, rhs, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                             left: Some(Box::new((*lhs).into())),
@@ -2061,15 +2057,18 @@ mod protobuf {
                 // This is probably difficult to fix to keep backward compatibility
                 // The issue is only with the protobuf types and the roundtrip tests were/are working since
                 // the read handles this (i.e, reading cond as lhs)
-                Expr::Cond { cond: lhs, lhs: cond, rhs, .. } => {
-                    Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
-                        Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
-                            left: Some(Box::new((*lhs).into())),
-                            cond: Some(Box::new((*cond).into())),
-                            right: Some(Box::new((*rhs).into())),
-                        }),
-                    ))
-                }
+                Expr::Cond {
+                    cond: lhs,
+                    lhs: cond,
+                    rhs,
+                    ..
+                } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
+                    Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
+                        left: Some(Box::new((*lhs).into())),
+                        cond: Some(Box::new((*cond).into())),
+                        right: Some(Box::new((*rhs).into())),
+                    }),
+                )),
                 Expr::PatternMatch {
                     predicate,
                     match_arms,

@@ -1277,8 +1277,7 @@ mod tests {
 
         let result = expr.bind_global_variable_types(&vec![type_spec]).unwrap();
 
-        let expected =
-            Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
+        let expected = Expr::identifier_global("foo", None).with_inferred_type(InferredType::Str);
 
         assert_eq!(result, expected);
     }

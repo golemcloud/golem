@@ -1608,9 +1608,9 @@ mod type_pull_up_tests {
         pub(crate) fn expected_pattern_match() -> Expr {
             Expr::pattern_match(
                 Expr::select_field(
-                    Expr::identifier_global("foo", None).with_inferred_type(
-                        InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
-                    ),
+                    Expr::identifier_global("foo", None).with_inferred_type(InferredType::Record(
+                        vec![("bar".to_string(), InferredType::Str)],
+                    )),
                     "bar",
                     None,
                 )
@@ -1621,11 +1621,12 @@ mod type_pull_up_tests {
                             "cons1".to_string(),
                             vec![ArmPattern::Literal(Box::new(
                                 Expr::select_field(
-                                    Expr::identifier_global("foo", None)
-                                        .with_inferred_type(InferredType::Record(vec![(
+                                    Expr::identifier_global("foo", None).with_inferred_type(
+                                        InferredType::Record(vec![(
                                             "bar".to_string(),
                                             InferredType::Str,
-                                        )])),
+                                        )]),
+                                    ),
                                     "bar",
                                     None,
                                 )
@@ -1634,11 +1635,12 @@ mod type_pull_up_tests {
                         ),
                         arm_resolution_expr: Box::new(
                             Expr::select_field(
-                                Expr::identifier_global("baz", None)
-                                    .with_inferred_type(InferredType::Record(vec![(
+                                Expr::identifier_global("baz", None).with_inferred_type(
+                                    InferredType::Record(vec![(
                                         "qux".to_string(),
                                         InferredType::Str,
-                                    )])),
+                                    )]),
+                                ),
                                 "qux",
                                 None,
                             )
@@ -1650,11 +1652,12 @@ mod type_pull_up_tests {
                             "cons2".to_string(),
                             vec![ArmPattern::Literal(Box::new(
                                 Expr::select_field(
-                                    Expr::identifier_global("quux", None)
-                                        .with_inferred_type(InferredType::Record(vec![(
+                                    Expr::identifier_global("quux", None).with_inferred_type(
+                                        InferredType::Record(vec![(
                                             "corge".to_string(),
                                             InferredType::Str,
-                                        )])),
+                                        )]),
+                                    ),
                                     "corge",
                                     None,
                                 )

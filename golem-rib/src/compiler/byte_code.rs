@@ -972,14 +972,8 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_record() {
         let expr = Expr::record(vec![
-            (
-                "foo_key".to_string(),
-                Expr::literal("foo_value"),
-            ),
-            (
-                "bar_key".to_string(),
-                Expr::literal("bar_value"),
-            ),
+            ("foo_key".to_string(), Expr::literal("foo_value")),
+            ("bar_key".to_string(), Expr::literal("bar_value")),
         ])
         .with_inferred_type(InferredType::Record(vec![
             (String::from("foo_key"), InferredType::Str),
@@ -1116,22 +1110,16 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_select_field() {
         let record = Expr::record(vec![
-            (
-                "foo_key".to_string(),
-                Expr::literal("foo_value"),
-            ),
-            (
-                "bar_key".to_string(),
-                Expr::literal("bar_value"),
-            ),
+            ("foo_key".to_string(), Expr::literal("foo_value")),
+            ("bar_key".to_string(), Expr::literal("bar_value")),
         ])
         .with_inferred_type(InferredType::Record(vec![
             (String::from("foo_key"), InferredType::Str),
             (String::from("bar_key"), InferredType::Str),
         ]));
 
-        let expr = Expr::select_field(record, "bar_key", None)
-            .with_inferred_type(InferredType::Str);
+        let expr =
+            Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry, &vec![]).unwrap();
@@ -1170,14 +1158,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_select_index() {
-        let sequence = Expr::sequence(
-            vec![
-                Expr::literal("foo"),
-                Expr::literal("bar"),
-            ],
-            None,
-        )
-        .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
+        let sequence = Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")], None)
+            .with_inferred_type(InferredType::List(Box::new(InferredType::Str)));
 
         let expr = Expr::select_index(sequence, 1).with_inferred_type(InferredType::Str);
 
