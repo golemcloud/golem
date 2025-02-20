@@ -89,6 +89,8 @@ mod tests {
     use rand::Rng;
     use serde::{Deserialize, Serialize};
 
+    use crate::model::ComponentId;
+
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     enum Example {
         First(String),
@@ -112,6 +114,15 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    pub fn roundtrip_component_id() {
+        let example = Some(ComponentId::new_v4());
+        println!("example: {example:?}");
+        let serialized = super::serialize(&example).unwrap();
+        let deserialized = super::deserialize(&serialized).unwrap();
+        assert_eq!(example, deserialized);
     }
 
     #[test]

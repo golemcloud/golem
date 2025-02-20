@@ -290,6 +290,7 @@ pub trait ComponentService {
         &self,
         _local_path: &Path,
         _component_id: &ComponentId,
+        _component_name: &str,
         _component_type: ComponentType,
     ) -> Result<(), AddComponentError> {
         panic!(
@@ -724,7 +725,7 @@ pub trait ComponentService {
         &self,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> crate::Result<Option<u64>> {
+    ) -> crate::Result<u64> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
                 let response = client
@@ -750,13 +751,13 @@ pub trait ComponentService {
                     .collect::<crate::Result<Vec<Vec<u8>>>>()?;
 
                 let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
-                Ok(Some(bytes.len() as u64))
+                Ok(bytes.len() as u64)
             }
             ComponentServiceClient::Http(client) => match client
                 .download_component(&component_id.0, Some(component_version))
                 .await
             {
-                Ok(bytes) => Ok(Some(bytes.len() as u64)),
+                Ok(bytes) => Ok(bytes.len() as u64),
                 Err(error) => Err(anyhow!("{error:?}")),
             },
         }

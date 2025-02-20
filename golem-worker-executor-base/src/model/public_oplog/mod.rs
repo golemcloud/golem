@@ -24,7 +24,8 @@ use crate::durable_host::serialized::{
     SerializableIpAddresses, SerializableStreamError,
 };
 use crate::durable_host::wasm_rpc::serialized::{
-    SerializableInvokeRequest, SerializableInvokeResult,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
+    SerializableScheduleInvocationRequest,
 };
 use crate::error::GolemError;
 use crate::model::InterruptKind;
@@ -33,13 +34,13 @@ use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
+use crate::GolemTypes;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::exports::{find_resource_site, function_by_name};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
-use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
     CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
@@ -79,10 +80,10 @@ pub struct PublicOplogChunk {
     pub last_index: OplogIndex,
 }
 
-pub async fn get_public_oplog_chunk<Owner: PluginOwner, Scope: PluginScope>(
-    component_service: Arc<dyn ComponentService + Send + Sync>,
+pub async fn get_public_oplog_chunk<T: GolemTypes>(
+    component_service: Arc<dyn ComponentService<T>>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+    plugins: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -132,10 +133,10 @@ pub struct PublicOplogSearchResult {
     pub last_index: OplogIndex,
 }
 
-pub async fn search_public_oplog<Owner: PluginOwner, Scope: PluginScope>(
-    component_service: Arc<dyn ComponentService + Send + Sync>,
+pub async fn search_public_oplog<T: GolemTypes>(
+    component_service: Arc<dyn ComponentService<T>>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
-    plugin_service: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+    plugin_service: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -215,26 +216,24 @@ pub async fn find_component_version_at(
 }
 
 #[async_trait]
-pub trait PublicOplogEntryOps<Owner: PluginOwner, Scope: PluginScope>: Sized {
+pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        components: Arc<dyn ComponentService + Send + Sync>,
-        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+        components: Arc<dyn ComponentService<T>>,
+        plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String>;
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
-    for PublicOplogEntry
-{
+impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        components: Arc<dyn ComponentService + Send + Sync>,
-        plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
+        components: Arc<dyn ComponentService<T>>,
+        plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String> {
@@ -1039,8 +1038,24 @@ fn encode_host_function_request_as_value(
         "golem::rpc::wasm-rpc::invoke idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => no_payload(),
+        "golem::rpc::wasm-rpc::schedule_invocation" => {
+            let payload: SerializableScheduleInvocationRequest = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::rpc::cancellation-token::cancel" => {
+            let payload: SerializableScheduleId = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         "golem::api::poll_promise" => {
             let payload: PromiseId = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::resolve_component_id" => {
+            let payload: String = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::resolve_worker_id_strict" => {
+            let payload: (String, String) = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
         _ => Err(format!("Unsupported host function name: {}", function_name)),
@@ -1368,8 +1383,25 @@ fn encode_host_function_response_as_value(
                 .map(|pair| Uuid::from_u64_pair(pair.0, pair.1));
             Ok(payload.into_value_and_type())
         }
+        "golem::rpc::wasm-rpc::schedule_invocation" => {
+            let payload: Result<SerializableScheduleId, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::rpc::cancellation-token::cancel" => {
+            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         "golem::api::poll_promise" => {
             let payload: Result<Option<Vec<u8>>, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::resolve_component_id" => {
+            let payload: Result<Option<ComponentId>, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::resolve_worker_id_strict" => {
+            let payload: Result<Option<WorkerId>, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
         _ => Err(format!("Unsupported host function name: {}", function_name)),
@@ -2344,6 +2376,45 @@ impl IntoValueAndType for SerializableInvokeRequest {
                 ),
             ]),
         )
+    }
+}
+
+impl IntoValueAndType for SerializableScheduleInvocationRequest {
+    fn into_value_and_type(self) -> ValueAndType {
+        ValueAndType::new(
+            Value::Record(vec![
+                self.remote_worker_id.into_value(),
+                self.idempotency_key.into_value(),
+                self.function_name.into_value(),
+                Value::Tuple(
+                    self.function_params
+                        .iter()
+                        .map(|v| v.value.clone())
+                        .collect(),
+                ),
+                self.datetime.into_value(),
+            ]),
+            record(vec![
+                field("remote_worker_id", WorkerId::get_type()),
+                field("idempotency_key", IdempotencyKey::get_type()),
+                field("function_name", str()),
+                field(
+                    "function_params",
+                    tuple(self.function_params.into_iter().map(|v| v.typ).collect()),
+                ),
+                field("datetime", SerializableDateTime::get_type()),
+            ]),
+        )
+    }
+}
+
+impl IntoValue for SerializableScheduleId {
+    fn into_value(self) -> Value {
+        Value::List(self.data.into_iter().map(Value::U8).collect())
+    }
+
+    fn get_type() -> AnalysedType {
+        list(u8())
     }
 }
 

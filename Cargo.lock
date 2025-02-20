@@ -3408,6 +3408,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-service-base",
  "golem-wasm-rpc",
  "golem-worker-executor-base",
  "humantime-serde",

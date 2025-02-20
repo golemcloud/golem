@@ -16,29 +16,37 @@ use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
 use crate::config::GolemClientProtocol;
+use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
+use golem_common::testing::LocalFileSystemComponentMetadata;
 use golem_wasm_ast::analysis::AnalysedExport;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+const WASMS_DIRNAME: &str = "wasms";
+
 pub struct FileSystemComponentService {
     root: PathBuf,
 }
 
 impl FileSystemComponentService {
-    pub fn new(root: &Path) -> Self {
+    pub async fn new(root: &Path) -> Self {
         info!("Using a directory for storing components: {root:?}");
+
+        // If we keep metadata around for multiple runs invariants like unique name
+        // might be violated.
+        // Ignore the error as this will fail if the directory does not exist.
+        let _ = tokio::fs::remove_dir_all(root).await;
+
         Self {
             root: root.to_path_buf(),
         }
@@ -51,18 +59,22 @@ impl FileSystemComponentService {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         component_type: ComponentType,
-        files: &[(PathBuf, InitialComponentFile)],
+        files: &[InitialComponentFile],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
     ) -> Result<Component, AddComponentError> {
         let target_dir = &self.root;
+
         debug!("Local component store: {target_dir:?}");
-        if !target_dir.exists() {
-            tokio::fs::create_dir_all(target_dir).await.map_err(|err| {
-                AddComponentError::Other(format!(
-                    "Failed to create component store directory: {err}"
-                ))
-            })?;
+        {
+            let wasm_dir = target_dir.join(WASMS_DIRNAME);
+            if !wasm_dir.exists() {
+                tokio::fs::create_dir_all(wasm_dir).await.map_err(|err| {
+                    AddComponentError::Other(format!(
+                        "Failed to create component store directory: {err}"
+                    ))
+                })?;
+            }
         }
 
         if !source_path.exists() {
@@ -71,7 +83,8 @@ impl FileSystemComponentService {
             )));
         }
 
-        let target_path = target_dir.join(format!("{component_id}-{component_version}.wasm"));
+        let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_version}.wasm");
+        let target_path = target_dir.join(&wasm_filename);
 
         tokio::fs::copy(source_path, &target_path)
             .await
@@ -96,19 +109,23 @@ impl FileSystemComponentService {
             .map_err(|e| AddComponentError::Other(format!("Failed to read component size: {}", e)))?
             .len();
 
-        let metadata = FilesystemComponentMetadata {
+        let metadata = LocalFileSystemComponentMetadata {
+            component_id: component_id.clone(),
+            component_name: component_name.to_string(),
             version: component_version,
             component_type,
-            files: files.iter().map(|(_source, file)| file.clone()).collect(),
+            files: files.to_owned(),
             size,
             memories: memories.clone(),
             exports: exports.clone(),
-            plugin_installations: vec![],
             dynamic_linking: dynamic_linking.clone(),
+            wasm_filename,
         };
-        metadata
-            .write_to_file(&target_dir.join(format!("{component_id}-{component_version}.json")))
-            .await?;
+        write_metadata_to_file(
+            metadata,
+            &target_dir.join(metadata_filename(component_id, component_version)),
+        )
+        .await?;
 
         Ok(Component {
             versioned_component_id: Some(VersionedComponentId {
@@ -131,10 +148,7 @@ impl FileSystemComponentService {
             project_id: None,
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
-            files: files
-                .iter()
-                .map(|(_source, file)| file.clone().into())
-                .collect(),
+            files: files.iter().map(|file| file.clone().into()).collect(),
             installed_plugins: vec![],
         })
     }
@@ -161,6 +175,23 @@ impl FileSystemComponentService {
             .collect::<Vec<_>>();
 
         Some((linear_memories, exports))
+    }
+
+    async fn load_metadata(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> crate::Result<LocalFileSystemComponentMetadata> {
+        let path = self
+            .root
+            .join(metadata_filename(component_id, component_version));
+
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .context("failed to read old metadata")?;
+
+        let result = serde_json::from_str(&content)?;
+        Ok(result)
     }
 }
 
@@ -218,7 +249,10 @@ impl ComponentService for FileSystemComponentService {
             &ComponentId(Uuid::new_v4()),
             0,
             component_type,
-            files,
+            &files
+                .iter()
+                .map(|(_source, file)| file.clone())
+                .collect::<Vec<_>>(),
             unverified,
             dynamic_linking,
         )
@@ -229,11 +263,12 @@ impl ComponentService for FileSystemComponentService {
         &self,
         local_path: &Path,
         component_id: &ComponentId,
+        component_name: &str,
         component_type: ComponentType,
     ) -> Result<(), AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
-            &Uuid::new_v4().to_string(),
+            component_name,
             component_id,
             0,
             component_type,
@@ -268,16 +303,27 @@ impl ComponentService for FileSystemComponentService {
         let last_version = self.get_latest_version(component_id).await;
         let new_version = last_version + 1;
 
-        let empty_linking = HashMap::<String, DynamicLinkedInstance>::new();
+        let old_metadata = self
+            .load_metadata(component_id, last_version)
+            .await
+            .expect("failed to read metadata");
+
+        let files = files.map(|inner| {
+            inner
+                .iter()
+                .map(|(_, file)| file.clone())
+                .collect::<Vec<_>>()
+        });
+
         self.write_component_to_filesystem(
             local_path,
-            &Uuid::new_v4().to_string(),
+            &old_metadata.component_name,
             component_id,
             new_version,
             component_type,
-            files.unwrap_or_default(),
+            files.as_ref().unwrap_or(&old_metadata.files),
             false,
-            dynamic_linking.unwrap_or(&empty_linking),
+            dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
         )
         .await
         .expect("Failed to write component to filesystem");
@@ -295,7 +341,7 @@ impl ComponentService for FileSystemComponentService {
                 let path = entry.path();
                 let file_name = path.file_name().unwrap().to_str().unwrap();
 
-                if file_name.starts_with(&component_id_str) && file_name.ends_with(".wasm") {
+                if file_name.starts_with(&component_id_str) && file_name.ends_with(".json") {
                     let version_part = file_name.split('-').last().unwrap();
                     let version_part = version_part[..version_part.len() - 5].to_string();
                     version_part.parse::<u64>().ok()
@@ -312,11 +358,9 @@ impl ComponentService for FileSystemComponentService {
         &self,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> crate::Result<Option<u64>> {
-        let target_dir = &self.root;
-        let path = target_dir.join(format!("{component_id}-{component_version}.wasm"));
-        let metadata = tokio::fs::metadata(&path).await?;
-        Ok(Some(metadata.len()))
+    ) -> crate::Result<u64> {
+        let metadata = self.load_metadata(component_id, component_version).await?;
+        Ok(metadata.size)
     }
 
     fn component_directory(&self) -> &Path {
@@ -338,26 +382,18 @@ impl ComponentService for FileSystemComponentService {
     async fn kill(&self) {}
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FilesystemComponentMetadata {
-    pub version: ComponentVersion,
-    pub size: u64,
-    pub memories: Vec<LinearMemory>,
-    pub exports: Vec<AnalysedExport>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub plugin_installations: Vec<PluginInstallation>,
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+async fn write_metadata_to_file(
+    metadata: LocalFileSystemComponentMetadata,
+    path: &Path,
+) -> Result<(), AddComponentError> {
+    let json = serde_json::to_string(&metadata).map_err(|_| {
+        AddComponentError::Other("Failed to serialize component file properties".to_string())
+    })?;
+    tokio::fs::write(path, json).await.map_err(|_| {
+        AddComponentError::Other("Failed to write component file properties".to_string())
+    })
 }
 
-impl FilesystemComponentMetadata {
-    async fn write_to_file(&self, path: &Path) -> Result<(), AddComponentError> {
-        let json = serde_json::to_string(self).map_err(|_| {
-            AddComponentError::Other("Failed to serialize component file properties".to_string())
-        })?;
-        tokio::fs::write(path, json).await.map_err(|_| {
-            AddComponentError::Other("Failed to write component file properties".to_string())
-        })
-    }
+fn metadata_filename(component_id: &ComponentId, component_version: ComponentVersion) -> String {
+    format!("{component_id}-{component_version}.json")
 }

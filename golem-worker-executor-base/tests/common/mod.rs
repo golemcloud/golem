@@ -54,7 +54,7 @@ use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
 
 use tokio::runtime::Handle;
 
@@ -67,9 +67,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -82,6 +80,7 @@ use golem_wasm_rpc::golem_rpc_0_1_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_1_x::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor_base::preview2::golem::durability;
 use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
+use golem_worker_executor_base::services::component;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
@@ -647,13 +646,12 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
+    type Types = DefaultGolemTypes;
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
-    type ComponentOwner = DefaultComponentOwner;
-    type PluginScope = DefaultPluginScope;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata,
+        component_metadata: ComponentMetadata<DefaultGolemTypes>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -667,17 +665,13 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Self::ComponentOwner as ComponentOwner>::PluginOwner, Self::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -729,7 +723,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn component_metadata(&self) -> &ComponentMetadata<DefaultGolemTypes> {
         self.durable_ctx.component_metadata()
     }
 
@@ -905,7 +899,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &ComponentMetadata<DefaultGolemTypes>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -921,18 +915,27 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
+    fn create_component_service(
+        &self,
+        golem_config: &GolemConfig,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        plugin_observations: Arc<dyn PluginsObservations>,
+    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
+        component::configured(
+            &golem_config.component_service,
+            &golem_config.component_cache,
+            &golem_config.compiled_component_service,
+            blob_storage,
+            plugin_observations,
+        )
+    }
+
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<
-            dyn Plugins<
-                    <<TestWorkerCtx as WorkerCtx>::ComponentOwner as ComponentOwner>::PluginOwner,
-                    <TestWorkerCtx as WorkerCtx>::PluginScope,
-                > + Send
-                + Sync,
-        >,
-        Arc<dyn PluginsObservations + Send + Sync>,
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
     ) {
         plugins::default_configured(&golem_config.plugin_service)
     }
@@ -943,7 +946,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -959,7 +962,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let worker_fork = Arc::new(DefaultWorkerFork::new(

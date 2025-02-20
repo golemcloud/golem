@@ -254,6 +254,21 @@ interface host {
 
     /// Revert a worker to a previous state
     revert-worker: func(worker-id: worker-id, revert-target: revert-worker-target);
+
+    /// Get the component-id for a given component name.
+    /// Returns none when no component with the specified name exists.
+    resolve-component-id: func(component-name: string) -> option<component-id>;
+
+    /// Get the worker-id for a given component and worker name.
+    /// Returns none when no component with the specified name exists.
+    resolve-worker-id: func(component-name: string, worker-name: string) -> option<worker-id>;
+
+    /// Get the worker-id for a given component and worker name.
+    /// Returns none when no component with the specified component-name or no worker with the specified worker-name exists.
+    resolve-worker-id-strict: func(component-name: string, worker-name: string) -> option<worker-id>;
+
+    /// Construct an uri for a given worker id.
+    worker-uri: func(worker-id: worker-id) -> uri;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
