@@ -1873,6 +1873,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_name: value.component_name.0,
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
+            account_id: None,
             project_id: None,
             created_at: value
                 .created_at

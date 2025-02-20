@@ -145,6 +145,7 @@ impl FileSystemComponentService {
                     .map(|(link, instance)| (link.clone(), instance.clone().into()))
                     .collect(),
             }),
+            account_id: None,
             project_id: None,
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),

@@ -996,6 +996,7 @@ fn to_grpc_component(component: golem_client::model::Component) -> Component {
         component_size: component.component_size,
         metadata: Some(component.metadata.into()),
         project_id: None,
+        account_id: None,
         created_at: component.created_at.map(|ts| SystemTime::from(ts).into()),
         component_type: component
             .component_type
