@@ -274,12 +274,12 @@ mod internal {
                         .ok_or("Desugar pattern match failed".to_string())?;
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
-            Expr::Cond(if_expr, then_expr, else_expr, _) => {
+            Expr::Cond { cond, lhs, rhs, .. } => {
                 handle_if_condition(
                     instruction_id,
-                    if_expr.deref(),
-                    then_expr.deref(),
-                    else_expr.deref(),
+                    cond.deref(),
+                    lhs.deref(),
+                    rhs.deref(),
                     stack,
                 );
             }
@@ -555,7 +555,7 @@ mod internal {
                 instructions.push(RibIR::Concat(exprs.len()));
             }
 
-            Expr::Not(expr, _) => {
+            Expr::Not { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Negate);
             }

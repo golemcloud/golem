@@ -32,6 +32,7 @@ parser! {
 mod internal {
     use combine::parser::char::{char, digit, letter};
     use combine::{many1, optional, ParseError};
+    use std::ops::Deref;
 
     use super::*;
     use crate::parser::errors::RibParseError;
@@ -73,19 +74,38 @@ mod internal {
                     let expr = build_selector(base, opt);
 
                     match expr {
-                        Some(Expr::SelectField(field, name, inner_typ, inferred_typ)) => {
+                        Some(Expr::SelectField {
+                            field,
+                            expr,
+                            type_annotation: inner_typ,
+                            ..
+                        }) => {
                             if let Some(typ) = optional {
-                                Ok(Expr::SelectField(field, name, Some(typ), inferred_typ))
+                                Ok(Expr::select_field(expr.deref().clone(), field, Some(typ)))
                             } else {
-                                Ok(Expr::SelectField(field, name, inner_typ, inferred_typ))
+                                Ok(Expr::select_field(expr.deref().clone(), field, inner_typ))
                             }
                         }
 
-                        Some(Expr::SelectIndex(field, index, inner_typ, inferred_type)) => {
+                        Some(Expr::SelectIndex {
+                            expr,
+                            index,
+                            type_annotation: inner_typ,
+                            inferred_type,
+                        }) => {
                             if let Some(typ) = optional {
-                                Ok(Expr::SelectIndex(field, index, Some(typ), inferred_type))
+                                Ok(Expr::select_index_with_type_annotation(
+                                    expr.deref().clone(),
+                                    index,
+                                    typ,
+                                ))
                             } else {
-                                Ok(Expr::SelectIndex(field, index, inner_typ, inferred_type))
+                                Ok(Expr::SelectIndex {
+                                    expr,
+                                    index,
+                                    type_annotation: inner_typ,
+                                    inferred_type,
+                                })
                             }
                         }
 
@@ -102,26 +122,36 @@ mod internal {
     // We also propagate any type name in between towards the outer.
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         match nest {
-            Expr::Identifier(variable_id, _, _) => {
+            Expr::Identifier { variable_id, .. } => {
                 Some(Expr::select_field(base, variable_id.name().as_str(), None))
             }
-            Expr::SelectField(second, last, type_name, inferred_type) => {
+            Expr::SelectField {
+                expr: second,
+                field: last,
+                type_annotation: type_name,
+                inferred_type,
+            } => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectField(
-                    Box::new(inner_select),
-                    last,
-                    type_name,
+                Some(Expr::SelectField {
+                    expr: Box::new(inner_select),
+                    field: last,
+                    type_annotation: type_name,
                     inferred_type,
-                ))
+                })
             }
-            Expr::SelectIndex(second, last_index, type_name, inferred_type) => {
+            Expr::SelectIndex {
+                expr: second,
+                index: last_index,
+                type_annotation: type_name,
+                inferred_type,
+            } => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectIndex(
-                    Box::new(inner_select),
-                    last_index,
-                    type_name,
+                Some(Expr::SelectIndex {
+                    expr: Box::new(inner_select),
+                    index: last_index,
+                    type_annotation: type_name,
                     inferred_type,
-                ))
+                })
             }
             _ => None,
         }

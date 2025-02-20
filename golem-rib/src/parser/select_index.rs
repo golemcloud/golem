@@ -91,7 +91,7 @@ mod internal {
         >,
     {
         number().map(|s: Expr| match s {
-            Expr::Number(number, _, _) => {
+            Expr::Number { number, .. } => {
                 if number.value < BigDecimal::from(0) {
                     panic!("Cannot use a negative number to index",)
                 } else {

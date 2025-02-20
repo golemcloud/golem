@@ -258,11 +258,14 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier{ variable_id, inferred_type, ..} => {
+                    Expr::Identifier {
+                        variable_id,
+                        inferred_type,
+                        ..
+                    } => {
                         if let VariableId::ListComprehension(l) = variable_id {
                             if l.name == variable.name() {
-                                *inferred_type =
-                                    inferred_type.merge(iterable_variable_type.clone())
+                                *inferred_type = inferred_type.merge(iterable_variable_type.clone())
                             }
                         }
                     }
@@ -293,16 +296,18 @@ mod internal {
 
             while let Some(expr) = queue.pop_back() {
                 match expr {
-                    Expr::Identifier{ variable_id,  inferred_type, ..} => {
+                    Expr::Identifier {
+                        variable_id,
+                        inferred_type,
+                        ..
+                    } => {
                         if let VariableId::ListComprehension(l) = variable_id {
                             if l.name == iterated_variable.name() {
-                                *inferred_type =
-                                    inferred_type.merge(iterable_variable_type.clone())
+                                *inferred_type = inferred_type.merge(iterable_variable_type.clone())
                             }
                         } else if let VariableId::ListReduce(l) = variable_id {
                             if l.name == reduce_variable.name() {
-                                *inferred_type =
-                                    inferred_type.merge(init_value_expr_type.clone())
+                                *inferred_type = inferred_type.merge(init_value_expr_type.clone())
                             }
                         }
                     }

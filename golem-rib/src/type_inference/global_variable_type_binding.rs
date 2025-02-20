@@ -70,9 +70,7 @@ mod internal {
 
     use crate::generic_type_parameter::GenericTypeParameter;
     use crate::type_checker::{Path, PathElem};
-    use crate::{
-        call_type, Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId,
-    };
+    use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -214,20 +212,24 @@ mod internal {
                 }
 
                 //
-                Expr::PatternMatch { predicate, match_arms, inferred_type, .. } => {
-                    handle_pattern_match(
-                        predicate,
-                        match_arms,
-                        inferred_type,
-                        &mut temp_stack,
-                    );
+                Expr::PatternMatch {
+                    predicate,
+                    match_arms,
+                    inferred_type,
+                    ..
+                } => {
+                    handle_pattern_match(predicate, match_arms, inferred_type, &mut temp_stack);
                 }
 
                 Expr::Concat { exprs, .. } => {
                     handle_concat(exprs, &mut temp_stack);
                 }
 
-                Expr::ExprBlock { exprs, inferred_type, .. } => {
+                Expr::ExprBlock {
+                    exprs,
+                    inferred_type,
+                    ..
+                } => {
                     handle_multiple(exprs, inferred_type, &mut temp_stack);
                 }
 
@@ -360,22 +362,41 @@ mod internal {
                     });
                 }
 
-                Expr::Let { variable_id, type_annotation, expr, inferred_type } => {
-                    handle_let(variable_id, expr, type_annotation, inferred_type, &mut temp_stack);
+                Expr::Let {
+                    variable_id,
+                    type_annotation,
+                    expr,
+                    inferred_type,
+                } => {
+                    handle_let(
+                        variable_id,
+                        expr,
+                        type_annotation,
+                        inferred_type,
+                        &mut temp_stack,
+                    );
                 }
-                Expr::Sequence { exprs, type_annotation, inferred_type, .. } => {
+                Expr::Sequence {
+                    exprs,
+                    type_annotation,
+                    inferred_type,
+                    ..
+                } => {
                     handle_sequence(exprs, inferred_type, &mut temp_stack, type_annotation);
                 }
-                Expr::Record { exprs, inferred_type } => {
+                Expr::Record {
+                    exprs,
+                    inferred_type,
+                } => {
                     handle_record(exprs, inferred_type, &mut temp_stack);
                 }
-                Expr::Literal {..} => {
+                Expr::Literal { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Number {.. } => {
+                Expr::Number { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Boolean { ..} => {
+                Expr::Boolean { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
                 Expr::And { lhs, rhs, .. } => {

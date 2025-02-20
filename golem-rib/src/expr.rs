@@ -294,7 +294,7 @@ impl Expr {
     }
 
     pub fn is_list(&self) -> bool {
-        matches!(self, Expr::Sequence { ..})
+        matches!(self, Expr::Sequence { .. })
     }
 
     pub fn is_flags(&self) -> bool {
@@ -302,50 +302,50 @@ impl Expr {
     }
 
     pub fn is_identifier(&self) -> bool {
-        matches!(self, Expr::Identifier { ..})
+        matches!(self, Expr::Identifier { .. })
     }
 
     pub fn is_select_field(&self) -> bool {
-        matches!(self, Expr::SelectField { ..})
+        matches!(self, Expr::SelectField { .. })
     }
 
     pub fn is_if_else(&self) -> bool {
-        matches!(self, Expr::Cond { ..})
+        matches!(self, Expr::Cond { .. })
     }
 
     pub fn is_function_call(&self) -> bool {
-        matches!(self, Expr::Call { ..})
+        matches!(self, Expr::Call { .. })
     }
 
     pub fn is_match_expr(&self) -> bool {
-        matches!(self, Expr::PatternMatch { ..})
+        matches!(self, Expr::PatternMatch { .. })
     }
 
     pub fn is_select_index(&self) -> bool {
-        matches!(self, Expr::SelectIndex { ..})
+        matches!(self, Expr::SelectIndex { .. })
     }
 
     pub fn is_boolean(&self) -> bool {
-        matches!(self, Expr::Boolean { ..})
+        matches!(self, Expr::Boolean { .. })
     }
 
     pub fn is_comparison(&self) -> bool {
         matches!(
             self,
-            Expr::GreaterThan { ..}
-                | Expr::GreaterThanOrEqualTo { ..}
-                | Expr::LessThanOrEqualTo { ..}
-                | Expr::EqualTo { ..}
-                | Expr::LessThan { ..}
+            Expr::GreaterThan { .. }
+                | Expr::GreaterThanOrEqualTo { .. }
+                | Expr::LessThanOrEqualTo { .. }
+                | Expr::EqualTo { .. }
+                | Expr::LessThan { .. }
         )
     }
 
     pub fn is_concat(&self) -> bool {
-        matches!(self, Expr::Concat {..})
+        matches!(self, Expr::Concat { .. })
     }
 
     pub fn is_multiple(&self) -> bool {
-        matches!(self, Expr::ExprBlock {..})
+        matches!(self, Expr::ExprBlock { .. })
     }
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
@@ -1124,38 +1124,38 @@ impl Expr {
     // This is different to `merge_inferred_type` where it tries to combine the new inferred type with the existing one.
     pub fn with_inferred_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier{inferred_type, ..}
-            | Expr::Let{inferred_type, ..}
-            | Expr::SelectField{inferred_type, ..}
-            | Expr::SelectIndex{inferred_type, ..}
-            | Expr::Sequence{inferred_type, ..}
-            | Expr::Record{inferred_type, ..}
-            | Expr::Tuple{inferred_type, ..}
-            | Expr::Literal{inferred_type, ..}
-            | Expr::Number{inferred_type, ..}
-            | Expr::Flags{inferred_type, ..}
-            | Expr::Boolean{inferred_type, ..}
-            | Expr::Concat{inferred_type, ..}
-            | Expr::ExprBlock{inferred_type, ..}
-            | Expr::Not{inferred_type, ..}
-            | Expr::GreaterThan{inferred_type, ..}
-            | Expr::GreaterThanOrEqualTo{inferred_type, ..}
-            | Expr::LessThanOrEqualTo{inferred_type, ..}
-            | Expr::EqualTo{inferred_type, ..}
-            | Expr::LessThan{inferred_type, ..}
-            | Expr::Plus{inferred_type, ..}
-            | Expr::Minus{inferred_type, ..}
-            | Expr::Divide{inferred_type, ..}
-            | Expr::Multiply{inferred_type, ..}
-            | Expr::Cond{inferred_type, ..}
-            | Expr::PatternMatch{inferred_type, ..}
-            | Expr::Option{inferred_type, ..}
-            | Expr::Result{inferred_type, ..}
-            | Expr::Unwrap{inferred_type, ..}
-            | Expr::Throw{inferred_type, ..}
-            | Expr::And{inferred_type, ..}
-            | Expr::Or{inferred_type, ..}
-            | Expr::GetTag{inferred_type, ..}
+            Expr::Identifier { inferred_type, .. }
+            | Expr::Let { inferred_type, .. }
+            | Expr::SelectField { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
+            | Expr::Sequence { inferred_type, .. }
+            | Expr::Record { inferred_type, .. }
+            | Expr::Tuple { inferred_type, .. }
+            | Expr::Literal { inferred_type, .. }
+            | Expr::Number { inferred_type, .. }
+            | Expr::Flags { inferred_type, .. }
+            | Expr::Boolean { inferred_type, .. }
+            | Expr::Concat { inferred_type, .. }
+            | Expr::ExprBlock { inferred_type, .. }
+            | Expr::Not { inferred_type, .. }
+            | Expr::GreaterThan { inferred_type, .. }
+            | Expr::GreaterThanOrEqualTo { inferred_type, .. }
+            | Expr::LessThanOrEqualTo { inferred_type, .. }
+            | Expr::EqualTo { inferred_type, .. }
+            | Expr::LessThan { inferred_type, .. }
+            | Expr::Plus { inferred_type, .. }
+            | Expr::Minus { inferred_type, .. }
+            | Expr::Divide { inferred_type, .. }
+            | Expr::Multiply { inferred_type, .. }
+            | Expr::Cond { inferred_type, .. }
+            | Expr::PatternMatch { inferred_type, .. }
+            | Expr::Option { inferred_type, .. }
+            | Expr::Result { inferred_type, .. }
+            | Expr::Unwrap { inferred_type, .. }
+            | Expr::Throw { inferred_type, .. }
+            | Expr::And { inferred_type, .. }
+            | Expr::Or { inferred_type, .. }
+            | Expr::GetTag { inferred_type, .. }
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }

@@ -75,12 +75,16 @@ impl<W: Write> Writer<W> {
 
     fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
-            Expr::Literal{ value, ..} => {
+            Expr::Literal { value, .. } => {
                 self.write_display("\"")?;
                 self.write_str(value)?;
                 self.write_display("\"")
             }
-            Expr::Identifier{variable_id, type_annotation, ..} => {
+            Expr::Identifier {
+                variable_id,
+                type_annotation,
+                ..
+            } => {
                 self.write_str(variable_id.name())?;
                 if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
@@ -90,7 +94,12 @@ impl<W: Write> Writer<W> {
                 }
             }
 
-            Expr::Let{ variable_id, type_annotation, expr,..} => {
+            Expr::Let {
+                variable_id,
+                type_annotation,
+                expr,
+                ..
+            } => {
                 self.write_str("let ")?;
                 self.write_str(variable_id.name())?;
                 if let Some(type_name) = type_annotation {
@@ -100,7 +109,12 @@ impl<W: Write> Writer<W> {
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField{ expr, field, type_annotation, ..} => {
+            Expr::SelectField {
+                expr,
+                field,
+                type_annotation,
+                ..
+            } => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
                 self.write_str(field)?;
@@ -111,7 +125,12 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
-            Expr::SelectIndex { expr, index, type_annotation, .. } => {
+            Expr::SelectIndex {
+                expr,
+                index,
+                type_annotation,
+                ..
+            } => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;
@@ -123,7 +142,11 @@ impl<W: Write> Writer<W> {
                     Ok(())
                 }
             }
-            Expr::Sequence{ exprs, type_annotation, ..} => {
+            Expr::Sequence {
+                exprs,
+                type_annotation,
+                ..
+            } => {
                 self.write_display("[")?;
                 for (idx, expr) in exprs.iter().enumerate() {
                     if idx != 0 {
@@ -165,7 +188,11 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(")")
             }
-            Expr::Number { number, type_annotation, .. } => {
+            Expr::Number {
+                number,
+                type_annotation,
+                ..
+            } => {
                 self.write_display(number.value.to_string())?;
                 if let Some(type_name) = type_annotation {
                     self.write_display(type_name)?;
@@ -256,7 +283,11 @@ impl<W: Write> Writer<W> {
                 self.write_str(" else ")?;
                 self.write_expr(rhs)
             }
-            Expr::PatternMatch { predicate, match_arms, .. } => {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                ..
+            } => {
                 self.write_str("match ")?;
                 self.write_expr(predicate)?;
                 self.write_str(" { ")?;
@@ -275,7 +306,11 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::Option { expr, type_annotation, .. } => {
+            Expr::Option {
+                expr,
+                type_annotation,
+                ..
+            } => {
                 match expr {
                     Some(expr) => {
                         self.write_str("some(")?;
@@ -305,7 +340,12 @@ impl<W: Write> Writer<W> {
                 }
             },
 
-            Expr::Call { call_type, generic_type_parameter, args, .. } => {
+            Expr::Call {
+                call_type,
+                generic_type_parameter,
+                args,
+                ..
+            } => {
                 let function_name = call_type.to_string();
 
                 self.write_str(function_name)?;
@@ -450,7 +490,7 @@ mod internal {
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal { value, .. } => ExprType::Text(value),
-            Expr::Concat { ..} => ExprType::StringInterpolated,
+            Expr::Concat { .. } => ExprType::StringInterpolated,
             expr => ExprType::Code(expr),
         }
     }
@@ -559,7 +599,7 @@ mod internal {
             }
 
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Identifier { variable_id, ..} => writer.write_str(variable_id.name()),
+                Expr::Identifier { variable_id, .. } => writer.write_str(variable_id.name()),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

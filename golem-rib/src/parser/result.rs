@@ -49,8 +49,10 @@ where
         ),
     )
         .and_then(|(expr, type_name)| match expr {
-            Expr::Result(Ok(expr), _, _) => Ok(Expr::ok(*expr, type_name)),
-            Expr::Result(Err(expr), _, _) => Ok(Expr::err(*expr, type_name)),
+            Expr::Result { expr: Ok(expr), .. } => Ok(Expr::ok(*expr, type_name)),
+            Expr::Result {
+                expr: Err(expr), ..
+            } => Ok(Expr::err(*expr, type_name)),
             _ => Err(RibParseError::Message(
                 "Invalid syntax for Result type".to_string(),
             )),

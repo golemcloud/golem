@@ -78,7 +78,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Tuple { exprs, .. } => {
                 internal::unresolved_types_in_tuple(exprs)?;
             }
-            Expr::Literal(_, inferred_type) => {
+            Expr::Literal { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr));
                 }
@@ -167,11 +167,11 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 internal::unresolved_type_for_pattern_match(predicate, match_arms)?;
             }
             Expr::Option {
-                expr,
+                expr: expr0,
                 inferred_type,
                 ..
             } => {
-                if let Some(expr) = expr {
+                if let Some(expr) = expr0 {
                     queue.push_back(expr);
                 }
 

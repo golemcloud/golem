@@ -43,9 +43,9 @@ mod internal {
             );
 
             for branch in if_branches.iter().skip(1).rev() {
-                if let Expr::Cond(_, _, else_, _) = &mut expr {
-                    let else_copy = *else_.clone();
-                    *else_ = Box::new(
+                if let Expr::Cond { rhs, .. } = &mut expr {
+                    let else_copy = *rhs.clone();
+                    *rhs = Box::new(
                         Expr::cond(branch.condition.clone(), branch.body.clone(), else_copy)
                             .merge_inferred_type(branch.body.inferred_type()),
                     );
@@ -598,7 +598,7 @@ mod desugar_tests {
 
         pub(crate) fn last_expr(expr: &Expr) -> Expr {
             match expr {
-                Expr::ExprBlock(exprs, _) => exprs.last().unwrap().clone(),
+                Expr::ExprBlock { exprs, .. } => exprs.last().unwrap().clone(),
                 _ => expr.clone(),
             }
         }

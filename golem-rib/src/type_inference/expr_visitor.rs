@@ -224,7 +224,9 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
                 queue.push_back(&*arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _, _) => queue.push_back(expr),
+        Expr::Option {
+            expr: Some(expr), ..
+        } => queue.push_back(expr),
         Expr::Result { expr: Ok(expr), .. } => queue.push_back(expr),
         Expr::Result {
             expr: Err(expr), ..
@@ -357,7 +359,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 queue.push_front(expr);
             }
         }
-        Expr::ExprBlock(exprs, _) => {
+        Expr::ExprBlock { exprs, .. } => {
             for expr in exprs.iter_mut() {
                 queue.push_back(expr);
             }
@@ -412,18 +414,31 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs)
         }
-        Expr::PatternMatch(expr, arms, _) => {
-            queue.push_front(&mut *expr);
-            for arm in arms {
+        Expr::PatternMatch {
+            predicate,
+            match_arms,
+            ..
+        } => {
+            queue.push_front(&mut *predicate);
+            for arm in match_arms {
                 let arm_literal_expressions = arm.arm_pattern.get_expr_literals_mut();
                 queue.extend(arm_literal_expressions.into_iter().map(|x| x.as_mut()));
                 queue.push_back(&mut *arm.arm_resolution_expr);
             }
         }
-        Expr::Option(Some(expr), _, _) => queue.push_front(&mut *expr),
-        Expr::Result(Ok(expr), _, _) => queue.push_front(&mut *expr),
-        Expr::Result(Err(expr), _, _) => queue.push_front(&mut *expr),
-        Expr::Call(call_type, _, arguments, inferred_type) => {
+        Expr::Option {
+            expr: Some(expr), ..
+        } => queue.push_front(&mut *expr),
+        Expr::Result { expr: Ok(expr), .. } => queue.push_front(&mut *expr),
+        Expr::Result {
+            expr: Err(expr), ..
+        } => queue.push_front(&mut *expr),
+        Expr::Call {
+            call_type,
+            args,
+            inferred_type,
+            ..
+        } => {
             let (exprs, worker) = internal::get_expressions_in_call_type_mut(call_type);
 
             if let Some(exprs) = exprs {
@@ -443,7 +458,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
                 }
             }
 
-            for expr in arguments.iter_mut() {
+            for expr in args.iter_mut() {
                 queue.push_front(expr);
             }
         }

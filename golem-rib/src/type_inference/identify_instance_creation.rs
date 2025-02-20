@@ -82,7 +82,12 @@ mod internal {
         queue.push_back(expr);
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(call_type, generic_type_parameter, args, inferred_type) => {
+                Expr::Call {
+                    call_type,
+                    generic_type_parameter,
+                    args,
+                    inferred_type,
+                } => {
                     let type_parameter = generic_type_parameter
                         .clone()
                         .map(|type_parameter| TypeParameter::from_str(&type_parameter.value))
