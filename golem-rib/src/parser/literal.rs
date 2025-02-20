@@ -17,12 +17,14 @@ use combine::{parser, ParseError, Stream};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::literal::internal::literal_;
+use crate::rib_source_span::GetSourcePosition;
 
 parser! {
     pub fn literal[Input]()(Input) -> Expr
     where [
         Input: Stream<Token = char>,
         RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,
+        Input::Position: GetSourcePosition
     ]
     {
         literal_()
@@ -37,6 +39,7 @@ mod internal {
     use combine::parser::char::spaces;
     use combine::parser::repeat::many;
     use combine::{between, choice, many1, none_of, ParseError, Parser};
+    use crate::rib_source_span::GetSourcePosition;
 
     pub fn literal_<Input>() -> impl Parser<Input, Output = Expr>
     where
@@ -44,6 +47,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         spaces()
             .with(
@@ -78,6 +82,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         many1(none_of("\"${}".chars()))
             .map(LiteralTerm::Static)
@@ -90,6 +95,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         between(
             char_('$').with(char_('{')).skip(spaces()),
@@ -127,15 +133,15 @@ mod literal_parse_tests {
     #[test]
     fn test_empty_literal() {
         let input = "\"\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::literal(""), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::literal("")));
     }
 
     #[test]
     fn test_literal() {
         let input = "\"foo\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::literal("foo"), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::literal("foo")));
     }
 
     #[test]

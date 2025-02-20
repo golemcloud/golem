@@ -18,6 +18,7 @@ use combine::{attempt, ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn boolean_literal<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -25,6 +26,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     attempt(string("true"))
         .map(|_| Expr::boolean(true))
@@ -46,21 +48,21 @@ mod tests {
     #[test]
     fn test_boolean_true() {
         let input = "true";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::boolean(true), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::boolean(true)));
     }
 
     #[test]
     fn test_boolean_false() {
         let input = "false";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::boolean(false), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::boolean(false)));
     }
 
     #[test]
     fn test_boolean_with_spaces() {
         let input = "true ";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::boolean(true), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::boolean(true)));
     }
 }

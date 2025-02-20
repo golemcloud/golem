@@ -17,6 +17,7 @@ use crate::parser::rib_expr::rib_expr;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{attempt, sep_end_by, ParseError, Parser};
+use crate::rib_source_span::GetSourcePosition;
 
 // Get all expressions in a block
 // that doesn't have a return type
@@ -28,6 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     spaces()
         .with(sep_end_by(
@@ -44,6 +46,7 @@ mod tests {
 
     use super::*;
     use combine::EasyParser;
+    use combine::stream::position;
 
     #[test]
     fn test_block_without_return() {
@@ -52,7 +55,7 @@ mod tests {
         let y = 2;
         x + y;
         "#;
-        let expr = block_without_return().easy_parse(input).unwrap().0;
+        let expr = block_without_return().easy_parse(position::Stream::new(input)).unwrap().0;
 
         let expected = vec![
             Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),

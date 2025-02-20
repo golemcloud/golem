@@ -2839,6 +2839,7 @@ mod type_inference_tests {
                 type_annotation,
                 expr,
                 inferred_type,
+                source_span: None
             }
         }
 

@@ -73,6 +73,7 @@ mod internal {
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
+    use crate::rib_source_span::RibSourceSpan;
 
     pub(crate) fn bind_global_variable_types(
         expr: &Expr,
@@ -367,6 +368,7 @@ mod internal {
                     type_annotation,
                     expr,
                     inferred_type,
+                    source_span
                 } => {
                     handle_let(
                         variable_id,
@@ -374,6 +376,7 @@ mod internal {
                         type_annotation,
                         inferred_type,
                         &mut temp_stack,
+                        source_span
                     );
                 }
                 Expr::Sequence {
@@ -1193,9 +1196,10 @@ mod internal {
     pub(crate) fn handle_let(
         original_variable_id: &VariableId,
         original_expr: &Expr,
-        optional_type: &Option<crate::parser::type_name::TypeName>,
+        optional_type: &Option<TypeName>,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &Option<RibSourceSpan>,
     ) {
         let expr = temp_stack
             .pop_front()
@@ -1206,6 +1210,7 @@ mod internal {
             type_annotation: optional_type.clone(),
             expr: Box::new(expr),
             inferred_type: current_inferred_type.clone(),
+            source_span: source_span.clone()
         };
         temp_stack.push_front((new_let, false));
     }
@@ -1413,6 +1418,7 @@ mod tests {
                     .with_inferred_type(InferredType::Str),
                 ),
                 inferred_type: InferredType::Unknown,
+                source_span: None,
             },
             Expr::Let {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
@@ -1442,6 +1448,7 @@ mod tests {
                     .with_inferred_type(InferredType::U64),
                 ),
                 inferred_type: InferredType::Unknown,
+                source_span: None
             },
             Expr::Identifier {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),

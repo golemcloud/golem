@@ -20,6 +20,7 @@ use std::str::FromStr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::type_name::{parse_basic_type, parse_type_name, TypeName};
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn number<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -28,6 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     spaces()
         .with(
@@ -81,60 +83,57 @@ mod tests {
     #[test]
     fn test_number() {
         let input = "123";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::untyped_number(BigDecimal::from(123)), ""))
+            Ok(Expr::untyped_number(BigDecimal::from(123)))
         );
     }
 
     #[test]
     fn test_negative_number() {
         let input = "-123";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::untyped_number(BigDecimal::from(-123)), ""))
+            Ok(Expr::untyped_number(BigDecimal::from(-123)))
         );
     }
 
     #[test]
     fn test_float_number() {
         let input = "123.456";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::untyped_number(BigDecimal::from_str("123.456").unwrap()),
-                ""
-            ))
+            Ok(Expr::untyped_number(BigDecimal::from_str("123.456").unwrap()))
         );
     }
 
     #[test]
     fn test_number_with_binding_positive() {
         let input = "123u32";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         let expected = Expr::untyped_number_with_type_name(BigDecimal::from(123), TypeName::U32);
-        assert_eq!(result, Ok((expected, "")));
+        assert_eq!(result, Ok(expected));
     }
 
     #[test]
     fn test_number_with_binding_negative() {
         let input = "-123s64";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         let expected = Expr::untyped_number_with_type_name(BigDecimal::from(-123), TypeName::S64);
-        assert_eq!(result, Ok((expected, "")));
+        assert_eq!(result, Ok(expected));
     }
 
     #[test]
     fn test_number_with_binding_float() {
         let input = "-123.0f64";
-        let result = number().easy_parse(input);
+        let result = Expr::from_text(input);
         let expected = Expr::untyped_number_with_type_name(
             BigDecimal::from_str("-123.0").unwrap(),
             TypeName::F64,
         );
-        assert_eq!(result, Ok((expected, "")));
+        assert_eq!(result, Ok(expected));
     }
 }

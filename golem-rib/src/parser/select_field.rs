@@ -20,10 +20,11 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::record::record;
+use crate::rib_source_span::GetSourcePosition;
 
 parser! {
     pub fn select_field[Input]()(Input) -> Expr
-    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
     {
         select_field_()
     }
@@ -44,6 +45,7 @@ mod internal {
         parser::char::{char as char_, spaces},
         Parser,
     };
+    use crate::rib_source_span::GetSourcePosition;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
@@ -53,6 +55,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         spaces().with(
             (
@@ -163,6 +166,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         choice((
             attempt(select_index()),
@@ -177,6 +181,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         text().message("Unable to parse field name")
     }

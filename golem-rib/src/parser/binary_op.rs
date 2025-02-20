@@ -15,6 +15,7 @@
 use crate::parser::errors::RibParseError;
 use combine::parser::char::string;
 use combine::{attempt, choice, ParseError, Parser};
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn binary_op<Input>() -> impl Parser<Input, Output = BinaryOp>
 where
@@ -22,6 +23,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     choice((
         attempt(string(">=")).map(|_| BinaryOp::GreaterThanOrEqualTo),
@@ -66,80 +68,65 @@ mod test {
     #[test]
     fn test_greater_than() {
         let input = "foo > bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::greater_than(
+            Ok(Expr::greater_than(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_greater_than_or_equal_to() {
         let input = "foo >= bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::greater_than_or_equal_to(
+            Ok(Expr::greater_than_or_equal_to(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_less_than() {
         let input = "foo < bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::less_than(
+            Ok(Expr::less_than(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_less_than_or_equal_to() {
         let input = "foo <= bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::less_than_or_equal_to(
+            Ok(Expr::less_than_or_equal_to(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_equal_to() {
         let input = "foo == bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
@@ -166,11 +153,10 @@ mod test {
     #[test]
     fn test_binary_op_in_sequence() {
         let input = "[foo >= bar, foo < bar]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(
+            Ok(Expr::sequence(
                     vec![
                         Expr::greater_than_or_equal_to(
                             Expr::identifier_global("foo", None),
@@ -182,20 +168,17 @@ mod test {
                         )
                     ],
                     None
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_record() {
         let input = "{foo : 1} == {foo: 2}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::record(vec![(
                         "foo".to_string(),
                         Expr::untyped_number(BigDecimal::from(1))
@@ -204,20 +187,17 @@ mod test {
                         "foo".to_string(),
                         Expr::untyped_number(BigDecimal::from(2))
                     )]),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_sequence() {
         let input = "[1, 2] == [3, 4]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::sequence(
                         vec![
                             Expr::untyped_number(BigDecimal::from(1)),
@@ -232,20 +212,17 @@ mod test {
                         ],
                         None
                     ),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_tuple() {
         let input = "(1, 2) == (3, 4)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::tuple(vec![
                         Expr::untyped_number(BigDecimal::from(1)),
                         Expr::untyped_number(BigDecimal::from(2))
@@ -254,84 +231,69 @@ mod test {
                         Expr::untyped_number(BigDecimal::from(3)),
                         Expr::untyped_number(BigDecimal::from(4))
                     ]),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_select_field() {
         let input = "foo.bar == baz.qux";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::select_field(Expr::identifier_global("foo", None), "bar", None),
                     Expr::select_field(Expr::identifier_global("baz", None), "qux", None),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_select_index() {
         let input = "foo[1] == bar[2]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::select_index(Expr::identifier_global("foo", None), 1),
                     Expr::select_index(Expr::identifier_global("bar", None), 2),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_result() {
         let input = "ok(foo) == ok(bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::ok(Expr::identifier_global("foo", None), None),
                     Expr::ok(Expr::identifier_global("bar", None), None),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_option() {
         let input = "some(foo) == some(bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::option(Some(Expr::identifier_global("foo", None))),
                     Expr::option(Some(Expr::identifier_global("bar", None))),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_of_call() {
         let input = "foo() == bar()";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::equal_to(
+            Ok(Expr::equal_to(
                     Expr::call_worker_function(
                         DynamicParsedFunctionName {
                             site: ParsedFunctionSite::Global,
@@ -354,20 +316,17 @@ mod test {
                         None,
                         vec![]
                     ),
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_binary_op_in_record() {
         let input = "{foo: bar > baz, baz: bar == foo}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![
+            Ok(Expr::record(vec![
                     (
                         "foo".to_string(),
                         Expr::greater_than(
@@ -382,9 +341,7 @@ mod test {
                             Expr::identifier_global("foo", None)
                         )
                     ),
-                ]),
-                ""
-            ))
+                ]))
         );
     }
 }

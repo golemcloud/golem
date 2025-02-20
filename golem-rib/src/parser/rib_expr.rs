@@ -19,13 +19,13 @@ use combine::{ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-
+use crate::rib_source_span::GetSourcePosition;
 use super::binary_op::BinaryOp;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
 parser! {
     pub fn rib_expr[Input]()(Input) -> Expr
-    where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
+    where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
     {
        rib_expr_()
     }
@@ -37,6 +37,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     spaces()
         .with(
@@ -88,6 +89,7 @@ mod internal {
     use crate::Expr;
     use combine::parser::char::spaces;
     use combine::{attempt, choice, many, parser, ParseError, Parser, Stream};
+    use crate::rib_source_span::GetSourcePosition;
 
     // A simple expression is a composition of all parsers that doesn't involve left recursion
     pub fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
@@ -96,6 +98,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         spaces()
             .with(choice((
@@ -124,7 +127,7 @@ mod internal {
 
     parser! {
         pub(crate) fn simple_expr[Input]()(Input) -> Expr
-        where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
+        where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
         {
             simple_expr_()
         }
@@ -136,13 +139,14 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         many((binary_op(), simple_expr()))
     }
 
     parser! {
         pub(crate) fn rib_expr_rest[Input]()(Input) -> Vec<(BinaryOp, Expr)>
-        where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
+        where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
         {
             rib_expr_rest_()
         }
@@ -154,6 +158,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
     }
@@ -164,6 +169,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         choice((attempt(select_field()), attempt(select_index())))
             .message("Unable to parse selection expression")

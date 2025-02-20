@@ -34,6 +34,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+use crate::rib_source_span::RibSourceSpan;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -41,6 +42,7 @@ pub enum Expr {
         variable_id: VariableId,
         type_annotation: Option<TypeName>,
         expr: Box<Expr>,
+        source_span: Option<RibSourceSpan>,
         inferred_type: InferredType,
     },
     SelectField {
@@ -600,6 +602,7 @@ impl Expr {
             variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
             expr: Box::new(expr),
+            source_span: None,
             inferred_type: InferredType::Unknown,
         }
     }
@@ -613,6 +616,7 @@ impl Expr {
             variable_id,
             type_annotation,
             expr: Box::new(expr),
+            source_span: None,
             inferred_type: InferredType::Unknown,
         }
     }
@@ -1112,6 +1116,21 @@ impl Expr {
 
     pub fn reset_type(&mut self) {
         type_inference::reset_type_info(self);
+    }
+
+    pub fn with_source_span(&self, source_span: Option<RibSourceSpan>) -> Expr {
+        let mut expr_copied = self.clone();
+        expr_copied.with_source_span_mut(source_span);
+        expr_copied
+    }
+
+    pub fn with_source_span_mut(&mut self, new_source_span: Option<RibSourceSpan>) {
+        match self {
+            Expr::Let { source_span, .. } => {
+                *source_span = new_source_span;
+            }
+            _ => {}
+        }
     }
 
     pub fn with_inferred_type(&self, new_inferred_type: InferredType) -> Expr {

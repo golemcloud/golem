@@ -21,6 +21,7 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -28,6 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     spaces().with(
         (
@@ -71,6 +73,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         many1(
             (
@@ -89,6 +92,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         number().map(|s: Expr| match s {
             Expr::Number { number, .. } => {
@@ -108,6 +112,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition
     {
         choice((attempt(sequence()), attempt(identifier())))
     }
@@ -125,29 +130,23 @@ mod tests {
     #[test]
     fn test_select_index() {
         let input = "foo[0]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_index(Expr::identifier_global("foo", None), 0),
-                ""
-            ))
+            Ok(Expr::select_index(Expr::identifier_global("foo", None), 0))
         );
     }
 
     #[test]
     fn test_recursive_select_index() {
         let input = "foo[0][1]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_index(
+            Ok(Expr::select_index(
                     Expr::select_index(Expr::identifier_global("foo", None), 0),
                     1
-                ),
-                ""
-            ))
+                ))
         );
     }
 }

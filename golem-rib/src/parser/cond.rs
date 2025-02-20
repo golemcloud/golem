@@ -18,6 +18,7 @@ use combine::{attempt, not_followed_by, ParseError, Parser};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn conditional<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -25,6 +26,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     // Use attempt only for the initial "if" to resolve ambiguity with identifiers
     attempt(
@@ -55,45 +57,38 @@ mod tests {
     #[test]
     fn test_conditional() {
         let input = "if foo then bar else baz";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
+            Ok(Expr::cond(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None),
                     Expr::identifier_global("baz", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_conditional_of_sequences() {
         let input = "if foo then [bar] else [baz]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
+            Ok(Expr::cond(
                     Expr::identifier_global("foo", None),
                     Expr::sequence(vec![Expr::identifier_global("bar", None)], None),
                     Expr::sequence(vec![Expr::identifier_global("baz", None)], None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_if_condition_inside_else() {
         let input = "if foo then bar else if baz then qux else quux";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
+            Ok(Expr::cond(
                     Expr::identifier_global("foo", None),
                     Expr::identifier_global("bar", None),
                     Expr::cond(
@@ -101,20 +96,17 @@ mod tests {
                         Expr::identifier_global("qux", None),
                         Expr::identifier_global("quux", None)
                     )
-                ),
-                ""
-            ))
+                ))
         );
     }
 
     #[test]
     fn test_if_condition_inside_then() {
         let input = "if foo then if bar then baz else qux else quux";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
+            Ok(Expr::cond(
                     Expr::identifier_global("foo", None),
                     Expr::cond(
                         Expr::identifier_global("bar", None),
@@ -122,9 +114,7 @@ mod tests {
                         Expr::identifier_global("qux", None)
                     ),
                     Expr::identifier_global("quux", None)
-                ),
-                ""
-            ))
+                ))
         );
     }
 }

@@ -41,6 +41,7 @@ mod type_parameter_parser;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
+mod rib_source_span;
 
 #[cfg(test)]
 test_r::enable!();

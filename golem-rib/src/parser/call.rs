@@ -24,6 +24,7 @@ use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
 use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
+use crate::rib_source_span::GetSourcePosition;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -32,6 +33,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     (
         function_name().skip(spaces()),
@@ -56,6 +58,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
     let namespace = many1(identifier()).message("namespace");
@@ -249,8 +252,8 @@ mod function_call_tests {
     #[test]
     fn test_call() {
         let input = "foo()";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -261,9 +264,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![],
-            ),
-            "",
-        ));
+            ));
 
         assert_eq!(result, expected);
     }
@@ -271,9 +272,9 @@ mod function_call_tests {
     #[test]
     fn test_call_with_args() {
         let input = "foo(bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
 
-        let expected = Ok((
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -284,17 +285,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::identifier_global("bar", None)],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_args() {
         let input = "foo(bar, baz)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -308,17 +307,16 @@ mod function_call_tests {
                     Expr::identifier_global("bar", None),
                     Expr::identifier_global("baz", None),
                 ],
-            ),
-            "",
-        ));
+            )
+        );
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_args_and_spaces() {
         let input = "foo(bar, baz, qux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -333,17 +331,15 @@ mod function_call_tests {
                     Expr::identifier_global("baz", None),
                     Expr::identifier_global("qux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_args_and_spaces_and_commas() {
         let input = "foo(bar, baz, qux, quux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -359,17 +355,15 @@ mod function_call_tests {
                     Expr::identifier_global("qux", None),
                     Expr::identifier_global("quux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_args_and_spaces_and_commas_and_spaces() {
         let input = "foo(bar, baz, qux, quux, quuz)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -386,17 +380,15 @@ mod function_call_tests {
                     Expr::identifier_global("quux", None),
                     Expr::identifier_global("quuz", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_args_and_spaces_and_commas_and_spaces_and_commas() {
         let input = "foo(bar, baz, qux, quux, quuz, quuux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -414,17 +406,15 @@ mod function_call_tests {
                     Expr::identifier_global("quuz", None),
                     Expr::identifier_global("quuux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_record() {
         let input = "foo({bar: baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -438,17 +428,15 @@ mod function_call_tests {
                     "bar".to_string(),
                     Expr::identifier_global("baz", None),
                 )])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_record_and_multiple_args() {
         let input = "foo({bar: baz}, qux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -465,17 +453,15 @@ mod function_call_tests {
                     )]),
                     Expr::identifier_global("qux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_records() {
         let input = "foo({bar: baz}, {qux: quux})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -495,17 +481,15 @@ mod function_call_tests {
                         Expr::identifier_global("quux", None),
                     )]),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_records_and_args() {
         let input = "foo({bar: baz}, {qux: quux}, quuz)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -526,17 +510,15 @@ mod function_call_tests {
                     )]),
                     Expr::identifier_global("quuz", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_sequence() {
         let input = "foo([bar, baz])";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -553,17 +535,15 @@ mod function_call_tests {
                     ],
                     None,
                 )],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_sequence_and_args() {
         let input = "foo([bar, baz], qux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -583,17 +563,15 @@ mod function_call_tests {
                     ),
                     Expr::identifier_global("qux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_multiple_sequences() {
         let input = "foo([bar, baz], [qux, quux])";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -619,17 +597,15 @@ mod function_call_tests {
                         None,
                     ),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_tuples() {
         let input = "foo((bar, baz))";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -643,17 +619,15 @@ mod function_call_tests {
                     Expr::identifier_global("bar", None),
                     Expr::identifier_global("baz", None),
                 ])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_tuples_and_args() {
         let input = "foo((bar, baz), qux)";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -670,17 +644,15 @@ mod function_call_tests {
                     ]),
                     Expr::identifier_global("qux", None),
                 ],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_flags() {
         let input = "foo({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -691,17 +663,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_interface_names() {
         let input = "interface.{fn1}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Interface {
@@ -714,17 +684,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_exported_interface() {
         let input = "ns:name/interface.{fn1}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -740,17 +708,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_versioned_exported_interface() {
         let input = "wasi:cli/run@0.2.0.{run}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -766,17 +732,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_constructor_syntax_sugar() {
         let input = "ns:name/interface.{resource1.new}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -792,17 +756,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_constructor() {
         let input = "ns:name/interface.{[constructor]resource1}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -818,17 +780,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_indexed_constructor1() {
         let input = "ns:name/interface.{resource1().new}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -845,9 +805,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
@@ -856,8 +814,8 @@ mod function_call_tests {
     #[test]
     fn test_call_with_function_name_indexed_constructor2() {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).new}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -878,9 +836,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
@@ -888,8 +844,8 @@ mod function_call_tests {
     fn test_call_with_function_name_indexed_constructor3() {
         let input =
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -912,9 +868,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
@@ -945,8 +899,8 @@ mod function_call_tests {
     #[test]
     fn test_call_with_function_name_method() {
         let input = "ns:name/interface.{[method]resource1.do-something}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -963,9 +917,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
@@ -973,8 +925,8 @@ mod function_call_tests {
     #[test]
     fn test_call_with_function_name_static_method_syntax_sugar() {
         let input = "ns:name/interface.{resource1.do-something-static}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -991,17 +943,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_static() {
         let input = "ns:name/interface.{[static]resource1.do-something-static}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1018,17 +968,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_drop_syntax_sugar() {
         let input = "ns:name/interface.{resource1.drop}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1044,17 +992,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_indexed_drop_1() {
         let input = "ns:name/interface.{resource1().drop}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1071,17 +1017,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_indexed_drop_2() {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).drop}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1102,9 +1046,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
@@ -1112,8 +1054,8 @@ mod function_call_tests {
     fn test_call_with_function_name_indexed_drop_3() {
         let input =
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1136,17 +1078,15 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_call_with_function_name_drop() {
         let input = "ns:name/interface.{[drop]resource1}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
+        let result = Expr::from_text(input);
+        let expected = Ok(
             Expr::call_worker_function(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
@@ -1162,9 +1102,7 @@ mod function_call_tests {
                 None,
                 None,
                 vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+            ));
         assert_eq!(result, expected);
     }
 }

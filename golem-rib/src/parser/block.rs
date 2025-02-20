@@ -3,6 +3,7 @@ use crate::parser::rib_expr::rib_expr;
 use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{sep_by, ParseError, Parser};
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn block<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -10,6 +11,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition
 {
     sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
         if expressions.len() == 1 {
@@ -31,9 +33,9 @@ mod tests {
     #[test]
     fn test_block() {
         let input = "\"foo\"; \"bar\"";
-        let result = block().easy_parse(input);
-        assert!(result.is_ok());
-        let (expr, _) = result.unwrap();
+        let expr = Expr::from_text(input);
+        assert!(expr.is_ok());
+        let expr = expr.unwrap();
         assert_eq!(
             expr,
             Expr::expr_block(vec![Expr::literal("foo"), Expr::literal("bar")])
@@ -47,7 +49,7 @@ mod tests {
         let y = 2;
         x + y
         "#;
-        let expr = block().easy_parse(input).unwrap().0;
+        let expr = Expr::from_text(input).unwrap();
 
         let expected = Expr::expr_block(vec![
             Expr::let_binding("x", Expr::untyped_number(BigDecimal::from(1)), None),
