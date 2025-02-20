@@ -38,11 +38,13 @@ use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 pub use crate::base_model::*;
+use crate::model::invocation_context::InvocationContextStack;
 
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
+pub mod invocation_context;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
@@ -254,6 +256,7 @@ pub enum ScheduledAction {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack
     },
 }
 
@@ -862,6 +865,7 @@ pub enum WorkerInvocation {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::Value>,
+        invocation_context: InvocationContextStack
     },
     ManualUpdate {
         target_version: ComponentVersion,

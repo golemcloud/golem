@@ -19,6 +19,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::{TargetWorkerId, WorkerId};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerMetadata};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -27,6 +28,7 @@ use golem_wasm_rpc::protobuf::Val;
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::sync::Arc;
+use tracing::warn;
 
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, GolemError>;
@@ -44,6 +46,7 @@ pub trait GrpcInvokeRequest: CanStartWorker {
     ) -> Result<Vec<Val>, GolemError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
     fn name(&self) -> String;
+    fn invocation_context(&self) -> InvocationContextStack;
 }
 
 trait ProtobufInvocationDetails {
@@ -233,6 +236,10 @@ impl GrpcInvokeRequest for golem_api_grpc::proto::golem::workerexecutor::v1::Inv
     fn name(&self) -> String {
         self.name.clone()
     }
+
+    fn invocation_context(&self) -> InvocationContextStack {
+        from_proto_invocation_context(&self.context)
+    }
 }
 
 impl ProtobufInvocationDetails
@@ -276,6 +283,10 @@ impl GrpcInvokeRequest
     fn name(&self) -> String {
         self.name.clone()
     }
+
+    fn invocation_context(&self) -> InvocationContextStack {
+        from_proto_invocation_context(&self.context)
+    }
 }
 
 impl GrpcInvokeRequest
@@ -295,6 +306,10 @@ impl GrpcInvokeRequest
     fn name(&self) -> String {
         self.name.clone()
     }
+
+    fn invocation_context(&self) -> InvocationContextStack {
+        from_proto_invocation_context(&self.context)
+    }
 }
 
 impl GrpcInvokeRequest
@@ -313,6 +328,10 @@ impl GrpcInvokeRequest
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn invocation_context(&self) -> InvocationContextStack {
+        from_proto_invocation_context(&self.context)
     }
 }
 
@@ -414,4 +433,19 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     }
 
     Ok(input)
+}
+
+fn from_proto_invocation_context(
+    context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+) -> InvocationContextStack {
+    let provided_context = context.as_ref().and_then(|context| {
+        context.tracing.as_ref().and_then(|tracing_context| {
+            let result: Result<InvocationContextStack, String> = tracing_context.clone().try_into();
+            if let Err(err) = &result {
+                warn!("Failed to parse tracing context: {}", err);
+            }
+            result.ok()
+        })
+    });
+    provided_context.unwrap_or_else(|| InvocationContextStack::fresh())
 }

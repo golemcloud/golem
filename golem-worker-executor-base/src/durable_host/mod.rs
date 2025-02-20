@@ -22,7 +22,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError, ListDirectoryResult, PersistenceLevel, ReadFileResult, SpanId, TrapType, WorkerConfig};
+use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError, ListDirectoryResult, PersistenceLevel, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -98,6 +98,7 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use golem_common::model::invocation_context::SpanId;
 
 pub mod blobstore;
 mod cli;
@@ -1273,6 +1274,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_idempotency_key(idempotency_key)
                             .await;
+                        // TODO: set current invocation context (stored one)
 
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_worker(
@@ -1891,6 +1893,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             last_oplog_index,
         )
         .await;
+        let invocation_context = InvocationContext::new(None);
+        let current_span_id = invocation_context.root.span_id.clone();
         Self {
             oplog_service,
             oplog: oplog.clone(),
@@ -1919,6 +1923,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             component_metadata,
             total_linear_memory_size,
             replay_state,
+            invocation_context,
+            current_span_id
         }
     }
 

@@ -36,6 +36,7 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_wasm_rpc::Value;
 
@@ -63,6 +64,7 @@ pub trait SchedulerWorkerAccess {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) -> Result<(), GolemError>;
 }
 
@@ -88,13 +90,19 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     ) -> Result<(), GolemError> {
         let worker = self
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
 
         worker
-            .invoke(idempotency_key, full_function_name, function_input)
+            .invoke(
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            )
             .await?;
 
         Worker::start_if_needed(worker).await?;
@@ -302,6 +310,7 @@ impl SchedulerServiceDefault {
                     idempotency_key,
                     full_function_name,
                     function_input,
+                    invocation_context
                 } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
@@ -312,6 +321,7 @@ impl SchedulerServiceDefault {
                             idempotency_key,
                             full_function_name.clone(),
                             function_input,
+                            invocation_context
                         )
                         .await;
 
@@ -428,6 +438,7 @@ mod tests {
     use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
@@ -454,6 +465,7 @@ mod tests {
             _idempotency_key: IdempotencyKey,
             _full_function_name: String,
             _function_input: Vec<Value>,
+            _invocation_context: InvocationContextStack,
         ) -> Result<(), GolemError> {
             unimplemented!()
         }

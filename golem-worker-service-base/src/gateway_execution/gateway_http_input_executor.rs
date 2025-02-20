@@ -21,11 +21,7 @@ use super::request::{
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetail;
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_binding::{
-    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
-    IdempotencyKeyCompiled, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled,
-    WorkerNameCompiled,
-};
+use crate::gateway_binding::{resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled};
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
@@ -48,6 +44,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
+use golem_common::model::invocation_context::InvocationContextStack;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -109,6 +106,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
+                &binding.invocation_context_compiled
             )
             .await?;
 
@@ -147,6 +145,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
+                &None
             )
             .await?;
 
@@ -192,6 +191,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
+                &None
             )
             .await?;
 
@@ -285,6 +285,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
+        invocation_context_compiled: &Option<InvocationContextCompiled>
     ) -> GatewayHttpResult<WorkerDetail> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
@@ -312,10 +313,14 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
+        // TODO: evaluate invocation context script and add additional fields and trace/span id info based on the request
+        let invocation_context = InvocationContextStack::fresh(); // TODO
+
         Ok(WorkerDetail {
             component_id: component_id.clone(),
             worker_name,
             idempotency_key,
+            invocation_context
         })
     }
 

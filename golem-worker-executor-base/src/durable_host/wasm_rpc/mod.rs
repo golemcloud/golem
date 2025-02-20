@@ -152,6 +152,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
+            let stack = self
+                .state
+                .invocation_context
+                .get_stack(&self.state.current_span_id);
             let result = self
                 .rpc()
                 .invoke_and_await(
@@ -162,6 +166,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.worker_id(),
                     &args,
                     &env,
+                    stack,
                 )
                 .await;
             durability
@@ -285,6 +290,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
             };
+            let stack = self
+                .state
+                .invocation_context
+                .get_stack(&self.state.current_span_id);
             let result = self
                 .rpc()
                 .invoke(
@@ -295,6 +304,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.worker_id(),
                     &args,
                     &env,
+                    stack,
                 )
                 .await;
             durability.persist(self, input, result).await
@@ -375,6 +385,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let result = if self.state.is_live() {
             let rpc = self.rpc();
 
+            let stack = self
+                .state
+                .invocation_context
+                .get_stack(&self.state.current_span_id);
             let handle = wasmtime_wasi::runtime::spawn(async move {
                 Ok(rpc
                     .invoke_and_await(
@@ -385,6 +399,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         &worker_id,
                         &args,
                         &env,
+                        stack,
                     )
                     .await)
             });
@@ -485,11 +500,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 datetime: <SerializableDateTime as From<DateTime<Utc>>>::from(datetime.into()),
             };
 
+            let stack = self
+                .state
+                .invocation_context
+                .get_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
                 full_function_name: function_name,
                 function_input: function_params.into_iter().map(|e| e.into()).collect(),
+                invocation_context: stack,
             };
 
             let result = self
@@ -626,6 +646,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
+            let stack = self
+                .state
+                .invocation_context
+                .get_stack(&self.state.current_span_id);
+
             let entry = self.table().get_mut(&this)?;
             let entry = entry
                 .payload
@@ -701,6 +726,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 &self_worker_id,
                                 &args,
                                 &env,
+                                stack,
                             )
                             .await)
                     });

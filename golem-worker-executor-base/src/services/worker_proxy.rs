@@ -24,8 +24,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
-use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{InvokeParameters, UpdateMode};
 use golem_common::client::GrpcClient;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
@@ -39,7 +40,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
-use crate::model::FlatInvocationContext;
 
 #[async_trait]
 pub trait WorkerProxy {
@@ -52,7 +52,7 @@ pub trait WorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-        caller_span: FlatInvocationContext
+        caller_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, WorkerProxyError>;
 
     async fn invoke(
@@ -64,7 +64,7 @@ pub trait WorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-        caller_span: FlatInvocationContext
+        caller_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
@@ -212,7 +212,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-        caller_span: FlatInvocationContext
+        caller_stack: InvocationContextStack,
     ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
@@ -238,11 +238,11 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         function: function_name.clone(),
                         invoke_parameters: invoke_parameters.clone(),
-                        context: Some(InvocationContext {
+                        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
-                            span: Some(caller_span.clone().into())
+                            tracing: Some(caller_stack.clone().into()),
                         }),
                     },
                     &self.access_token,
@@ -282,7 +282,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-        caller_span: FlatInvocationContext
+        caller_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
@@ -306,11 +306,11 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         function: function_name.clone(),
                         invoke_parameters: invoke_parameters.clone(),
-                        context: Some(InvocationContext {
+                        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
-                            span: Some(caller_span.clone().into())
+                            tracing: Some(caller_stack.clone().into()),
                         }),
                     },
                     &self.access_token,

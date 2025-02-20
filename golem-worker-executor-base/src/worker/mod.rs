@@ -69,6 +69,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
+use golem_common::model::invocation_context::InvocationContextStack;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -507,6 +508,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack
     ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
@@ -516,7 +518,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
                 // Invoke the function in the background
-                self.enqueue(idempotency_key, full_function_name, function_input)
+                self.enqueue(idempotency_key, full_function_name, function_input, invocation_context)
                     .await;
                 Ok(None)
             }
@@ -531,9 +533,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack
     ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
-            .invoke(idempotency_key.clone(), full_function_name, function_input)
+            .invoke(idempotency_key.clone(), full_function_name, function_input, invocation_context)
             .await?
         {
             Some(Ok(output)) => Ok(output),
@@ -812,11 +815,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
-                    .enqueue(idempotency_key, full_function_name, function_input)
+                    .enqueue(idempotency_key, full_function_name, function_input, invocation_context)
                     .await;
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
@@ -825,6 +829,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     idempotency_key,
                     full_function_name,
                     function_input,
+                    invocation_context
                 };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -1432,11 +1437,13 @@ impl RunningWorker {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_context: InvocationContextStack
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
             idempotency_key,
             full_function_name,
             function_input,
+            invocation_context
         };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1738,6 +1745,7 @@ impl RunningWorker {
                                                 idempotency_key: invocation_key,
                                                 full_function_name,
                                                 function_input,
+                                                invocation_context
                                             } => {
                                                 let span = span!(
                                                     Level::INFO,
@@ -1752,6 +1760,7 @@ impl RunningWorker {
                                                         .data_mut()
                                                         .set_current_idempotency_key(invocation_key)
                                                         .await;
+                                                    // TODO: set current invocation context (provided + new span for invocation)
 
                                                     if let Some(idempotency_key) =
                                                         &store.data().get_current_idempotency_key().await

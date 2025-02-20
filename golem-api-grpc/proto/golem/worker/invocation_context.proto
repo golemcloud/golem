@@ -9,11 +9,15 @@ message InvocationContext {
   golem.worker.WorkerId parent = 1;
   repeated string args = 3;
   map<string, string> env = 4;
-  optional InvocationSpan span = 5;
+  optional TracingInvocationContext tracing = 5;
+}
+
+message TracingInvocationContext {
+  string trace_id = 1;
+  repeated InvocationSpan spans = 2; // stack of spans, first item is the current, last one is the root
 }
 
 message InvocationSpan {
-  string trace_id = 1;
   string span_id = 2;
   google.protobuf.Timestamp start = 3;
   map<string, AttributeValue> attributes = 8;

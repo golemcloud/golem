@@ -29,6 +29,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::component::ComponentOwner;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginOwner, PluginScope,
@@ -258,7 +259,12 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         ];
 
         worker
-            .invoke(idempotency_key, function_name, function_input)
+            .invoke(
+                idempotency_key,
+                function_name,
+                function_input,
+                InvocationContextStack::fresh(),
+            )
             .await?;
 
         Ok(())

@@ -168,6 +168,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 )?;
                 let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
+                let invocation_context = value.invocation_context.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
@@ -267,6 +268,29 @@ impl IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
             compiled_idempotency_key: idempotency_key_compiled.byte_code,
             rib_input: idempotency_key_compiled.rib_input_type_info,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationContextCompiled {
+    pub invocation_context: Expr,
+    pub compiled_invocation_context: RibByteCode,
+    pub rib_input: RibInputTypeInfo,
+}
+
+impl InvocationContextCompiled {
+    pub fn from_invocation_context(
+        invocation_context: &Expr,
+        exports: &[AnalysedExport],
+    ) -> Result<Self, String> {
+        let invocation_context_compiled =
+            DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;
+
+        Ok(InvocationContextCompiled {
+            invocation_context: invocation_context.clone(),
+            compiled_invocation_context: invocation_context_compiled.byte_code,
+            rib_input: invocation_context_compiled.rib_input_type_info,
         })
     }
 }

@@ -480,6 +480,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                         idempotency_key,
                         full_function_name,
                         function_input,
+                        invocation_context
                     } => {
                         let metadata = components
                             .get_metadata(

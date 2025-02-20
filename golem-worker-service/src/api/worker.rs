@@ -147,6 +147,8 @@ impl WorkerApi {
             function = function.0
         );
 
+        // TODO: invocation context from tracing-context headers
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
@@ -206,6 +208,8 @@ impl WorkerApi {
             function = function.0
         );
 
+        // TODO: invocation context from tracing-context headers
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
@@ -263,6 +267,8 @@ impl WorkerApi {
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
+
+        // TODO: invocation context from tracing-context headers
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
@@ -322,6 +328,8 @@ impl WorkerApi {
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
                 .map_err(|errors| WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        // TODO: invocation context from tracing-context headers
 
         let response = match params {
             InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(

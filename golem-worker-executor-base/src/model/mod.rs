@@ -19,6 +19,9 @@ use crate::workerctx::WorkerCtx;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -32,8 +35,6 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use uuid::Uuid;
 use wasmtime::Trap;
 
 pub trait ShardAssignmentCheck {
@@ -359,192 +360,6 @@ pub enum ReadFileResult {
     NotAFile,
 }
 
-#[derive(Debug, Clone)]
-pub struct TraceId(String);
-
-impl TraceId {
-    pub fn generate() -> Self {
-        Self(format!("{:x}", Uuid::new_v4().as_u128()))
-    }
-}
-
-impl Display for TraceId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SpanId(String);
-
-impl SpanId {
-    pub fn generate() -> Self {
-        let (lo, hi) = Uuid::new_v4().as_u64_pair();
-        Self(format!("{:x}", lo ^ hi))
-    }
-}
-
-impl Display for SpanId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum AttributeValue {
-    String(String),
-}
-
-impl From<AttributeValue> for golem_api_grpc::proto::golem::worker::AttributeValue {
-    fn from(value: AttributeValue) -> Self {
-        match value {
-            AttributeValue::String(value) => Self {
-                value: Some(
-                    golem_api_grpc::proto::golem::worker::attribute_value::Value::StringValue(
-                        value,
-                    ),
-                ),
-            },
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::AttributeValue> for AttributeValue {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::AttributeValue,
-    ) -> Result<Self, Self::Error> {
-        match value.value {
-            Some(golem_api_grpc::proto::golem::worker::attribute_value::Value::StringValue(
-                value,
-            )) => Ok(Self::String(value)),
-            _ => Err("Invalid attribute value".to_string()),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct FlatInvocationContext {
-    pub trace_id: TraceId,
-    pub span_id: SpanId,
-    pub start: Timestamp,
-    pub attributes: HashMap<String, AttributeValue>,
-}
-
-impl From<FlatInvocationContext> for golem_api_grpc::proto::golem::worker::InvocationSpan {
-    fn from(value: FlatInvocationContext) -> Self {
-        let mut attributes = HashMap::new();
-        for (key, value) in value.attributes {
-            attributes.insert(key, value.into());
-        }
-        Self {
-            trace_id: value.trace_id.0,
-            span_id: value.span_id.0,
-            start: Some(value.start.into()),
-            attributes,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::InvocationSpan> for FlatInvocationContext {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::InvocationSpan,
-    ) -> Result<Self, Self::Error> {
-        let mut attributes = HashMap::new();
-        for (key, value) in value.attributes {
-            attributes.insert(key, value.try_into()?);
-        }
-        Ok(Self {
-            trace_id: TraceId(value.trace_id),
-            span_id: SpanId(value.span_id),
-            start: value.start.ok_or_else(|| "Missing timestamp".to_string())?.into(),
-            attributes,
-        })
-    }
-}
-
-pub struct InvocationContextSpan {
-    pub trace_id: TraceId,
-    pub span_id: SpanId,
-    pub parent: Option<Arc<InvocationContextSpan>>,
-    pub start: Timestamp,
-    attributes: RwLock<HashMap<String, AttributeValue>>,
-}
-
-impl InvocationContextSpan {
-    fn new(trace_id: Option<TraceId>, span_id: Option<SpanId>) -> Arc<Self> {
-        let trace_id = trace_id.unwrap_or(TraceId::generate());
-        let span_id = span_id.unwrap_or(SpanId::generate());
-        Arc::new(Self {
-            trace_id,
-            span_id,
-            parent: None,
-            start: Timestamp::now_utc(),
-            attributes: RwLock::new(HashMap::new()),
-        })
-    }
-
-    fn start_span(self: &Arc<Self>, span_id: Option<SpanId>) -> Arc<Self> {
-        Self::new(Some(self.trace_id.clone()), span_id)
-    }
-
-    async fn get_attribute(&self, key: &str) -> Option<AttributeValue> {
-        let mut current = self;
-        loop {
-            let attributes = current.attributes.read().await;
-            match attributes.get(key) {
-                Some(value) => break Some(value.clone()),
-                None => match current.parent.as_ref() {
-                    Some(parent) => {
-                        current = parent;
-                    }
-                    None => break None,
-                },
-            }
-        }
-    }
-
-    async fn get_attributes(&self) -> HashMap<String, AttributeValue> {
-        let flattened = self.flatten().await;
-        flattened.attributes
-    }
-
-    async fn set_attribute(&self, key: String, value: AttributeValue) {
-        self.attributes.write().await.insert(key, value);
-    }
-
-    async fn flatten(&self) -> FlatInvocationContext {
-        let mut flattened = FlatInvocationContext {
-            trace_id: self.trace_id.clone(),
-            span_id: self.span_id.clone(),
-            start: self.start,
-            attributes: HashMap::new(),
-        };
-        self.flatten_to(&mut flattened).await;
-        flattened
-    }
-
-    async fn flatten_to(&self, flattened: &mut FlatInvocationContext) {
-        let mut current = self;
-        loop {
-            let attributes = current.attributes.read().await;
-            for (key, value) in &*attributes {
-                if !flattened.attributes.contains_key(key) {
-                    flattened.attributes.insert(key.clone(), value.clone());
-                }
-            }
-            if let Some(parent) = &current.parent {
-                current = parent;
-            } else {
-                break;
-            }
-        }
-    }
-}
-
 pub struct InvocationContext {
     pub trace_id: TraceId,
     pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
@@ -552,9 +367,44 @@ pub struct InvocationContext {
 }
 
 impl InvocationContext {
+    pub fn new(trace_id: Option<TraceId>) -> Self {
+        let trace_id = trace_id.unwrap_or(TraceId::generate());
+        let root = InvocationContextSpan::new(None);
+        let mut spans = HashMap::new();
+        spans.insert(root.span_id.clone(), root.clone());
+        Self {
+            trace_id,
+            spans,
+            root,
+        }
+    }
+
+    pub fn from_stack(value: InvocationContextStack) -> Result<(Self, SpanId), String> {
+        if value.spans.len() == 0 {
+            return Err("Empty span list".to_string());
+        }
+
+        let root = value.spans.last().unwrap().clone();
+        let current_span_id = value.spans.first().unwrap().span_id.clone();
+
+        let mut spans = HashMap::new();
+        for span in value.spans {
+            spans.insert(span.span_id.clone(), span);
+        }
+
+        Ok((
+            Self {
+                trace_id: value.trace_id,
+                spans,
+                root,
+            },
+            current_span_id,
+        ))
+    }
+
     pub fn start_span(
         &mut self,
-        current_span_id: SpanId,
+        current_span_id: &SpanId,
         new_span_id: Option<SpanId>,
     ) -> Result<Arc<InvocationContextSpan>, String> {
         let current_span = self.span(current_span_id)?;
@@ -563,33 +413,44 @@ impl InvocationContext {
         Ok(span)
     }
 
-    pub fn finish_span(&mut self, span_id: SpanId) -> Result<Option<SpanId>, String> {
-        let span = self.span(span_id.clone())?;
+    pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
+        let span = self.span(span_id)?;
         let parent_id = span.parent.as_ref().map(|parent| parent.span_id.clone());
-        self.spans.remove(&span_id);
+        self.spans.remove(span_id);
         Ok(parent_id)
     }
 
     pub async fn get_attribute(
         &self,
-        span_id: SpanId,
+        span_id: &SpanId,
         key: &str,
+        inherit: bool,
     ) -> Result<Option<AttributeValue>, String> {
         let span = self.span(span_id)?;
-        Ok(span.get_attribute(key).await)
+        Ok(span.get_attribute(key, inherit).await)
+    }
+
+    pub async fn get_attribute_chain(
+        &self,
+        span_id: &SpanId,
+        key: &str,
+    ) -> Result<Option<Vec<AttributeValue>>, String> {
+        let span = self.span(span_id)?;
+        Ok(span.get_attribute_chain(key).await)
     }
 
     pub async fn get_attributes(
         &self,
-        span_id: SpanId,
-    ) -> Result<HashMap<String, AttributeValue>, String> {
+        span_id: &SpanId,
+        inherit: bool,
+    ) -> Result<HashMap<String, Vec<AttributeValue>>, String> {
         let span = self.span(span_id)?;
-        Ok(span.get_attributes().await)
+        Ok(span.get_attributes(inherit).await)
     }
 
     pub async fn set_attribute(
         &self,
-        span_id: SpanId,
+        span_id: &SpanId,
         key: String,
         value: AttributeValue,
     ) -> Result<(), String> {
@@ -598,35 +459,29 @@ impl InvocationContext {
         Ok(())
     }
 
-    pub async fn flatten(&self, span_id: SpanId) -> Result<FlatInvocationContext, String> {
-        let span = self.span(span_id)?;
-        Ok(span.flatten().await)
+    pub fn get_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        let mut result = Vec::new();
+        let mut current = self.span(current_span_id).unwrap();
+        loop {
+            result.push(current.clone());
+            match current.parent.as_ref() {
+                Some(parent) => {
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        InvocationContextStack {
+            trace_id: self.trace_id.clone(),
+            spans: result,
+        }
     }
 
-    fn span(&self, span_id: SpanId) -> Result<&Arc<InvocationContextSpan>, String> {
+    fn span(&self, span_id: &SpanId) -> Result<&Arc<InvocationContextSpan>, String> {
         Ok(self
             .spans
-            .get(&span_id)
+            .get(span_id)
             .ok_or_else(|| format!("Span {span_id} not found"))?)
-    }
-}
-
-impl From<FlatInvocationContext> for InvocationContext {
-    fn from(flat: FlatInvocationContext) -> Self {
-        let mut spans = HashMap::new();
-        let root = Arc::new(InvocationContextSpan {
-            trace_id: flat.trace_id.clone(),
-            span_id: flat.span_id.clone(),
-            parent: None,
-            start: flat.start,
-            attributes: RwLock::new(flat.attributes),
-        });
-        spans.insert(root.span_id.clone(), root.clone());
-        Self {
-            trace_id: flat.trace_id,
-            spans,
-            root,
-        }
     }
 }
 
