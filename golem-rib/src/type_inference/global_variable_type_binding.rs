@@ -69,7 +69,7 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
 
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::rib_source_span::RibSourceSpan;
+    use crate::rib_source_span::SourceSpan;
     use crate::type_checker::{Path, PathElem};
     use crate::{Expr, GlobalVariableTypeSpec, InferredType, MatchArm, TypeName, VariableId};
     use std::collections::VecDeque;
@@ -92,6 +92,7 @@ mod internal {
                 expr @ Expr::Identifier {
                     variable_id,
                     type_annotation,
+                    source_span,
                     ..
                 } => {
                     if variable_id == &type_spec.variable_id {
@@ -106,6 +107,7 @@ mod internal {
                                         variable_id: variable_id.clone(),
                                         type_annotation: type_annotation.clone(),
                                         inferred_type: type_spec.inferred_type.clone(),
+                                        source_span: source_span.clone(),
                                     },
                                     false,
                                 ));
@@ -123,6 +125,7 @@ mod internal {
                     field,
                     type_annotation,
                     inferred_type,
+                    source_span
                 } => {
                     let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, ..}) if expr0.as_ref() == outer);
 
@@ -135,14 +138,16 @@ mod internal {
                         &mut path,
                         &type_spec.inferred_type,
                         type_annotation,
+                        source_span
                     )?;
                 }
 
                 Expr::Tuple {
                     exprs,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_tuple(exprs, inferred_type, &mut temp_stack);
+                    handle_tuple(exprs, inferred_type, &mut temp_stack, source_span);
                 }
 
                 expr @ Expr::Flags { .. } => {
@@ -154,6 +159,7 @@ mod internal {
                     index,
                     type_annotation,
                     inferred_type,
+                    source_span
                 } => {
                     handle_select_index(
                         expr,
@@ -161,6 +167,7 @@ mod internal {
                         inferred_type,
                         &mut temp_stack,
                         type_annotation,
+                        source_span
                     )?;
                 }
 
@@ -168,29 +175,33 @@ mod internal {
                     expr: Ok(_),
                     type_annotation,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_result_ok(expr, inferred_type, &mut temp_stack, type_annotation);
+                    handle_result_ok(expr, inferred_type, &mut temp_stack, type_annotation, source_span);
                 }
 
                 Expr::Result {
                     expr: Err(_),
                     type_annotation,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_result_error(expr, inferred_type, &mut temp_stack, type_annotation);
+                    handle_result_error(expr, inferred_type, &mut temp_stack, type_annotation, source_span);
                 }
 
                 Expr::Option {
                     expr: Some(expr),
                     type_annotation,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_option_some(expr, inferred_type, &mut temp_stack, type_annotation);
+                    handle_option_some(expr, inferred_type, &mut temp_stack, type_annotation, source_span);
                 }
 
                 Expr::Option {
                     type_annotation,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
                     temp_stack.push_front((
@@ -198,6 +209,7 @@ mod internal {
                             expr: None,
                             type_annotation: type_annotation.clone(),
                             inferred_type: inferred_type.clone(),
+                            source_span: source_span.clone(),
                         },
                         false,
                     ));
@@ -208,8 +220,9 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_if_else(cond, lhs, rhs, inferred_type, &mut temp_stack);
+                    handle_if_else(cond, lhs, rhs, inferred_type, &mut temp_stack, source_span);
                 }
 
                 //
@@ -217,37 +230,41 @@ mod internal {
                     predicate,
                     match_arms,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
-                    handle_pattern_match(predicate, match_arms, inferred_type, &mut temp_stack);
+                    handle_pattern_match(predicate, match_arms, inferred_type, &mut temp_stack, source_span);
                 }
 
-                Expr::Concat { exprs, .. } => {
-                    handle_concat(exprs, &mut temp_stack);
+                Expr::Concat { exprs, source_span, .. } => {
+                    handle_concat(exprs, &mut temp_stack, source_span);
                 }
 
                 Expr::ExprBlock {
                     exprs,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
-                    handle_multiple(exprs, inferred_type, &mut temp_stack);
+                    handle_multiple(exprs, inferred_type, &mut temp_stack, source_span);
                 }
 
-                Expr::Not { inferred_type, .. } => {
-                    handle_not(expr, inferred_type, &mut temp_stack);
+                Expr::Not { inferred_type, source_span, .. } => {
+                    handle_not(expr, inferred_type, &mut temp_stack, source_span);
                 }
 
                 Expr::GreaterThan {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::GreaterThan {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -256,12 +273,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::GreaterThanOrEqualTo {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -270,12 +289,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::LessThanOrEqualTo {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -283,12 +304,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Plus {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -297,12 +320,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Minus {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -311,12 +336,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Multiply {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -325,12 +352,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_math_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::Divide {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -339,12 +368,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::EqualTo {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -353,12 +384,14 @@ mod internal {
                     lhs,
                     rhs,
                     inferred_type,
+                    source_span
                 } => {
                     handle_comparison_op(lhs, rhs, inferred_type, &mut temp_stack, |a, b, c| {
                         Expr::LessThan {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         }
                     });
                 }
@@ -383,15 +416,17 @@ mod internal {
                     exprs,
                     type_annotation,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
-                    handle_sequence(exprs, inferred_type, &mut temp_stack, type_annotation);
+                    handle_sequence(exprs, inferred_type, &mut temp_stack, type_annotation, source_span);
                 }
                 Expr::Record {
                     exprs,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_record(exprs, inferred_type, &mut temp_stack);
+                    handle_record(exprs, inferred_type, &mut temp_stack, source_span);
                 }
                 Expr::Literal { .. } => {
                     temp_stack.push_front((expr.clone(), false));
@@ -402,7 +437,7 @@ mod internal {
                 Expr::Boolean { .. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::And { lhs, rhs, .. } => {
+                Expr::And { lhs, rhs, source_span, .. } => {
                     handle_comparison_op(
                         lhs,
                         rhs,
@@ -412,11 +447,12 @@ mod internal {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         },
                     );
                 }
 
-                Expr::Or { lhs, rhs, .. } => {
+                Expr::Or { lhs, rhs, source_span, .. } => {
                     handle_comparison_op(
                         lhs,
                         rhs,
@@ -426,6 +462,7 @@ mod internal {
                             lhs: a,
                             rhs: b,
                             inferred_type: c,
+                            source_span: source_span.clone(),
                         },
                     );
                 }
@@ -436,6 +473,7 @@ mod internal {
                     generic_type_parameter,
                     args,
                     inferred_type,
+                    source_span
                 } => handle_invoke_method(
                     lhs,
                     method,
@@ -443,6 +481,7 @@ mod internal {
                     generic_type_parameter.clone(),
                     inferred_type,
                     &mut temp_stack,
+                    source_span
                 ),
 
                 Expr::Call {
@@ -450,6 +489,7 @@ mod internal {
                     generic_type_parameter,
                     args,
                     inferred_type,
+                    source_span
                 } => {
                     handle_call(
                         call_type,
@@ -457,14 +497,16 @@ mod internal {
                         generic_type_parameter,
                         inferred_type,
                         &mut temp_stack,
+                        source_span,
                     );
                 }
 
                 Expr::Unwrap {
                     expr,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_unwrap(expr, inferred_type, &mut temp_stack);
+                    handle_unwrap(expr, inferred_type, &mut temp_stack, source_span);
                 }
 
                 Expr::Throw { .. } => {
@@ -474,8 +516,9 @@ mod internal {
                 Expr::GetTag {
                     expr,
                     inferred_type,
+                    source_span
                 } => {
-                    handle_get_tag(expr, inferred_type, &mut temp_stack);
+                    handle_get_tag(expr, inferred_type, &mut temp_stack, source_span);
                 }
 
                 Expr::ListComprehension {
@@ -483,6 +526,7 @@ mod internal {
                     iterable_expr,
                     yield_expr,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
                     handle_list_comprehension(
@@ -491,6 +535,7 @@ mod internal {
                         yield_expr,
                         inferred_type,
                         &mut temp_stack,
+                        source_span
                     );
                 }
 
@@ -501,6 +546,7 @@ mod internal {
                     init_value_expr,
                     yield_expr,
                     inferred_type,
+                    source_span
                 } => handle_list_reduce(
                     reduce_variable,
                     iterated_variable,
@@ -509,6 +555,7 @@ mod internal {
                     yield_expr,
                     inferred_type,
                     &mut temp_stack,
+                    source_span
                 ),
             }
         }
@@ -537,6 +584,7 @@ mod internal {
         current_yield_expr: &Expr,
         current_comprehension_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let yield_expr_inferred = temp_stack
             .pop_front()
@@ -553,7 +601,7 @@ mod internal {
                 iterable_expr_inferred,
                 yield_expr_inferred,
                 current_comprehension_type.clone(),
-            ),
+            ).with_source_span(source_span.clone()),
             false,
         ))
     }
@@ -566,6 +614,7 @@ mod internal {
         yield_expr: &Expr,
         reduce_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let new_yield_expr = temp_stack
             .pop_front()
@@ -590,7 +639,7 @@ mod internal {
                 new_init_value_expr,
                 new_yield_expr,
                 new_reduce_type,
-            ),
+            ).with_source_span(source_span.clone()),
             false,
         ))
     }
@@ -599,6 +648,8 @@ mod internal {
         tuple_elems: &[Expr],
         current_tuple_type: &InferredType,
         result_expr_queue: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
+
     ) {
         let mut new_tuple_elems = vec![];
 
@@ -613,7 +664,7 @@ mod internal {
         new_tuple_elems.reverse();
 
         // Reform tuple
-        let new_tuple = Expr::tuple(new_tuple_elems).with_inferred_type(current_tuple_type.clone());
+        let new_tuple = Expr::tuple(new_tuple_elems).with_inferred_type(current_tuple_type.clone()).with_source_span(source_span.clone());
         result_expr_queue.push_front((new_tuple, false));
     }
 
@@ -626,6 +677,8 @@ mod internal {
         path: &mut Path,
         override_type: &InferredType,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
+
     ) -> Result<(), String> {
         let (expr, part_of_path) = temp_stack
             .pop_front()
@@ -648,20 +701,20 @@ mod internal {
 
                 temp_stack.push_front((
                     Expr::select_field(expr.clone(), field, type_name.clone())
-                        .with_inferred_type(new_type),
+                        .with_inferred_type(new_type).with_source_span(source_span.clone()),
                     continue_search,
                 ));
             } else {
                 temp_stack.push_front((
                     Expr::select_field(expr.clone(), field, type_name.clone())
-                        .with_inferred_type(current_field_type.clone()),
+                        .with_inferred_type(current_field_type.clone()).with_source_span(source_span.clone()),
                     true,
                 ));
             }
         } else {
             temp_stack.push_front((
                 Expr::select_field(expr.clone(), field, type_name.clone())
-                    .with_inferred_type(current_field_type.clone()),
+                    .with_inferred_type(current_field_type.clone()).with_source_span(source_span.clone()),
                 false,
             ));
         }
@@ -675,6 +728,8 @@ mod internal {
         current_index_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
+
     ) -> Result<(), String> {
         let expr = temp_stack
             .pop_front()
@@ -685,6 +740,7 @@ mod internal {
             index: *index,
             type_annotation: type_name.clone(),
             inferred_type: current_index_type.clone(),
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_select_index, false));
 
@@ -696,6 +752,8 @@ mod internal {
         current_ok_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
+
     ) {
         let ok_expr = temp_stack
             .pop_front()
@@ -705,6 +763,7 @@ mod internal {
             expr: Ok(Box::new(ok_expr.0.clone())),
             type_annotation: type_name.clone(),
             inferred_type: current_ok_type.clone(),
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_result, true));
     }
@@ -714,6 +773,8 @@ mod internal {
         current_error_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
+
     ) {
         let expr = temp_stack
             .pop_front()
@@ -724,6 +785,7 @@ mod internal {
             expr: Err(Box::new(expr.clone())),
             type_annotation: type_name.clone(),
             inferred_type: current_error_type.clone(),
+            source_span: source_span.clone(),
         };
 
         temp_stack.push_front((new_result, false));
@@ -734,6 +796,8 @@ mod internal {
         current_some_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
+
     ) {
         let expr = temp_stack
             .pop_front()
@@ -742,6 +806,7 @@ mod internal {
             expr: Some(Box::new(expr.0.clone())),
             type_annotation: type_name.clone(),
             inferred_type: current_some_type.clone(),
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_option, false));
     }
@@ -752,6 +817,8 @@ mod internal {
         original_else_expr: &Expr,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
+
     ) {
         let else_expr = temp_stack
             .pop_front()
@@ -768,6 +835,7 @@ mod internal {
             lhs: Box::new(then_expr.0.clone()),
             rhs: Box::new(else_expr.0.clone()),
             inferred_type: current_inferred_type.clone(),
+            source_span: source_span.clone(),
         };
 
         temp_stack.push_front((new_expr, false));
@@ -778,6 +846,8 @@ mod internal {
         current_match_arms: &[MatchArm],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
+
     ) {
         let mut new_resolutions = vec![];
         let mut new_arm_patterns = vec![];
@@ -822,12 +892,13 @@ mod internal {
             predicate: Box::new(pred.clone()),
             match_arms: new_match_arms,
             inferred_type: current_inferred_type.clone(),
+            source_span: source_span.clone(),
         };
 
         temp_stack.push_front((new_expr, false));
     }
 
-    pub(crate) fn handle_concat(exprs: &Vec<Expr>, temp_stack: &mut VecDeque<(Expr, bool)>) {
+    pub(crate) fn handle_concat(exprs: &Vec<Expr>, temp_stack: &mut VecDeque<(Expr, bool)>, source_span: &SourceSpan) {
         let mut new_exprs = vec![];
         for expr in exprs {
             let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
@@ -839,6 +910,7 @@ mod internal {
         let new_concat = Expr::Concat {
             exprs: new_exprs,
             inferred_type: InferredType::Str,
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_concat, false));
     }
@@ -847,6 +919,7 @@ mod internal {
         current_expr_list: &Vec<Expr>,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let mut new_exprs = vec![];
         for _ in current_expr_list {
@@ -863,6 +936,7 @@ mod internal {
         let new_multiple = Expr::ExprBlock {
             exprs: new_exprs,
             inferred_type: current_inferred_type.clone(),
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_multiple, false));
     }
@@ -871,6 +945,7 @@ mod internal {
         original_not_expr: &Expr,
         current_not_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let expr = temp_stack
             .pop_front()
@@ -879,6 +954,7 @@ mod internal {
         let new_not = Expr::Not {
             expr: Box::new(expr),
             inferred_type: current_not_type.clone(),
+            source_span: source_span.clone(),
         };
         temp_stack.push_front((new_not, false));
     }
@@ -947,6 +1023,7 @@ mod internal {
         generic_type_parameter: Option<GenericTypeParameter>,
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let mut new_arg_exprs = vec![];
 
@@ -980,6 +1057,7 @@ mod internal {
                     inferred_type: InferredType::Instance {
                         instance_type: new_instance_type,
                     },
+                    source_span: source_span.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));
@@ -990,6 +1068,7 @@ mod internal {
                     generic_type_parameter,
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
+                    source_span: source_span.clone(),
                 };
 
                 temp_stack.push_front((new_call, false));
@@ -1001,6 +1080,7 @@ mod internal {
                 generic_type_parameter,
                 args: new_arg_exprs,
                 inferred_type: inferred_type.clone(),
+                source_span: source_span.clone(),
             };
 
             temp_stack.push_front((new_call, false));
@@ -1013,6 +1093,7 @@ mod internal {
         generic_type_parameter: &Option<GenericTypeParameter>,
         inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let mut new_arg_exprs = vec![];
 
@@ -1048,6 +1129,7 @@ mod internal {
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
                         inferred_type: inferred_type.clone(),
+                        source_span: source_span.clone(),
                     };
                     temp_stack.push_front((new_call, false));
                 } else {
@@ -1056,6 +1138,7 @@ mod internal {
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
                         inferred_type: inferred_type.clone(),
+                        source_span: source_span.clone(),
                     };
 
                     temp_stack.push_front((new_call, false));
@@ -1132,6 +1215,7 @@ mod internal {
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
                         inferred_type: new_inferred_type,
+                        source_span: source_span.clone(),
                     }
                 } else {
                     Expr::Call {
@@ -1142,6 +1226,7 @@ mod internal {
                         generic_type_parameter: generic_type_parameter.clone(),
                         args: new_arg_exprs,
                         inferred_type: new_inferred_type,
+                        source_span: source_span.clone(),
                     }
                 };
 
@@ -1154,6 +1239,7 @@ mod internal {
                     generic_type_parameter: None,
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
+                    source_span: source_span.clone(),
                 };
                 temp_stack.push_front((new_call, false));
             }
@@ -1164,6 +1250,7 @@ mod internal {
                     generic_type_parameter: None,
                     args: new_arg_exprs,
                     inferred_type: inferred_type.clone(),
+                    source_span: source_span.clone(),
                 };
                 temp_stack.push_front((new_call, false));
             }
@@ -1174,11 +1261,12 @@ mod internal {
         expr: &Expr,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
         let new_unwrap = expr
             .unwrap()
-            .with_inferred_type(current_inferred_type.clone());
+            .with_inferred_type(current_inferred_type.clone()).with_source_span(source_span.clone());
         temp_stack.push_front((new_unwrap, false));
     }
 
@@ -1186,10 +1274,11 @@ mod internal {
         expr: &Expr,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let expr = temp_stack.pop_front().map(|x| x.0).unwrap_or(expr.clone());
         let new_get_tag =
-            Expr::get_tag(expr.clone()).with_inferred_type(current_inferred_type.clone());
+            Expr::get_tag(expr.clone()).with_inferred_type(current_inferred_type.clone()).with_source_span(source_span.clone());
         temp_stack.push_front((new_get_tag, false));
     }
 
@@ -1199,7 +1288,7 @@ mod internal {
         optional_type: &Option<TypeName>,
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
-        source_span: &RibSourceSpan,
+        source_span: &SourceSpan,
     ) {
         let expr = temp_stack
             .pop_front()
@@ -1220,6 +1309,7 @@ mod internal {
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
         type_name: &Option<TypeName>,
+        source_span: &SourceSpan
     ) {
         let mut new_exprs = vec![];
 
@@ -1231,7 +1321,7 @@ mod internal {
         new_exprs.reverse();
 
         let expr = Expr::sequence(new_exprs, type_name.clone())
-            .with_inferred_type(current_inferred_type.clone());
+            .with_inferred_type(current_inferred_type.clone()).with_source_span(source_span.clone());
 
         temp_stack.push_front((expr, false));
     }
@@ -1240,6 +1330,7 @@ mod internal {
         current_expr_list: &[(String, Box<Expr>)],
         current_inferred_type: &InferredType,
         temp_stack: &mut VecDeque<(Expr, bool)>,
+        source_span: &SourceSpan
     ) {
         let mut new_exprs = vec![];
 
@@ -1254,7 +1345,7 @@ mod internal {
         new_exprs.reverse();
 
         let new_record =
-            Expr::record(new_exprs.to_vec()).with_inferred_type(current_inferred_type.clone());
+            Expr::record(new_exprs.to_vec()).with_inferred_type(current_inferred_type.clone()).with_source_span(source_span.clone());
         temp_stack.push_front((new_record, false));
     }
 }
@@ -1262,7 +1353,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rib_source_span::RibSourceSpan;
+    use crate::rib_source_span::SourceSpan;
     use crate::{FunctionTypeRegistry, Id, TypeName};
     use test_r::test;
 
@@ -1419,7 +1510,7 @@ mod tests {
                     .with_inferred_type(InferredType::Str),
                 ),
                 inferred_type: InferredType::Unknown,
-                source_span: RibSourceSpan::default(),
+                source_span: SourceSpan::default(),
             },
             Expr::Let {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
@@ -1449,12 +1540,13 @@ mod tests {
                     .with_inferred_type(InferredType::U64),
                 ),
                 inferred_type: InferredType::Unknown,
-                source_span: RibSourceSpan::default(),
+                source_span: SourceSpan::default(),
             },
             Expr::Identifier {
                 variable_id: VariableId::Local("hello".to_string(), Some(Id(0))),
                 type_annotation: None,
                 inferred_type: InferredType::U64,
+                source_span: SourceSpan::default(),
             },
         ])
         .with_inferred_type(InferredType::U64);

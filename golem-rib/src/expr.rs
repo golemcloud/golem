@@ -16,7 +16,7 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
-use crate::rib_source_span::RibSourceSpan;
+use crate::rib_source_span::SourceSpan;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
@@ -42,143 +42,171 @@ pub enum Expr {
         variable_id: VariableId,
         type_annotation: Option<TypeName>,
         expr: Box<Expr>,
-        source_span: RibSourceSpan,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     SelectField {
         expr: Box<Expr>,
         field: String,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     SelectIndex {
         expr: Box<Expr>,
         index: usize,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Sequence {
         exprs: Vec<Expr>,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Record {
         exprs: Vec<(String, Box<Expr>)>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Tuple {
         exprs: Vec<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Literal {
         value: String,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Number {
         number: Number,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Flags {
         flags: Vec<String>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Identifier {
         variable_id: VariableId,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Boolean {
         value: bool,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Concat {
         exprs: Vec<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     ExprBlock {
         exprs: Vec<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Not {
         expr: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     GreaterThan {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     And {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Or {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     GreaterThanOrEqualTo {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     LessThanOrEqualTo {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Plus {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Multiply {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Minus {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Divide {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     EqualTo {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     LessThan {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Cond {
         cond: Box<Expr>,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     PatternMatch {
         predicate: Box<Expr>,
         match_arms: Vec<MatchArm>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Option {
         expr: Option<Box<Expr>>,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Result {
         expr: Result<Box<Expr>, Box<Expr>>,
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     // instance[t]("my-worker") will be parsed sd Expr::Call { "instance", Some(t }, vec!["my-worker"] }
     // will be parsed as Expr::Call { "instance", vec!["my-worker"] }.
@@ -190,6 +218,7 @@ pub enum Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
     // such that `my-worker-variable-expr` (lhs) will be of the type `InferredType::InstanceType`. `lhs` will
@@ -202,24 +231,29 @@ pub enum Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Unwrap {
         expr: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     Throw {
         message: String,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     GetTag {
         expr: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     ListComprehension {
         iterated_variable: VariableId,
         iterable_expr: Box<Expr>,
         yield_expr: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
     ListReduce {
         reduce_variable: VariableId,
@@ -228,6 +262,7 @@ pub enum Expr {
         yield_expr: Box<Expr>,
         init_value_expr: Box<Expr>,
         inferred_type: InferredType,
+        source_span: SourceSpan,
     },
 }
 
@@ -369,6 +404,7 @@ impl Expr {
         Expr::Unwrap {
             expr: Box::new(self.clone()),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -376,6 +412,7 @@ impl Expr {
         Expr::Boolean {
             value,
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -384,6 +421,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -391,6 +429,7 @@ impl Expr {
         Expr::Throw {
             message: message.as_ref().to_string(),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -399,6 +438,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::number(),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -407,6 +447,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::number(),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -415,6 +456,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::number(),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -423,6 +465,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::number(),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -435,6 +478,7 @@ impl Expr {
                 lhs: left,
                 rhs: Box::new(i),
                 inferred_type: InferredType::Bool,
+                source_span: SourceSpan::default(),
             });
         }
 
@@ -455,6 +499,7 @@ impl Expr {
             generic_type_parameter,
             args,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -468,6 +513,7 @@ impl Expr {
             generic_type_parameter,
             args,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -483,6 +529,7 @@ impl Expr {
             generic_type_parameter,
             args,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -490,6 +537,7 @@ impl Expr {
         Expr::Concat {
             exprs: expressions,
             inferred_type: InferredType::Str,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -499,6 +547,7 @@ impl Expr {
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -507,6 +556,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -519,6 +569,7 @@ impl Expr {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(inferred_type)),
             },
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -526,6 +577,7 @@ impl Expr {
         Expr::Flags {
             flags: flags.clone(),
             inferred_type: InferredType::Flags(flags),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -534,6 +586,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -542,6 +595,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -551,6 +605,7 @@ impl Expr {
             variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -563,6 +618,7 @@ impl Expr {
             variable_id: VariableId::local(name.as_ref(), id),
             type_annotation,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -574,6 +630,7 @@ impl Expr {
             variable_id,
             type_annotation,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -582,6 +639,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -590,6 +648,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -602,7 +661,7 @@ impl Expr {
             variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
             expr: Box::new(expr),
-            source_span: RibSourceSpan::default(),
+            source_span: SourceSpan::default(),
             inferred_type: InferredType::Unknown,
         }
     }
@@ -616,7 +675,7 @@ impl Expr {
             variable_id,
             type_annotation,
             expr: Box::new(expr),
-            source_span: RibSourceSpan::default(),
+            source_span: SourceSpan::default(),
             inferred_type: InferredType::Unknown,
         }
     }
@@ -636,6 +695,7 @@ impl Expr {
             yield_expr: Box::new(yield_expr),
             init_value_expr: Box::new(init_value_expr),
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -667,6 +727,7 @@ impl Expr {
             iterable_expr: Box::new(iterable_expr),
             yield_expr: Box::new(yield_expr),
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -699,6 +760,7 @@ impl Expr {
         Expr::Literal {
             value: value.as_ref().to_string(),
             inferred_type: InferredType::Str,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -714,6 +776,7 @@ impl Expr {
         Expr::ExprBlock {
             exprs: expressions,
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -722,6 +785,7 @@ impl Expr {
         Expr::Not {
             expr: Box::new(expr),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -735,6 +799,7 @@ impl Expr {
                 ok: Some(Box::new(inferred_type)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -748,6 +813,7 @@ impl Expr {
             expr: expr.map(Box::new),
             type_annotation: None,
             inferred_type: InferredType::Option(Box::new(inferred_type)),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -761,6 +827,7 @@ impl Expr {
             expr: expr.map(Box::new),
             type_annotation: Some(type_annotation),
             inferred_type: InferredType::Option(Box::new(inferred_type)),
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -769,6 +836,7 @@ impl Expr {
             lhs: Box::new(left),
             rhs: Box::new(right),
             inferred_type: InferredType::Bool,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -777,6 +845,7 @@ impl Expr {
             predicate: Box::new(expr),
             match_arms,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -794,6 +863,7 @@ impl Expr {
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -807,6 +877,7 @@ impl Expr {
             field: field.as_ref().to_string(),
             type_annotation,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -820,6 +891,7 @@ impl Expr {
             field: field.as_ref().to_string(),
             type_annotation: Some(type_annotation),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -829,6 +901,7 @@ impl Expr {
             index,
             type_annotation: None,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -842,6 +915,7 @@ impl Expr {
             index,
             type_annotation: Some(type_annotation),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -849,6 +923,7 @@ impl Expr {
         Expr::GetTag {
             expr: Box::new(expr),
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -863,6 +938,7 @@ impl Expr {
         Expr::Tuple {
             exprs: expressions,
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -877,6 +953,7 @@ impl Expr {
             exprs: expressions,
             type_annotation,
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -1118,22 +1195,59 @@ impl Expr {
         type_inference::reset_type_info(self);
     }
 
-    pub fn source_span(&self) -> RibSourceSpan {
+    pub fn source_span(&self) -> SourceSpan {
         match self {
             Expr::Let { source_span, .. } => source_span.clone(),
-            _ => RibSourceSpan::default(),
+            _ => SourceSpan::default(),
         }
     }
 
-    pub fn with_source_span(&self, new_source_span: RibSourceSpan) -> Expr {
+    pub fn with_source_span(&self, new_source_span: SourceSpan) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.with_source_span_mut(new_source_span);
         expr_copied
     }
 
-    pub fn with_source_span_mut(&mut self, new_source_span: RibSourceSpan) {
-        if let Expr::Let { source_span, .. } = self {
-            *source_span = new_source_span;
+    pub fn with_source_span_mut(&mut self, new_source_span: SourceSpan) {
+        match self {
+            Expr::Identifier { source_span, .. }
+            | Expr::Let { source_span, .. }
+            | Expr::SelectField { source_span, .. }
+            | Expr::SelectIndex { source_span, .. }
+            | Expr::Sequence { source_span, .. }
+            | Expr::Record { source_span, .. }
+            | Expr::Tuple { source_span, .. }
+            | Expr::Literal { source_span, .. }
+            | Expr::Number { source_span, .. }
+            | Expr::Flags { source_span, .. }
+            | Expr::Boolean { source_span, .. }
+            | Expr::Concat { source_span, .. }
+            | Expr::ExprBlock { source_span, .. }
+            | Expr::Not { source_span, .. }
+            | Expr::GreaterThan { source_span, .. }
+            | Expr::GreaterThanOrEqualTo { source_span, .. }
+            | Expr::LessThanOrEqualTo { source_span, .. }
+            | Expr::EqualTo { source_span, .. }
+            | Expr::LessThan { source_span, .. }
+            | Expr::Plus { source_span, .. }
+            | Expr::Minus { source_span, .. }
+            | Expr::Divide { source_span, .. }
+            | Expr::Multiply { source_span, .. }
+            | Expr::Cond { source_span, .. }
+            | Expr::PatternMatch { source_span, .. }
+            | Expr::Option { source_span, .. }
+            | Expr::Result { source_span, .. }
+            | Expr::Unwrap { source_span, .. }
+            | Expr::Throw { source_span, .. }
+            | Expr::And { source_span, .. }
+            | Expr::Or { source_span, .. }
+            | Expr::GetTag { source_span, .. }
+            | Expr::ListComprehension { source_span, .. }
+            | Expr::ListReduce { source_span, .. }
+            | Expr::InvokeMethodLazy { source_span, .. }
+            | Expr::Call { source_span, .. } => {
+                *source_span = new_source_span;
+            }
         }
     }
 
@@ -1219,6 +1333,7 @@ impl Expr {
             number: Number { value: big_decimal },
             type_annotation,
             inferred_type,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -1382,12 +1497,14 @@ impl ArmPattern {
                 variable_id: VariableId::global(binding_variable.to_string()),
                 type_annotation: None,
                 inferred_type: InferredType::Unknown,
+                source_span: SourceSpan::default(),
             })),
             type_annotation: None,
             inferred_type: InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
+            source_span: SourceSpan::default(),
         }))
     }
 
@@ -1398,12 +1515,14 @@ impl ArmPattern {
                 variable_id: VariableId::global(binding_variable.to_string()),
                 type_annotation: None,
                 inferred_type: InferredType::Unknown,
+                source_span: SourceSpan::default(),
             })),
             type_annotation: None,
             inferred_type: InferredType::Result {
                 ok: Some(Box::new(InferredType::Unknown)),
                 error: Some(Box::new(InferredType::Unknown)),
             },
+            source_span: SourceSpan::default(),
         }))
     }
 
@@ -1414,9 +1533,11 @@ impl ArmPattern {
                 variable_id: VariableId::local_with_no_id(binding_variable),
                 type_annotation: None,
                 inferred_type: InferredType::Unknown,
+                source_span: SourceSpan::default(),
             })),
             type_annotation: None,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }))
     }
 
@@ -1425,6 +1546,7 @@ impl ArmPattern {
             expr: None,
             type_annotation: None,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }))
     }
 
@@ -1433,6 +1555,7 @@ impl ArmPattern {
             variable_id: VariableId::global(binding_variable.to_string()),
             type_annotation: None,
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         }))
     }
     pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
@@ -1788,7 +1911,8 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                     call_type,
                                     generic_type_parameter,
                                     args: vec![],
-                                    inferred_type: InferredType::Unknown
+                                    inferred_type: InferredType::Unknown,
+                                    source_span: SourceSpan::default(),
                                 }
                             }
                         }
@@ -1814,6 +1938,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                         .map(|value| GenericTypeParameter { value }),
                     args,
                     inferred_type: InferredType::Unknown,
+                    source_span: SourceSpan::default(),
                 }
             }
         };

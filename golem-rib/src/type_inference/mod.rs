@@ -2601,7 +2601,7 @@ mod type_inference_tests {
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
-        use crate::rib_source_span::RibSourceSpan;
+        use crate::rib_source_span::SourceSpan;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             Number, ParsedFunctionSite, VariableId,
@@ -2840,7 +2840,7 @@ mod type_inference_tests {
                 type_annotation,
                 expr,
                 inferred_type,
-                source_span: RibSourceSpan::default(),
+                source_span: SourceSpan::default(),
             }
         }
 

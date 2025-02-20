@@ -86,7 +86,7 @@ mod internal {
     use crate::parser::sequence::sequence;
     use crate::parser::tuple::tuple;
     use crate::parser::worker_function_invoke::worker_function_invoke;
-    use crate::rib_source_span::{GetSourcePosition, RibSourceSpan};
+    use crate::rib_source_span::{GetSourcePosition, SourceSpan};
     use crate::Expr;
     use combine::parser::char::spaces;
     use combine::{attempt, choice, many, parser, position, ParseError, Parser, Stream};
@@ -132,7 +132,7 @@ mod internal {
                 let start = start_pos.get_source_position();
                 let end_pos: Input::Position = end;
                 let end = end_pos.get_source_position();
-                let span = RibSourceSpan::new(start, end);
+                let span = SourceSpan::new(start, end);
                 expr.with_source_span(span)
             })
     }

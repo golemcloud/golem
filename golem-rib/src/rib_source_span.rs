@@ -1,74 +1,73 @@
-use combine::stream::position::SourcePosition;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Default)]
-pub struct RibSourceSpan {
-    start: RibSourcePosition,
-    end: RibSourcePosition,
+pub struct SourceSpan {
+    start: SourcePosition,
+    end: SourcePosition,
 }
 
-impl RibSourceSpan {
-    pub fn new(start: RibSourcePosition, end: RibSourcePosition) -> RibSourceSpan {
-        RibSourceSpan { start, end }
+impl SourceSpan {
+    pub fn new(start: SourcePosition, end: SourcePosition) -> SourceSpan {
+        SourceSpan { start, end }
     }
 }
 
 /// These instances are important as source span shouldn't take part in any comparison
 /// or hashing or order of `Expr`.
-impl PartialEq for RibSourceSpan {
+impl PartialEq for SourceSpan {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl Eq for RibSourceSpan {}
+impl Eq for SourceSpan {}
 
-impl Hash for RibSourceSpan {
+impl Hash for SourceSpan {
     fn hash<H: Hasher>(&self, _: &mut H) {}
 }
 
 #[allow(clippy::non_canonical_partial_ord_impl)]
-impl PartialOrd for RibSourceSpan {
+impl PartialOrd for SourceSpan {
     fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
         Some(Ordering::Equal)
     }
 }
 
-impl Ord for RibSourceSpan {
+impl Ord for SourceSpan {
     fn cmp(&self, _: &Self) -> Ordering {
         Ordering::Equal
     }
 }
 
-impl Debug for RibSourceSpan {
+impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "<SourceSpan>")
     }
 }
 
-impl Display for RibSourceSpan {
+impl Display for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Start: [{}], End: [{}]", self.start, self.end)
     }
 }
 
 #[derive(Clone, Default)]
-pub struct RibSourcePosition {
+pub struct SourcePosition {
     pub line: i32,
     pub column: i32,
 }
 
-impl Display for RibSourcePosition {
+impl Display for SourcePosition {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Line: {}, Column: {}", self.line, self.column)
     }
 }
 
 pub trait GetSourcePosition {
-    fn get_source_position(&self) -> RibSourcePosition;
+    fn get_source_position(&self) -> SourcePosition;
 }
 
 // Rib parsers are polymorphic with `Input` and this was done to allow
@@ -81,9 +80,9 @@ pub trait GetSourcePosition {
 // Also, this implies the input to Rib parser has to be (always)
 // `combine::stream::position::Stream` where `Input::Position` is `stream::position::SourcePosition`.
 // See `Expr::from_text` functionality where we form this input.
-impl GetSourcePosition for SourcePosition {
-    fn get_source_position(&self) -> RibSourcePosition {
-        RibSourcePosition {
+impl GetSourcePosition for combine::stream::position::SourcePosition {
+    fn get_source_position(&self) -> SourcePosition {
+        SourcePosition {
             line: self.line,
             column: self.column,
         }
@@ -92,7 +91,7 @@ impl GetSourcePosition for SourcePosition {
 
 #[cfg(test)]
 mod tests {
-    use crate::{rib_source_span::RibSourceSpan, Expr};
+    use crate::{rib_source_span::SourceSpan, Expr};
     use test_r::test;
 
     #[derive(Debug, PartialEq)]
@@ -103,8 +102,8 @@ mod tests {
         end_column: i32,
     }
 
-    impl From<RibSourceSpan> for RibSourceSpanDebug {
-        fn from(span: RibSourceSpan) -> Self {
+    impl From<SourceSpan> for RibSourceSpanDebug {
+        fn from(span: SourceSpan) -> Self {
             Self {
                 start_line: span.start.line,
                 start_column: span.start.column,
