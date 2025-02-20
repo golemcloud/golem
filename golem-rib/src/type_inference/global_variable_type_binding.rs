@@ -644,20 +644,20 @@ mod internal {
                 };
 
                 temp_stack.push_front((
-                    Expr::select_field(expr.clone(), field.to_string(), type_name.clone())
+                    Expr::select_field(expr.clone(), field, type_name.clone())
                         .with_inferred_type(new_type),
                     continue_search,
                 ));
             } else {
                 temp_stack.push_front((
-                    Expr::select_field(expr.clone(), field.to_string(), type_name.clone())
+                    Expr::select_field(expr.clone(), field, type_name.clone())
                         .with_inferred_type(current_field_type.clone()),
                     true,
                 ));
             }
         } else {
             temp_stack.push_front((
-                Expr::select_field(expr.clone(), field.to_string(), type_name.clone())
+                Expr::select_field(expr.clone(), field, type_name.clone())
                     .with_inferred_type(current_field_type.clone()),
                 false,
             ));

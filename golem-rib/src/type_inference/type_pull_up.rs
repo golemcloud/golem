@@ -594,7 +594,7 @@ mod internal {
         let selection_field_type =
             get_inferred_type_of_selected_field(field, &select_from_expr_type)?;
 
-        let new_select_field = Expr::select_field(expr.clone(), field.to_string(), None)
+        let new_select_field = Expr::select_field(expr.clone(), field, None)
             .with_inferred_type(current_field_type.merge(selection_field_type));
 
         inferred_type_stack.push_front(new_select_field);

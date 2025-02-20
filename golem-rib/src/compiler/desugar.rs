@@ -39,7 +39,7 @@ mod internal {
             let mut expr = Expr::cond(
                 branch.condition.clone(),
                 branch.body.clone(),
-                Expr::throw("No match found".to_string()),
+                Expr::throw("No match found"),
             );
 
             for branch in if_branches.iter().skip(1).rev() {
