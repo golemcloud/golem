@@ -102,14 +102,14 @@ mod tests {
     use test_r::test;
 
     #[derive(Debug, PartialEq)]
-    struct RibSourceSpanDebug {
+    struct SourceSpanDebug {
         start_line: i32,
         start_column: i32,
         end_line: i32,
         end_column: i32,
     }
 
-    impl From<SourceSpan> for RibSourceSpanDebug {
+    impl From<SourceSpan> for SourceSpanDebug {
         fn from(span: SourceSpan) -> Self {
             Self {
                 start_line: span.start.line,
@@ -132,32 +132,33 @@ mod tests {
         )
         .unwrap();
 
-        let mut parent_span = None;
+        let mut block_span: Option<SourceSpanDebug> = None;
 
-        let spans: Vec<RibSourceSpanDebug> = if let Expr::ExprBlock {
+        let line_spans: Vec<SourceSpanDebug> = if let Expr::ExprBlock {
             exprs, source_span, ..
         } = rib_expr
         {
-            parent_span = Some(source_span);
+            block_span = Some(source_span.into());
+
             exprs.iter().map(|expr| expr.source_span().into()).collect()
         } else {
             vec![]
         };
 
-        let expected_spans = vec![
-            RibSourceSpanDebug {
+        let expected_line_spans = vec![
+            SourceSpanDebug {
                 start_line: 2,
                 start_column: 11,
                 end_line: 3,
                 end_column: 18,
             },
-            RibSourceSpanDebug {
+            SourceSpanDebug {
                 start_line: 4,
                 start_column: 11,
                 end_line: 5,
                 end_column: 18,
             },
-            RibSourceSpanDebug {
+            SourceSpanDebug {
                 start_line: 6,
                 start_column: 11,
                 end_line: 6,
@@ -165,15 +166,14 @@ mod tests {
             },
         ];
 
-        let expected_parent_span = RibSourceSpanDebug {
+        let expected_parent_span = SourceSpanDebug {
             start_line: 2,
             start_column: 11,
             end_line: 6,
             end_column: 22,
         };
 
-        assert_eq!(spans, expected_spans);
-
-        assert_eq!(parent_span.map(|x| x.into()), Some(expected_parent_span));
+        assert_eq!(line_spans, expected_line_spans);
+        assert_eq!(block_span, Some(expected_parent_span));
     }
 }
