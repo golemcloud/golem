@@ -125,9 +125,6 @@ mod literal_parse_tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use crate::parser::rib_expr::rib_expr;
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]

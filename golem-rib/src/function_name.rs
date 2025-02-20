@@ -15,9 +15,9 @@
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::easy::ParseError;
+use combine::stream::position;
 use combine::stream::position::{SourcePosition, Stream};
-use combine::stream::{easy, position};
-use combine::{stream, EasyParser};
+use combine::EasyParser;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
@@ -628,10 +628,7 @@ impl ParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<
-            (DynamicParsedFunctionName, Stream<&str, SourcePosition>),
-            ParseError<Stream<&str, SourcePosition>>,
-        > = parser.easy_parse(position::Stream::new(name));
+        let result = parser.easy_parse(position::Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),

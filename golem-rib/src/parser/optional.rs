@@ -78,7 +78,6 @@ mod tests {
 
     use super::*;
     use crate::TypeName;
-    use combine::EasyParser;
 
     #[test]
     fn test_some() {

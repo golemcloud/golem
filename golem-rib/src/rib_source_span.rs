@@ -30,6 +30,7 @@ impl Hash for RibSourceSpan {
     fn hash<H: Hasher>(&self, _: &mut H) {}
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for RibSourceSpan {
     fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
         Some(Ordering::Equal)
@@ -44,7 +45,7 @@ impl Ord for RibSourceSpan {
 
 impl Debug for RibSourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", "<SourceSpan>")
+        write!(f, "<SourceSpan>")
     }
 }
 

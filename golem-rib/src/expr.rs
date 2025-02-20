@@ -1132,11 +1132,8 @@ impl Expr {
     }
 
     pub fn with_source_span_mut(&mut self, new_source_span: RibSourceSpan) {
-        match self {
-            Expr::Let { source_span, .. } => {
-                *source_span = new_source_span;
-            }
-            _ => {}
+        if let Expr::Let { source_span, .. } = self {
+            *source_span = new_source_span;
         }
     }
 

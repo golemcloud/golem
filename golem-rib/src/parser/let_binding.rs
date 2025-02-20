@@ -19,11 +19,10 @@ use crate::parser::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
 use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::{alpha_num, char};
-use combine::stream::position::SourcePosition;
 use combine::{
     attempt, not_followed_by, optional,
     parser::char::{char as char_, spaces, string},
-    position, ParseError, Parser,
+    ParseError, Parser,
 };
 
 pub fn let_binding<Input>() -> impl Parser<Input, Output = Expr>

@@ -243,11 +243,9 @@ mod function_call_tests {
     use test_r::test;
 
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-    use combine::EasyParser;
 
     use crate::expr::Expr;
     use crate::function_name::{ParsedFunctionSite, SemVer};
-    use crate::parser::rib_expr::rib_expr;
 
     #[test]
     fn test_call() {

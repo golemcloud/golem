@@ -59,11 +59,9 @@ mod test {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use crate::parser::rib_expr::rib_expr;
     use crate::{
         DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ParsedFunctionSite,
     };
-    use combine::EasyParser;
 
     #[test]
     fn test_greater_than() {

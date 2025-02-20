@@ -122,10 +122,7 @@ mod internal {
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use crate::expr::*;
-    use crate::parser::rib_expr::rib_expr;
 
     #[test]
     fn test_select_index() {

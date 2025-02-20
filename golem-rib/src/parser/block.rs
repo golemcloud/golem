@@ -28,7 +28,6 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use combine::EasyParser;
 
     #[test]
     fn test_block() {

@@ -55,8 +55,6 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]
