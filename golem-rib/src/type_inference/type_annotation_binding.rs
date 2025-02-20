@@ -27,7 +27,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 ..
             } => {
                 if let Some(type_name) = type_annotation {
-                    internal::override_type(expr, type_name.clone().into());
+                    expr.with_inferred_type_mut(type_name.clone().into());
                 }
                 queue.push_back(expr);
             }
@@ -121,53 +121,6 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
-        }
-    }
-}
-
-mod internal {
-    use crate::{Expr, InferredType};
-
-    pub(crate) fn override_type(expr: &mut Expr, new_type: InferredType) {
-        match expr {
-            Expr::Identifier(_, _, inferred_type)
-            | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, _, inferred_type)
-            | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, _, inferred_type)
-            | Expr::Record(_, inferred_type)
-            | Expr::Tuple(_, inferred_type)
-            | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, _, inferred_type)
-            | Expr::Flags(_, inferred_type)
-            | Expr::Boolean(_, inferred_type)
-            | Expr::Concat(_, inferred_type)
-            | Expr::ExprBlock(_, inferred_type)
-            | Expr::Not(_, inferred_type)
-            | Expr::GreaterThan(_, _, inferred_type)
-            | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
-            | Expr::LessThanOrEqualTo(_, _, inferred_type)
-            | Expr::EqualTo(_, _, inferred_type)
-            | Expr::LessThan(_, _, inferred_type)
-            | Expr::Plus(_, _, inferred_type)
-            | Expr::Minus(_, _, inferred_type)
-            | Expr::Divide(_, _, inferred_type)
-            | Expr::Multiply(_, _, inferred_type)
-            | Expr::Cond(_, _, _, inferred_type)
-            | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, _, inferred_type)
-            | Expr::Unwrap(_, inferred_type)
-            | Expr::Throw(_, inferred_type)
-            | Expr::GetTag(_, inferred_type)
-            | Expr::And(_, _, inferred_type)
-            | Expr::Or(_, _, inferred_type)
-            | Expr::ListComprehension { inferred_type, .. }
-            | Expr::ListReduce { inferred_type, .. }
-            | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Call(_, _, _, inferred_type) => {
-                *inferred_type = new_type;
-            }
         }
     }
 }

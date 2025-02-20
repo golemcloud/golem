@@ -40,7 +40,7 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(CallType::Function { function_name, .. }, _, args, inferred_type) => {
+                Expr::Call{call_type: CallType::Function { function_name, .. }, args, inferred_type, ..} => {
                     if variants.contains(&function_name.to_string()) {
                         *expr = Expr::call(
                             CallType::VariantConstructor(function_name.to_string()),
