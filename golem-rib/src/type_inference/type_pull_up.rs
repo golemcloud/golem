@@ -621,12 +621,15 @@ mod internal {
         let list_expr = InferredType::List(Box::new(yield_expr_inferred.inferred_type()));
         let comprehension_type = current_comprehension_type.merge(list_expr);
 
-        inferred_type_stack.push_front(Expr::typed_list_comprehension(
-            variable_id.clone(),
-            iterable_expr_inferred,
-            yield_expr_inferred,
-            comprehension_type,
-        ))
+        inferred_type_stack.push_front(
+            Expr::typed_list_comprehension(
+                variable_id.clone(),
+                iterable_expr_inferred,
+                yield_expr_inferred,
+                comprehension_type,
+            )
+            .with_source_span(source_span.clone()),
+        );
     }
 
     pub(crate) fn handle_list_reduce(
@@ -651,14 +654,17 @@ mod internal {
 
         let new_reduce_type = reduce_type.merge(new_init_value_expr.inferred_type());
 
-        inferred_type_stack.push_front(Expr::typed_list_reduce(
-            reduce_variable.clone(),
-            iterated_variable.clone(),
-            new_iterable_expr,
-            new_init_value_expr,
-            new_yield_expr,
-            new_reduce_type,
-        ))
+        inferred_type_stack.push_front(
+            Expr::typed_list_reduce(
+                reduce_variable.clone(),
+                iterated_variable.clone(),
+                new_iterable_expr,
+                new_init_value_expr,
+                new_yield_expr,
+                new_reduce_type,
+            )
+            .with_source_span(source_span.clone()),
+        );
     }
 
     pub(crate) fn handle_tuple(
@@ -681,7 +687,9 @@ mod internal {
             InferredType::Tuple(new_tuple_elems.iter().map(|x| x.inferred_type()).collect());
 
         let merged_tuple_type = current_tuple_type.merge(new_tuple_type);
-        let new_tuple = Expr::tuple(new_tuple_elems).with_inferred_type(merged_tuple_type);
+        let new_tuple = Expr::tuple(new_tuple_elems)
+            .with_inferred_type(merged_tuple_type)
+            .with_source_span(source_position.clone());
         inferred_type_stack.push_front(new_tuple);
     }
 
@@ -700,7 +708,8 @@ mod internal {
             get_inferred_type_of_selected_field(field, &select_from_expr_type)?;
 
         let new_select_field = Expr::select_field(expr.clone(), field, None)
-            .with_inferred_type(current_field_type.merge(selection_field_type));
+            .with_inferred_type(current_field_type.merge(selection_field_type))
+            .with_source_span(source_span.clone());
 
         inferred_type_stack.push_front(new_select_field);
 
@@ -721,7 +730,8 @@ mod internal {
         let list_type =
             get_inferred_type_of_selection_index(*index, &inferred_type_of_selection_expr)?;
         let new_select_index = Expr::select_index(expr.clone(), *index)
-            .with_inferred_type(current_index_type.merge(list_type));
+            .with_inferred_type(current_index_type.merge(list_type))
+            .with_source_span(source_span.clone());
 
         inferred_type_stack.push_front(new_select_index);
 

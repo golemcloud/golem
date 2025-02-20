@@ -95,6 +95,7 @@ mod internal {
                             index,
                             type_annotation: inner_typ,
                             inferred_type,
+                            source_span,
                         }) => {
                             if let Some(typ) = optional {
                                 Ok(Expr::select_index_with_type_annotation(
@@ -108,6 +109,7 @@ mod internal {
                                     index,
                                     type_annotation: inner_typ,
                                     inferred_type,
+                                    source_span,
                                 })
                             }
                         }
@@ -133,6 +135,7 @@ mod internal {
                 field: last,
                 type_annotation: type_name,
                 inferred_type,
+                source_span,
             } => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::SelectField {
@@ -140,6 +143,7 @@ mod internal {
                     field: last,
                     type_annotation: type_name,
                     inferred_type,
+                    source_span,
                 })
             }
             Expr::SelectIndex {
@@ -147,6 +151,7 @@ mod internal {
                 index: last_index,
                 type_annotation: type_name,
                 inferred_type,
+                source_span,
             } => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::SelectIndex {
@@ -154,6 +159,7 @@ mod internal {
                     index: last_index,
                     type_annotation: type_name,
                     inferred_type,
+                    source_span,
                 })
             }
             _ => None,
