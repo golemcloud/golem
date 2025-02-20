@@ -1258,7 +1258,6 @@ mod internal {
 mod tests {
     use super::*;
     use crate::{FunctionTypeRegistry, Id, TypeName};
-    use golem_api_grpc::proto::golem::rib::variable_id;
     use test_r::test;
 
     #[test]

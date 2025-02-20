@@ -603,7 +603,7 @@ mod internal {
 mod type_push_down_tests {
     use test_r::test;
 
-    use crate::{Expr, InferredType, VariableId};
+    use crate::{Expr, InferredType};
 
     #[test]
     fn test_push_down_for_record() {

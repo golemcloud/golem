@@ -584,7 +584,11 @@ mod desugar_tests {
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
         let desugared_expr = match internal::last_expr(&expr) {
-            Expr::PatternMatch(predicate, match_arms, _) => {
+            Expr::PatternMatch {
+                predicate,
+                match_arms,
+                ..
+            } => {
                 desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
             }
             _ => panic!("Expected a match expression"),
@@ -604,7 +608,7 @@ mod desugar_tests {
         }
     }
     mod expectations {
-        use crate::{Expr, InferredType, Number, TypeName, VariableId};
+        use crate::{Expr, InferredType, TypeName, VariableId};
         use bigdecimal::BigDecimal;
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::cond(

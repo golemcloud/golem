@@ -486,10 +486,9 @@ mod function_parameters_inference_tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionSite, VariableId};
+    use crate::{Expr, InferredType, ParsedFunctionSite};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
@@ -545,8 +544,10 @@ mod function_parameters_inference_tests {
         )
         .with_inferred_type(InferredType::Sequence(vec![]));
 
-        let expected = Expr::expr_block(vec![let_binding, call_expr])
-            .with_inferred_type(InferredType::Unknown);
+        let expected = Expr::ExprBlock {
+            exprs: vec![let_binding, call_expr],
+            inferred_type: InferredType::Unknown,
+        };
 
         assert_eq!(expr, expected);
     }

@@ -202,7 +202,7 @@ mod tests {
     use crate::type_inference::inference_fix_point::internal::{
         equivalent_exprs, equivalent_types, non_equivalent_types,
     };
-    use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
+    use crate::{Expr, FunctionTypeRegistry, InferredType, VariableId};
 
     #[test]
     fn test_inferred_type_equality_1() {

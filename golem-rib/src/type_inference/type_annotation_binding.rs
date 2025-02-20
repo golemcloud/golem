@@ -132,7 +132,7 @@ mod type_binding_tests {
 
     use super::*;
     use crate::parser::type_name::TypeName;
-    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use crate::{ArmPattern, InferredType, MatchArm, VariableId};
 
     #[test]
     fn test_bind_type_in_let() {
@@ -393,10 +393,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::pattern_match(
-            Expr::identifier_with_variable_id(
-                VariableId::global("x".to_string()),
-                None,
-            ),
+            Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
             vec![MatchArm {
                 arm_pattern: ArmPattern::Literal(Box::new(Expr::identifier_with_variable_id(
                     VariableId::global("a".to_string()),
@@ -427,20 +424,9 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::cond(
-            Expr::identifier_with_variable_id(
-                VariableId::global("x".to_string()),
-                None,
-            ),
-            Expr::number(
-                BigDecimal::from(1),
-                Some(TypeName::U64),
-                InferredType::U64,
-            ),
-            Expr::number(
-                BigDecimal::from(2),
-                Some(TypeName::U64),
-                InferredType::U64,
-            ),
+            Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
+            Expr::number(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+            Expr::number(BigDecimal::from(2), Some(TypeName::U64), InferredType::U64),
         );
 
         assert_eq!(expr, expected);

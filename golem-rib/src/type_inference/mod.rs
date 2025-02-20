@@ -2601,12 +2601,11 @@ mod type_inference_tests {
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
-        use crate::type_inference::type_inference_tests::internal::record;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             Number, ParsedFunctionSite, VariableId,
         };
-        use golem_wasm_ast::analysis::analysed_type::{option, u64};
+        use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -2647,10 +2646,10 @@ mod type_inference_tests {
         pub(crate) fn literal(value: String, inferred_type: InferredType) -> Expr {
             Expr::Literal {
                 value,
-                inferred_type: InferredType::Str,
+                inferred_type,
             }
         }
-        pub(crate) fn tuple(expr: Vec<Expr>, inferred_type: InferredType) -> Expr {
+        pub(crate) fn tuple(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
             Expr::Tuple {
                 exprs,
                 inferred_type,
@@ -2806,7 +2805,7 @@ mod type_inference_tests {
             inferred_type: InferredType,
         ) -> Expr {
             Expr::Number {
-                number,
+                number: value,
                 type_annotation,
                 inferred_type,
             }
@@ -2909,7 +2908,10 @@ mod type_inference_tests {
         }
 
         pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
-            ValueAndType::new(Value::Option(None), golem_wasm_ast::analysis::analysed_type::option(typ.clone()))
+            ValueAndType::new(
+                Value::Option(None),
+                golem_wasm_ast::analysis::analysed_type::option(typ.clone()),
+            )
         }
 
         pub(crate) fn get_analysed_exports(

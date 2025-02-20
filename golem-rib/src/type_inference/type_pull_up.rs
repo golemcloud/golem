@@ -1172,9 +1172,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{
-        ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId,
-    };
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -1605,7 +1603,7 @@ mod type_pull_up_tests {
     }
 
     mod internal {
-        use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+        use crate::{ArmPattern, Expr, InferredType, MatchArm};
 
         pub(crate) fn expected_pattern_match() -> Expr {
             Expr::pattern_match(

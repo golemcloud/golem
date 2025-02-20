@@ -1099,17 +1099,15 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_str() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::literal("hello"),
                 Some(TypeName::Str),
-                Box::new(Expr::literal("hello")),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::literal("bar"),
                 Some(TypeName::Str),
-                Box::new(Expr::literal("bar")),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1121,17 +1119,15 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u8() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::untyped_number(BigDecimal::from(1)),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(BigDecimal::from(1))),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::untyped_number(BigDecimal::from(2)),
                 Some(TypeName::U8),
-                Box::new(Expr::untyped_number(BigDecimal::from(2))),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1143,17 +1139,15 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u16() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::untyped_number(BigDecimal::from(1)),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(BigDecimal::from(1))),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::untyped_number(BigDecimal::from(2)),
                 Some(TypeName::U16),
-                Box::new(Expr::untyped_number(BigDecimal::from(2))),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1165,17 +1159,15 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u32() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::untyped_number(BigDecimal::from(1)),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(BigDecimal::from(1))),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::untyped_number(BigDecimal::from(2)),
                 Some(TypeName::U32),
-                Box::new(Expr::untyped_number(BigDecimal::from(2))),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1187,25 +1179,17 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_option() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::option(Some(Expr::literal("foo")))
+                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
-                Box::new(Expr::Option(
-                    Some(Box::new(Expr::literal("foo"))),
-                    None,
-                    InferredType::Option(Box::new(InferredType::Str)),
-                )),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::option(Some(Expr::literal("bar")))
+                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
-                Box::new(Expr::Option(
-                    Some(Box::new(Expr::literal("bar"))),
-                    None,
-                    InferredType::Option(Box::new(InferredType::Str)),
-                )),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1219,25 +1203,17 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_list() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::sequence(vec![Expr::literal("foo")], None)
+                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
                 Some(TypeName::List(Box::new(TypeName::Str))),
-                Box::new(Expr::Sequence(
-                    vec![Expr::literal("foo")],
-                    None,
-                    InferredType::List(Box::new(InferredType::Str)),
-                )),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::sequence(vec![Expr::literal("bar")], None)
+                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
                 Some(TypeName::List(Box::new(TypeName::Str))),
-                Box::new(Expr::Sequence(
-                    vec![Expr::literal("bar")],
-                    None,
-                    InferredType::List(Box::new(InferredType::Str)),
-                )),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1250,23 +1226,17 @@ mod let_tests {
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_tuple() {
         let input_expr = Expr::expr_block(vec![
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
+                Expr::tuple(vec![Expr::literal("foo")])
+                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
-                Box::new(Expr::Tuple(
-                    vec![Expr::literal("foo")],
-                    InferredType::Tuple(vec![InferredType::Str]),
-                )),
-                InferredType::Unknown,
             ),
-            Expr::Let(
+            Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
+                Expr::tuple(vec![Expr::literal("bar")])
+                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
-                Box::new(Expr::Tuple(
-                    vec![Expr::literal("bar")],
-                    InferredType::Tuple(vec![InferredType::Str]),
-                )),
-                InferredType::Unknown,
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();

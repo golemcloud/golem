@@ -202,10 +202,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U8)
                 ),
                 ""
@@ -222,10 +219,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U16)
                 ),
                 ""
@@ -242,10 +236,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U32)
                 ),
                 ""
@@ -262,10 +253,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::U64)
                 ),
                 ""
@@ -282,10 +270,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S8,)
                 ),
                 ""
@@ -302,10 +287,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S16)
                 ),
                 ""
@@ -322,10 +304,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S32)
                 ),
                 ""
@@ -342,10 +321,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::S64,)
                 ),
                 ""
@@ -362,10 +338,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::F32)
                 ),
                 ""
@@ -382,10 +355,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::F64)
                 ),
                 ""
@@ -402,10 +372,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::Chr)
                 ),
                 ""
@@ -422,10 +389,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::identifier_with_variable_id(
-                        VariableId::global("bar".to_string()),
-                        None,
-                    ),
+                    Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
                     Some(TypeName::Str)
                 ),
                 ""
@@ -442,10 +406,8 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(
-                        vec![],
-                        None
-                    ).with_inferred_type( InferredType::List(Box::new(InferredType::Unknown))),
+                    Expr::sequence(vec![], None)
+                        .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
                     Some(TypeName::List(Box::new(TypeName::U8)))
                 ),
                 ""
