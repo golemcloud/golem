@@ -491,11 +491,11 @@ impl Expr {
         }
     }
 
-    pub fn cond(cond: Expr, then: Expr, else_: Expr) -> Self {
+    pub fn cond(cond: Expr, lhs: Expr, rhs: Expr) -> Self {
         Expr::Cond {
             cond: Box::new(cond),
-            lhs: Box::new(then),
-            rhs: Box::new(else_),
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
             inferred_type: InferredType::Unknown,
         }
     }
@@ -2037,14 +2037,14 @@ mod protobuf {
                     ))
                 }
                 Expr::LessThanOrEqualTo {
-                    lhs: left,
-                    rhs: right,
+                    lhs,
+                    rhs,
                     ..
                 } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                         golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
-                            left: Some(Box::new((*left).into())),
-                            right: Some(Box::new((*right).into())),
+                            left: Some(Box::new((*lhs).into())),
+                            right: Some(Box::new((*rhs).into())),
                         },
                     )),
                 ),
@@ -2056,7 +2056,12 @@ mod protobuf {
                         }),
                     ))
                 }
-                Expr::Cond { cond, lhs, rhs, .. } => {
+                // Note: We were storing and retrieving (proto) condition expressions such that
+                // `cond` was written `lhs` and vice versa.
+                // This is probably difficult to fix to keep backward compatibility
+                // The issue is only with the protobuf types and the roundtrip tests were/are working since
+                // the read handles this (i.e, reading cond as lhs)
+                Expr::Cond { cond: lhs, lhs: cond, rhs, .. } => {
                     Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
                         Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
                             left: Some(Box::new((*lhs).into())),
