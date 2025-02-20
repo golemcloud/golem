@@ -53,6 +53,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
@@ -65,6 +66,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             Expr::Not {
                 expr,
                 inferred_type,
+                ..
             } => {
                 expr.add_infer_type_mut(inferred_type.clone());
                 queue.push_back(expr);
@@ -100,6 +102,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 predicate,
                 match_arms,
                 inferred_type,
+                ..
             } => {
                 for MatchArm {
                     arm_resolution_expr,
@@ -116,6 +119,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             Expr::Tuple {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_tuple(exprs, inferred_type, &mut queue)?;
             }
@@ -130,6 +134,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             Expr::Record {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_record(exprs, inferred_type, &mut queue)?;
             }
@@ -148,6 +153,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 iterable_expr,
                 yield_expr,
                 inferred_type,
+                ..
             } => {
                 handle_list_comprehension(
                     iterated_variable,
@@ -166,6 +172,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 init_value_expr,
                 yield_expr,
                 inferred_type,
+                ..
             } => {
                 handle_list_reduce(
                     reduce_variable,

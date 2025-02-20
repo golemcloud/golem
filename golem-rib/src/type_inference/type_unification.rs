@@ -57,6 +57,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Tuple {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 queue.extend(exprs.iter_mut());
 
@@ -165,6 +166,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 queue.push(cond);
                 queue.push(lhs);
@@ -233,6 +235,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 predicate,
                 match_arms,
                 inferred_type,
+                ..
             } => {
                 queue.push(predicate);
                 for arm in match_arms.iter_mut().rev() {
@@ -383,6 +386,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::ExprBlock {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 queue.extend(exprs);
 
@@ -396,6 +400,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Not {
                 expr,
                 inferred_type,
+                ..
             } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
@@ -410,6 +415,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Unwrap {
                 expr,
                 inferred_type,
+                ..
             } => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
@@ -453,6 +459,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
             }
@@ -461,6 +468,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
             }
@@ -469,6 +477,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
             }
@@ -477,6 +486,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 internal::handle_math_op(&mut queue, lhs, rhs, inferred_type, &mut errors, expr_str)
             }

@@ -308,7 +308,7 @@ where
 
 parser! {
     fn query[Input]()(Input) -> Query
-    where [Input: Stream<Token = char>, LuceneParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>]
+    where [Input: Stream<Token = char>, LuceneParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
     {
         query_()
     }

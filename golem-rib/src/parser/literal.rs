@@ -17,12 +17,14 @@ use combine::{parser, ParseError, Stream};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::literal::internal::literal_;
+use crate::rib_source_span::GetSourcePosition;
 
 parser! {
     pub fn literal[Input]()(Input) -> Expr
     where [
         Input: Stream<Token = char>,
         RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,
+        Input::Position: GetSourcePosition
     ]
     {
         literal_()
@@ -33,6 +35,7 @@ mod internal {
     use crate::expr::Expr;
     use crate::parser::block::block;
     use crate::parser::errors::RibParseError;
+    use crate::rib_source_span::GetSourcePosition;
     use combine::parser::char::char as char_;
     use combine::parser::char::spaces;
     use combine::parser::repeat::many;
@@ -44,6 +47,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         spaces()
             .with(
@@ -60,7 +64,9 @@ mod internal {
                         match first {
                             LiteralTerm::Static(s) => Expr::literal(s),
                             LiteralTerm::Dynamic(expr) => match expr {
-                                Expr::Literal { value, .. } => Expr::literal(value),
+                                Expr::Literal {
+                                    value, source_span, ..
+                                } => Expr::literal(value).with_source_span(source_span.clone()),
                                 _ => Expr::concat(vec![expr.clone()]),
                             },
                         }
@@ -78,6 +84,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         many1(none_of("\"${}".chars()))
             .map(LiteralTerm::Static)
@@ -90,6 +97,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         between(
             char_('$').with(char_('{')).skip(spaces()),
@@ -119,23 +127,20 @@ mod literal_parse_tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
 
-    use crate::parser::rib_expr::rib_expr;
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]
     fn test_empty_literal() {
         let input = "\"\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::literal(""), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::literal("")));
     }
 
     #[test]
     fn test_literal() {
         let input = "\"foo\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::literal("foo"), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::literal("foo")));
     }
 
     #[test]

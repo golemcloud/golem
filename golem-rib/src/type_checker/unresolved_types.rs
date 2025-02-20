@@ -63,6 +63,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Record {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 internal::unresolved_types_in_record(
                     &exprs
@@ -110,6 +111,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Concat {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 internal::unresolved_type_for_concat(exprs)?;
 
@@ -125,6 +127,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Not {
                 expr,
                 inferred_type,
+                ..
             } => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
@@ -153,6 +156,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 internal::unresolved_type_for_if_condition(cond, lhs, rhs)?;
                 if inferred_type.un_resolved() {

@@ -24,6 +24,7 @@ use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
+use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::char as char_;
 
 pub fn result<Input>() -> impl Parser<Input, Output = Expr>
@@ -32,6 +33,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         choice((
@@ -64,48 +66,43 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]
     fn test_result() {
         let input = "ok(foo)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::ok(Expr::identifier_global("foo", None), None), ""))
+            Ok(Expr::ok(Expr::identifier_global("foo", None), None))
         );
     }
 
     #[test]
     fn test_result_err() {
         let input = "err(foo)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::err(Expr::identifier_global("foo", None), None), ""))
+            Ok(Expr::err(Expr::identifier_global("foo", None), None))
         );
     }
 
     #[test]
     fn test_ok_of_sequence() {
         let input = "ok([foo, bar])";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::ok(
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        ],
-                        None
-                    ),
+            Ok(Expr::ok(
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ),
-                ""
+                None
             ))
         );
     }
@@ -113,21 +110,18 @@ mod tests {
     #[test]
     fn test_err_of_sequence() {
         let input = "err([foo, bar])";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::err(
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        ],
-                        None
-                    ),
+            Ok(Expr::err(
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
                     None
                 ),
-                ""
+                None
             ))
         );
     }
@@ -135,12 +129,12 @@ mod tests {
     #[test]
     fn test_ok_of_err() {
         let input = "ok(err(foo))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::ok(Expr::err(Expr::identifier_global("foo", None), None), None),
-                ""
+            Ok(Expr::ok(
+                Expr::err(Expr::identifier_global("foo", None), None),
+                None
             ))
         );
     }
@@ -148,12 +142,12 @@ mod tests {
     #[test]
     fn test_err_of_ok() {
         let input = "err(ok(foo))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::err(Expr::ok(Expr::identifier_global("foo", None), None), None),
-                ""
+            Ok(Expr::err(
+                Expr::ok(Expr::identifier_global("foo", None), None),
+                None
             ))
         );
     }
@@ -161,12 +155,12 @@ mod tests {
     #[test]
     fn test_ok_of_ok() {
         let input = "ok(ok(foo))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::ok(Expr::ok(Expr::identifier_global("foo", None), None), None),
-                ""
+            Ok(Expr::ok(
+                Expr::ok(Expr::identifier_global("foo", None), None),
+                None
             ))
         );
     }
@@ -174,12 +168,12 @@ mod tests {
     #[test]
     fn test_err_of_err() {
         let input = "err(err(foo))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::err(Expr::err(Expr::identifier_global("foo", None), None), None),
-                ""
+            Ok(Expr::err(
+                Expr::err(Expr::identifier_global("foo", None), None),
+                None
             ))
         );
     }

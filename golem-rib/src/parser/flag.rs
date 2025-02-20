@@ -22,6 +22,7 @@ use combine::{
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn flag<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -29,6 +30,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     let flag_name = many1(letter().or(char_('_')).or(digit()).or(char_('-')))
         .map(|s: Vec<char>| s.into_iter().collect());
@@ -49,46 +51,39 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
-    use crate::parser::rib_expr::rib_expr;
-
     use super::*;
 
     #[test]
     fn test_empty_flag() {
         let input = "{}";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::flags(vec![]), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::flags(vec![])));
     }
 
     #[test]
     fn test_flag_singleton() {
         let input = "{foo}";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::flags(vec!["foo".to_string()]), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::flags(vec!["foo".to_string()])));
     }
 
     #[test]
     fn test_flag() {
         let input = "{ foo, bar}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::flags(vec!["foo".to_string(), "bar".to_string()]), ""))
+            Ok(Expr::flags(vec!["foo".to_string(), "bar".to_string()]))
         );
     }
 
     #[test]
     fn test_bool_str_flags() {
         let input = "{true, false}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::flags(vec!["true".to_string(), "false".to_string()]),
-                ""
-            ))
+            Ok(Expr::flags(vec!["true".to_string(), "false".to_string()]))
         );
     }
 }

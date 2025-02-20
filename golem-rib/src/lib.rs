@@ -33,6 +33,7 @@ mod inferred_type;
 mod instance_type;
 mod interpreter;
 mod parser;
+mod rib_source_span;
 mod text;
 mod type_checker;
 mod type_inference;

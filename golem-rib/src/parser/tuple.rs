@@ -18,10 +18,10 @@ use combine::{
     sep_by, ParseError, Parser,
 };
 
+use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-
-use super::rib_expr::rib_expr;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn tuple<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -29,6 +29,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -54,8 +55,8 @@ mod tests {
     #[test]
     fn test_empty_tuple() {
         let input = "()";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::tuple(vec![]), "")));
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::tuple(vec![])));
     }
 
     #[test]
@@ -73,157 +74,136 @@ mod tests {
     #[test]
     fn test_tuple() {
         let input = "(foo, bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::identifier_global("foo", None),
-                    Expr::identifier_global("bar", None)
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::identifier_global("foo", None),
+                Expr::identifier_global("bar", None)
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_sequence() {
         let input = "([foo, bar], [baz, qux])";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("foo", None),
-                            Expr::identifier_global("bar", None)
-                        ],
-                        None
-                    ),
-                    Expr::sequence(
-                        vec![
-                            Expr::identifier_global("baz", None),
-                            Expr::identifier_global("qux", None)
-                        ],
-                        None
-                    )
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("foo", None),
+                        Expr::identifier_global("bar", None)
+                    ],
+                    None
+                ),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("baz", None),
+                        Expr::identifier_global("qux", None)
+                    ],
+                    None
+                )
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_record() {
         let input = "({foo: bar}, {baz: qux})";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::record(vec![(
-                        "foo".to_string(),
-                        Expr::identifier_global("bar", None)
-                    )]),
-                    Expr::record(vec![(
-                        "baz".to_string(),
-                        Expr::identifier_global("qux", None)
-                    )])
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::record(vec![(
+                    "foo".to_string(),
+                    Expr::identifier_global("bar", None)
+                )]),
+                Expr::record(vec![(
+                    "baz".to_string(),
+                    Expr::identifier_global("qux", None)
+                )])
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_literal() {
         let input = "(\"foo\", \"bar\")";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![Expr::literal("foo"), Expr::literal("bar")]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::literal("foo"),
+                Expr::literal("bar")
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_tuple() {
         let input = "((foo, bar), (baz, qux))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
+            Ok(Expr::tuple(vec![
                 Expr::tuple(vec![
-                    Expr::tuple(vec![
-                        Expr::identifier_global("foo", None),
-                        Expr::identifier_global("bar", None)
-                    ]),
-                    Expr::tuple(vec![
-                        Expr::identifier_global("baz", None),
-                        Expr::identifier_global("qux", None)
-                    ])
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None)
                 ]),
-                ""
-            ))
+                Expr::tuple(vec![
+                    Expr::identifier_global("baz", None),
+                    Expr::identifier_global("qux", None)
+                ])
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_result() {
         let input = "(ok(foo), err(bar))";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::ok(Expr::identifier_global("foo", None), None),
-                    Expr::err(Expr::identifier_global("bar", None), None)
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::ok(Expr::identifier_global("foo", None), None),
+                Expr::err(Expr::identifier_global("bar", None), None)
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_option() {
         let input = "(some(foo), none)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::option(Some(Expr::identifier_global("foo", None))),
-                    Expr::option(None)
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::option(Some(Expr::identifier_global("foo", None))),
+                Expr::option(None)
+            ]))
         );
     }
 
     #[test]
     fn test_tuple_of_cond() {
         let input = "(if foo then bar else baz, if qux then quux else quuz)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::tuple(vec![
-                    Expr::cond(
-                        Expr::identifier_global("foo", None),
-                        Expr::identifier_global("bar", None),
-                        Expr::identifier_global("baz", None)
-                    ),
-                    Expr::cond(
-                        Expr::identifier_global("qux", None),
-                        Expr::identifier_global("quux", None),
-                        Expr::identifier_global("quuz", None)
-                    )
-                ]),
-                ""
-            ))
+            Ok(Expr::tuple(vec![
+                Expr::cond(
+                    Expr::identifier_global("foo", None),
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
+                ),
+                Expr::cond(
+                    Expr::identifier_global("qux", None),
+                    Expr::identifier_global("quux", None),
+                    Expr::identifier_global("quuz", None)
+                )
+            ]))
         );
     }
 }

@@ -357,7 +357,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 4, column: 11",
             "Unexpected `y`",
-            "Expected `;`, whitespaces or end of input",
+            "Expected end of input",
             "",
         ]
         .join("\n");
@@ -387,7 +387,7 @@ mod invalid_syntax_tests {
         let expected_error = [
             "Parse error at line: 1, column: 5",
             "Unexpected `(`",
-            "Expected `;`, whitespaces or end of input",
+            "Expected end of input",
             "",
         ]
         .join("\n");

@@ -487,6 +487,7 @@ mod function_parameters_inference_tests {
     use test_r::test;
 
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
+    use crate::rib_source_span::SourceSpan;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{Expr, InferredType, ParsedFunctionSite};
     use golem_wasm_ast::analysis::{
@@ -546,6 +547,7 @@ mod function_parameters_inference_tests {
         let expected = Expr::ExprBlock {
             exprs: vec![let_binding, call_expr],
             inferred_type: InferredType::Unknown,
+            source_span: SourceSpan::default(),
         };
 
         assert_eq!(expr, expected);
