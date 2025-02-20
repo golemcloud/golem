@@ -75,14 +75,14 @@ impl<W: Write> Writer<W> {
 
     fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
-            Expr::Literal(string, _) => {
+            Expr::Literal{ value, ..} => {
                 self.write_display("\"")?;
-                self.write_str(string)?;
+                self.write_str(value)?;
                 self.write_display("\"")
             }
-            Expr::Identifier(identifier, type_name, _) => {
-                self.write_str(identifier.name())?;
-                if let Some(type_name) = type_name {
+            Expr::Identifier{variable_id, type_annotation, ..} => {
+                self.write_str(variable_id.name())?;
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
                 } else {
@@ -90,42 +90,42 @@ impl<W: Write> Writer<W> {
                 }
             }
 
-            Expr::Let(variable_id, type_name, expr, _) => {
+            Expr::Let{ variable_id, type_annotation, expr,..} => {
                 self.write_str("let ")?;
                 self.write_str(variable_id.name())?;
-                if let Some(type_name) = type_name {
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)?;
                 };
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField(expr, field_name, type_name, _) => {
+            Expr::SelectField{ expr, field, type_annotation, ..} => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
-                self.write_str(field_name)?;
-                if let Some(type_name) = type_name {
+                self.write_str(field)?;
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
                 } else {
                     Ok(())
                 }
             }
-            Expr::SelectIndex(expr, index, type_name, _) => {
+            Expr::SelectIndex { expr, index, type_annotation, .. } => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;
                 self.write_display("]")?;
-                if let Some(type_name) = type_name {
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
                 } else {
                     Ok(())
                 }
             }
-            Expr::Sequence(sequence, type_name, _) => {
+            Expr::Sequence{ exprs, type_annotation, ..} => {
                 self.write_display("[")?;
-                for (idx, expr) in sequence.iter().enumerate() {
+                for (idx, expr) in exprs.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(",")?;
                         self.write_display(" ")?;
@@ -133,16 +133,16 @@ impl<W: Write> Writer<W> {
                     self.write_expr(expr)?;
                 }
                 self.write_display("]")?;
-                if let Some(type_name) = type_name {
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
                 } else {
                     Ok(())
                 }
             }
-            Expr::Record(record, _) => {
+            Expr::Record { exprs, .. } => {
                 self.write_display("{")?;
-                for (idx, (key, value)) in record.iter().enumerate() {
+                for (idx, (key, value)) in exprs.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(",")?;
                         self.write_display(" ")?;
@@ -154,9 +154,9 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display("}")
             }
-            Expr::Tuple(tuple, _) => {
+            Expr::Tuple { exprs, .. } => {
                 self.write_display("(")?;
-                for (idx, expr) in tuple.iter().enumerate() {
+                for (idx, expr) in exprs.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(",")?;
                         self.write_display(" ")?;
@@ -165,14 +165,14 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(")")
             }
-            Expr::Number(number, type_name, _) => {
+            Expr::Number { number, type_annotation, .. } => {
                 self.write_display(number.value.to_string())?;
-                if let Some(type_name) = type_name {
+                if let Some(type_name) = type_annotation {
                     self.write_display(type_name)?;
                 }
                 Ok(())
             }
-            Expr::Flags(flags, _) => {
+            Expr::Flags { flags, .. } => {
                 self.write_display("{")?;
                 for (idx, flag) in flags.iter().enumerate() {
                     if idx != 0 {
@@ -183,14 +183,14 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display("}")
             }
-            Expr::Boolean(bool, _) => self.write_display(bool),
-            Expr::Concat(concatenated, _) => {
+            Expr::Boolean { value, .. } => self.write_display(value),
+            Expr::Concat { exprs, .. } => {
                 self.write_display("\"")?;
-                internal::write_concatenated_exprs(self, concatenated)?;
+                internal::write_concatenated_exprs(self, exprs)?;
                 self.write_display("\"")
             }
-            Expr::ExprBlock(expr, _) => {
-                for (idx, expr) in expr.iter().enumerate() {
+            Expr::ExprBlock { exprs, .. } => {
+                for (idx, expr) in exprs.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(";")?;
                         self.write_display("\n")?;
@@ -199,69 +199,69 @@ impl<W: Write> Writer<W> {
                 }
                 Ok(())
             }
-            Expr::Not(expr, _) => {
+            Expr::Not { expr, .. } => {
                 self.write_str("!")?;
                 self.write_expr(expr)
             }
-            Expr::GreaterThan(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::GreaterThan { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" > ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Plus(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::Plus { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" + ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Minus(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::Minus { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" - ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Divide(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::Divide { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" / ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Multiply(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::Multiply { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" * ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::GreaterThanOrEqualTo(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" >= ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::LessThanOrEqualTo(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" <= ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::EqualTo(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::EqualTo { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" == ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::LessThan(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::LessThan { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" < ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Cond(if_expr, left, right, _) => {
+            Expr::Cond { cond, lhs, rhs, .. } => {
                 self.write_str("if ")?;
-                self.write_expr(if_expr)?;
+                self.write_expr(cond)?;
                 self.write_str(" then ")?;
-                self.write_expr(left)?;
+                self.write_expr(lhs)?;
                 self.write_str(" else ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::PatternMatch(match_expr, match_terms, _) => {
+            Expr::PatternMatch { predicate, match_arms, .. } => {
                 self.write_str("match ")?;
-                self.write_expr(match_expr)?;
+                self.write_expr(predicate)?;
                 self.write_str(" { ")?;
                 self.write_display(" ")?;
-                for (idx, match_term) in match_terms.iter().enumerate() {
+                for (idx, match_term) in match_arms.iter().enumerate() {
                     if idx != 0 {
                         self.write_str(", ")?;
                     }
@@ -275,8 +275,8 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::Option(constructor, type_name, _) => {
-                match constructor {
+            Expr::Option { expr, type_annotation, .. } => {
+                match expr {
                     Some(expr) => {
                         self.write_str("some(")?;
                         self.write_expr(expr)?;
@@ -285,14 +285,14 @@ impl<W: Write> Writer<W> {
                     None => self.write_str("none")?,
                 }
 
-                if let Some(type_name) = type_name {
+                if let Some(type_name) = type_annotation {
                     self.write_str(": ")?;
                     self.write_display(type_name)
                 } else {
                     Ok(())
                 }
             }
-            Expr::Result(constructor, _, _) => match constructor {
+            Expr::Result { expr, .. } => match expr {
                 Ok(expr) => {
                     self.write_str("ok(")?;
                     self.write_expr(expr)?;
@@ -305,19 +305,19 @@ impl<W: Write> Writer<W> {
                 }
             },
 
-            Expr::Call(invocation_name, optional_type_parameter, params, _) => {
-                let function_name = invocation_name.to_string();
+            Expr::Call { call_type, generic_type_parameter, args, .. } => {
+                let function_name = call_type.to_string();
 
                 self.write_str(function_name)?;
 
-                if let Some(type_parameter) = optional_type_parameter {
+                if let Some(type_parameter) = generic_type_parameter {
                     self.write_str("[")?;
                     self.write_str(type_parameter.value.clone())?;
                     self.write_str("]")?;
                 }
 
                 self.write_display("(")?;
-                for (idx, param) in params.iter().enumerate() {
+                for (idx, param) in args.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(",")?;
                         self.write_display(" ")?;
@@ -327,31 +327,31 @@ impl<W: Write> Writer<W> {
                 self.write_display(")")
             }
 
-            Expr::Unwrap(expr, _) => {
+            Expr::Unwrap { expr, .. } => {
                 self.write_str("unwrap(")?;
                 self.write_expr(expr)?;
                 self.write_str(")")
             }
 
-            Expr::Throw(msg, _) => {
+            Expr::Throw { message, .. } => {
                 self.write_str("throw(")?;
-                self.write_str(msg)?;
+                self.write_str(message)?;
                 self.write_str(")")
             }
-            Expr::GetTag(expr, _) => {
+            Expr::GetTag { expr, .. } => {
                 self.write_str("get_tag(")?;
                 self.write_expr(expr)?;
                 self.write_str(")")
             }
-            Expr::And(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::And { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" && ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
-            Expr::Or(left, right, _) => {
-                self.write_expr(left)?;
+            Expr::Or { lhs, rhs, .. } => {
+                self.write_expr(lhs)?;
                 self.write_str(" || ")?;
-                self.write_expr(right)
+                self.write_expr(rhs)
             }
             Expr::ListComprehension {
                 iterated_variable,
@@ -426,10 +426,10 @@ mod internal {
     where
         W: std::io::Write,
     {
-        if let Expr::ExprBlock(yield_lines, _) = expr {
-            let last_line_index = yield_lines.len() - 1;
+        if let Expr::ExprBlock { exprs, .. } = expr {
+            let last_line_index = exprs.len() - 1;
 
-            for (index, line) in yield_lines.iter().enumerate() {
+            for (index, line) in exprs.iter().enumerate() {
                 if index == last_line_index {
                     writer.write_display("yield ")?;
                     writer.write_expr(line)?;
@@ -449,8 +449,8 @@ mod internal {
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
-            Expr::Literal(str, _) => ExprType::Text(str),
-            Expr::Concat(_, _) => ExprType::StringInterpolated,
+            Expr::Literal { value, .. } => ExprType::Text(value),
+            Expr::Concat { ..} => ExprType::StringInterpolated,
             expr => ExprType::Code(expr),
         }
     }
@@ -559,7 +559,7 @@ mod internal {
             }
 
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Identifier(s, _, _) => writer.write_str(s.name()),
+                Expr::Identifier { variable_id, ..} => writer.write_str(variable_id.name()),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

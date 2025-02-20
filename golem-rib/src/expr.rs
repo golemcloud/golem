@@ -178,9 +178,9 @@ pub enum Expr {
         type_annotation: Option<TypeName>,
         inferred_type: InferredType,
     },
-    // instance[t]("my-worker") will be parsed sd Expr::Call("instance", Some(t), vec!["my-worker"])
-    // will be parsed as Expr::Call("instance", vec!["my-worker"]).
-    // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call(InstanceCreation,..)
+    // instance[t]("my-worker") will be parsed sd Expr::Call { "instance", Some(t }, vec!["my-worker"] }
+    // will be parsed as Expr::Call { "instance", vec!["my-worker"] }.
+    // During function call inference phase, the type of this `Expr::Call` will be `Expr::Call { InstanceCreation,.. }
     // with inferred-type as `InstanceType`. This way any variables attached to the instance creation
     // will be having the `InstanceType`.
     Call {
@@ -191,7 +191,7 @@ pub enum Expr {
     },
     // Any calls such as `my-worker-variable-expr.function_name()` will be parsed as Expr::Invoke
     // such that `my-worker-variable-expr` (lhs) will be of the type `InferredType::InstanceType`. `lhs` will
-    // be `Expr::Call(InstanceCreation)` with type `InferredType::InstanceType`.
+    // be `Expr::Call { InstanceCreation }` with type `InferredType::InstanceType`.
     // As part of a separate type inference phase this will be converted back to `Expr::Call` with fully
     // qualified function names (the complex version) which further takes part in all other type inference phases.
     InvokeMethodLazy {
@@ -294,58 +294,58 @@ impl Expr {
     }
 
     pub fn is_list(&self) -> bool {
-        matches!(self, Expr::Sequence(_, _, _))
+        matches!(self, Expr::Sequence { ..})
     }
 
     pub fn is_flags(&self) -> bool {
-        matches!(self, Expr::Flags(_, _))
+        matches!(self, Expr::Flags { .. })
     }
 
     pub fn is_identifier(&self) -> bool {
-        matches!(self, Expr::Identifier(_, _, _))
+        matches!(self, Expr::Identifier { ..})
     }
 
     pub fn is_select_field(&self) -> bool {
-        matches!(self, Expr::SelectField(_, _, _, _))
+        matches!(self, Expr::SelectField { ..})
     }
 
     pub fn is_if_else(&self) -> bool {
-        matches!(self, Expr::Cond(_, _, _, _))
+        matches!(self, Expr::Cond { ..})
     }
 
     pub fn is_function_call(&self) -> bool {
-        matches!(self, Expr::Call(_, _, _, _))
+        matches!(self, Expr::Call { ..})
     }
 
     pub fn is_match_expr(&self) -> bool {
-        matches!(self, Expr::PatternMatch(_, _, _))
+        matches!(self, Expr::PatternMatch { ..})
     }
 
     pub fn is_select_index(&self) -> bool {
-        matches!(self, Expr::SelectIndex(_, _, _, _))
+        matches!(self, Expr::SelectIndex { ..})
     }
 
     pub fn is_boolean(&self) -> bool {
-        matches!(self, Expr::Boolean(_, _))
+        matches!(self, Expr::Boolean { ..})
     }
 
     pub fn is_comparison(&self) -> bool {
         matches!(
             self,
-            Expr::GreaterThan(_, _, _)
-                | Expr::GreaterThanOrEqualTo(_, _, _)
-                | Expr::LessThanOrEqualTo(_, _, _)
-                | Expr::EqualTo(_, _, _)
-                | Expr::LessThan(_, _, _)
+            Expr::GreaterThan { ..}
+                | Expr::GreaterThanOrEqualTo { ..}
+                | Expr::LessThanOrEqualTo { ..}
+                | Expr::EqualTo { ..}
+                | Expr::LessThan { ..}
         )
     }
 
     pub fn is_concat(&self) -> bool {
-        matches!(self, Expr::Concat(_, _))
+        matches!(self, Expr::Concat {..})
     }
 
     pub fn is_multiple(&self) -> bool {
-        matches!(self, Expr::ExprBlock(_, _))
+        matches!(self, Expr::ExprBlock {..})
     }
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
@@ -1067,42 +1067,42 @@ impl Expr {
 
     pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
-            Expr::Identifier(_, _, inferred_type)
-            | Expr::Let(_, _, _, inferred_type)
-            | Expr::SelectField(_, _, _, inferred_type)
-            | Expr::SelectIndex(_, _, _, inferred_type)
-            | Expr::Sequence(_, _, inferred_type)
-            | Expr::Record(_, inferred_type)
-            | Expr::Tuple(_, inferred_type)
-            | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, _, inferred_type)
-            | Expr::Flags(_, inferred_type)
-            | Expr::Boolean(_, inferred_type)
-            | Expr::Concat(_, inferred_type)
-            | Expr::ExprBlock(_, inferred_type)
-            | Expr::Not(_, inferred_type)
-            | Expr::GreaterThan(_, _, inferred_type)
-            | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
-            | Expr::LessThanOrEqualTo(_, _, inferred_type)
-            | Expr::EqualTo(_, _, inferred_type)
-            | Expr::Plus(_, _, inferred_type)
-            | Expr::Minus(_, _, inferred_type)
-            | Expr::Divide(_, _, inferred_type)
-            | Expr::Multiply(_, _, inferred_type)
-            | Expr::LessThan(_, _, inferred_type)
-            | Expr::Cond(_, _, _, inferred_type)
-            | Expr::PatternMatch(_, _, inferred_type)
-            | Expr::Option(_, _, inferred_type)
-            | Expr::Result(_, _, inferred_type)
-            | Expr::Unwrap(_, inferred_type)
-            | Expr::Throw(_, inferred_type)
-            | Expr::GetTag(_, inferred_type)
-            | Expr::And(_, _, inferred_type)
-            | Expr::Or(_, _, inferred_type)
+            Expr::Identifier { inferred_type, .. }
+            | Expr::Let { inferred_type, .. }
+            | Expr::SelectField { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
+            | Expr::Sequence { inferred_type, .. }
+            | Expr::Record { inferred_type, .. }
+            | Expr::Tuple { inferred_type, .. }
+            | Expr::Literal { inferred_type, .. }
+            | Expr::Number { inferred_type, .. }
+            | Expr::Flags { inferred_type, .. }
+            | Expr::Boolean { inferred_type, .. }
+            | Expr::Concat { inferred_type, .. }
+            | Expr::ExprBlock { inferred_type, .. }
+            | Expr::Not { inferred_type, .. }
+            | Expr::GreaterThan { inferred_type, .. }
+            | Expr::GreaterThanOrEqualTo { inferred_type, .. }
+            | Expr::LessThanOrEqualTo { inferred_type, .. }
+            | Expr::EqualTo { inferred_type, .. }
+            | Expr::Plus { inferred_type, .. }
+            | Expr::Minus { inferred_type, .. }
+            | Expr::Divide { inferred_type, .. }
+            | Expr::Multiply { inferred_type, .. }
+            | Expr::LessThan { inferred_type, .. }
+            | Expr::Cond { inferred_type, .. }
+            | Expr::PatternMatch { inferred_type, .. }
+            | Expr::Option { inferred_type, .. }
+            | Expr::Result { inferred_type, .. }
+            | Expr::Unwrap { inferred_type, .. }
+            | Expr::Throw { inferred_type, .. }
+            | Expr::GetTag { inferred_type, .. }
+            | Expr::And { inferred_type, .. }
+            | Expr::Or { inferred_type, .. }
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Call(_, _, _, inferred_type) => {
+            | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
                 }
@@ -1159,7 +1159,7 @@ impl Expr {
             | Expr::ListComprehension { inferred_type, .. }
             | Expr::ListReduce { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Call(_, _, _, inferred_type) => {
+            | Expr::Call { inferred_type, .. } => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
                 }

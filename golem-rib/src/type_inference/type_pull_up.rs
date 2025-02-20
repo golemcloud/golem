@@ -66,7 +66,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            expr @ Expr::Flags(_, _) => {
+            expr @ Expr::Flags{..} => {
                 inferred_type_stack.push_front(expr.clone());
             }
 
@@ -364,22 +364,22 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     type_annotation,
                 );
             }
-            Expr::Record(expr, inferred_type) => {
-                internal::handle_record(expr, inferred_type, &mut inferred_type_stack);
+            Expr::Record { exprs, inferred_type } => {
+                internal::handle_record(exprs, inferred_type, &mut inferred_type_stack);
             }
-            Expr::Literal(_, _) => {
+            Expr::Literal { .. } => {
                 inferred_type_stack.push_front(expr.clone());
             }
-            Expr::Number(_, _, _) => {
+            Expr::Number { .. } => {
                 inferred_type_stack.push_front(expr.clone());
             }
-            Expr::Boolean(_, _) => {
+            Expr::Boolean { .. } => {
                 inferred_type_stack.push_front(expr.clone());
             }
             Expr::And {
                 lhs,
                 rhs,
-                inferred_type,
+                ..
             } => {
                 internal::handle_comparison_op(
                     lhs,

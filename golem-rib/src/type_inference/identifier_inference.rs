@@ -106,8 +106,8 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::PatternMatch(_, arms, _) => {
-                    for arm in arms {
+                Expr::PatternMatch { match_arms, .. } => {
+                    for arm in match_arms {
                         process_arm(arm)
                     }
                 }

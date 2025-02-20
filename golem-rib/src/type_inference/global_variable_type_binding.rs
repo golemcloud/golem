@@ -97,7 +97,7 @@ mod internal {
                 } => {
                     if variable_id == &type_spec.variable_id {
                         if path.is_empty() {
-                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == expr);
+                            let continue_traverse = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, .. }) if expr0.as_ref() == expr);
 
                             if continue_traverse {
                                 temp_stack.push_front((expr.clone(), true));
@@ -125,7 +125,7 @@ mod internal {
                     type_annotation,
                     inferred_type,
                 } => {
-                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField(inner, _, _, _)) if inner.as_ref() == outer);
+                    let continue_search = matches!(expr_queue.back(), Some(Expr::SelectField { expr: expr0, ..}) if expr0.as_ref() == outer);
 
                     handle_select_field(
                         expr,
@@ -214,11 +214,11 @@ mod internal {
                 }
 
                 //
-                Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
+                Expr::PatternMatch { predicate, match_arms, inferred_type, .. } => {
                     handle_pattern_match(
                         predicate,
                         match_arms,
-                        current_inferred_type,
+                        inferred_type,
                         &mut temp_stack,
                     );
                 }
@@ -227,12 +227,12 @@ mod internal {
                     handle_concat(exprs, &mut temp_stack);
                 }
 
-                Expr::ExprBlock(exprs, current_inferred_type) => {
-                    handle_multiple(exprs, current_inferred_type, &mut temp_stack);
+                Expr::ExprBlock { exprs, inferred_type, .. } => {
+                    handle_multiple(exprs, inferred_type, &mut temp_stack);
                 }
 
-                Expr::Not(_, current_inferred_type) => {
-                    handle_not(expr, current_inferred_type, &mut temp_stack);
+                Expr::Not { inferred_type, .. } => {
+                    handle_not(expr, inferred_type, &mut temp_stack);
                 }
 
                 Expr::GreaterThan {
@@ -360,22 +360,22 @@ mod internal {
                     });
                 }
 
-                Expr::Let(variable_id, typ, expr, inferred_type) => {
-                    handle_let(variable_id, expr, typ, inferred_type, &mut temp_stack);
+                Expr::Let { variable_id, type_annotation, expr, inferred_type } => {
+                    handle_let(variable_id, expr, type_annotation, inferred_type, &mut temp_stack);
                 }
-                Expr::Sequence(exprs, type_name, current_inferred_type) => {
-                    handle_sequence(exprs, current_inferred_type, &mut temp_stack, type_name);
+                Expr::Sequence { exprs, type_annotation, inferred_type, .. } => {
+                    handle_sequence(exprs, inferred_type, &mut temp_stack, type_annotation);
                 }
-                Expr::Record(expr, inferred_type) => {
-                    handle_record(expr, inferred_type, &mut temp_stack);
+                Expr::Record { exprs, inferred_type } => {
+                    handle_record(exprs, inferred_type, &mut temp_stack);
                 }
-                Expr::Literal(_, _) => {
+                Expr::Literal {..} => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Number(_, _, _) => {
+                Expr::Number {.. } => {
                     temp_stack.push_front((expr.clone(), false));
                 }
-                Expr::Boolean(_, _) => {
+                Expr::Boolean { ..} => {
                     temp_stack.push_front((expr.clone(), false));
                 }
                 Expr::And { lhs, rhs, .. } => {
