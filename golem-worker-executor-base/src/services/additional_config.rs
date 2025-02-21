@@ -31,13 +31,7 @@ pub struct DefaultAdditionalGolemConfig {
 
 impl HasConfigExamples<DefaultAdditionalGolemConfig> for DefaultAdditionalGolemConfig {
     fn examples() -> Vec<ConfigExample<DefaultAdditionalGolemConfig>> {
-        vec![(
-            "with disabled resource limits",
-            Self {
-                component_cache: ComponentCacheConfig::default(),
-                component_service: ComponentServiceConfig::default(),
-            },
-        )]
+        vec![]
     }
 }
 
@@ -59,6 +53,7 @@ pub fn load_or_dump_config() -> Option<(GolemConfig, DefaultAdditionalGolemConfi
 pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
+    pub max_resolved_component_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -68,6 +63,7 @@ impl Default for ComponentCacheConfig {
         Self {
             max_capacity: 32,
             max_metadata_capacity: 16384,
+            max_resolved_component_capacity: 1024,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
