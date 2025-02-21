@@ -1024,7 +1024,7 @@ impl Expr {
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
 
-        type_inference::type_inference_fix_point(|x| x.inference_scan(function_type_registry), self)
+        type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
 
         self.check_types(function_type_registry)
@@ -1063,37 +1063,12 @@ impl Expr {
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
     // Not all phases of compilation will be part of this scan.
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
-    pub fn inference_scan(&mut self,  function_type_registry: &FunctionTypeRegistry,) -> Result<(), String> {
+    pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
-        let result = self.push_types_down();
-
-        if let Err(err) = result {
-            let better_errors = self.check_types(function_type_registry);
-
-            match better_errors {
-                Ok(_) => {
-                    return Err(err);
-                }
-                Err(errors) => {
-                    return Err(errors);
-                }
-            }
-        }
+        self.push_types_down()?;
         self.infer_all_identifiers()?;
-        let expr = self.pull_types_up();
-        if let Ok(expr) = expr {
-            *self = expr;
-        } else {
-            let better_errors = self.check_types(function_type_registry);
-            match better_errors {
-                Ok(_) => {
-                    expr?;
-                }
-                Err(errors) => {
-                    return Err(errors);
-                }
-            }
-        }
+        let expr = self.pull_types_up()?;
+        *self = expr;
         self.infer_global_inputs();
         Ok(())
     }

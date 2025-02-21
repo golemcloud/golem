@@ -401,7 +401,7 @@ mod internal {
     pub(crate) fn handle_record<'a>(
         inner_expressions: &'a mut [(String, Box<Expr>)],
         outer_inferred_type: &InferredType,
-        push_dow    n_queue: &mut VecDeque<&'a mut Expr>,
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), String> {
         let refined_record_type = RecordType::refine(outer_inferred_type).ok_or({
             let inner_expressions = inner_expressions
