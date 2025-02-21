@@ -78,7 +78,6 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
       }
     });
     setMarkers(markers);
-    console.log("markers", markers);
     monaco.editor.setModelMarkers(model, "yaml", markers);
   };
 

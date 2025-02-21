@@ -1,19 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import {toast} from "@/hooks/use-toast";
-import {fetchData, updateIP} from "@/lib/tauri&web.ts";
-import {ENDPOINT} from "@/service/endpoints.ts";
-import {parseErrorResponse} from "@/service/error-handler.ts";
-import {Api} from "@/types/api.ts";
-import {Component, ComponentList} from "@/types/component.ts";
-import {Plugin} from "@/types/plugin";
+import { toast } from "@/hooks/use-toast";
+import { fetchData, updateIP } from "@/lib/tauri&web.ts";
+import { ENDPOINT } from "@/service/endpoints.ts";
+import { parseErrorResponse } from "@/service/error-handler.ts";
+import { Api } from "@/types/api.ts";
+import { Component, ComponentList } from "@/types/component.ts";
+import { Plugin } from "@/types/plugin";
 
 export class Service {
   public baseUrl: string;
 
   constructor(baseUrl: string) {
-    this.baseUrl = ""; // Initialize with empty string
-    // this.initializeBaseUrl(baseUrl); // Call async initialization
-    console.log("baseUrl", this.baseUrl);
     this.baseUrl = baseUrl;
   }
 
@@ -404,33 +401,6 @@ export class Service {
       }
     } catch (response: any) {
       const result = parseErrorResponse(response);
-      // throw result;
-      // TODO: Need to handle error response for get request
-      // console.log("response", response)
-      // if (method !== "GET") {
-      //     let descriptions = "";
-      //     if (response?.error) {
-      //         descriptions = response?.error;
-      //     }
-      //     if (response?.errors) {
-      //         descriptions = response?.errors.join(", ");
-      //     }
-      //     if (typeof response === "string") {
-      //         descriptions = parseErrorMessage(response);
-      //     }
-      //     if (response?.status !== 504) {
-      //         toast({
-      //             title: "API request failed.",
-      //             description: descriptions,
-      //             variant: "destructive",
-      //             duration: descriptions.includes("Rib compilation error")
-      //                 ? Infinity
-      //                 : 5000,
-      //         });
-      //     }
-      // }
-      //
-      // // Re-throw the error only for non-504 status
       if (response?.status !== 504) {
         throw result;
       }

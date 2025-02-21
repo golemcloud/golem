@@ -243,7 +243,6 @@ const CreateRoute = () => {
   }, [apiName, version, path, method, form]);
 
   const onSubmit = async (values: RouteFormValues) => {
-    console.log("activeApiDetails", activeApiDetails);
     if (!activeApiDetails) return;
 
     try {
@@ -260,7 +259,6 @@ const CreateRoute = () => {
         });
         return;
       }
-      console.log("selectedApi", selectedApi);
       selectedApi.routes = selectedApi.routes.filter(
         route => !(route.path === path && route.method === method),
       );

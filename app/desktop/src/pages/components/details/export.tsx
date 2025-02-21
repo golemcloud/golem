@@ -18,9 +18,7 @@ import {
 import { useEffect, useState } from "react";
 import { API } from "@/service";
 import { useParams } from "react-router-dom";
-import { ComponentList, Export, Parameter, Typ } from "@/types/component";
-
-// ---------- Shadcn UI Tooltip Imports ----------
+import { ComponentList, Export, Parameter, Typ } from "@/types/component"; // ---------- Shadcn UI Tooltip Imports ----------
 import {
   Tooltip,
   TooltipContent,
@@ -117,7 +115,6 @@ function generateFunctionInterfacesV1(data: Export[]): ExportResult[] {
       const functionName = func.name.replace(/-([a-z])/g, (_, letter: string) =>
         letter.toUpperCase(),
       );
-      console.log("func", JSON.stringify(func.parameters));
       const paramNodes = buildParameterNodes(func.parameters);
 
       const returnNode = func.results?.[0]?.typ ? (

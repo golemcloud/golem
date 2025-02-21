@@ -79,7 +79,6 @@ export default function YamlUploader() {
 
       const apiResponse = await API.getApi(apiName!);
       const selectedApi = apiResponse.find(api => api.version === version);
-      console.log("selectedApi", apiName, version, payload);
       const r = await API.callApi(
         ENDPOINT.putApi(apiName, version),
         "PUT",

@@ -15,11 +15,9 @@ export function parseErrorResponse(response: any): ErrorResponse {
     description: "Something went wrong. Please try again later.",
     payload: response,
   };
-  console.log("response", response, typeof response);
   if (typeof response === "string") {
     parsedError.description = parseErrorMessage(response);
   } else if (typeof response === "object") {
-    console.log("object", JSON.stringify(response), String(response));
     if (response?.error) {
       parsedError.description = response?.error;
     } else if (response?.Error) {
@@ -104,7 +102,6 @@ export function parseErrorResponse(response: any): ErrorResponse {
           break;
       }
     } else {
-      console.log("elese", response);
       parsedError.description = parseErrorMessage(String(response));
     }
   }

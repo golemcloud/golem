@@ -29,7 +29,6 @@ export default function APISettings() {
   const [queryParams] = useSearchParams();
   const reload = queryParams.get("reload");
 
-
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showConfirmAllDialog, setShowConfirmAllDialog] = useState(false);
   const [showConfirmAllRoutes, setShowConfirmAllRoutes] = useState(false);

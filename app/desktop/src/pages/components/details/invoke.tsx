@@ -394,8 +394,8 @@ function SectionCard({
         onInvoke(parsedValue);
       }
     } catch (error) {
-      setErrors({ "root": "Invalid JSON format" });
-    } 
+      setErrors({ root: "Invalid JSON format" });
+    }
   };
 
   const validateForm = (parsedValue: any[]): Record<string, string> => {

@@ -108,17 +108,19 @@ export const ApiLayout = () => {
           setActiveItem={setCurrentMenu}
           title={"Worker"}
         >
-          {currentApiDetails?.routes?.length> 0 && <NavRoutes
-            routes={(currentApiDetails?.routes || []).map(route => {
-              return {
-                method: route.method,
-                name: route.path,
-                url: `/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
-              };
-            })}
-            setActiveItem={value => setCurrentMenu(value)}
-            activeItem={currentMenu}
-          />}
+          {currentApiDetails?.routes?.length > 0 && (
+            <NavRoutes
+              routes={(currentApiDetails?.routes || []).map(route => {
+                return {
+                  method: route.method,
+                  name: route.path,
+                  url: `/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
+                };
+              })}
+              setActiveItem={value => setCurrentMenu(value)}
+              activeItem={currentMenu}
+            />
+          )}
         </SidebarMenu>
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 border-b">

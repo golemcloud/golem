@@ -157,7 +157,6 @@ export const ApiRoute = () => {
           const route = selectedApi.routes.find(
             route => route.path === path && route.method === method,
           );
-          console.log("route", route);
           setCurrentRoute(route || ({} as RouteRequestData));
         } else {
           navigate(`/apis/${apiName}/version/${version}`);

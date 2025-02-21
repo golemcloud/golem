@@ -1,12 +1,26 @@
-import {API} from "@/service";
-import {useCallback, useEffect, useMemo, useState} from "react";
-import {Outlet, useLocation, useNavigate, useParams} from "react-router-dom";
-import {SidebarInset, SidebarProvider, SidebarTrigger,} from "@/components/ui/sidebar.tsx";
-import {SidebarMenu} from "@/components/sidebar.tsx";
-import {Separator} from "@/components/ui/separator.tsx";
+import { API } from "@/service";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar.tsx";
+import { SidebarMenu } from "@/components/sidebar.tsx";
+import { Separator } from "@/components/ui/separator.tsx";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
-import {ComponentList} from "@/types/component.ts";
-import {ArrowRightFromLine, Folder, Home, Info, Pencil, Pickaxe, Settings, ToyBrick, Workflow,} from "lucide-react";
+import { ComponentList } from "@/types/component.ts";
+import {
+  ArrowRightFromLine,
+  Folder,
+  Home,
+  Info,
+  Pencil,
+  Pickaxe,
+  Settings,
+  ToyBrick,
+  Workflow,
+} from "lucide-react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,7 +29,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
-import {SidebarMenuProps} from "@/components/nav-main.tsx";
+import { SidebarMenuProps } from "@/components/nav-main.tsx";
 
 /**
  * Creates menu items for the component sidebar

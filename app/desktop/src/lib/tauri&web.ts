@@ -24,7 +24,6 @@ export async function saveFile(fileName: string, data: Uint8Array) {
 
 export async function updateIP(newIP: string) {
   try {
-    console.log("newIP", newIP);
     await invoke("update_backend_ip", { newIp: newIP });
     console.log("Backend IP updated!");
   } catch (error) {

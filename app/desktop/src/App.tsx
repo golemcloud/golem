@@ -11,7 +11,6 @@ import WorkerInfo from "@/pages/workers/details/info.tsx";
 import WorkerInvoke from "@/pages/workers/details/invoke.tsx";
 import ComponentInvoke from "@/pages/components/details/invoke.tsx";
 
-
 // Lazy load route components for code splitting and performance improvement
 // Lazy-loading improves initial load times by loading components only when needed.
 const Components = lazy(() => import("@/pages/components"));

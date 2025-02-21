@@ -64,8 +64,6 @@ export function BackendEndpointInput() {
   const handleSave = async () => {
     try {
       endpointSchema.parse(endpoint);
-      // Validation passed
-      console.log("Saving endpoint:", endpoint);
       await updateService(endpoint);
       window.location.reload();
       setOpen(false);

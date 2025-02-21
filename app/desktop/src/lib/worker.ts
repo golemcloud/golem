@@ -370,7 +370,11 @@ export function validateJsonStructure(
     case "U16":
     case "U8": {
       const bitSize = parseInt(type.slice(1), 10);
-      if (typeof data !== "number" || !isUnsigned(data) || !fitsBitSize(data, bitSize, false)) {
+      if (
+        typeof data !== "number" ||
+        !isUnsigned(data) ||
+        !fitsBitSize(data, bitSize, false)
+      ) {
         return `Expected an unsigned ${bitSize}-bit integer for field "${field.name}", but got ${data}`;
       }
       break;
@@ -381,7 +385,11 @@ export function validateJsonStructure(
     case "S16":
     case "S8": {
       const bitSize = parseInt(type.slice(1), 10);
-      if (typeof data !== "number" || !isInteger(data) || !fitsBitSize(data, bitSize, true)) {
+      if (
+        typeof data !== "number" ||
+        !isInteger(data) ||
+        !fitsBitSize(data, bitSize, true)
+      ) {
         return `Expected a signed ${bitSize}-bit integer for field "${field.name}", but got ${data}`;
       }
       break;
@@ -429,7 +437,10 @@ export function validateJsonStructure(
 
     case "Option": {
       if (data !== null && data !== undefined) {
-        const error = validateJsonStructure(data, { ...field, typ: field.typ.inner! });
+        const error = validateJsonStructure(data, {
+          ...field,
+          typ: field.typ.inner!,
+        });
         if (error) return error;
       }
       break;
@@ -463,10 +474,14 @@ export function validateJsonStructure(
         return `Expected variant to be one of [${caseNames.join(", ")}] for field "${field.name}"`;
       }
       const selectedCaseField = cases.find(
-        (c): c is { name: string; typ: Typ } => typeof c !== "string" && c.name === selectedCase,
+        (c): c is { name: string; typ: Typ } =>
+          typeof c !== "string" && c.name === selectedCase,
       );
       if (selectedCaseField) {
-        const error = validateJsonStructure(data[selectedCase], selectedCaseField);
+        const error = validateJsonStructure(
+          data[selectedCase],
+          selectedCaseField,
+        );
         if (error) return error;
       }
       break;
@@ -477,7 +492,11 @@ export function validateJsonStructure(
         return `Expected an object for field "${field.name}", but got ${typeof data}`;
       }
       if (data.ok !== null && data.ok !== undefined) {
-        const error = validateJsonStructure(data.ok, { ...field, typ: field.typ.ok!, name: "" });
+        const error = validateJsonStructure(data.ok, {
+          ...field,
+          typ: field.typ.ok!,
+          name: "",
+        });
         if (error) return error;
       }
       if (data.err !== null && data.err !== undefined) {
