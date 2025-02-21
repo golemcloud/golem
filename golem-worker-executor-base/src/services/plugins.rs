@@ -15,6 +15,7 @@
 use crate::error::GolemError;
 use crate::grpc::authorised_grpc_request;
 use crate::services::golem_config::PluginServiceConfig;
+use crate::{DefaultGolemTypes, GolemTypes};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
@@ -25,8 +26,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation, PluginOwner,
-    PluginScope,
+    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
@@ -40,7 +40,7 @@ use uuid::Uuid;
 /// data. It is in a separate trait because it does not have to be parametric for the Owner/Scope
 /// types.
 #[async_trait]
-pub trait PluginsObservations {
+pub trait PluginsObservations: Send + Sync {
     /// Observes a known plugin installation; as getting component metadata returns the active set
     /// of installed plugins in its result, it is an opportunity to cache this information and
     /// use it in further calls to `get`.
@@ -57,7 +57,7 @@ pub trait PluginsObservations {
 }
 
 #[async_trait]
-pub trait Plugins<Owner: PluginOwner, Scope: PluginScope>: PluginsObservations {
+pub trait Plugins<T: GolemTypes>: PluginsObservations {
     /// Gets a plugin installation and the plugin definition it refers to for a given plugin
     /// installation id belonging to a specific component version
     async fn get(
@@ -66,7 +66,13 @@ pub trait Plugins<Owner: PluginOwner, Scope: PluginScope>: PluginsObservations {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         installation_id: &PluginInstallationId,
-    ) -> Result<(PluginInstallation, PluginDefinition<Owner, Scope>), GolemError> {
+    ) -> Result<
+        (
+            PluginInstallation,
+            PluginDefinition<T::PluginOwner, T::PluginScope>,
+        ),
+        GolemError,
+    > {
         let plugin_installation = self
             .get_plugin_installation(account_id, component_id, component_version, installation_id)
             .await?;
@@ -95,14 +101,14 @@ pub trait Plugins<Owner: PluginOwner, Scope: PluginScope>: PluginsObservations {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<Owner, Scope>, GolemError>;
+    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError>;
 }
 
 pub fn default_configured(
     config: &PluginServiceConfig,
 ) -> (
-    Arc<dyn Plugins<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
-    Arc<dyn PluginsObservations + Send + Sync>,
+    Arc<dyn Plugins<DefaultGolemTypes>>,
+    Arc<dyn PluginsObservations>,
 ) {
     match config {
         PluginServiceConfig::Grpc(config) => {
@@ -121,15 +127,15 @@ pub fn default_configured(
             (Arc::new(client1), Arc::new(client2))
         }
         PluginServiceConfig::Local(_) => {
-            let client1 = PluginsUnavailable::new();
+            let client1 = PluginsUnavailable;
             let client2 = client1.clone();
             (Arc::new(client1), Arc::new(client2))
         }
     }
 }
 
-#[derive(Clone)]
-struct CachedPlugins<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>> {
+#[allow(clippy::type_complexity)]
+struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
     inner: Inner,
     cached_plugin_installations: Cache<
         (
@@ -142,13 +148,25 @@ struct CachedPlugins<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owne
         PluginInstallation,
         GolemError,
     >,
-    cached_plugin_definitions:
-        Cache<(AccountId, String, String), (), PluginDefinition<Owner, Scope>, GolemError>,
+    cached_plugin_definitions: Cache<
+        (AccountId, String, String),
+        (),
+        PluginDefinition<T::PluginOwner, T::PluginScope>,
+        GolemError,
+    >,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>>
-    CachedPlugins<Owner, Scope, Inner>
-{
+impl<T: GolemTypes, Inner: Plugins<T> + Clone> Clone for CachedPlugins<T, Inner> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            cached_plugin_installations: self.cached_plugin_installations.clone(),
+            cached_plugin_definitions: self.cached_plugin_definitions.clone(),
+        }
+    }
+}
+
+impl<T: GolemTypes, Inner: Plugins<T>> CachedPlugins<T, Inner> {
     pub fn new(inner: Inner, plugin_cache_capacity: usize) -> Self {
         Self {
             inner,
@@ -169,9 +187,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope>>
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope> + Send + Sync>
-    PluginsObservations for CachedPlugins<Owner, Scope, Inner>
-{
+impl<T: GolemTypes, Inner: Plugins<T>> PluginsObservations for CachedPlugins<T, Inner> {
     async fn observe_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -195,12 +211,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Inner: Plugins<Owner, Scope> + Send
 }
 
 #[async_trait]
-impl<
-        Owner: PluginOwner,
-        Scope: PluginScope,
-        Inner: Plugins<Owner, Scope> + Clone + Send + Sync + 'static,
-    > Plugins<Owner, Scope> for CachedPlugins<Owner, Scope, Inner>
-{
+impl<T: GolemTypes, Inner: Plugins<T> + Clone + 'static> Plugins<T> for CachedPlugins<T, Inner> {
     async fn get_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -240,7 +251,7 @@ impl<
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<Owner, Scope>, GolemError> {
+    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
         let key = (
             account_id.clone(),
             plugin_installation.name.clone(),
@@ -322,7 +333,7 @@ impl PluginsObservations for DefaultGrpcPlugins {
 }
 
 #[async_trait]
-impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
+impl Plugins<DefaultGolemTypes> for DefaultGrpcPlugins {
     async fn get_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -419,24 +430,10 @@ impl Plugins<DefaultPluginOwner, DefaultPluginScope> for DefaultGrpcPlugins {
 }
 
 #[derive(Clone)]
-struct PluginsUnavailable<Owner: PluginOwner, Scope: PluginScope> {
-    _owner: std::marker::PhantomData<Owner>,
-    _scope: std::marker::PhantomData<Scope>,
-}
-
-impl<Owner: PluginOwner, Scope: PluginScope> PluginsUnavailable<Owner, Scope> {
-    pub fn new() -> Self {
-        Self {
-            _owner: std::marker::PhantomData,
-            _scope: std::marker::PhantomData,
-        }
-    }
-}
+struct PluginsUnavailable;
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> PluginsObservations
-    for PluginsUnavailable<Owner, Scope>
-{
+impl PluginsObservations for PluginsUnavailable {
     async fn observe_plugin_installation(
         &self,
         _account_id: &AccountId,
@@ -449,9 +446,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginsObservations
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> Plugins<Owner, Scope>
-    for PluginsUnavailable<Owner, Scope>
-{
+impl<T: GolemTypes> Plugins<T> for PluginsUnavailable {
     async fn get_plugin_installation(
         &self,
         _account_id: &AccountId,
@@ -468,7 +463,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> Plugins<Owner, Scope>
         _component_id: &ComponentId,
         _component_version: ComponentVersion,
         _plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<Owner, Scope>, GolemError> {
+    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
         Err(GolemError::runtime("Not available"))
     }
 }
