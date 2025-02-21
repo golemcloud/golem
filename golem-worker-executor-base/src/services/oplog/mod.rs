@@ -386,7 +386,7 @@ impl OpenOplogs {
     pub async fn get_or_open(
         &self,
         worker_id: &WorkerId,
-        constructor: impl OplogConstructor + Send + 'static,
+        constructor: impl OplogConstructor + 'static,
     ) -> Arc<dyn Oplog + Send + Sync> {
         loop {
             let constructor_clone = constructor.clone();
@@ -446,7 +446,7 @@ impl Debug for OpenOplogs {
 }
 
 #[async_trait]
-pub trait OplogConstructor: Clone {
+pub trait OplogConstructor: Clone + Send {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,

@@ -2,7 +2,7 @@ use crate::InferredType;
 
 // Convert AllOf(AllOf(x, y, z), AllOf(a, b, OneOf(c, d))) to AllOf(x, y, z, a, b, OneOf(c,d))
 // In Rib inference, there is no situation of a OneOf having AllOf
-// We have only 1 semantic type: Which is AllOf(OneOf) and not OneOf(AllOf)
+// We intentionally make sure we have only AllOf(OneOf) and not OneOf(AllOf)
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut one_of_types = vec![];
     let mut all_of_types = vec![];
@@ -13,7 +13,6 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
                 let flattened = flatten_one_of_list(types);
                 one_of_types.extend(flattened);
             }
-            // we made sure to flatten all the all ofs
             InferredType::AllOf(all_of) => {
                 let flattened = flatten_all_of_list(all_of);
                 all_of_types.extend(flattened);
@@ -35,7 +34,6 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
 // Note that we don't have the situation of OneOf(AllOf) in Rib inference.
 // The simplest form of resolving a OneOf is adding information of AllOf in the outer layer.
 // Otherwise, `OneOf` is unresolved forever.
-// In other words, in Rib inference, there is no situation of a OneOf having AllOf
 pub fn flatten_one_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut one_of_types = vec![];
     let mut all_of_types = vec![];
@@ -47,7 +45,6 @@ pub fn flatten_one_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
 
                 one_of_types.extend(flattened);
             }
-            // we made sure to flatten all the all ofs
             InferredType::AllOf(types) => {
                 let flattened = flatten_all_of_list(types);
                 all_of_types.extend(flattened);

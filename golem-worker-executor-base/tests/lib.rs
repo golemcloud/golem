@@ -183,9 +183,8 @@ impl WorkerExecutorTestDependencies {
             SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
         );
         let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-            FileSystemComponentService::new(Path::new("data/components")),
-        );
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+            Arc::new(FileSystemComponentService::new(Path::new("data/components")).await);
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
                 .await

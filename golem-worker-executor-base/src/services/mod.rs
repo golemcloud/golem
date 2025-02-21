@@ -19,11 +19,10 @@ use crate::services::events::Events;
 use crate::services::plugins::Plugins;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::{PluginOwner, PluginScope};
 use tokio::runtime::Handle;
 
 pub mod active_workers;
+pub mod additional_config;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
@@ -52,8 +51,8 @@ pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
 }
 
-pub trait HasComponentService {
-    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync>;
+pub trait HasComponentService<T> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService<T>>;
 }
 
 pub trait HasShardManagerService {
@@ -146,8 +145,8 @@ pub trait HasFileLoader {
     fn file_loader(&self) -> Arc<FileLoader>;
 }
 
-pub trait HasPlugins<Owner: PluginOwner, Scope: PluginScope> {
-    fn plugins(&self) -> Arc<dyn Plugins<Owner, Scope> + Send + Sync>;
+pub trait HasPlugins<T> {
+    fn plugins(&self) -> Arc<dyn Plugins<T>>;
 }
 
 pub trait HasOplogProcessorPlugin {
@@ -161,7 +160,7 @@ pub trait HasRdbmsService {
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
-    + HasComponentService
+    + HasComponentService<Ctx::Types>
     + HasConfig
     + HasWorkerForkService
     + HasWorkerService
@@ -181,7 +180,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
-    + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+    + HasPlugins<Ctx::Types>
     + HasOplogProcessorPlugin
     + HasExtraDeps<Ctx>
     + Clone
@@ -192,7 +191,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
-            + HasComponentService
+            + HasComponentService<Ctx::Types>
             + HasConfig
             + HasWorkerForkService
             + HasWorkerService
@@ -212,7 +211,7 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
-            + HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
+            + HasPlugins<Ctx::Types>
             + HasOplogProcessorPlugin
             + HasExtraDeps<Ctx>
             + Clone
@@ -228,7 +227,7 @@ pub struct All<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -248,11 +247,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    >,
+    plugins: Arc<dyn Plugins<Ctx::Types>>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
@@ -297,7 +292,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService<Ctx::Types> + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
@@ -320,11 +315,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -410,8 +401,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService for T {
-    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService<Ctx::Types> for T {
+    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
         self.all().component_service.clone()
     }
 }
@@ -542,16 +533,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>>
-    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope> for T
-{
-    fn plugins(
-        &self,
-    ) -> Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    > {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins<Ctx::Types> for T {
+    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
         self.all().plugins.clone()
     }
 }

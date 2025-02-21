@@ -42,7 +42,6 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::component::ComponentOwner;
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use tokio::runtime::Handle;
 
@@ -62,7 +61,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
-    pub component_service: Arc<dyn component::ComponentService + Send + Sync>,
+    pub component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     pub worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -81,11 +80,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
-    pub plugins: Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    >,
+    pub plugins: Arc<dyn Plugins<Ctx::Types>>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
     pub extra_deps: Ctx::ExtraDeps,
 }
@@ -102,8 +97,8 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasComponentService for DefaultWorkerFork<Ctx> {
-    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+impl<Ctx: WorkerCtx> HasComponentService<Ctx::Types> for DefaultWorkerFork<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
         self.component_service.clone()
     }
 }
@@ -234,17 +229,8 @@ impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx>
-    HasPlugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-    for DefaultWorkerFork<Ctx>
-{
-    fn plugins(
-        &self,
-    ) -> Arc<
-        dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-            + Send
-            + Sync,
-    > {
+impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for DefaultWorkerFork<Ctx> {
+    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
         self.plugins.clone()
     }
 }
@@ -295,7 +281,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -316,11 +302,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<
-            dyn Plugins<<Ctx::ComponentOwner as ComponentOwner>::PluginOwner, Ctx::PluginScope>
-                + Send
-                + Sync,
-        >,
+        plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {

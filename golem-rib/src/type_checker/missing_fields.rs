@@ -2,7 +2,7 @@ use crate::type_checker::{Path, PathElem};
 use crate::Expr;
 use golem_wasm_ast::analysis::AnalysedType;
 
-pub fn find_missing_fields(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
+pub fn find_missing_fields_in_record(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
     let mut missing_paths = Vec::new();
 
     if let AnalysedType::Record(expected_record) = expected {
@@ -11,15 +11,15 @@ pub fn find_missing_fields(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
             .iter()
             .map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone()))
         {
-            if let Expr::Record(actual_reord, _) = expr {
-                let actual_value_opt = actual_reord
+            if let Expr::Record { exprs, .. } = expr {
+                let actual_value_opt = exprs
                     .iter()
                     .find(|(name, _)| *name == field_name)
                     .map(|(_, value)| value);
 
                 if let Some(actual_value) = actual_value_opt {
                     if let AnalysedType::Record(record) = expected_type_of_field {
-                        let nested_paths = find_missing_fields(
+                        let nested_paths = find_missing_fields_in_record(
                             actual_value,
                             &AnalysedType::Record(record.clone()),
                         );

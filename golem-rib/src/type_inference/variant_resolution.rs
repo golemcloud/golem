@@ -40,13 +40,19 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(CallType::Function(parsed_function_name), args, inferred_type) => {
-                    if variants.contains(&parsed_function_name.to_string()) {
-                        *expr = Expr::Call(
-                            CallType::VariantConstructor(parsed_function_name.to_string()),
+                Expr::Call {
+                    call_type: CallType::Function { function_name, .. },
+                    args,
+                    inferred_type,
+                    ..
+                } => {
+                    if variants.contains(&function_name.to_string()) {
+                        *expr = Expr::call(
+                            CallType::VariantConstructor(function_name.to_string()),
+                            None,
                             args.clone(),
-                            inferred_type.clone(),
-                        );
+                        )
+                        .with_inferred_type(inferred_type.clone());
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -65,13 +71,18 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type) => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     if variants.contains(&variable_id.name()) {
-                        *expr = Expr::Call(
+                        *expr = Expr::call(
                             CallType::VariantConstructor(variable_id.name()),
+                            None,
                             vec![],
-                            inferred_type.clone(),
-                        );
+                        )
+                        .with_inferred_type(inferred_type.clone());
                     }
                 }
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -90,7 +101,11 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Identifier(variable_id, _, inferred_type) => {
+                Expr::Identifier {
+                    variable_id,
+                    inferred_type,
+                    ..
+                } => {
                     let key = RegistryKey::FunctionName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
                         function_type_registry.types.get(&key)
@@ -101,18 +116,23 @@ mod internal {
                     }
                 }
 
-                Expr::Call(CallType::Function(parsed_function_name), exprs, inferred_type) => {
-                    let key = RegistryKey::FunctionName(parsed_function_name.to_string());
+                Expr::Call {
+                    call_type: CallType::Function { function_name, .. },
+                    args,
+                    inferred_type,
+                    ..
+                } => {
+                    let key = RegistryKey::FunctionName(function_name.to_string());
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
                         let variant_inferred_type = InferredType::from_variant_cases(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
-                        variant_with_args.push(parsed_function_name.to_string());
+                        variant_with_args.push(function_name.to_string());
                     }
 
-                    for expr in exprs {
+                    for expr in args {
                         queue.push_back(expr);
                     }
                 }

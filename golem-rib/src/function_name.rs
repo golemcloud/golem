@@ -14,7 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
-use combine::stream::easy;
+use combine::stream::position;
+use combine::stream::position::Stream;
 use combine::EasyParser;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
 
 impl std::fmt::Debug for SemVer {
@@ -94,7 +95,7 @@ impl<'de> BorrowDecode<'de> for SemVer {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Encode, Decode, Ord, PartialOrd)]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -134,7 +135,7 @@ impl ParsedFunctionSite {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum DynamicParsedFunctionReference {
     Function {
         function: String,
@@ -500,11 +501,11 @@ impl ParsedFunctionReference {
 // In `DynamicParsedFunctionName` the resource parameters are `Expr` (Rib) while they are `String`
 // in `ParsedFunctionName`.
 // `Expr` implies the real values are yet to be computed, while `String`
-// in ParsedFunctionName is a textual representation of the "real" values.
+// in ParsedFunctionName is a textual representation of the evaluated values.
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,
@@ -516,15 +517,12 @@ impl DynamicParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
-            parser.easy_parse(name);
+        let result = parser.easy_parse(Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.translate_position(name))
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }
@@ -629,15 +627,12 @@ impl ParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
-            parser.easy_parse(name);
+        let result = parser.easy_parse(position::Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.translate_position(name))
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }

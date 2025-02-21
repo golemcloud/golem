@@ -51,6 +51,7 @@ pub struct WorkerCreationResponse {
     pub component_version: ComponentVersion,
 }
 
+// TODO: Add validations (non-empty, no "/", no " ", ...)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct ComponentName(pub String);
 
@@ -1872,6 +1873,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_name: value.component_name.0,
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
+            account_id: None,
             project_id: None,
             created_at: value
                 .created_at

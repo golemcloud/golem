@@ -19,6 +19,7 @@ use combine::{many, optional, ParseError, Parser, Stream};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::type_name::parse_type_name;
+use crate::rib_source_span::GetSourcePosition;
 
 const RESERVED_KEYWORDS: &[&str] = &[
     "if", "then", "else", "match", "ok", "some", "err", "none", "let", "for", "yield", "reduce",
@@ -31,6 +32,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         identifier_text(),
@@ -41,7 +43,7 @@ where
                 .skip(spaces()),
         ),
     )
-        .map(|(variable, typ)| Expr::identifier(variable, typ))
+        .map(|(variable, typ)| Expr::identifier_global(variable, typ))
         .message("Invalid identifier")
 }
 pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>
@@ -51,6 +53,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         letter(),
@@ -80,7 +83,7 @@ mod tests {
     fn test_identifier() {
         let input = "foo";
         let result = Expr::from_text(input);
-        assert_eq!(result, Ok(Expr::identifier("foo", None)));
+        assert_eq!(result, Ok(Expr::identifier_global("foo", None)));
     }
 
     #[test]

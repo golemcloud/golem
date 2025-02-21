@@ -16,6 +16,7 @@ use crate::parser::block_without_return::block_without_return;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier_text;
 use crate::parser::rib_expr::rib_expr as expr;
+use crate::rib_source_span::GetSourcePosition;
 use crate::{Expr, VariableId};
 use combine::parser::char::{alpha_num, char, spaces, string};
 use combine::{attempt, not_followed_by, optional, ParseError, Parser, Stream};
@@ -26,6 +27,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         attempt(
@@ -114,8 +116,8 @@ mod tests {
                 ),
                 Expr::untyped_number(BigDecimal::from(0)),
                 Expr::expr_block(vec![Expr::plus(
-                    Expr::identifier("z", None),
-                    Expr::identifier("p", None)
+                    Expr::identifier_global("z", None),
+                    Expr::identifier_global("p", None)
                 )]),
             )
         );
@@ -148,11 +150,11 @@ mod tests {
                 Expr::list_reduce(
                     VariableId::list_reduce_identifier("z"),
                     VariableId::list_comprehension_identifier("a"),
-                    Expr::identifier("ages", None),
+                    Expr::identifier_global("ages", None),
                     Expr::untyped_number(BigDecimal::from(0)),
                     Expr::expr_block(vec![Expr::plus(
-                        Expr::identifier("z", None),
-                        Expr::identifier("a", None)
+                        Expr::identifier_global("z", None),
+                        Expr::identifier_global("a", None)
                     )]),
                 )
             ])

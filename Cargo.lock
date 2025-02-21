@@ -3191,6 +3191,7 @@ dependencies = [
 name = "golem-rib"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bigdecimal",
  "bincode",
  "combine",
@@ -3223,6 +3224,7 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "dashmap",
+ "figment",
  "futures",
  "golem-api-grpc",
  "golem-common",
@@ -3417,6 +3419,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-service-base",
  "golem-wasm-rpc",
  "golem-worker-executor-base",
  "humantime-serde",

@@ -98,40 +98,32 @@ pub fn check_types_in_math_expr(expr: &mut Expr) -> Result<(), BinaryMathExprErr
     while let Some(expr) = queue.pop_back() {
         let expr_str = expr.to_string();
         match expr {
-            Expr::Plus(left_expr, right_expr, _) => {
-                if let Err(error_type) =
-                    internal::check_math_expression_types(expr_str, left_expr, right_expr)
-                {
+            Expr::Plus { lhs, rhs, .. } => {
+                if let Err(error_type) = internal::check_math_expression_types(expr_str, lhs, rhs) {
                     return Err(BinaryMathExprError {
                         error_type,
                         op_type: BinaryOpType::Addition,
                     });
                 }
             }
-            Expr::Minus(left_expr, right_expr, _) => {
-                if let Err(error_type) =
-                    internal::check_math_expression_types(expr_str, left_expr, right_expr)
-                {
+            Expr::Minus { lhs, rhs, .. } => {
+                if let Err(error_type) = internal::check_math_expression_types(expr_str, lhs, rhs) {
                     return Err(BinaryMathExprError {
                         error_type,
                         op_type: BinaryOpType::Subtraction,
                     });
                 }
             }
-            Expr::Multiply(left_expr, right_expr, _) => {
-                if let Err(error_type) =
-                    internal::check_math_expression_types(expr_str, left_expr, right_expr)
-                {
+            Expr::Multiply { lhs, rhs, .. } => {
+                if let Err(error_type) = internal::check_math_expression_types(expr_str, lhs, rhs) {
                     return Err(BinaryMathExprError {
                         error_type,
                         op_type: BinaryOpType::Multiplication,
                     });
                 }
             }
-            Expr::Divide(left_expr, right_expr, _) => {
-                if let Err(error_type) =
-                    internal::check_math_expression_types(expr_str, left_expr, right_expr)
-                {
+            Expr::Divide { lhs, rhs, .. } => {
+                if let Err(error_type) = internal::check_math_expression_types(expr_str, lhs, rhs) {
                     return Err(BinaryMathExprError {
                         error_type,
                         op_type: BinaryOpType::Division,

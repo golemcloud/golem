@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::parser::identifier::identifier_text;
+use crate::parser::rib_expr::rib_expr;
+use crate::parser::type_name::parse_type_name;
+use crate::rib_source_span::GetSourcePosition;
 use combine::parser::char::{alpha_num, char};
 use combine::{
     attempt, not_followed_by, optional,
@@ -19,18 +25,13 @@ use combine::{
     ParseError, Parser,
 };
 
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
-use crate::parser::identifier::identifier_text;
-use crate::parser::rib_expr::rib_expr;
-use crate::parser::type_name::parse_type_name;
-
 pub fn let_binding<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     attempt(
         string("let").skip(not_followed_by(alpha_num().or(char('-')).or(char('_'))).skip(spaces())),
@@ -58,6 +59,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     identifier_text().message("Unable to parse binding variable")
 }
@@ -65,8 +67,6 @@ where
 #[cfg(test)]
 mod tests {
     use test_r::test;
-
-    use combine::EasyParser;
 
     use crate::parser::type_name::TypeName;
     use crate::{InferredType, VariableId};
@@ -76,12 +76,13 @@ mod tests {
     #[test]
     fn test_let_binding() {
         let input = "let foo = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding("foo", Expr::identifier("bar", None), None),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_global("bar", None),
+                None
             ))
         );
     }
@@ -89,19 +90,19 @@ mod tests {
     #[test]
     fn test_let_binding_with_sequence() {
         let input = "let foo = [bar, baz]";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::sequence(
-                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
-                        None
-                    ),
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ],
                     None
                 ),
-                ""
+                None
             ))
         );
     }
@@ -109,16 +110,16 @@ mod tests {
     #[test]
     fn test_let_binding_with_binary_comparisons() {
         let input = "let foo = bar == baz";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::equal_to(Expr::identifier("bar", None), Expr::identifier("baz", None)),
-                    None
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::equal_to(
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
                 ),
-                ""
+                None
             ))
         );
     }
@@ -126,16 +127,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_option() {
         let input = "let foo = some(bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::option(Some(Expr::identifier("bar", None))),
-                    None
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::identifier_global("bar", None))),
+                None
             ))
         );
     }
@@ -143,12 +141,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_result() {
         let input = "let foo = ok(bar)";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar", None), None), None),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::ok(Expr::identifier_global("bar", None), None),
+                None
             ))
         );
     }
@@ -156,26 +155,26 @@ mod tests {
     #[test]
     fn test_let_binding_with_literal() {
         let input = "let foo = \"bar\"";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((Expr::let_binding("foo", Expr::literal("bar"), None), ""))
+            Ok(Expr::let_binding("foo", Expr::literal("bar"), None))
         );
     }
 
     #[test]
     fn test_let_binding_with_record() {
         let input = "let foo = { bar : baz }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))]),
-                    None
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::record(vec![(
+                    "bar".to_string(),
+                    Expr::identifier_global("baz", None)
+                )]),
+                None
             ))
         );
     }
@@ -183,20 +182,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u8() {
         let input = "let foo: u8 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::U8)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U8)
             ))
         );
     }
@@ -204,20 +196,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u16() {
         let input = "let foo: u16 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::U16)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U16)
             ))
         );
     }
@@ -225,20 +210,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u32() {
         let input = "let foo: u32 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::U32)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U32)
             ))
         );
     }
@@ -246,20 +224,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u64() {
         let input = "let foo: u64 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::U64)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::U64)
             ))
         );
     }
@@ -267,20 +238,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s8() {
         let input = "let foo: s8 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::S8,)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S8,)
             ))
         );
     }
@@ -288,20 +252,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s16() {
         let input = "let foo: s16 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::S16)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S16)
             ))
         );
     }
@@ -309,20 +266,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s32() {
         let input = "let foo: s32 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::S32)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S32)
             ))
         );
     }
@@ -330,20 +280,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s64() {
         let input = "let foo: s64 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::S64,)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::S64,)
             ))
         );
     }
@@ -351,20 +294,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_f32() {
         let input = "let foo: f32 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::F32)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::F32)
             ))
         );
     }
@@ -372,20 +308,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_f64() {
         let input = "let foo: f64 = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::F64)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::F64)
             ))
         );
     }
@@ -393,20 +322,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_chr() {
         let input = "let foo: char = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::Chr)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::Chr)
             ))
         );
     }
@@ -414,20 +336,13 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_str() {
         let input = "let foo: string = bar";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Identifier(
-                        VariableId::global("bar".to_string()),
-                        None,
-                        InferredType::Unknown
-                    ),
-                    Some(TypeName::Str)
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::identifier_with_variable_id(VariableId::global("bar".to_string()), None,),
+                Some(TypeName::Str)
             ))
         );
     }
@@ -435,20 +350,14 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_list_u8() {
         let input = "let foo: list<u8> = []";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::Sequence(
-                        vec![],
-                        None,
-                        InferredType::List(Box::new(InferredType::Unknown))
-                    ),
-                    Some(TypeName::List(Box::new(TypeName::U8)))
-                ),
-                ""
+            Ok(Expr::let_binding(
+                "foo",
+                Expr::sequence(vec![], None)
+                    .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
+                Some(TypeName::List(Box::new(TypeName::U8)))
             ))
         );
     }

@@ -81,7 +81,7 @@ async fn execute(
 }
 
 #[test]
-async fn test_api_def_for_valid_input() {
+async fn test_legacy_api_def_for_valid_input() {
     let api_request =
         get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
 
@@ -96,7 +96,8 @@ async fn test_api_def_for_valid_input() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -124,7 +125,48 @@ async fn test_api_def_for_valid_input() {
 }
 
 #[test]
-async fn test_api_def_for_invalid_input_with_type_mismatch_for_worker_name_rib_input() {
+async fn test_first_class_worker_api_def_for_valid_input() {
+    let api_request =
+        get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response_mapping = r#"
+       let id: u64 = request.path.user-id;
+       let worker-name = "shopping-cart-${id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_1() {
     // RibInput (request.path.user-id) to form worker name is expected to be a u64
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -137,7 +179,8 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_for_worker_name_rib_i
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -157,7 +200,36 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_for_worker_name_rib_i
 }
 
 #[test]
-async fn test_api_def_for_invalid_input_with_type_mismatch_for_response_mapping_rib_input() {
+async fn test_first_class_worker_api_def_for_invalid_input_with_type_mismatch_1() {
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    // user-id is a string, but the worker-name rib expressions expects it to be a u64
+    let api_request =
+        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_2() {
     let worker_name = r#"
       "shopping-cart"
     "#;
@@ -170,7 +242,38 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_for_response_mapping_
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    // user-id is a string, but the rib expressions expects it to be a u64
+    let api_request =
+        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+async fn test_first_class_worker_api_def_for_invalid_input_with_type_mismatch_2() {
+    // RibInput (request.path.user-id) to form response is expected to be a u64
+    let response_mapping = r#"
+      let user: u64 = request.path.user-id;
+      let worker-instance = instance("shopping-cart");
+      let response = worker-instance.get-cart-contents("a", "user-${user}");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -839,9 +942,12 @@ async fn test_api_def_with_path_and_query_params_lookup_for_valid_input() {
         response
     "#;
 
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", worker_name, response_mapping)
-            .await;
+    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
+        "/foo/{user-id}?{token-id}",
+        Some(worker_name),
+        response_mapping,
+    )
+    .await;
 
     let session_store = internal::get_session_store();
 
@@ -900,7 +1006,8 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -958,7 +1065,8 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -1030,7 +1138,8 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -1100,7 +1209,8 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", worker_name, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -1144,7 +1254,7 @@ async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
 
         let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
             "/getcartcontent/{cart-id}",
-            "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
+            Some("${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}"),
             expression,
         )
         .await;
@@ -1246,11 +1356,16 @@ fn get_preflight_gateway_request(
 
 async fn get_api_def_with_worker_binding(
     path_pattern: &str,
-    worker_name: &str,
+    global_worker_name: Option<&str>,
     rib_expression: &str,
 ) -> HttpApiDefinition {
-    let yaml_string = format!(
-        r#"
+    // Global worker name exists only for backward compatibility
+    // With first class worker support, we always have `none` as global worker name
+    // With first class worker support (where worker name is none), it depends on the Rib script, whether an invoke is with a ephemeral worker or not
+    let yaml_string = match global_worker_name {
+        Some(worker_name) => {
+            format!(
+                r#"
           id: users-api
           version: 0.0.1
           createdAt: 2024-08-21T07:42:15.696Z
@@ -1266,8 +1381,30 @@ async fn get_api_def_with_worker_binding(
               response: '${{{}}}'
 
         "#,
-        path_pattern, worker_name, rib_expression
-    );
+                path_pattern, worker_name, rib_expression
+            )
+        }
+        None => {
+            format!(
+                r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Get
+            path: {}
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              response: '${{{}}}'
+
+        "#,
+                path_pattern, rib_expression
+            )
+        }
+    };
 
     // Serde is available only for user facing HttpApiDefinition
     let http_api_definition_request: api::HttpApiDefinitionRequest =

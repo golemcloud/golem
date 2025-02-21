@@ -21,7 +21,7 @@ pub fn reset_type_info(expr: &mut Expr) {
 
     // Start from the end
     while let Some(expr) = queue.pop_back() {
-        expr.override_type_type_mut(InferredType::Unknown);
+        expr.with_inferred_type_mut(InferredType::Unknown);
         expr.visit_children_mut_bottom_up(&mut queue);
     }
 }

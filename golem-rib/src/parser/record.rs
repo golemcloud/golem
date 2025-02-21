@@ -18,16 +18,17 @@ use combine::{
     sep_by1, ParseError, Parser, Stream,
 };
 
+use super::rib_expr::rib_expr;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
-
-use super::rib_expr::rib_expr;
+use crate::rib_source_span::GetSourcePosition;
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
     where [
         Input: Stream<Token = char>,
         RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,
+        Input::Position: GetSourcePosition
     ]
     {
        record_()
@@ -40,6 +41,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     spaces()
         .with(
@@ -66,6 +68,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     many1(letter().or(char_('_').or(char_('-'))))
         .map(|s: Vec<char>| s.into_iter().collect())
@@ -83,6 +86,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     (
         field_key().skip(spaces()),
@@ -99,139 +103,128 @@ where
 mod tests {
     use test_r::test;
 
-    use combine::EasyParser;
-
     use super::*;
 
     #[test]
     fn test_singleton_record() {
         let input = "{foo: bar}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![("foo".to_string(), Expr::identifier("bar", None))]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::identifier_global("bar", None)
+            )]))
         );
     }
 
     #[test]
     fn test_record() {
         let input = "{foo: bar, baz: qux}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![
-                    ("foo".to_string(), Expr::identifier("bar", None)),
-                    ("baz".to_string(), Expr::identifier("qux", None))
-                ]),
-                ""
-            ))
+            Ok(Expr::record(vec![
+                ("foo".to_string(), Expr::identifier_global("bar", None)),
+                ("baz".to_string(), Expr::identifier_global("qux", None))
+            ]))
         );
     }
 
     #[test]
     fn test_record_with_values() {
         let input = "{ foo: \"bar\" }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![("foo".to_string(), Expr::literal("bar"))]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::literal("bar")
+            )]))
         );
     }
 
     #[test]
     fn test_record_with_invalid_values() {
         let input = "{ foo: 'bar' }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_nested_records() {
         let input = "{foo: {bar: baz}}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
                 Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz", None))])
-                )]),
-                ""
-            ))
+                    "bar".to_string(),
+                    Expr::identifier_global("baz", None)
+                )])
+            )]))
         );
     }
 
     #[test]
     fn test_record_of_tuple() {
         let input = "{foo: (bar, baz)}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::tuple(vec![
-                        Expr::identifier("bar", None),
-                        Expr::identifier("baz", None)
-                    ])
-                )]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::tuple(vec![
+                    Expr::identifier_global("bar", None),
+                    Expr::identifier_global("baz", None)
+                ])
+            )]))
         );
     }
 
     #[test]
     fn test_record_of_sequence() {
         let input = "{foo: [bar, baz]}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::sequence(
-                        vec![Expr::identifier("bar", None), Expr::identifier("baz", None)],
-                        None
-                    )
-                )]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::sequence(
+                    vec![
+                        Expr::identifier_global("bar", None),
+                        Expr::identifier_global("baz", None)
+                    ],
+                    None
+                )
+            )]))
         );
     }
 
     #[test]
     fn test_record_of_result() {
         let input = "{foo: ok(bar)}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::ok(Expr::identifier("bar", None), None)
-                )]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "foo".to_string(),
+                Expr::ok(Expr::identifier_global("bar", None), None)
+            )]))
         );
     }
 
     #[test]
     fn test_record_keys_can_be_key_words() {
         let input = "{err: bar}";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::record(vec![("err".to_string(), Expr::identifier("bar", None))]),
-                ""
-            ))
+            Ok(Expr::record(vec![(
+                "err".to_string(),
+                Expr::identifier_global("bar", None)
+            )]))
         );
     }
 }

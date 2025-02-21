@@ -126,6 +126,7 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
             component_name: value.component_name.0,
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
+            account_id: None,
             project_id: None,
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                 value.created_at,

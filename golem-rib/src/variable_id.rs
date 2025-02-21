@@ -16,7 +16,9 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, Debug, Clone, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+)]
 pub enum VariableId {
     Global(String),
     Local(String, Option<Id>),
@@ -106,17 +108,23 @@ impl VariableId {
     }
 }
 
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+)]
 pub struct ListComprehensionIdentifier {
     pub name: String,
 }
 
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+)]
 pub struct ListAggregationIdentifier {
     pub name: String,
 }
 
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+)]
 pub struct MatchIdentifier {
     pub name: String,
     pub match_arm_index: usize, // Every match arm across the program is identified by a non-sharing index value. Within a match arm the identifier names cannot be reused
@@ -142,7 +150,9 @@ impl Display for VariableId {
         }
     }
 }
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+)]
 pub struct Id(pub(crate) u32);
 
 #[cfg(feature = "protobuf")]

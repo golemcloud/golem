@@ -20,6 +20,7 @@ use match_arm::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn pattern_match<Input>() -> impl Parser<Input, Output = Expr>
 where
@@ -27,6 +28,7 @@ where
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
+    Input::Position: GetSourcePosition,
 {
     let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
 
@@ -51,11 +53,11 @@ mod match_arm {
     use combine::parser::char::spaces;
     use combine::{parser::char::string, ParseError, Parser};
 
+    use super::arm_pattern::*;
     use crate::expr::MatchArm;
     use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
-
-    use super::arm_pattern::*;
+    use crate::rib_source_span::GetSourcePosition;
 
     // RHS of a match arm
     pub(crate) fn match_arm<Input>() -> impl Parser<Input, Output = MatchArm>
@@ -64,6 +66,7 @@ mod match_arm {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         (
             //LHS
@@ -85,6 +88,7 @@ mod arm_pattern {
     use crate::expr::ArmPattern;
     use crate::parser::errors::RibParseError;
     use crate::parser::pattern_match::internal::*;
+    use crate::rib_source_span::GetSourcePosition;
 
     // LHS of a match arm
     fn arm_pattern_<Input>() -> impl Parser<Input, Output = ArmPattern>
@@ -93,6 +97,7 @@ mod arm_pattern {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         choice((
             attempt(arm_pattern_constructor()),
@@ -111,7 +116,7 @@ mod arm_pattern {
 
     parser! {
         pub(crate) fn arm_pattern[Input]()(Input) -> ArmPattern
-         where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]{
+         where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]{
             arm_pattern_()
         }
     }
@@ -131,6 +136,7 @@ mod internal {
     use crate::parser::pattern_match::arm_pattern::*;
 
     use crate::parser::rib_expr::rib_expr;
+    use crate::rib_source_span::GetSourcePosition;
 
     pub(crate) fn arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
@@ -138,6 +144,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         choice((
             attempt(arm_pattern_constructor_with_name()),
@@ -153,6 +160,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         rib_expr().map(|lit| ArmPattern::Literal(Box::new(lit)))
     }
@@ -163,6 +171,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         many1(letter().or(digit()).or(char_('_')))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -175,6 +184,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         let custom = (
             constructor_type_name().skip(spaces()),
@@ -193,6 +203,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         string("none").map(|_| ArmPattern::constructor("none", vec![]))
     }
@@ -203,6 +214,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         (
             string("(").skip(spaces()),
@@ -218,6 +230,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         (
             string("[").skip(spaces()),
@@ -238,6 +251,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         (
             string("{").skip(spaces()),
@@ -261,6 +275,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         (
             record_key().skip(spaces()),
@@ -279,6 +294,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         many1(letter().or(char_('_').or(char_('-'))))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -291,6 +307,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         many1(letter().or(digit()).or(char_('_')).or(char_('-')))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -314,18 +331,15 @@ mod tests {
     #[test]
     fn test_simple_pattern_match() {
         let input = "match foo { _ => bar }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo", None),
-                    vec![MatchArm::new(
-                        ArmPattern::WildCard,
-                        Expr::identifier("bar", None)
-                    )]
-                ),
-                ""
+            Ok(Expr::pattern_match(
+                Expr::identifier_global("foo", None),
+                vec![MatchArm::new(
+                    ArmPattern::WildCard,
+                    Expr::identifier_global("bar", None)
+                )]
             ))
         );
     }
@@ -339,7 +353,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Expr::pattern_match(
-                Expr::identifier("foo", None),
+                Expr::identifier_global("foo", None),
                 vec![MatchArm::new(
                     ArmPattern::custom_constructor(
                         "foo",
@@ -349,7 +363,7 @@ mod tests {
                             ArmPattern::identifier("iden")
                         ]
                     ),
-                    Expr::identifier("bar", None)
+                    Expr::identifier_global("bar", None)
                 )]
             ))
         );
@@ -358,34 +372,31 @@ mod tests {
     #[test]
     fn test_simple_pattern_with_alias() {
         let input = "match foo { abc @ foo(_, _, d @ baz(_)) => bar }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo", None),
-                    vec![MatchArm::new(
-                        ArmPattern::As(
-                            "abc".to_string(),
-                            Box::new(ArmPattern::custom_constructor(
-                                "foo",
-                                vec![
-                                    ArmPattern::WildCard,
-                                    ArmPattern::WildCard,
-                                    ArmPattern::As(
-                                        "d".to_string(),
-                                        Box::new(ArmPattern::custom_constructor(
-                                            "baz",
-                                            vec![ArmPattern::WildCard]
-                                        ))
-                                    )
-                                ]
-                            ))
-                        ),
-                        Expr::identifier("bar", None)
-                    )]
-                ),
-                ""
+            Ok(Expr::pattern_match(
+                Expr::identifier_global("foo", None),
+                vec![MatchArm::new(
+                    ArmPattern::As(
+                        "abc".to_string(),
+                        Box::new(ArmPattern::custom_constructor(
+                            "foo",
+                            vec![
+                                ArmPattern::WildCard,
+                                ArmPattern::WildCard,
+                                ArmPattern::As(
+                                    "d".to_string(),
+                                    Box::new(ArmPattern::custom_constructor(
+                                        "baz",
+                                        vec![ArmPattern::WildCard]
+                                    ))
+                                )
+                            ]
+                        ))
+                    ),
+                    Expr::identifier_global("bar", None)
+                )]
             ))
         );
     }
@@ -393,21 +404,20 @@ mod tests {
     #[test]
     fn test_pattern_match_with_custom_constructor() {
         let input = "match foo { Foo(x) => bar }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo", None),
-                    vec![MatchArm::new(
-                        ArmPattern::Constructor(
-                            "Foo".to_string(),
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))]
-                        ),
-                        Expr::identifier("bar", None)
-                    )]
-                ),
-                ""
+            Ok(Expr::pattern_match(
+                Expr::identifier_global("foo", None),
+                vec![MatchArm::new(
+                    ArmPattern::Constructor(
+                        "Foo".to_string(),
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                            "x", None
+                        )))]
+                    ),
+                    Expr::identifier_global("bar", None)
+                )]
             ))
         );
     }
@@ -415,42 +425,45 @@ mod tests {
     #[test]
     fn test_pattern_match() {
         let input = "match foo { _ => bar, ok(x) => x, err(x) => x, none => foo, some(x) => x }";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo", None),
-                    vec![
-                        MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar", None)),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
-                            ),
-                            Expr::identifier("x", None),
+            Ok(Expr::pattern_match(
+                Expr::identifier_global("foo", None),
+                vec![
+                    MatchArm::new(ArmPattern::WildCard, Expr::identifier_global("bar", None)),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "ok",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))],
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
-                            ),
-                            Expr::identifier("x", None),
+                        Expr::identifier_global("x", None),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "err",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))],
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::identifier("foo", None),
+                        Expr::identifier_global("x", None),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor("none", vec![]),
+                        Expr::identifier_global("foo", None),
+                    ),
+                    MatchArm::new(
+                        ArmPattern::constructor(
+                            "some",
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
+                                "x", None
+                            )))],
                         ),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x", None)))],
-                            ),
-                            Expr::identifier("x", None),
-                        ),
-                    ]
-                ),
-                ""
+                        Expr::identifier_global("x", None),
+                    ),
+                ]
             ))
         );
     }

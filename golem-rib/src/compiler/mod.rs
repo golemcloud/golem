@@ -60,6 +60,7 @@ pub fn compile_with_restricted_global_variables(
 
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
+
     let function_calls_identified =
         WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 

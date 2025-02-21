@@ -15,6 +15,8 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
+// This function will assign ids to variables declared with `let` expressions,
+// and propagate these ids to the usage sites (`Expr::Identifier` nodes).
 pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
     let mut queue = VecDeque::new();
@@ -23,17 +25,20 @@ pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     // Start from the end
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Let(variable_id, _, expr, _) => {
+            Expr::Let {
+                variable_id, expr, ..
+            } => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
-                *variable_id = identifier_id_state.lookup(&field_name).unwrap();
+                if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
+                    *variable_id = latest_variable_id.clone();
+                }
                 queue.push_front(expr);
             }
 
-            Expr::Identifier(variable_id, _, _) if !variable_id.is_match_binding() => {
+            Expr::Identifier { variable_id, .. } if !variable_id.is_match_binding() => {
                 let field_name = variable_id.name();
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
-                    // If there existed a let statement, this ensures global is changed to local
                     *variable_id = latest_variable_id.clone();
                 }
             }
@@ -78,7 +83,7 @@ mod name_binding_tests {
 
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-    use crate::{Expr, InferredType, ParsedFunctionSite, VariableId};
+    use crate::{Expr, ParsedFunctionSite, VariableId};
 
     #[test]
     fn test_name_binding_simple() {
@@ -92,26 +97,21 @@ mod name_binding_tests {
         // Bind x in let with the x in foo
         expr.bind_variables_of_let_assignment();
 
-        let let_binding = Expr::Let(
+        let let_binding = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
+            Expr::untyped_number(BigDecimal::from(1)),
             None,
-            Box::new(Expr::untyped_number(BigDecimal::from(1))),
-            InferredType::Unknown,
         );
 
-        let call_expr = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+        let call_expr = Expr::call(
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
-            vec![Expr::Identifier(
-                VariableId::local("x", 0),
-                None,
-                InferredType::Unknown,
-            )],
-            InferredType::Unknown,
+            None,
+            vec![Expr::identifier_local("x", 0, None)],
         );
 
         let expected = Expr::expr_block(vec![let_binding, call_expr]);
@@ -133,48 +133,38 @@ mod name_binding_tests {
         // Bind x in let with the x in foo
         expr.bind_variables_of_let_assignment();
 
-        let let_binding1 = Expr::Let(
+        let let_binding1 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
+            Expr::untyped_number(BigDecimal::from(1)),
             None,
-            Box::new(Expr::untyped_number(BigDecimal::from(1))),
-            InferredType::Unknown,
         );
 
-        let let_binding2 = Expr::Let(
+        let let_binding2 = Expr::let_binding_with_variable_id(
             VariableId::local("y", 0),
+            Expr::untyped_number(BigDecimal::from(2)),
             None,
-            Box::new(Expr::untyped_number(BigDecimal::from(2))),
-            InferredType::Unknown,
         );
 
-        let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+        let call_expr1 = Expr::call(
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
-            vec![Expr::Identifier(
-                VariableId::local("x", 0),
-                None,
-                InferredType::Unknown,
-            )],
-            InferredType::Unknown,
+            None,
+            vec![Expr::identifier_local("x", 0, None)],
         );
 
-        let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+        let call_expr2 = Expr::call(
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
-            vec![Expr::Identifier(
-                VariableId::local("y", 0),
-                None,
-                InferredType::Unknown,
-            )],
-            InferredType::Unknown,
+            None,
+            vec![Expr::identifier_local("y", 0, None)],
         );
 
         let expected = Expr::expr_block(vec![let_binding1, let_binding2, call_expr1, call_expr2]);
@@ -196,48 +186,38 @@ mod name_binding_tests {
         // Bind x in let with the x in foo
         expr.bind_variables_of_let_assignment();
 
-        let let_binding1 = Expr::Let(
+        let let_binding1 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 0),
+            Expr::untyped_number(BigDecimal::from(1)),
             None,
-            Box::new(Expr::untyped_number(BigDecimal::from(1))),
-            InferredType::Unknown,
         );
 
-        let let_binding2 = Expr::Let(
+        let let_binding2 = Expr::let_binding_with_variable_id(
             VariableId::local("x", 1),
+            Expr::untyped_number(BigDecimal::from(2)),
             None,
-            Box::new(Expr::untyped_number(BigDecimal::from(2))),
-            InferredType::Unknown,
         );
 
-        let call_expr1 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+        let call_expr1 = Expr::call(
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
-            vec![Expr::Identifier(
-                VariableId::local("x", 0),
-                None,
-                InferredType::Unknown,
-            )],
-            InferredType::Unknown,
+            None,
+            vec![Expr::identifier_local("x", 0, None)],
         );
 
-        let call_expr2 = Expr::Call(
-            CallType::Function(DynamicParsedFunctionName {
+        let call_expr2 = Expr::call(
+            CallType::function_without_worker(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
                 function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
-            vec![Expr::Identifier(
-                VariableId::local("x", 1),
-                None,
-                InferredType::Unknown,
-            )],
-            InferredType::Unknown,
+            None,
+            vec![Expr::identifier_local("x", 1, None)],
         );
 
         let expected = Expr::expr_block(vec![let_binding1, call_expr1, let_binding2, call_expr2]);
