@@ -23,9 +23,7 @@ use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
-use crate::services::golem_config::{
-    CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
-};
+use crate::services::golem_config::CompiledComponentServiceConfig;
 use crate::services::plugins::PluginsObservations;
 use async_lock::{RwLock, Semaphore};
 use async_trait::async_trait;
@@ -62,6 +60,8 @@ use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use crate::{DefaultGolemTypes, GolemTypes};
+
+use super::additional_config::{ComponentCacheConfig, ComponentServiceConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

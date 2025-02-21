@@ -3214,6 +3214,7 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "dashmap",
+ "figment",
  "futures",
  "golem-api-grpc",
  "golem-common",

@@ -1,5 +1,8 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_worker_executor_base::services::additional_config::{
+    ComponentServiceConfig, ComponentServiceLocalConfig, DefaultAdditionalGolemConfig,
+};
 use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -24,9 +27,9 @@ use golem_common::model::{
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
-    MemoryConfig, ShardManagerServiceConfig, WorkerServiceGrpcConfig,
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
+    IndexedStorageConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig,
+    WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -320,9 +323,7 @@ pub async fn start_limited(
         }),
         port: context.grpc_port(),
         http_port: context.http_port(),
-        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
-            root: Path::new("data/components").to_path_buf(),
-        }),
+
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
@@ -339,13 +340,20 @@ pub async fn start_limited(
         ..Default::default()
     };
 
+    let additional_config = DefaultAdditionalGolemConfig {
+        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
+            root: Path::new("data/components").to_path_buf(),
+        }),
+        ..Default::default()
+    };
+
     let handle = Handle::current();
 
     let grpc_port = config.port;
 
     let mut join_set = JoinSet::new();
 
-    run(config, prometheus, handle, &mut join_set).await?;
+    run(config, additional_config, prometheus, handle, &mut join_set).await?;
 
     let start = std::time::Instant::now();
     loop {
@@ -368,13 +376,14 @@ pub async fn start_limited(
 
 async fn run(
     golem_config: GolemConfig,
+    additional_config: DefaultAdditionalGolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<(), anyhow::Error> {
     info!("Golem Worker Executor starting up...");
 
-    ServerBootstrap {}
+    ServerBootstrap { additional_config }
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await?;
 
@@ -642,7 +651,9 @@ impl UpdateManagement for TestWorkerCtx {
     }
 }
 
-struct ServerBootstrap {}
+struct ServerBootstrap {
+    additional_config: DefaultAdditionalGolemConfig,
+}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
@@ -922,8 +933,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
         component::configured(
-            &golem_config.component_service,
-            &golem_config.component_cache,
+            &self.additional_config.component_service,
+            &self.additional_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,

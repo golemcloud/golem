@@ -25,6 +25,7 @@ use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem::durability;
 use golem_worker_executor_base::preview2::{golem_api_0_2_x, golem_api_1_x};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
+use golem_worker_executor_base::services::additional_config::DefaultAdditionalGolemConfig;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
@@ -59,7 +60,9 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-struct ServerBootstrap;
+struct ServerBootstrap {
+    additional_config: DefaultAdditionalGolemConfig,
+}
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -74,8 +77,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
         component::configured(
-            &golem_config.component_service,
-            &golem_config.component_cache,
+            &self.additional_config.component_service,
+            &self.additional_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
@@ -228,12 +231,13 @@ fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
 
 pub async fn run(
     golem_config: GolemConfig,
+    additional_config: DefaultAdditionalGolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    ServerBootstrap
+    ServerBootstrap { additional_config }
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await
 }
