@@ -1,11 +1,14 @@
-use crate::type_checker::TypeMismatchError;
 use crate::type_refinement::precise_types::*;
-use crate::type_refinement::TypeRefinement;
-use crate::InferredType;
+use crate::type_refinement::{RefinedType, TypeRefinement};
+use crate::{Expr, InferredType, Path, PathElem, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
+use std::fmt;
+use std::fmt::Display;
 use std::ops::Deref;
 
 pub fn check_type_mismatch(
+    expr: &Expr,
+    parent_expr: Option<&Expr>,
     expected_type: &AnalysedType,
     actual_type: &InferredType,
 ) -> Result<(), TypeMismatchError> {
@@ -21,7 +24,7 @@ pub fn check_type_mismatch(
                         let actual_field_type =
                             actual_record_type.inner_type_by_name(&expected_field_name);
 
-                        check_type_mismatch(&expected_field_type, &actual_field_type)
+                        check_type_mismatch(expr, parent_expr, &expected_field_type, &actual_field_type)
                             .map_err(|e| e.at_field(expected_field_name.clone()))?;
                     }
 
@@ -29,6 +32,8 @@ pub fn check_type_mismatch(
                 }
 
                 None => Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 )),
@@ -48,6 +53,8 @@ pub fn check_type_mismatch(
             NumberType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -57,6 +64,8 @@ pub fn check_type_mismatch(
             CharType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -73,7 +82,7 @@ pub fn check_type_mismatch(
                             actual_variant.inner_type_by_name(&expected_case_name);
 
                         if let Some(expected_case_typ) = expected_case.typ.clone() {
-                            check_type_mismatch(&expected_case_typ, &actual_case_type)?;
+                            check_type_mismatch(expr, parent_expr, &expected_case_typ, &actual_case_type)?;
                         }
                     }
 
@@ -81,6 +90,8 @@ pub fn check_type_mismatch(
                 }
 
                 None => Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 )),
@@ -96,18 +107,20 @@ pub fn check_type_mismatch(
                 (actual_type_ok, type_result.ok.clone())
             {
                 is_ok = true;
-                check_type_mismatch(&expected_type_ok, &actual_type_ok)?;
+                check_type_mismatch(expr, parent_expr, &expected_type_ok, &actual_type_ok)?;
             }
 
             if let (Some(actual_type_err), Some(expected_type_err)) =
                 (actual_type_err, type_result.err.clone())
             {
-                check_type_mismatch(&expected_type_err, &actual_type_err)?;
+                check_type_mismatch(expr, parent_expr, &expected_type_err, &actual_type_err)?;
             } else {
                 // Implies it the actual type is neither type of `ok`, nor the typ of `err`.
                 // The complexity of the code is due to the fact that the actual type can be either `ok` or `err` or neither.
                 if !is_ok {
                     return Err(TypeMismatchError::new(
+                        expr,
+                        parent_expr,
                         expected_type.clone(),
                         actual_type.clone(),
                     ));
@@ -120,9 +133,11 @@ pub fn check_type_mismatch(
             let optional_type = OptionalType::refine(actual_type).map(|t| t.inner_type().clone());
 
             if let Some(optional_type) = optional_type {
-                check_type_mismatch(inner_type.inner.deref(), &optional_type)
+                check_type_mismatch(expr, parent_expr, inner_type.inner.deref(), &optional_type)
             } else {
                 Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -136,6 +151,8 @@ pub fn check_type_mismatch(
                 Ok(())
             } else {
                 Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -145,6 +162,8 @@ pub fn check_type_mismatch(
             FlagsType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -159,17 +178,20 @@ pub fn check_type_mismatch(
                     let actual_types_vec = actual_types.into_iter().collect::<Vec<_>>();
 
                     let actual_type = actual_types_vec.get(index).ok_or(TypeMismatchError::new(
+                        expr,
+                        parent_expr,
                         expected_type.clone(),
                         actual_type.clone(),
                     ))?;
 
-                    check_type_mismatch(expected_type, actual_type)
-                        .map_err(|e| e.at_index(index))?;
+                    check_type_mismatch(expr, parent_expr, expected_type, actual_type)?;
                 }
 
                 Ok(())
             } else {
                 Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -181,10 +203,12 @@ pub fn check_type_mismatch(
             if let Some(actual_list) = actual_list {
                 let actual_inner_type = actual_list.inner_type().clone();
                 let expected_inner_type = list_type.inner.deref().clone();
-                check_type_mismatch(&expected_inner_type, &actual_inner_type)
+                check_type_mismatch(expr, parent_expr, &expected_inner_type, &actual_inner_type)
                     .map_err(|e| e.updated_expected_type(&AnalysedType::List(list_type.clone())))
             } else {
                 Err(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -194,6 +218,8 @@ pub fn check_type_mismatch(
             StringType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
@@ -202,10 +228,167 @@ pub fn check_type_mismatch(
             BoolType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
+                    expr,
+                    parent_expr,
                     expected_type.clone(),
                     actual_type.clone(),
                 ))
         }
         AnalysedType::Handle(_) => Ok(()),
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct TypeMismatchError {
+    pub expr_with_wrong_type: Expr,
+    pub parent_expr: Option<Expr>,
+    pub expected_type: AnalysedType,
+    pub actual_type: InferredType,
+    pub field_path: Path,
+}
+
+impl TypeMismatchError {
+    pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.expected_type = expected_type.clone();
+        mismatch_error
+    }
+
+    pub fn at_field(&self, field_name: String) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error
+            .field_path
+            .push_front(PathElem::Field(field_name));
+        mismatch_error
+    }
+
+    pub fn new(
+        expr: &Expr,
+        parent_expr: Option<&Expr>,
+        expected_type: AnalysedType,
+        actual_type: InferredType,
+    ) -> Self {
+        TypeMismatchError {
+            expr_with_wrong_type: expr.clone(),
+            parent_expr: parent_expr.cloned(),
+            expected_type,
+            actual_type,
+            field_path: Path::default()
+        }
+    }
+}
+
+impl Display for TypeMismatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let span = self.expr_with_wrong_type.source_span();
+
+        write!(
+            f,
+            "type mismatch in the following rib expression found at line {}, column {}",
+            span.start_line(),
+            span.start_column()
+        )?;
+
+        if !self.field_path.is_empty() {
+            writeln!(f, " at field: `{}`", self.field_path)?;
+        } else {
+            writeln!(f)?;
+        }
+
+        writeln!(f, "`{}`", self.expr_with_wrong_type)?;
+
+        if let Some(parent) = &self.parent_expr {
+            if !parent.is_block() {
+                writeln!(f, "found within: ")?;
+                writeln!(f, "`{}`", parent)?;
+            }
+        }
+
+        let expected_type = TypeName::try_from(self.expected_type.clone())
+            .ok()
+            .map_or(format!("{:?}", self.expected_type), |x| x.to_string());
+
+        let actual_type = {
+            if !self.actual_type.is_valid_wit_type() {
+                try_retrieving_types(self.actual_type.clone(), self.expected_type.clone())
+            } else {
+                TypeName::try_from(self.actual_type.clone())
+                    .ok().map(|x| x.to_string())
+            }
+        };
+
+        writeln!(f, "Expected: `{}`", expected_type)?;
+
+        if let Some(actual_type) = actual_type {
+            writeln!(f, "Found: `{}`", actual_type)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn try_retrieving_types(inferred_type: InferredType, expected_type: AnalysedType) -> Option<String> {
+    let inferred_type = match inferred_type.clone() {
+        InferredType::AllOf(types) => {
+            let new_types = types.into_iter().filter(|t| t != &expected_type.clone().into()).collect::<Vec<_>>();
+            InferredType::all_of(new_types).unwrap_or(InferredType::Unknown)
+        }
+
+        _ => inferred_type.clone()
+    };
+
+
+    if let Some(_) = OptionalType::refine(&inferred_type) {
+        return Some("option".to_string());
+    }
+
+    if RecordType::refine(&inferred_type).is_some() {
+        return Some("record".to_string());
+    }
+
+    if let Some(_) = OkType::refine(&inferred_type) {
+        return Some("ok".to_string());
+    }
+
+    if let Some(_) = ErrType::refine(&inferred_type) {
+        return Some("err".to_string());
+    }
+
+    if let Some(_) = ListType::refine(&inferred_type) {
+        return Some("list".to_string());
+    }
+
+    if let Some(_) = TupleType::refine(&inferred_type) {
+        return Some("tuple".to_string());
+    }
+
+    if let Some(_) = VariantType::refine(&inferred_type) {
+        return Some("variant".to_string());
+    }
+
+    if let Some(_) = StringType::refine(&inferred_type) {
+        return Some("string".to_string());
+    }
+
+    if let Some(_) = NumberType::refine(&inferred_type) {
+        return Some("a wit number type".to_string());
+    }
+
+    if let Some(_) = CharType::refine(&inferred_type) {
+        return Some("char".to_string());
+    }
+
+    if let Some(_) = BoolType::refine(&inferred_type) {
+        return Some("bool".to_string());
+    }
+
+    if let Some(_) = FlagsType::refine(&inferred_type) {
+        return Some("flags".to_string());
+    }
+
+    if let Some(_) = EnumType::refine(&inferred_type) {
+        return Some("enum".to_string());
+    }
+
+    None
 }

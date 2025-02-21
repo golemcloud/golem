@@ -274,6 +274,38 @@ impl InferredType {
         matches!(self, InferredType::OneOf(_))
     }
 
+    pub fn is_valid_wit_type(&self) -> bool {
+        match self {
+            InferredType::AllOf(_) => false,
+            InferredType::OneOf(_) => false,
+            InferredType::Unknown => false,
+            InferredType::Bool => true,
+            InferredType::S8 =>  true,
+            InferredType::U8 => true,
+            InferredType::S16 => true,
+            InferredType::U16 => true,
+            InferredType::S32 => true,
+            InferredType::U32 => true,
+            InferredType::S64 => true,
+            InferredType::U64 => true,
+            InferredType::F32 => true,
+            InferredType::F64 => true,
+            InferredType::Chr => true,
+            InferredType::Str => true,
+            InferredType::List(_) => true,
+            InferredType::Tuple(_) => true,
+            InferredType::Record(_) => true,
+            InferredType::Flags(_) => true,
+            InferredType::Enum(_) => true,
+            InferredType::Option(_) => true,
+            InferredType::Result { .. } => true,
+            InferredType::Variant(_) => true,
+            InferredType::Resource { .. } => true,
+            InferredType::Instance { .. } => false,
+            InferredType::Sequence(_) => false,
+        }
+    }
+
     pub fn is_all_of(&self) -> bool {
         matches!(self, InferredType::AllOf(_))
     }

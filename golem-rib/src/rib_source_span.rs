@@ -10,6 +10,15 @@ pub struct SourceSpan {
 }
 
 impl SourceSpan {
+    pub fn start_line(&self) -> i32 {
+        self.start.line
+    }
+
+    pub fn start_column(&self) -> i32 {
+        self.start.column
+    }
+
+
     pub fn new(start: SourcePosition, end: SourcePosition) -> SourceSpan {
         SourceSpan { start, end }
     }
@@ -77,14 +86,8 @@ pub trait GetSourcePosition {
     fn get_source_position(&self) -> SourcePosition;
 }
 
-// Rib parsers are polymorphic with `Input` and this was done to allow
-// certain parsers such as `function_name` to compile/work properly. This may change in future `combine` versions
-// making things simple.
-// This implies associative `Input::Position`  should have line number and column number
-// (unlike `PointerOffset` accessible through translate position in a simple input `&str`)
-// to be converted to `RibSourcePosition` and with the below instance, we are able to access line number and column number
-// within each parser.
-// Also, this implies the input to Rib parser has to be (always)
+// With the below instance, we are able to access line number and column number
+// within each parser. Also, this implies the input to Rib parser has to be (always)
 // `combine::stream::position::Stream` where `Input::Position` is `stream::position::SourcePosition`.
 // See `Expr::from_text` functionality where we form this input.
 impl GetSourcePosition for combine::stream::position::SourcePosition {

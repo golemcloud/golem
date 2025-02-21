@@ -53,6 +53,14 @@ impl InstanceCreationType {
 }
 
 impl CallType {
+
+    pub fn worker_expr(&self) -> Option<&Expr> {
+        match self {
+            CallType::Function { worker, .. } => worker.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
             CallType::Function { worker, .. } => worker.as_mut(),

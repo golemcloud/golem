@@ -1,7 +1,7 @@
 pub(crate) use check_instance_returns::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
-pub(crate) use type_check_error::*;
+pub(crate) use errors::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
@@ -12,7 +12,7 @@ mod exhaustive_pattern_match;
 mod math;
 mod missing_fields;
 mod path;
-mod type_check_error;
+mod errors;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
@@ -62,7 +62,7 @@ mod type_check_tests {
 
             let result = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, string>>, b: u64, c: list<s32>, d: record<da: s32>>. Unable to determine the type of `3` in `x`. Number literals must have a type annotation. Example: `1: u64`";
+            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, string>>, b: u64, c: list<s32>, d: record<da: s32>>. cannot determine the type of `3` in `x`. Number literals must have a type annotation. Example: `1: u64`";
             assert_eq!(result, expected);
         }
     }
@@ -161,8 +161,9 @@ mod type_check_tests {
         #[test]
         fn test_type_mismatch_in_nested_record_in_function_call3() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: 1, ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
-          result
+            let bar = {a: {aa: 1, ab: 2, ac: {foo: "bar"}, ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
+            let result = foo(bar);
+            result
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -170,6 +171,8 @@ mod type_check_tests {
             let metadata = internal::get_metadata_with_record_input_params();
 
             let result = compile(&expr, &metadata).unwrap_err();
+
+            println!("{}", result.clone());
 
             let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: 1, ad: {ada: 1}, ae: (1, \"foo\")}, b: 3, c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `a.ac`. Expected `list<s32>`";
             assert_eq!(result, expected);
