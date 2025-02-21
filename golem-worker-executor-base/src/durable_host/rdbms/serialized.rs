@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{ExtIntoValueAndType, RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
@@ -42,10 +42,10 @@ impl<T: RdbmsType> RdbmsRequest<T> {
     }
 }
 
-impl<T> ExtIntoValueAndType for RdbmsRequest<T>
+impl<T> RdbmsIntoValueAndType for RdbmsRequest<T>
 where
     T: RdbmsType + 'static,
-    Vec<T::DbValue>: ExtIntoValueAndType,
+    Vec<T::DbValue>: RdbmsIntoValueAndType,
 {
     fn into_value_and_type(self) -> ValueAndType {
         let v = self.params.into_value_and_type();

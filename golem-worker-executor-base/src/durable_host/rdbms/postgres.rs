@@ -2265,7 +2265,7 @@ pub mod tests {
         DbValueWithResourceRep,
     };
     use crate::services::rdbms::postgres::types as postgres_types;
-    use crate::services::rdbms::ExtIntoValueAndType;
+    use crate::services::rdbms::RdbmsIntoValueAndType;
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
@@ -2305,9 +2305,15 @@ pub mod tests {
         check!(result.value == value);
         check!(result2.value == value);
 
-        let value_and_type = value.into_value_and_type();
+        let value_and_type = value.clone().into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
+
+        if value_and_type_json.is_err() {
+            println!("VALUE:  {}", value);
+        }
         check!(value_and_type_json.is_ok());
+
+        // println!("{}", value_and_type_json.unwrap());
     }
 
     #[test]
@@ -2618,9 +2624,13 @@ pub mod tests {
         check!(result.value == value);
         check!(result2.value == value);
 
-        let value_and_type = value.into_value_and_type();
+        let value_and_type = value.clone().into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
+        if value_and_type_json.is_err() {
+            println!("TYPE: {}", value);
+        }
         check!(value_and_type_json.is_ok());
+        // println!("{}", value_and_type_json.unwrap());
     }
 
     #[test]
@@ -2639,6 +2649,17 @@ pub mod tests {
                     postgres_types::DbColumnType::Int4,
                 ),
                 ("price".to_string(), postgres_types::DbColumnType::Numeric),
+                (
+                    "tags".to_string(),
+                    postgres_types::DbColumnType::Text.into_array(),
+                ),
+                (
+                    "interval".to_string(),
+                    postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
+                        "float4range".to_string(),
+                        postgres_types::DbColumnType::Float4,
+                    )),
+                ),
             ],
         ));
 

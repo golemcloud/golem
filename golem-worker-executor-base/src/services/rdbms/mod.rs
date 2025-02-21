@@ -44,7 +44,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
-        + ExtIntoValueAndType
+        + RdbmsIntoValueAndType
         + 'static;
     type DbValue: Clone
         + Send
@@ -54,7 +54,7 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Decode
         + for<'de> BorrowDecode<'de>
         + Encode
-        + ExtIntoValueAndType
+        + RdbmsIntoValueAndType
         + 'static;
 }
 
@@ -269,12 +269,12 @@ pub struct DbRow<T: 'static> {
     pub values: Vec<T>,
 }
 
-impl<T> ExtIntoValueAndType for DbRow<T>
+impl<T> RdbmsIntoValueAndType for DbRow<T>
 where
-    Vec<T>: ExtIntoValueAndType,
+    Vec<T>: RdbmsIntoValueAndType,
 {
     fn into_value_and_type(self) -> ValueAndType {
-        let v = ExtIntoValueAndType::into_value_and_type(self.values);
+        let v = RdbmsIntoValueAndType::into_value_and_type(self.values);
         let t = analysed_type::record(vec![analysed_type::field("values", v.typ)]);
         ValueAndType::new(Value::Record(vec![v.value]), t)
     }
@@ -290,7 +290,7 @@ where
 impl<T> AnalysedTypeMerger for DbRow<T>
 where
     T: AnalysedTypeMerger,
-    Vec<T>: ExtIntoValueAndType,
+    Vec<T>: RdbmsIntoValueAndType,
 {
     fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
         if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
@@ -304,17 +304,20 @@ where
                         break;
                     }
                     if fc.name == "values" {
-                        if let (AnalysedType::List(f), AnalysedType::List(s)) =
-                            (fc.typ.clone(), sc.typ)
-                        {
-                            let t = T::merge_types(*f.inner, *s.inner);
-                            fields.push(analysed_type::field(
-                                fc.name.as_str(),
-                                analysed_type::list(t),
-                            ));
-                        } else {
-                            fields.push(fc);
-                        }
+                        let t = <Vec<T>>::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+
+                        // if let (AnalysedType::List(f), AnalysedType::List(s)) =
+                        //     (fc.typ.clone(), sc.typ)
+                        // {
+                        //     let t = T::merge_types(*f.inner, *s.inner);
+                        //     fields.push(analysed_type::field(
+                        //         fc.name.as_str(),
+                        //         analysed_type::list(t),
+                        //     ));
+                        // } else {
+                        //     fields.push(fc);
+                        // }
                     } else {
                         fields.push(fc);
                     }
@@ -369,15 +372,15 @@ impl<T: RdbmsType> DbResult<T> {
     }
 }
 
-impl<T> ExtIntoValueAndType for DbResult<T>
+impl<T> RdbmsIntoValueAndType for DbResult<T>
 where
     T: RdbmsType,
-    Vec<T::DbColumn>: ExtIntoValueAndType,
-    Vec<DbRow<T::DbValue>>: ExtIntoValueAndType,
+    Vec<T::DbColumn>: RdbmsIntoValueAndType,
+    Vec<DbRow<T::DbValue>>: RdbmsIntoValueAndType,
 {
     fn into_value_and_type(self) -> ValueAndType {
-        let cs = ExtIntoValueAndType::into_value_and_type(self.columns);
-        let rs = ExtIntoValueAndType::into_value_and_type(self.rows);
+        let cs = RdbmsIntoValueAndType::into_value_and_type(self.columns);
+        let rs = RdbmsIntoValueAndType::into_value_and_type(self.rows);
         let t = analysed_type::record(vec![
             analysed_type::field("columns", cs.typ),
             analysed_type::field("rows", rs.typ),
@@ -475,13 +478,13 @@ impl From<GolemError> for Error {
     }
 }
 
-pub trait ExtIntoValueAndType {
+pub trait RdbmsIntoValueAndType {
     fn into_value_and_type(self) -> ValueAndType;
 
     fn get_base_type() -> AnalysedType;
 }
 
-impl<T: ExtIntoValueAndType> ExtIntoValueAndType for Option<T> {
+impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Option<T> {
     fn into_value_and_type(self) -> ValueAndType {
         match self {
             Some(t) => {
@@ -500,7 +503,7 @@ impl<T: ExtIntoValueAndType> ExtIntoValueAndType for Option<T> {
     }
 }
 
-impl<S: ExtIntoValueAndType, E: IntoValue> ExtIntoValueAndType for Result<S, E> {
+impl<S: RdbmsIntoValueAndType, E: IntoValue> RdbmsIntoValueAndType for Result<S, E> {
     fn into_value_and_type(self) -> ValueAndType {
         match self {
             Ok(t) => {
@@ -549,7 +552,7 @@ impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
     }
 }
 
-impl<T: ExtIntoValueAndType + AnalysedTypeMerger> ExtIntoValueAndType for Vec<T> {
+impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Vec<T> {
     fn into_value_and_type(self) -> ValueAndType {
         get_value_and_type(self)
     }
@@ -559,7 +562,7 @@ impl<T: ExtIntoValueAndType + AnalysedTypeMerger> ExtIntoValueAndType for Vec<T>
     }
 }
 
-pub(crate) fn get_value_and_type<T: ExtIntoValueAndType + AnalysedTypeMerger>(
+pub(crate) fn get_value_and_type<T: RdbmsIntoValueAndType + AnalysedTypeMerger>(
     values: Vec<T>,
 ) -> ValueAndType {
     let mut vs = Vec::with_capacity(values.len());

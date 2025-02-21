@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{AnalysedTypeMerger, ExtIntoValueAndType};
+use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
@@ -108,7 +108,7 @@ impl NamedType for CompositeType {
     }
 }
 
-impl ExtIntoValueAndType for CompositeType {
+impl RdbmsIntoValueAndType for CompositeType {
     fn into_value_and_type(self) -> ValueAndType {
         let mut vs = Vec::with_capacity(self.attributes.len());
         let mut t: Option<AnalysedType> = None;
@@ -131,8 +131,60 @@ impl ExtIntoValueAndType for CompositeType {
 }
 
 impl AnalysedTypeMerger for CompositeType {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        fn get_attribute_type(attributes_type: AnalysedType) -> Option<AnalysedType> {
+            if let AnalysedType::List(attrs) = attributes_type {
+                if let AnalysedType::Tuple(attr) = *attrs.inner {
+                    attr.items.get(1).cloned()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "attributes" {
+                        let f = get_attribute_type(fc.typ.clone());
+                        let s = get_attribute_type(sc.typ);
+                        let t = DbColumnType::merge_types_opt(f, s);
+
+                        if let Some(t) = t {
+                            fields.push(analysed_type::field(
+                                fc.name.as_str(),
+                                analysed_type::list(analysed_type::tuple(vec![
+                                    analysed_type::str(),
+                                    t,
+                                ])),
+                            ));
+                        } else {
+                            fields.push(fc);
+                        }
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -170,9 +222,9 @@ impl NamedType for DomainType {
     }
 }
 
-impl ExtIntoValueAndType for DomainType {
+impl RdbmsIntoValueAndType for DomainType {
     fn into_value_and_type(self) -> ValueAndType {
-        let v = ExtIntoValueAndType::into_value_and_type(*self.base_type);
+        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -184,8 +236,35 @@ impl ExtIntoValueAndType for DomainType {
 }
 
 impl AnalysedTypeMerger for DomainType {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "base-type" {
+                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -223,9 +302,9 @@ impl NamedType for RangeType {
     }
 }
 
-impl ExtIntoValueAndType for RangeType {
+impl RdbmsIntoValueAndType for RangeType {
     fn into_value_and_type(self) -> ValueAndType {
-        let v = ExtIntoValueAndType::into_value_and_type(*self.base_type);
+        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -237,8 +316,35 @@ impl ExtIntoValueAndType for RangeType {
 }
 
 impl AnalysedTypeMerger for RangeType {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "base-type" {
+                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -467,9 +573,9 @@ impl NamedType for Composite {
     }
 }
 
-impl ExtIntoValueAndType for Composite {
+impl RdbmsIntoValueAndType for Composite {
     fn into_value_and_type(self) -> ValueAndType {
-        let values = ExtIntoValueAndType::into_value_and_type(self.values);
+        let values = RdbmsIntoValueAndType::into_value_and_type(self.values);
         let typ = Self::get_analysed_type(values.typ);
         let value = Value::Record(vec![self.name.into_value(), values.value]);
         ValueAndType::new(value, typ)
@@ -480,8 +586,35 @@ impl ExtIntoValueAndType for Composite {
 }
 
 impl AnalysedTypeMerger for Composite {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "values" {
+                        let t = <Vec<DbValue>>::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -519,9 +652,9 @@ impl Display for Domain {
     }
 }
 
-impl ExtIntoValueAndType for Domain {
+impl RdbmsIntoValueAndType for Domain {
     fn into_value_and_type(self) -> ValueAndType {
-        let v = ExtIntoValueAndType::into_value_and_type(*self.value);
+        let v = RdbmsIntoValueAndType::into_value_and_type(*self.value);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -533,8 +666,35 @@ impl ExtIntoValueAndType for Domain {
 }
 
 impl AnalysedTypeMerger for Domain {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "value" {
+                        let t = DbValue::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -552,7 +712,7 @@ impl Range {
         }
     }
 
-    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
+    fn get_value_analysed_type(base_type: AnalysedType) -> AnalysedType {
         fn get_bound_type(base_type: AnalysedType) -> AnalysedType {
             analysed_type::variant(vec![
                 analysed_type::case("included", base_type.clone()),
@@ -561,10 +721,14 @@ impl Range {
             ])
         }
 
-        let value_type = analysed_type::record(vec![
+        analysed_type::record(vec![
             analysed_type::field("start", get_bound_type(base_type.clone())),
             analysed_type::field("end", get_bound_type(base_type.clone())),
-        ]);
+        ])
+    }
+
+    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
+        let value_type = Self::get_value_analysed_type(base_type);
 
         analysed_type::record(vec![
             analysed_type::field("name", analysed_type::str()),
@@ -585,7 +749,7 @@ impl Display for Range {
     }
 }
 
-impl ExtIntoValueAndType for Range {
+impl RdbmsIntoValueAndType for Range {
     fn into_value_and_type(self) -> ValueAndType {
         fn get_bound_value(value: Bound<DbValue>) -> (Value, Option<AnalysedType>) {
             match value {
@@ -636,8 +800,70 @@ impl ExtIntoValueAndType for Range {
 }
 
 impl AnalysedTypeMerger for Range {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        fn get_bound_type(base_type: AnalysedType) -> Option<AnalysedType> {
+            if let AnalysedType::Variant(cases) = base_type {
+                if cases.cases.len() == 3 {
+                    cases.cases[0].typ.clone().or(cases.cases[1].typ.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+
+        fn get_value_type(attributes_type: AnalysedType) -> Option<AnalysedType> {
+            if let AnalysedType::Record(fields) = attributes_type {
+                if fields.fields.len() == 2 {
+                    get_bound_type(fields.fields[0].typ.clone())
+                        .or(get_bound_type(fields.fields[1].typ.clone()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "value" {
+                        let f = get_value_type(fc.typ.clone());
+                        let s = get_value_type(sc.typ);
+                        let t = DbColumnType::merge_types_opt(f, s);
+
+                        if let Some(t) = t {
+                            fields.push(analysed_type::field(
+                                fc.name.as_str(),
+                                Range::get_value_analysed_type(t),
+                            ));
+                        } else {
+                            fields.push(fc);
+                        }
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
 
@@ -821,7 +1047,7 @@ impl Display for DbColumnType {
     }
 }
 
-impl ExtIntoValueAndType for DbColumnType {
+impl RdbmsIntoValueAndType for DbColumnType {
     fn into_value_and_type(self) -> ValueAndType {
         fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
             let case_value = case_value.map(Box::new);
@@ -851,11 +1077,11 @@ impl ExtIntoValueAndType for DbColumnType {
             DbColumnType::Timetz => get_variant(15, None),
             DbColumnType::Interval => get_variant(16, None),
             DbColumnType::Bytea => get_variant(17, None),
-            DbColumnType::Json => get_variant(18, None),
-            DbColumnType::Jsonb => get_variant(19, None),
-            DbColumnType::Jsonpath => get_variant(20, None),
-            DbColumnType::Xml => get_variant(21, None),
-            DbColumnType::Uuid => get_variant(22, None),
+            DbColumnType::Uuid => get_variant(18, None),
+            DbColumnType::Xml => get_variant(19, None),
+            DbColumnType::Json => get_variant(29, None),
+            DbColumnType::Jsonb => get_variant(21, None),
+            DbColumnType::Jsonpath => get_variant(22, None),
             DbColumnType::Inet => get_variant(23, None),
             DbColumnType::Cidr => get_variant(24, None),
             DbColumnType::Macaddr => get_variant(25, None),
@@ -1224,7 +1450,7 @@ impl DbValue {
     }
 }
 
-impl ExtIntoValueAndType for DbValue {
+impl RdbmsIntoValueAndType for DbValue {
     fn into_value_and_type(self) -> ValueAndType {
         fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
             let case_value = case_value.map(Box::new);
@@ -1390,9 +1616,9 @@ impl DbColumn {
     }
 }
 
-impl ExtIntoValueAndType for DbColumn {
+impl RdbmsIntoValueAndType for DbColumn {
     fn into_value_and_type(self) -> ValueAndType {
-        let db_type = ExtIntoValueAndType::into_value_and_type(self.db_type);
+        let db_type = RdbmsIntoValueAndType::into_value_and_type(self.db_type);
         let t = DbColumn::get_analysed_type(db_type.typ);
         let v = Value::Record(vec![
             self.ordinal.into_value(),

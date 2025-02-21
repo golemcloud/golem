@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{AnalysedTypeMerger, ExtIntoValueAndType};
+use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
@@ -566,7 +566,7 @@ impl IntoValue for DbValue {
     }
 }
 
-impl ExtIntoValueAndType for DbValue {
+impl RdbmsIntoValueAndType for DbValue {
     fn into_value_and_type(self) -> ValueAndType {
         IntoValueAndType::into_value_and_type(self)
     }
@@ -604,7 +604,7 @@ impl IntoValue for DbColumn {
     }
 }
 
-impl ExtIntoValueAndType for DbColumn {
+impl RdbmsIntoValueAndType for DbColumn {
     fn into_value_and_type(self) -> ValueAndType {
         IntoValueAndType::into_value_and_type(self)
     }
