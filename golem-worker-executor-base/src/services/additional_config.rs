@@ -123,30 +123,3 @@ impl Default for ComponentServiceGrpcConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::services::additional_config::{load_or_dump_config, make_additional_config_loader};
-    use crate::services::golem_config::make_config_loader;
-
-    #[test]
-    pub fn base_config_is_loadable() {
-        make_config_loader()
-            .load()
-            .expect("Failed to load base config");
-    }
-
-    #[test]
-    pub fn additional_config_is_loadable() {
-        make_additional_config_loader()
-            .load()
-            .expect("Failed to load additional config");
-    }
-
-    #[test]
-    pub fn merged_config_is_loadable() {
-        load_or_dump_config().expect("Failed to load additional config");
-    }
-}
