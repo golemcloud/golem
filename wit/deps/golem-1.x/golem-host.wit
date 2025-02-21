@@ -255,17 +255,24 @@ interface host {
     /// Revert a worker to a previous state
     revert-worker: func(worker-id: worker-id, revert-target: revert-worker-target);
 
-    /// Get the component-id for a given component name.
-    /// Returns none when no component with the specified name exists.
-    resolve-component-id: func(component-name: string) -> option<component-id>;
+    /// Get the component-id for a given component reference.
+    /// Returns none when no component with the specified reference exists.
+    /// The syntax of the component reference is implementation dependent.
+    ///
+    /// Golem OSS: "{component_name}"
+    /// Golem Cloud:
+    ///     1: "{component_name}" -> will resolve in current account and project
+    ///     2: "{project_name}/{component_name}" -> will resolve in current account
+    ///     3: "{account_id}/{project_name}/{component_name}"
+    resolve-component-id: func(component-reference: string) -> option<component-id>;
 
     /// Get the worker-id for a given component and worker name.
-    /// Returns none when no component with the specified name exists.
-    resolve-worker-id: func(component-name: string, worker-name: string) -> option<worker-id>;
+    /// Returns none when no component for the specified reference exists.
+    resolve-worker-id: func(component-reference: string, worker-name: string) -> option<worker-id>;
 
     /// Get the worker-id for a given component and worker name.
-    /// Returns none when no component with the specified component-name or no worker with the specified worker-name exists.
-    resolve-worker-id-strict: func(component-name: string, worker-name: string) -> option<worker-id>;
+    /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
+    resolve-worker-id-strict: func(component-reference: string, worker-name: string) -> option<worker-id>;
 
     /// Construct an uri for a given worker id.
     worker-uri: func(worker-id: worker-id) -> uri;
