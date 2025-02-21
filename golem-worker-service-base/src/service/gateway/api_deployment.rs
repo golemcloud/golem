@@ -64,7 +64,6 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
     async fn get_by_site(
         &self,
-        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
@@ -288,10 +287,7 @@ where
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(
-                &deployment.namespace.to_string(),
-                &deployment.site.to_string(),
-            )
+            .get_by_site(&deployment.site.to_string())
             .await?;
 
         let mut existing_api_definition_keys: HashSet<ApiDefinitionIdWithVersion> = HashSet::new();
@@ -437,10 +433,7 @@ where
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(
-                &deployment.namespace.to_string(),
-                &deployment.site.to_string(),
-            )
+            .get_by_site(&deployment.site.to_string())
             .await?;
 
         let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
@@ -546,22 +539,29 @@ where
 
     async fn get_by_site(
         &self,
-        namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         info!("Get API deployment");
-        let existing_deployment_records = self
-            .deployment_repo
-            .get_by_site(&namespace.to_string(), &site.to_string())
-            .await?;
+        let existing_deployment_records =
+            self.deployment_repo.get_by_site(&site.to_string()).await?;
 
         let mut api_definition_keys: Vec<ApiDefinitionIdWithVersion> = vec![];
-
+        let mut namespace: Option<Namespace> = None;
         let mut site: Option<ApiSite> = None;
-
         let mut created_at: Option<chrono::DateTime<Utc>> = None;
 
         for deployment_record in existing_deployment_records {
+            if namespace.is_none() {
+                namespace = Some(deployment_record.namespace.try_into().map_err(
+                    |e: <Namespace as TryFrom<std::string::String>>::Error| {
+                        ApiDeploymentError::conversion_error(
+                            "API deployment namespace",
+                            e.to_string(),
+                        )
+                    },
+                )?);
+            }
+
             if site.is_none() {
                 site = Some(ApiSite {
                     host: deployment_record.host,
@@ -580,9 +580,9 @@ where
             });
         }
 
-        match (site, created_at) {
-            (Some(site), Some(created_at)) => Ok(Some(ApiDeployment {
-                namespace: namespace.clone(),
+        match (site, namespace, created_at) {
+            (Some(site), Some(namespace), Some(created_at)) => Ok(Some(ApiDeployment {
+                namespace,
                 site,
                 api_definition_keys,
                 created_at,
@@ -644,10 +644,8 @@ where
         site: &ApiSiteString,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
-        let existing_deployment_records = self
-            .deployment_repo
-            .get_by_site(&namespace.to_string(), &site.to_string())
-            .await?;
+        let existing_deployment_records =
+            self.deployment_repo.get_by_site(&site.to_string()).await?;
 
         if existing_deployment_records.is_empty() {
             Err(ApiDeploymentError::ApiDeploymentNotFound(
