@@ -95,6 +95,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 expr,
                 type_annotation,
                 inferred_type,
+                ..
             } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();
@@ -110,6 +111,7 @@ pub(crate) fn bind_type_annotations(expr: &mut Expr) {
                 exprs,
                 type_annotation,
                 inferred_type,
+                ..
             } => {
                 if let Some(type_name) = type_annotation {
                     *inferred_type = type_name.clone().into();

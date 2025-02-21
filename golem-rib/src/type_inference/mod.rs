@@ -2601,6 +2601,7 @@ mod type_inference_tests {
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
+        use crate::rib_source_span::SourceSpan;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             Number, ParsedFunctionSite, VariableId,
@@ -2622,6 +2623,7 @@ mod type_inference_tests {
                 expr,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn plus(lhs: Box<Expr>, rhs: Box<Expr>, inferred_type: InferredType) -> Expr {
@@ -2629,6 +2631,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2641,18 +2644,21 @@ mod type_inference_tests {
                 predicate,
                 match_arms,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn literal(value: String, inferred_type: InferredType) -> Expr {
             Expr::Literal {
                 value,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn tuple(exprs: Vec<Expr>, inferred_type: InferredType) -> Expr {
             Expr::Tuple {
                 exprs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn option(
@@ -2664,6 +2670,7 @@ mod type_inference_tests {
                 expr,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2678,6 +2685,7 @@ mod type_inference_tests {
                 field,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2692,6 +2700,7 @@ mod type_inference_tests {
                 index,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2704,6 +2713,7 @@ mod type_inference_tests {
                 exprs,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2718,6 +2728,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn greater_than(
@@ -2729,6 +2740,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2741,6 +2753,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2753,6 +2766,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2765,6 +2779,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2777,6 +2792,7 @@ mod type_inference_tests {
                 lhs,
                 rhs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2784,6 +2800,7 @@ mod type_inference_tests {
             Expr::Concat {
                 exprs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn call(
@@ -2797,6 +2814,7 @@ mod type_inference_tests {
                 generic_type_parameter,
                 args,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn number(
@@ -2808,6 +2826,7 @@ mod type_inference_tests {
                 number: value,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn identifier(
@@ -2819,12 +2838,14 @@ mod type_inference_tests {
                 variable_id,
                 type_annotation,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
         pub(crate) fn record(exprs: Vec<(String, Box<Expr>)>, inferred_type: InferredType) -> Expr {
             Expr::Record {
                 exprs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2839,6 +2860,7 @@ mod type_inference_tests {
                 type_annotation,
                 expr,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 
@@ -2846,6 +2868,7 @@ mod type_inference_tests {
             Expr::ExprBlock {
                 exprs,
                 inferred_type,
+                source_span: SourceSpan::default(),
             }
         }
 

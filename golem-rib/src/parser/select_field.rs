@@ -20,10 +20,11 @@ use internal::*;
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::record::record;
+use crate::rib_source_span::GetSourcePosition;
 
 parser! {
     pub fn select_field[Input]()(Input) -> Expr
-    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>, Input::Position: GetSourcePosition]
     {
         select_field_()
     }
@@ -39,6 +40,7 @@ mod internal {
     use crate::parser::identifier::identifier_text;
     use crate::parser::select_index::select_index;
     use crate::parser::type_name::parse_type_name;
+    use crate::rib_source_span::GetSourcePosition;
     use combine::{
         attempt,
         parser::char::{char as char_, spaces},
@@ -53,6 +55,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         spaces().with(
             (
@@ -92,6 +95,7 @@ mod internal {
                             index,
                             type_annotation: inner_typ,
                             inferred_type,
+                            source_span,
                         }) => {
                             if let Some(typ) = optional {
                                 Ok(Expr::select_index_with_type_annotation(
@@ -105,6 +109,7 @@ mod internal {
                                     index,
                                     type_annotation: inner_typ,
                                     inferred_type,
+                                    source_span,
                                 })
                             }
                         }
@@ -130,6 +135,7 @@ mod internal {
                 field: last,
                 type_annotation: type_name,
                 inferred_type,
+                source_span,
             } => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::SelectField {
@@ -137,6 +143,7 @@ mod internal {
                     field: last,
                     type_annotation: type_name,
                     inferred_type,
+                    source_span,
                 })
             }
             Expr::SelectIndex {
@@ -144,6 +151,7 @@ mod internal {
                 index: last_index,
                 type_annotation: type_name,
                 inferred_type,
+                source_span,
             } => {
                 let inner_select = build_selector(base, *second)?;
                 Some(Expr::SelectIndex {
@@ -151,6 +159,7 @@ mod internal {
                     index: last_index,
                     type_annotation: type_name,
                     inferred_type,
+                    source_span,
                 })
             }
             _ => None,
@@ -163,6 +172,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         choice((
             attempt(select_index()),
@@ -177,6 +187,7 @@ mod internal {
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
+        Input::Position: GetSourcePosition,
     {
         text().message("Unable to parse field name")
     }

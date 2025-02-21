@@ -14,7 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
-use combine::stream::easy;
+use combine::stream::position;
+use combine::stream::position::Stream;
 use combine::EasyParser;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
@@ -516,15 +517,12 @@ impl DynamicParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
-            parser.easy_parse(name);
+        let result = parser.easy_parse(Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.translate_position(name))
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }
@@ -629,15 +627,12 @@ impl ParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
-            parser.easy_parse(name);
+        let result = parser.easy_parse(position::Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
             Err(error) => {
-                let error_message = error
-                    .map_position(|p| p.translate_position(name))
-                    .to_string();
+                let error_message = error.map_position(|p| p.to_string()).to_string();
                 Err(error_message)
             }
         }

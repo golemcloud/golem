@@ -166,6 +166,7 @@ mod internal {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 stack.push(ExprState::from_expr(rhs.deref()));
@@ -176,6 +177,7 @@ mod internal {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
@@ -187,6 +189,7 @@ mod internal {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
@@ -198,6 +201,7 @@ mod internal {
                 lhs,
                 rhs,
                 inferred_type,
+                ..
             } => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
@@ -229,6 +233,7 @@ mod internal {
             Expr::Record {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 // Push field instructions in reverse order
                 for (field_name, field_expr) in exprs.iter().rev() {
@@ -268,6 +273,7 @@ mod internal {
                 predicate,
                 match_arms,
                 inferred_type,
+                ..
             } => {
                 let desugared_pattern_match =
                     desugar_pattern_match(predicate.deref(), match_arms, inferred_type.clone())
@@ -563,6 +569,7 @@ mod internal {
             Expr::Tuple {
                 exprs,
                 inferred_type,
+                ..
             } => {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));

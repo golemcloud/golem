@@ -87,6 +87,7 @@ mod internal {
                     generic_type_parameter,
                     args,
                     inferred_type,
+                    ..
                 } => {
                     let type_parameter = generic_type_parameter
                         .clone()

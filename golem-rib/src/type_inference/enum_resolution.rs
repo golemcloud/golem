@@ -40,6 +40,7 @@ mod internal {
                 Expr::Identifier {
                     variable_id,
                     inferred_type,
+                    source_span,
                     ..
                 } => {
                     if enum_cases.cases.contains(&variable_id.name()) {
@@ -48,6 +49,7 @@ mod internal {
                             generic_type_parameter: None,
                             args: vec![],
                             inferred_type: inferred_type.clone(),
+                            source_span: source_span.clone(),
                         };
                     }
                 }
