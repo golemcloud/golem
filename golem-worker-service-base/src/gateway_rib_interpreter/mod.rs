@@ -14,11 +14,11 @@
 
 use async_trait::async_trait;
 use futures_util::FutureExt;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 use std::sync::Arc;
 
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::ValueAndType;
@@ -37,6 +37,7 @@ pub trait WorkerServiceRibInterpreter<Namespace> {
         worker_name: Option<&str>,
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
+        invocation_context: InvocationContextStack,
         rib_byte_code: &RibByteCode,
         rib_input: &RibInput,
         namespace: Namespace,
@@ -87,6 +88,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         worker_name: Option<&str>,
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
+        invocation_context: InvocationContextStack,
         expr: &RibByteCode,
         rib_input: &RibInput,
         namespace: Namespace,
@@ -102,6 +104,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                 let component_id = component_id.clone();
                 let worker_name = worker_name.clone();
                 let idempotency_key = idempotency_key.clone();
+                let invocation_context = invocation_context.clone();
                 let executor = executor.clone();
                 let namespace = namespace.clone();
 
@@ -119,6 +122,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                         function_name,
                         function_params,
                         idempotency_key,
+                        invocation_context,
                         namespace,
                     };
 

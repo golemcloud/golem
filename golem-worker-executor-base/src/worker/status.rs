@@ -950,7 +950,7 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(WorkerInvocation::ExportedFunctionV1 {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![Value::Bool(true)],
@@ -974,12 +974,12 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(WorkerInvocation::ExportedFunctionV1 {
                 idempotency_key: k1.clone(),
                 full_function_name: "a".to_string(),
                 function_input: vec![Value::Bool(true)],
             })
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(WorkerInvocation::ExportedFunctionV1 {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![],

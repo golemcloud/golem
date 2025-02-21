@@ -447,5 +447,5 @@ fn from_proto_invocation_context(
             result.ok()
         })
     });
-    provided_context.unwrap_or_else(|| InvocationContextStack::fresh())
+    provided_context.unwrap_or_else(InvocationContextStack::fresh)
 }

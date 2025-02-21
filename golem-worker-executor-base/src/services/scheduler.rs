@@ -310,7 +310,7 @@ impl SchedulerServiceDefault {
                     idempotency_key,
                     full_function_name,
                     function_input,
-                    invocation_context
+                    invocation_context,
                 } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
@@ -321,7 +321,7 @@ impl SchedulerServiceDefault {
                             idempotency_key,
                             full_function_name.clone(),
                             function_input,
-                            invocation_context
+                            invocation_context,
                         )
                         .await;
 

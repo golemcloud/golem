@@ -21,7 +21,11 @@ use super::request::{
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetail;
 use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_binding::{resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled};
+use crate::gateway_binding::{
+    resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
+    IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
+    WorkerBindingCompiled, WorkerNameCompiled,
+};
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
@@ -31,7 +35,11 @@ use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
+use crate::headers::TraceContextHeaders;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -44,7 +52,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::error;
-use golem_common::model::invocation_context::InvocationContextStack;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor {
@@ -106,7 +113,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
-                &binding.invocation_context_compiled
+                &binding.invocation_context_compiled,
             )
             .await?;
 
@@ -145,7 +152,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
-                &None
+                &None,
             )
             .await?;
 
@@ -191,7 +198,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 &binding.worker_name_compiled,
                 &binding.idempotency_key_compiled,
                 &binding.component_id,
-                &None
+                &None,
             )
             .await?;
 
@@ -278,6 +285,54 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         Ok(IdempotencyKey::new(value))
     }
 
+    async fn evaluate_invocation_context_rib_script(
+        &self,
+        script: &InvocationContextCompiled,
+        request_value: &serde_json::Map<String, Value>,
+        request_attributes: HashMap<String, AttributeValue>,
+    ) -> GatewayHttpResult<(Option<TraceId>, Arc<InvocationContextSpan>)> {
+        let rib_input: RibInput = resolve_rib_input(request_value, &script.rib_input)
+            .await
+            .map_err(GatewayHttpError::BadRequest)?;
+
+        let value = rib::interpret_pure(&script.compiled_invocation_context, &rib_input)
+            .await
+            .map_err(GatewayHttpError::RibInterpretPureError)?
+            .get_record()
+            .ok_or(GatewayHttpError::BadRequest(
+                "Invocation context must be a Rib expression that resolves to record".to_string(),
+            ))?;
+        let record: HashMap<String, ValueAndType> = HashMap::from_iter(value);
+
+        let span_id = record
+            .get("span_id")
+            .or(record.get("span-id"))
+            .map(to_attribute_value)
+            .transpose()?
+            .map(SpanId::from_attribute_value)
+            .transpose()
+            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Span ID: {err}")))?;
+
+        let trace_id = record
+            .get("trace_id")
+            .or(record.get("trace-id"))
+            .map(to_attribute_value)
+            .transpose()?
+            .map(TraceId::from_attribute_value)
+            .transpose()
+            .map_err(|err| GatewayHttpError::BadRequest(format!("Invalid Trace ID: {err}")))?;
+
+        let span = InvocationContextSpan::new_with_attributes(span_id, request_attributes);
+
+        for (key, value) in record {
+            if key != "span_id" && key != "span-id" && key != "trace_id" && key != "trace-id" {
+                span.set_attribute(key, to_attribute_value(&value)?).await;
+            }
+        }
+
+        Ok((trace_id, span))
+    }
+
     async fn get_worker_detail(
         &self,
         request: &RichRequest,
@@ -285,7 +340,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         worker_name_compiled: &Option<WorkerNameCompiled>,
         idempotency_key_compiled: &Option<IdempotencyKeyCompiled>,
         component_id: &VersionedComponentId,
-        invocation_context_compiled: &Option<InvocationContextCompiled>
+        invocation_context_compiled: &Option<InvocationContextCompiled>,
     ) -> GatewayHttpResult<WorkerDetail> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
             let result = self
@@ -313,14 +368,45 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
-        // TODO: evaluate invocation context script and add additional fields and trace/span id info based on the request
-        let invocation_context = InvocationContextStack::fresh(); // TODO
+        let trace_context_headers = TraceContextHeaders::parse(request.underlying.headers());
+        let (trace_id_from_headers, span_id_from_headers, trace_states) =
+            match trace_context_headers {
+                Some(ctx) => (Some(ctx.trace_id), Some(ctx.parent_id), ctx.trace_states),
+                None => (None, None, Vec::new()),
+            };
+
+        let request_attributes = extract_request_attributes(&request.underlying);
+
+        // TODO: We should not create a new span with the span id from the headers. Instead, introduce a new kind of span which can be in the root and is read-only and does not have 'start'? Or just introduce an optional parent span field?
+
+        let invocation_context =
+            if let Some(invocation_context_compiled) = invocation_context_compiled {
+                let (user_defined_trace_id, user_defined_span) = self
+                    .evaluate_invocation_context_rib_script(
+                        invocation_context_compiled,
+                        request_value,
+                        request_attributes,
+                    )
+                    .await?;
+                InvocationContextStack::new(
+                    user_defined_trace_id
+                        .unwrap_or(trace_id_from_headers.unwrap_or(TraceId::generate())),
+                    user_defined_span,
+                    trace_states,
+                )
+            } else {
+                InvocationContextStack::new(
+                    trace_id_from_headers.unwrap_or(TraceId::generate()),
+                    InvocationContextSpan::new(span_id_from_headers),
+                    trace_states,
+                )
+            };
 
         Ok(WorkerDetail {
             component_id: component_id.clone(),
             worker_name,
             idempotency_key,
-            invocation_context
+            invocation_context,
         })
     }
 
@@ -340,6 +426,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
                 worker_detail.worker_name.as_deref(),
                 &worker_detail.component_id.component_id,
                 &worker_detail.idempotency_key,
+                worker_detail.invocation_context.clone(),
                 &compiled_response_mapping.response_mapping_compiled,
                 &rib_input,
                 namespace.clone(),
@@ -545,7 +632,7 @@ async fn resolve_rib_input(
 
         let parsed_value = TypeAnnotatedValue::parse_with_type(
             input_value,
-            analysed_type
+            analysed_type,
         ).map_err(|err| format!("Input {key} doesn't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), analysed_type))?;
 
         let converted_value = parsed_value.try_into().map_err(|err| {
@@ -571,4 +658,32 @@ async fn maybe_apply_middlewares_out(
     } else {
         response
     }
+}
+
+fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue> {
+    match &value.value {
+        golem_wasm_rpc::Value::String(value) => Ok(AttributeValue::String(value.clone())),
+        _ => Err(GatewayHttpError::BadRequest(
+            "Invocation context values must be string".to_string(),
+        )),
+    }
+}
+
+fn extract_request_attributes(request: &poem::Request) -> HashMap<String, AttributeValue> {
+    let mut result = HashMap::new();
+
+    result.insert(
+        "request.method".to_string(),
+        AttributeValue::String(request.method().to_string()),
+    );
+    result.insert(
+        "request.uri".to_string(),
+        AttributeValue::String(request.uri().to_string()),
+    );
+    result.insert(
+        "request.remote_addr".to_string(),
+        AttributeValue::String(request.remote_addr().to_string()),
+    );
+
+    result
 }

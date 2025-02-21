@@ -13,12 +13,13 @@ message InvocationContext {
 }
 
 message TracingInvocationContext {
-  string trace_id = 1;
+  string trace_id = 1;               // hexadecimal representation of a 128-bit trace ID
   repeated InvocationSpan spans = 2; // stack of spans, first item is the current, last one is the root
+  repeated string trace_state = 3;
 }
 
 message InvocationSpan {
-  string span_id = 2;
+  uint64 span_id = 2;
   google.protobuf.Timestamp start = 3;
   map<string, AttributeValue> attributes = 8;
 }

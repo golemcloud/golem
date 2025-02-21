@@ -256,7 +256,7 @@ pub enum ScheduledAction {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        invocation_context: InvocationContextStack
+        invocation_context: InvocationContextStack,
     },
 }
 
@@ -861,14 +861,19 @@ impl IntoValue for WorkerStatus {
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum WorkerInvocation {
-    ExportedFunction {
+    ExportedFunctionV1 {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
-        function_input: Vec<golem_wasm_rpc::Value>,
-        invocation_context: InvocationContextStack
+        function_input: Vec<Value>,
     },
     ManualUpdate {
         target_version: ComponentVersion,
+    },
+    ExportedFunction {
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
     },
 }
 
@@ -876,6 +881,9 @@ impl WorkerInvocation {
     pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
         match self {
             Self::ExportedFunction {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            Self::ExportedFunctionV1 {
                 idempotency_key, ..
             } => idempotency_key == key,
             _ => false,
@@ -887,7 +895,19 @@ impl WorkerInvocation {
             Self::ExportedFunction {
                 idempotency_key, ..
             } => Some(idempotency_key),
+            Self::ExportedFunctionV1 {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             _ => None,
+        }
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        match self {
+            Self::ExportedFunction {
+                invocation_context, ..
+            } => invocation_context.clone(),
+            _ => InvocationContextStack::fresh(),
         }
     }
 }

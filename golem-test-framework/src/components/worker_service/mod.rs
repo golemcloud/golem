@@ -1667,6 +1667,7 @@ fn http_api_definition_to_grpc(
                                 ),
                             }
                         }),
+                        invocation_context: None, // TODO
                     }),
                     middleware: None, // TODO
                 })

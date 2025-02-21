@@ -475,12 +475,18 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                 timestamp,
                 invocation,
             } => {
+                let invocation_context = invocation.invocation_context();
                 let invocation = match invocation {
                     WorkerInvocation::ExportedFunction {
                         idempotency_key,
                         full_function_name,
                         function_input,
-                        invocation_context
+                        ..
+                    }
+                    | WorkerInvocation::ExportedFunctionV1 {
+                        idempotency_key,
+                        full_function_name,
+                        function_input,
                     } => {
                         let metadata = components
                             .get_metadata(
@@ -514,6 +520,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PublicOplogEntryOps<Owner, Scope>
                             }
                         }
 
+                        // TODO: store invocation context
                         PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
                             idempotency_key,
                             full_function_name,

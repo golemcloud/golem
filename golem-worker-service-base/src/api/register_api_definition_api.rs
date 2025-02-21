@@ -19,7 +19,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, HttpHandlerBinding, HttpHandlerBindingCompiled,
-    InvocationContextCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
+    StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{CorsPreflightExpr, HttpCors, HttpMiddleware, HttpMiddlewares};
 use crate::gateway_security::{

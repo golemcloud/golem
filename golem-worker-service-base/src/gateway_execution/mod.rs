@@ -44,6 +44,7 @@ pub struct GatewayResolvedWorkerRequest<Namespace> {
     pub function_name: String,
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub invocation_context: InvocationContextStack,
     pub namespace: Namespace,
 }
 
@@ -52,7 +53,7 @@ pub struct WorkerDetail {
     pub component_id: VersionedComponentId,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
-    pub invocation_context: InvocationContextStack
+    pub invocation_context: InvocationContextStack,
 }
 
 impl WorkerDetail {

@@ -22,7 +22,10 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError, ListDirectoryResult, PersistenceLevel, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
+    ListDirectoryResult, PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
+};
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -56,6 +59,7 @@ use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
 use golem_common::model::component::ComponentOwner;
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription,
     WorkerError, WorkerResourceId,
@@ -98,7 +102,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use golem_common::model::invocation_context::SpanId;
 
 pub mod blobstore;
 mod cli;
@@ -742,6 +745,25 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.state.get_current_idempotency_key()
+    }
+
+    async fn set_current_invocation_context(
+        &mut self,
+        invocation_context: InvocationContextStack,
+    ) -> Result<(), GolemError> {
+        let (invocation_context, current_span_id) =
+            InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
+
+        self.state.invocation_context = invocation_context;
+        self.state.current_span_id = current_span_id;
+
+        Ok(())
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .get_stack(&self.state.current_span_id)
     }
 
     fn is_live(&self) -> bool {
@@ -1859,7 +1881,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     total_linear_memory_size: u64,
 
     invocation_context: InvocationContext,
-    current_span_id: SpanId
+    current_span_id: SpanId,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Scope> {
@@ -1924,7 +1946,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             total_linear_memory_size,
             replay_state,
             invocation_context,
-            current_span_id
+            current_span_id,
         }
     }
 

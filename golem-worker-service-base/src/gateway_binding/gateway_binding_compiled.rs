@@ -132,7 +132,9 @@ impl TryFrom<GatewayBindingCompiled>
                             )?,
                         ),
                         response_rib_output: None,
+                        invocation_context: None,
                         compiled_invocation_context_expr: None,
+                        invocation_context_rib_input: None,
                     },
                 )
             }
@@ -211,6 +213,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         )?,
                         rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
                     }),
+                    _ => None,
                 };
 
                 let response_compiled = ResponseMappingCompiled {

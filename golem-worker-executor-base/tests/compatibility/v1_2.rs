@@ -14,9 +14,16 @@
 
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{IdempotencyKey, OplogIndex, Timestamp};
+use golem_common::model::{
+    IdempotencyKey, OplogIndex, Timestamp, TimestampedWorkerInvocation, WorkerInvocation,
+};
+use golem_wasm_rpc::Value;
+use std::num::{NonZeroU128, NonZeroU64};
 use test_r::test;
 
 #[test]
@@ -39,4 +46,39 @@ pub fn oplog_entry() {
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_entry_revert", &mut mint, oe31);
     backward_compatible("oplog_entry_cancel_pending_invocation", &mut mint, oe32);
+}
+
+#[test]
+pub async fn timestamped_worker_invocation() {
+    let root_span = InvocationContextSpan::new(Some(SpanId(NonZeroU64::new(4567).unwrap())));
+    root_span
+        .set_attribute(
+            "key".to_string(),
+            AttributeValue::String("value".to_string()),
+        )
+        .await;
+    let invocation_context = InvocationContextStack::new(
+        TraceId(NonZeroU128::new(1234).unwrap()),
+        root_span,
+        vec!["x".to_string(), "y".to_string()],
+    );
+
+    let twi3 = TimestampedWorkerInvocation {
+        timestamp: Timestamp::from(1724701938466),
+        invocation: WorkerInvocation::ExportedFunction {
+            idempotency_key: IdempotencyKey {
+                value: "idempotency_key".to_string(),
+            },
+            full_function_name: "function-name".to_string(),
+            function_input: vec![Value::Bool(true)],
+            invocation_context,
+        },
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible(
+        "timestamped_worker_invocation_exported_function_v1_2",
+        &mut mint,
+        twi3,
+    );
 }

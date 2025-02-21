@@ -263,7 +263,7 @@ pub fn wasm_rpc_value() {
 pub fn timestamped_worker_invocation() {
     let twi1 = TimestampedWorkerInvocation {
         timestamp: Timestamp::from(1724701938466),
-        invocation: WorkerInvocation::ExportedFunction {
+        invocation: WorkerInvocation::ExportedFunctionV1 {
             idempotency_key: IdempotencyKey {
                 value: "idempotency_key".to_string(),
             },
@@ -784,7 +784,7 @@ pub fn oplog_entry() {
 
     let oe16 = OplogEntry::PendingWorkerInvocation {
         timestamp: Timestamp::from(1724701938466),
-        invocation: WorkerInvocation::ExportedFunction {
+        invocation: WorkerInvocation::ExportedFunctionV1 {
             idempotency_key: IdempotencyKey {
                 value: "idempotency_key".to_string(),
             },

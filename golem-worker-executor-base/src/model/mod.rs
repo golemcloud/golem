@@ -29,6 +29,7 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -364,6 +365,7 @@ pub struct InvocationContext {
     pub trace_id: TraceId,
     pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
     pub root: Arc<InvocationContextSpan>,
+    pub trace_states: Vec<String>,
 }
 
 impl InvocationContext {
@@ -376,16 +378,13 @@ impl InvocationContext {
             trace_id,
             spans,
             root,
+            trace_states: Vec::new(),
         }
     }
 
     pub fn from_stack(value: InvocationContextStack) -> Result<(Self, SpanId), String> {
-        if value.spans.len() == 0 {
-            return Err("Empty span list".to_string());
-        }
-
-        let root = value.spans.last().unwrap().clone();
-        let current_span_id = value.spans.first().unwrap().span_id.clone();
+        let root = value.spans.last().clone();
+        let current_span_id = value.spans.first().span_id.clone();
 
         let mut spans = HashMap::new();
         for span in value.spans {
@@ -397,6 +396,7 @@ impl InvocationContext {
                 trace_id: value.trace_id,
                 spans,
                 root,
+                trace_states: value.trace_states,
             },
             current_span_id,
         ))
@@ -473,15 +473,15 @@ impl InvocationContext {
         }
         InvocationContextStack {
             trace_id: self.trace_id.clone(),
-            spans: result,
+            spans: NEVec::try_from_vec(result).unwrap(), // result is always non-empty
+            trace_states: self.trace_states.clone(),
         }
     }
 
     fn span(&self, span_id: &SpanId) -> Result<&Arc<InvocationContextSpan>, String> {
-        Ok(self
-            .spans
+        self.spans
             .get(span_id)
-            .ok_or_else(|| format!("Span {span_id} not found"))?)
+            .ok_or_else(|| format!("Span {span_id} not found"))
     }
 }
 

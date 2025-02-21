@@ -68,6 +68,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
 use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
@@ -521,6 +522,15 @@ impl InvocationManagement for TestWorkerCtx {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
+    }
+
+    async fn set_current_invocation_context(&mut self, invocation_context: InvocationContextStack)  -> Result<(), GolemError> {
+        self.durable_ctx
+            .set_current_invocation_context(invocation_context).await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
     }
 
     fn is_live(&self) -> bool {

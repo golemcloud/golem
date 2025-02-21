@@ -635,7 +635,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh()); // TODO
+        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self
             .shard_service()
