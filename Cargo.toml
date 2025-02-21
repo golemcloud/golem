@@ -19,6 +19,7 @@ members = [
     "integration-tests",
     "wasm-ast",
     "wasm-rpc",
+    "app/desktop/src-tauri"
 ]
 
 exclude = [
