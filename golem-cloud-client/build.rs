@@ -116,6 +116,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PublicOplogEntry",
                 "golem_common::model::public_oplog::PublicOplogEntry",
             ),
+            (
+                "ValueAndOptionalType",
+                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
+            ),
         ],
     )
     .expect("Failed to generate client code from OpenAPI spec.");

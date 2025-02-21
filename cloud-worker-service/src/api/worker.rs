@@ -17,6 +17,7 @@ use golem_common::model::{
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
+use golem_worker_service_base::service::worker::InvocationParameters;
 use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::{Binary, Json};
@@ -378,20 +379,38 @@ impl WorkerApi {
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &worker_id.into_target_worker_id(),
-                idempotency_key.0,
-                function.0,
-                params.0.params,
-                None,
-                namespace,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|result| Json(InvokeResult { result }));
+
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let target_worker_id = worker_id.into_target_worker_id();
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service.validate_and_invoke_and_await_typed(
+                    &target_worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    vals,
+                    None,
+                    namespace,
+                )
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service.invoke_and_await_json(
+                    &target_worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    jsons,
+                    None,
+                    namespace,
+                )
+            }
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|result| Json(InvokeResult { result }));
 
         record.result(response)
     }
@@ -417,7 +436,7 @@ impl WorkerApi {
         let target_worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_and_await_function",
+            "invoke_and_await_function_without_name",
             worker_id = target_worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
@@ -431,20 +450,37 @@ impl WorkerApi {
                 &auth,
             )
             .await?;
-        let response = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &target_worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0.params,
-                None,
-                namespace,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|result| Json(InvokeResult { result }));
+
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service.validate_and_invoke_and_await_typed(
+                    &target_worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    vals,
+                    None,
+                    namespace,
+                )
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service.invoke_and_await_json(
+                    &target_worker_id,
+                    idempotency_key.0,
+                    function.0,
+                    jsons,
+                    None,
+                    namespace,
+                )
+            }
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|result| Json(InvokeResult { result }));
 
         record.result(response)
     }
@@ -481,20 +517,34 @@ impl WorkerApi {
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let response = self
-            .worker_service
-            .validate_and_invoke(
-                &worker_id.into_target_worker_id(),
+
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let target_worker_id = worker_id.into_target_worker_id();
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
+                &target_worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                vals,
                 None,
                 namespace,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(InvokeResponse {}));
+            ),
+            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
+                &target_worker_id,
+                idempotency_key.0,
+                function.0,
+                jsons,
+                None,
+                namespace,
+            ),
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|()| Json(InvokeResponse {}));
 
         record.result(response)
     }
@@ -521,7 +571,7 @@ impl WorkerApi {
         let target_worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_function",
+            "invoke_function_without_name",
             worker_id = target_worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
@@ -535,20 +585,33 @@ impl WorkerApi {
                 &auth,
             )
             .await?;
-        let response = self
-            .worker_service
-            .validate_and_invoke(
+
+        let params =
+            InvocationParameters::from_optionally_type_annotated_value_jsons(params.0.params)
+                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+
+        let response = match params {
+            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
                 &target_worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                vals,
                 None,
                 namespace,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(InvokeResponse {}));
+            ),
+            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
+                &target_worker_id,
+                idempotency_key.0,
+                function.0,
+                jsons,
+                None,
+                namespace,
+            ),
+        }
+        .instrument(record.span.clone())
+        .await
+        .map_err(|e| e.into())
+        .map(|()| Json(InvokeResponse {}));
 
         record.result(response)
     }

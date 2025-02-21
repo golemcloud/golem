@@ -12,7 +12,7 @@ use golem_test_framework::config::TestDependencies;
 use crate::RegularWorkerExecutorPerTestDependencies;
 use tokio::task::JoinSet;
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct TestRegularWorkerExecutor {
@@ -63,7 +63,7 @@ impl TestDependencies for TestRegularWorkerExecutor {
         self.deps.shard_manager()
     }
 
-    fn component_directory(&self) -> PathBuf {
+    fn component_directory(&self) -> &Path {
         self.deps.component_directory()
     }
 

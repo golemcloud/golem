@@ -143,8 +143,8 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
         panic!("Shard manager is not supported in debugging tests. We directly place things in a running worker executor")
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.component_directory.clone()
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
@@ -278,8 +278,8 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
         panic!("shard manager dependency supported")
     }
 
-    fn component_directory(&self) -> PathBuf {
-        self.component_directory.clone()
+    fn component_directory(&self) -> &Path {
+        &self.component_directory
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {

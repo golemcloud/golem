@@ -77,6 +77,7 @@ pub fn custom_http_request_route(services: ApiServices) -> Route {
         services.worker_request_to_http_service,
         services.http_request_api_definition_lookup_service,
         services.file_server_binding_handler,
+        services.http_handler_binding_handler,
         services.gateway_session_store,
     );
 

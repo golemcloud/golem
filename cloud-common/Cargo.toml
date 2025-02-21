@@ -7,9 +7,10 @@ edition = "2021"
 harness = false
 
 [features]
-default = ["poem", "protobuf"]
+default = ["poem", "protobuf", "model"]
 poem = []
 protobuf = []
+model = []
 
 [dependencies]
 golem-api-grpc = { workspace = true }

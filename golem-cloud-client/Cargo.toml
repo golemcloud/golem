@@ -12,10 +12,10 @@ harness = false
 
 [dependencies]
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = "=1.1.15"
-golem-common = "=1.1.15"
-golem-wasm-ast = { version = "=1.1.15", default-features = false, features = ["analysis"] }
-golem-wasm-rpc = { version = "=1.1.15", default-features = false }
+golem-client = "=1.1.20"
+golem-common = "=1.1.20"
+golem-wasm-ast = { version = "=1.1.20", default-features = false, features = ["analysis"] }
+golem-wasm-rpc = { version = "=1.1.20", default-features = false }
 
 async-trait = "^0.1"
 bytes = "^1.5"
@@ -25,7 +25,7 @@ http = "^1.0"
 reqwest = { version = "^0.12", features = ["gzip", "json", "multipart", "stream"] }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
-serde_yaml = "0.9.34+deprecated"
+serde_yaml = "0.9.34"
 tracing = "^0.1"
 uuid = { version = "^1.6", features = ["serde"] }
 

@@ -142,7 +142,7 @@ impl ApiDeploymentApi {
 
             let api_deployments = self
                 .deployment_service
-                .get_by_id(&namespace, &api_definition_id)
+                .get_by_id(&namespace, Some(api_definition_id))
                 .instrument(record.span.clone())
                 .await?;
 
@@ -167,12 +167,12 @@ impl ApiDeploymentApi {
         let token = token.secret();
         let record = recorded_http_api_request!("get_deployment", site = site.0);
         let response = {
-            let site = site.0;
+            let site = ApiSiteString(site.0);
             let auth_ctx = CloudAuthCtx::new(token);
 
             let api_deployment = self
                 .deployment_service
-                .get_by_site(&ApiSiteString(site.clone()))
+                .get_by_site(&site)
                 .instrument(record.span.clone())
                 .await?
                 .ok_or(ApiEndpointError::not_found(safe(
@@ -205,12 +205,12 @@ impl ApiDeploymentApi {
         let token = token.secret();
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
         let response = {
-            let site = site.0;
+            let site = ApiSiteString(site.0);
             let auth_ctx = CloudAuthCtx::new(token);
 
             let api_deployment = self
                 .deployment_service
-                .get_by_site(&ApiSiteString(site.clone()))
+                .get_by_site(&site)
                 .instrument(record.span.clone())
                 .await?
                 .ok_or(ApiEndpointError::not_found(safe(
@@ -226,7 +226,7 @@ impl ApiDeploymentApi {
                 .await?;
 
             self.deployment_service
-                .delete(&namespace, &ApiSiteString(site))
+                .delete(&namespace, &site)
                 .instrument(record.span.clone())
                 .await?;
 

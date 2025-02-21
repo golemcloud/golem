@@ -11,7 +11,7 @@ use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
     FileServerBindingDetails, FileServerBindingError, FileServerBindingHandler,
     FileServerBindingResult, FileServerBindingSuccess,
 };
-use golem_worker_service_base::gateway_execution::gateway_binding_resolver::WorkerDetail;
+use golem_worker_service_base::gateway_execution::WorkerDetail;
 use golem_worker_service_base::service::component::ComponentService;
 use rib::RibResult;
 use std::sync::Arc;

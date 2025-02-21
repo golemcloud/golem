@@ -50,7 +50,7 @@ wasmtime-wasi-http = { version = "=27.0.0" }
 
 [dev-dependencies]
 test-r = { workspace = true }
-golem-test-framework = { git = "https://github.com/golemcloud/golem.git", tag = "v1.1.15" }
+golem-test-framework = { git = "https://github.com/golemcloud/golem.git", tag = "v1.1.20" }
 
 [[test]]
 name = "integration"

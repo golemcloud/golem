@@ -42,19 +42,19 @@ use golem_service_base::service::routing_table::{RoutingTableService, RoutingTab
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
 use golem_worker_service_base::app_config::GatewaySessionStorageConfig;
-use golem_worker_service_base::gateway_api_definition::http::{
-    CompiledHttpApiDefinition, HttpApiDefinition,
-};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
-    ApiDefinitionsLookup, HttpApiDefinitionLookup,
+    DefaultHttpApiDefinitionLookup, HttpApiDefinitionsLookup,
 };
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use golem_worker_service_base::gateway_execution::gateway_session::{
     GatewaySession, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
     SqliteGatewaySessionExpiration,
 };
+use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
+    DefaultHttpHandlerBindingHandler, HttpHandlerBindingHandler,
+};
 use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
-use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::gateway_security::DefaultIdentityProvider;
 use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
 use golem_worker_service_base::repo::api_deployment::{ApiDeploymentRepo, DbApiDeploymentRepo};
@@ -90,15 +90,12 @@ pub struct ApiServices {
     pub worker_service: Arc<dyn WorkerService + Send + Sync>,
     pub worker_request_to_http_service:
         Arc<dyn GatewayWorkerRequestExecutor<CloudNamespace> + Send + Sync>,
-    pub http_request_api_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<
-                InputHttpRequest,
-                ApiDefinition = CompiledHttpApiDefinition<CloudNamespace>,
-            > + Sync
-            + Send,
-    >,
+    pub http_request_api_definition_lookup_service:
+        Arc<dyn HttpApiDefinitionsLookup<CloudNamespace> + Sync + Send>,
     pub file_server_binding_handler:
         Arc<dyn FileServerBindingHandler<CloudNamespace> + Send + Sync>,
+    pub http_handler_binding_handler:
+        Arc<dyn HttpHandlerBindingHandler<CloudNamespace> + Sync + Send>,
     pub security_scheme_service: Arc<dyn SecuritySchemeService + Send + Sync>,
     pub gateway_session_store: Arc<dyn GatewaySession + Send + Sync>,
 }
@@ -415,16 +412,23 @@ impl ApiServices {
             worker_service.clone(),
         ));
 
-        let http_request_api_definition_lookup_service =
-            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
+        let http_request_api_definition_lookup_service = Arc::new(
+            DefaultHttpApiDefinitionLookup::new(deployment_service.clone()),
+        );
 
-        let fileserver_binding_handler: Arc<
+        let file_server_binding_handler: Arc<
             dyn FileServerBindingHandler<CloudNamespace> + Send + Sync,
         > = Arc::new(CloudFileServerBindingHandler::new(
             component_service.clone(),
             config.base_config.component_service.access_token,
             initial_component_files_service.clone(),
             worker_service.clone(),
+        ));
+
+        let http_handler_binding_handler: Arc<
+            dyn HttpHandlerBindingHandler<CloudNamespace> + Send + Sync,
+        > = Arc::new(DefaultHttpHandlerBindingHandler::new(
+            worker_request_to_http_service.clone(),
         ));
 
         Ok(Self {
@@ -440,7 +444,8 @@ impl ApiServices {
             worker_service,
             worker_request_to_http_service,
             http_request_api_definition_lookup_service,
-            file_server_binding_handler: fileserver_binding_handler,
+            file_server_binding_handler,
+            http_handler_binding_handler,
             security_scheme_service,
             gateway_session_store,
         })

@@ -8,8 +8,8 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem::rpc::types::{
-    FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+    CancellationToken, Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -260,6 +260,30 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn schedule_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        scheduled_time: Datetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .schedule_invocation(self_, scheduled_time, function_name, function_params)
+            .await
+    }
+
+    async fn schedule_cancelable_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        scheduled_time: Datetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
+        self.durable_ctx
+            .schedule_cancelable_invocation(self_, scheduled_time, function_name, function_params)
+            .await
+    }
+
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
@@ -362,9 +386,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, owned_worker_id)
-            .await
+        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
+            this,
+            owned_worker_id,
+            latest_worker_status,
+        )
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(

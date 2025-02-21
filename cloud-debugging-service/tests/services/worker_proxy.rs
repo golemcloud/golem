@@ -2,7 +2,12 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::AccountId;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    fork_worker_response, revert_worker_response, ForkWorkerRequest, RevertWorkerRequest,
+};
+use golem_common::base_model::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
@@ -119,6 +124,72 @@ impl WorkerProxy for TestWorkerProxy {
             ))),
             Some(workerexecutor::v1::resume_worker_response::Result::Success(_)) => Ok(()),
             Some(workerexecutor::v1::resume_worker_response::Result::Failure(error)) => Err(
+                WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
+            ),
+        }
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cutoff: &OplogIndex,
+    ) -> Result<(), WorkerProxyError> {
+        let result = self
+            .worker_executor
+            .client()
+            .await
+            .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
+            .fork_worker(ForkWorkerRequest {
+                account_id: Some(AccountId {
+                    name: "test-account".to_string(),
+                }),
+                source_worker_id: Some(source_worker_id.clone().into()),
+                target_worker_id: Some(target_worker_id.clone().into()),
+                oplog_index_cutoff: (*oplog_index_cutoff).into(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match result {
+            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
+                "No result in fork worker response",
+            ))),
+            Some(fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(fork_worker_response::Result::Failure(error)) => Err(
+                WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
+            ),
+        }
+    }
+
+    async fn revert(
+        &self,
+        worker_id: WorkerId,
+        target: RevertWorkerTarget,
+    ) -> Result<(), WorkerProxyError> {
+        let result = self
+            .worker_executor
+            .client()
+            .await
+            .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
+            .revert_worker(RevertWorkerRequest {
+                worker_id: Some(worker_id.into()),
+                account_id: Some(AccountId {
+                    name: "test-account".to_string(),
+                }),
+                target: Some(target.into()),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match result {
+            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
+                "No result in revert worker response",
+            ))),
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Failure(error)) => Err(
                 WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
             ),
         }

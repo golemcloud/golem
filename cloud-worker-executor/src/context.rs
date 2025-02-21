@@ -10,8 +10,8 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::golem::rpc::types::{
-    FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+use golem_wasm_rpc::golem_rpc_0_1_x::types::{
+    CancellationToken, Datetime, FutureInvokeResult, HostFutureInvokeResult, WasmRpc,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -25,6 +25,7 @@ use golem_worker_executor_base::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
 };
+use golem_worker_executor_base::preview2::Pollable;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
@@ -266,8 +267,14 @@ impl ExternalOperations<Context> for Context {
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,
+        latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
+        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
+            this,
+            worker_id,
+            latest_worker_status,
+        )
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
@@ -447,6 +454,30 @@ impl HostWasmRpc for Context {
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, function_name, function_params)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        scheduled_time: Datetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .schedule_invocation(self_, scheduled_time, function_name, function_params)
+            .await
+    }
+
+    async fn schedule_cancelable_invocation(
+        &mut self,
+        self_: Resource<WasmRpc>,
+        scheduled_time: Datetime,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
+        self.durable_ctx
+            .schedule_cancelable_invocation(self_, scheduled_time, function_name, function_params)
             .await
     }
 

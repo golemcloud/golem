@@ -3,12 +3,6 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use bincode::de::read::Reader;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::write::Writer;
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::plugin::PluginOwner;
 use golem_common::model::{AccountId, HasAccountId, ProjectId};
 use poem_openapi::{Enum, Object};

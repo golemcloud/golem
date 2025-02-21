@@ -153,6 +153,19 @@ pub trait WorkerService {
         namespace: CloudNamespace,
     ) -> Result<ProtoInvokeResult, WorkerError>;
 
+    /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
+    /// returning it as a `TypeAnnotatedValue`. The input parameter JSONs cannot be converted to `Val`
+    /// without type information so they get forwarded to the executor.
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        namespace: CloudNamespace,
+    ) -> Result<TypeAnnotatedValue, WorkerError>;
+
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
     async fn validate_and_invoke(
@@ -186,6 +199,19 @@ pub trait WorkerService {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
+    ) -> Result<(), WorkerError>;
+
+    /// Enqueues an invocation for the worker without awaiting its results, using JSON value
+    /// encoding represented as raw strings. Without type information these representations cannot
+    /// be converted to `Val` so they get forwarded as-is to the executor.
+    async fn invoke_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        metadata: CloudNamespace,
     ) -> Result<(), WorkerError>;
 
     async fn complete_promise(
@@ -287,6 +313,20 @@ pub trait WorkerService {
         oplog_index_cut_off: OplogIndex,
         namespace: CloudNamespace,
     ) -> Result<(), WorkerError>;
+
+    async fn revert_worker(
+        &self,
+        worker_id: &WorkerId,
+        target: RevertWorkerTarget,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError>;
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        namespace: CloudNamespace,
+    ) -> Result<bool, WorkerError>;
 }
 
 #[derive(Clone)]
@@ -330,6 +370,7 @@ impl WorkerService for WorkerServiceDefault {
         namespace: CloudNamespace,
     ) -> Result<WorkerId, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
+        let account_id = worker_namespace.namespace.account_id.clone();
 
         let value = self
             .base_worker_service
@@ -338,12 +379,12 @@ impl WorkerService for WorkerServiceDefault {
                 component_version,
                 arguments,
                 environment_variables,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
         self.limit_service
-            .update_worker_limit(&worker_namespace.namespace.account_id, worker_id, 1)
+            .update_worker_limit(&account_id, worker_id, 1)
             .await?;
 
         Ok(value)
@@ -358,7 +399,10 @@ impl WorkerService for WorkerServiceDefault {
 
         let value = self
             .base_worker_service
-            .connect(worker_id, worker_namespace.as_worker_request_metadata())
+            .connect(
+                worker_id,
+                worker_namespace.clone().into_worker_request_metadata(),
+            )
             .await?;
 
         self.limit_service
@@ -379,13 +423,14 @@ impl WorkerService for WorkerServiceDefault {
         namespace: CloudNamespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
+        let account_id = worker_namespace.namespace.account_id.clone();
 
         self.base_worker_service
-            .delete(worker_id, worker_namespace.as_worker_request_metadata())
+            .delete(worker_id, worker_namespace.into_worker_request_metadata())
             .await?;
 
         self.limit_service
-            .update_worker_limit(&worker_namespace.namespace.account_id, worker_id, -1)
+            .update_worker_limit(&account_id, worker_id, -1)
             .await?;
 
         Ok(())
@@ -418,7 +463,7 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 invocation_context,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -444,7 +489,33 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 invocation_context,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        namespace: CloudNamespace,
+    ) -> Result<TypeAnnotatedValue, WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        let result = self
+            .base_worker_service
+            .invoke_and_await_json(
+                worker_id,
+                idempotency_key,
+                function_name,
+                params,
+                invocation_context,
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -469,7 +540,32 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 invocation_context,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn invoke_json(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<String>,
+        invocation_context: Option<InvocationContext>,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        self.base_worker_service
+            .invoke_json(
+                worker_id,
+                idempotency_key,
+                function_name,
+                params,
+                invocation_context,
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -491,7 +587,7 @@ impl WorkerService for WorkerServiceDefault {
                 worker_id,
                 oplog_id,
                 data,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -510,7 +606,7 @@ impl WorkerService for WorkerServiceDefault {
             .interrupt(
                 worker_id,
                 recover_immediately,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -523,13 +619,14 @@ impl WorkerService for WorkerServiceDefault {
         namespace: CloudNamespace,
     ) -> Result<crate::model::WorkerMetadata, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
+        let account_id = worker_namespace.namespace.account_id.clone();
 
         let metadata = self
             .base_worker_service
-            .get_metadata(worker_id, worker_namespace.as_worker_request_metadata())
+            .get_metadata(worker_id, worker_namespace.into_worker_request_metadata())
             .await?;
 
-        let metadata = convert_metadata(metadata, worker_namespace.namespace.account_id);
+        let metadata = convert_metadata(metadata, account_id);
 
         Ok(metadata)
     }
@@ -544,6 +641,7 @@ impl WorkerService for WorkerServiceDefault {
         namespace: CloudNamespace,
     ) -> Result<(Option<ScanCursor>, Vec<crate::model::WorkerMetadata>), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
+        let account_id = worker_namespace.namespace.account_id.clone();
 
         let (pagination, metadata) = self
             .base_worker_service
@@ -553,15 +651,13 @@ impl WorkerService for WorkerServiceDefault {
                 cursor,
                 count,
                 precise,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
         let metadata = metadata
             .into_iter()
-            .map(|metadata| {
-                convert_metadata(metadata, worker_namespace.namespace.account_id.clone())
-            })
+            .map(|metadata| convert_metadata(metadata, account_id.clone()))
             .collect();
 
         Ok((pagination, metadata))
@@ -578,7 +674,7 @@ impl WorkerService for WorkerServiceDefault {
             .base_worker_service
             .resume(
                 worker_id,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
                 force,
             )
             .await?;
@@ -601,7 +697,7 @@ impl WorkerService for WorkerServiceDefault {
                 worker_id,
                 update_mode,
                 target_version,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -625,7 +721,7 @@ impl WorkerService for WorkerServiceDefault {
                 from_oplog_index,
                 cursor,
                 count,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -649,7 +745,7 @@ impl WorkerService for WorkerServiceDefault {
                 cursor,
                 count,
                 query,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -669,7 +765,7 @@ impl WorkerService for WorkerServiceDefault {
             .list_directory(
                 worker_id,
                 path,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -690,7 +786,7 @@ impl WorkerService for WorkerServiceDefault {
             .get_file_contents(
                 worker_id,
                 path,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -709,7 +805,7 @@ impl WorkerService for WorkerServiceDefault {
             .activate_plugin(
                 worker_id,
                 plugin_installation_id,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -728,7 +824,7 @@ impl WorkerService for WorkerServiceDefault {
             .deactivate_plugin(
                 worker_id,
                 plugin_installation_id,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
@@ -749,11 +845,50 @@ impl WorkerService for WorkerServiceDefault {
                 source_worker_id,
                 target_worker_id,
                 oplog_index_cut_off,
-                worker_namespace.as_worker_request_metadata(),
+                worker_namespace.into_worker_request_metadata(),
             )
             .await?;
 
         Ok(())
+    }
+
+    async fn revert_worker(
+        &self,
+        worker_id: &WorkerId,
+        target: RevertWorkerTarget,
+        namespace: CloudNamespace,
+    ) -> Result<(), WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        self.base_worker_service
+            .revert_worker(
+                worker_id,
+                target,
+                worker_namespace.into_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        namespace: CloudNamespace,
+    ) -> Result<bool, WorkerError> {
+        let worker_namespace = self.authorize(namespace).await?;
+
+        let result = self
+            .base_worker_service
+            .cancel_invocation(
+                worker_id,
+                idempotency_key,
+                worker_namespace.into_worker_request_metadata(),
+            )
+            .await?;
+
+        Ok(result)
     }
 }
 
@@ -787,10 +922,10 @@ pub struct WorkerNamespace {
 }
 
 impl WorkerNamespace {
-    fn as_worker_request_metadata(&self) -> WorkerRequestMetadata {
+    fn into_worker_request_metadata(self) -> WorkerRequestMetadata {
         WorkerRequestMetadata {
-            account_id: Some(self.namespace.account_id.clone()),
-            limits: Some(self.resource_limits.clone()),
+            account_id: Some(self.namespace.account_id),
+            limits: Some(self.resource_limits),
         }
     }
 }

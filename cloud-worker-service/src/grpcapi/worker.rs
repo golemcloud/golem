@@ -8,13 +8,14 @@ use futures::StreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    activate_plugin_response, complete_promise_response, deactivate_plugin_response,
-    delete_worker_response, fork_worker_response, get_oplog_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
-    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
-    launch_new_worker_response, list_directory_response, resume_worker_response,
-    search_oplog_response, update_worker_response, worker_error, worker_execution_error,
-    ActivatePluginRequest, ActivatePluginResponse, CompletePromiseRequest, CompletePromiseResponse,
+    activate_plugin_response, cancel_invocation_response, complete_promise_response,
+    deactivate_plugin_response, delete_worker_response, fork_worker_response, get_oplog_response,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
+    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response, worker_error,
+    worker_execution_error, ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
+    CancelInvocationResponse, CompletePromiseRequest, CompletePromiseResponse,
     ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
     DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest,
     GetFileContentsResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse,
@@ -24,9 +25,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
     InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse,
-    SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError as GrpcWorkerError, WorkerExecutionError,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -40,12 +42,12 @@ use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::grpcapi::{
-    bad_request_error, error_to_status, parse_json_invoke_parameters, validate_component_file_path,
-    validate_protobuf_plugin_installation_id, validate_protobuf_target_worker_id,
-    validate_protobuf_worker_id, validated_worker_id,
+    bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
+    validate_component_file_path, validate_protobuf_plugin_installation_id,
+    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
 };
 use golem_worker_service_base::service::component::ComponentService;
-use golem_worker_service_base::service::worker::WorkerServiceError;
+use golem_worker_service_base::service::worker::{InvocationParameters, WorkerServiceError};
 use std::pin::Pin;
 use std::sync::Arc;
 use tap::TapFallible;
@@ -654,6 +656,60 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn revert_worker(
+        &self,
+        request: Request<RevertWorkerRequest>,
+    ) -> Result<Response<RevertWorkerResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "revert_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .revert_worker(request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(revert_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                revert_worker_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(RevertWorkerResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: Request<CancelInvocationRequest>,
+    ) -> Result<Response<CancelInvocationResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "revert_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .cancel_invocation(request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(cancel_invocation_response::Result::Success(result)),
+            Err(error) => record.fail(
+                cancel_invocation_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CancelInvocationResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -883,6 +939,8 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+        let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
+            .map_err(bad_request_errors)?;
 
         let idempotency_key = request
             .idempotency_key
@@ -893,16 +951,33 @@ impl WorkerGrpcApi {
             .auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        self.worker_service
-            .validate_and_invoke(
-                &worker_id,
-                Some(idempotency_key),
-                request.function,
-                params,
-                request.context,
-                namespace,
-            )
-            .await?;
+
+        match params {
+            InvocationParameters::TypedProtoVals(params) => {
+                self.worker_service
+                    .validate_and_invoke(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        params,
+                        request.context,
+                        namespace,
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_json(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        jsons,
+                        request.context,
+                        namespace,
+                    )
+                    .await?
+            }
+        }
 
         Ok(())
     }
@@ -946,6 +1021,8 @@ impl WorkerGrpcApi {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+        let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
+            .map_err(bad_request_errors)?;
 
         let idempotency_key = request
             .idempotency_key
@@ -956,17 +1033,33 @@ impl WorkerGrpcApi {
             .auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
             .await?;
-        let result = self
-            .worker_service
-            .validate_and_invoke_and_await_typed(
-                &worker_id,
-                Some(idempotency_key),
-                request.function,
-                params,
-                request.context,
-                namespace,
-            )
-            .await?;
+
+        let result = match params {
+            InvocationParameters::TypedProtoVals(params) => {
+                self.worker_service
+                    .validate_and_invoke_and_await_typed(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        params,
+                        request.context,
+                        namespace,
+                    )
+                    .await?
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_and_await_json(
+                        &worker_id,
+                        Some(idempotency_key),
+                        request.function,
+                        jsons,
+                        request.context,
+                        namespace,
+                    )
+                    .await?
+            }
+        };
 
         Ok(serde_json::to_value(result)
             .map_err(|err| GrpcWorkerError {
@@ -1233,7 +1326,6 @@ impl WorkerGrpcApi {
                             result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.into())),
                         })
                 }
-
             )
             ;
 
@@ -1311,6 +1403,58 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(())
+    }
+
+    async fn revert_worker(
+        &self,
+        request: RevertWorkerRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let target = request
+            .target
+            .ok_or_else(|| bad_request_error("Missing target"))?
+            .try_into()
+            .map_err(|err| bad_request_error(format!("Invalid target {}", err)))?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        self.worker_service
+            .revert_worker(&worker_id, target, namespace)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: CancelInvocationRequest,
+        metadata: MetadataMap,
+    ) -> Result<bool, GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        let result = self
+            .worker_service
+            .cancel_invocation(&worker_id, &idempotency_key, namespace)
+            .await?;
+
+        Ok(result)
     }
 }
 

@@ -212,7 +212,6 @@ impl DebugServiceDefault {
 
             let metadata = worker
                 .get_metadata()
-                .await
                 .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
             Ok(metadata)
