@@ -51,7 +51,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             let metadata = worker.get_metadata()?;
             if worker_id.component_id == *component_id
                 && (metadata.last_known_status.status == WorkerStatus::Running)
-                && filter.clone().map_or(true, |f| f.matches(&metadata))
+                && filter.clone().is_none_or(|f| f.matches(&metadata))
             {
                 workers.push(metadata);
             }
@@ -141,7 +141,7 @@ impl DefaultWorkerEnumerationService {
                     worker_metadata
                 };
 
-                if filter.clone().map_or(true, |f| f.matches(&metadata)) {
+                if filter.clone().is_none_or(|f| f.matches(&metadata)) {
                     workers.push(metadata);
                 }
             }
