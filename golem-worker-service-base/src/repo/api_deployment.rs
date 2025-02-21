@@ -394,10 +394,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     }
 
     #[when(sqlx::Sqlite -> get_by_site)]
-    async fn get_by_site_sqlite(
-        &self,
-        site: &str,
-    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+    async fn get_by_site_sqlite(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
