@@ -289,35 +289,49 @@ where
 
 impl<T> AnalysedTypeMerger for DbRow<T>
 where
+    T: AnalysedTypeMerger,
     Vec<T>: ExtIntoValueAndType,
 {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first // TODO implement merge
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "values" {
+                        if let (AnalysedType::List(f), AnalysedType::List(s)) =
+                            (fc.typ.clone(), sc.typ)
+                        {
+                            let t = T::merge_types(*f.inner, *s.inner);
+                            fields.push(analysed_type::field(
+                                fc.name.as_str(),
+                                analysed_type::list(t),
+                            ));
+                        } else {
+                            fields.push(fc);
+                        }
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
-
-// impl<T> ExtIntoValueAndType for Vec<DbRow<T>>
-// where
-//     Vec<T>: ExtIntoValueAndType,
-//     T: AnalysedTypeMerger
-// {
-//     fn into_value_and_type(self) -> ValueAndType {
-//         let mut ts = Vec::with_capacity(self.len());
-//         let mut vs = Vec::with_capacity(self.len());
-//         for v in self {
-//             let v = v.values.into_value_and_type();
-//             ts.push(v.typ);
-//             vs.push(Value::Record(vec![v.value]));
-//         }
-//
-//         let t = T::merge_types_many(ts).unwrap_or(T::get_base_type());
-//         ValueAndType::new(Value::List(vs), t)
-//     }
-//
-//     fn get_base_type() -> AnalysedType {
-//         analysed_type::list(DbRow::<T>::get_base_type())
-//     }
-// }
 
 #[async_trait]
 pub trait DbResultStream<T: RdbmsType> {
@@ -510,6 +524,29 @@ impl<S: ExtIntoValueAndType, E: IntoValue> ExtIntoValueAndType for Result<S, E> 
 
 pub trait AnalysedTypeMerger {
     fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType;
+
+    fn merge_types_opt(
+        first: Option<AnalysedType>,
+        second: Option<AnalysedType>,
+    ) -> Option<AnalysedType> {
+        match (first, second) {
+            (Some(f), Some(s)) => Some(Self::merge_types(f, s)),
+            (None, Some(s)) => Some(s),
+            (Some(f), None) => Some(f),
+            _ => None,
+        }
+    }
+}
+
+impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::List(f), AnalysedType::List(s)) = (first.clone(), second) {
+            let t = T::merge_types(*f.inner, *s.inner);
+            analysed_type::list(t)
+        } else {
+            first
+        }
+    }
 }
 
 impl<T: ExtIntoValueAndType + AnalysedTypeMerger> ExtIntoValueAndType for Vec<T> {

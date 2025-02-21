@@ -118,7 +118,7 @@ impl ExtIntoValueAndType for CompositeType {
                 None => Some(v.typ),
                 Some(t) => Some(DbColumnType::merge_types(t, v.typ)),
             };
-            vs.push(Value::Record(vec![n.into_value(), v.value]));
+            vs.push(Value::Tuple(vec![n.into_value(), v.value]));
         }
         let typ = Self::get_analysed_type(t.unwrap_or(DbColumnType::get_base_type()));
         let value = Value::Record(vec![self.name.into_value(), Value::List(vs)]);
@@ -127,6 +127,12 @@ impl ExtIntoValueAndType for CompositeType {
 
     fn get_base_type() -> AnalysedType {
         Self::get_analysed_type(DbColumnType::get_base_type())
+    }
+}
+
+impl AnalysedTypeMerger for CompositeType {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
     }
 }
 
@@ -177,6 +183,12 @@ impl ExtIntoValueAndType for DomainType {
     }
 }
 
+impl AnalysedTypeMerger for DomainType {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct RangeType {
     pub name: String,
@@ -221,6 +233,12 @@ impl ExtIntoValueAndType for RangeType {
 
     fn get_base_type() -> AnalysedType {
         Self::get_analysed_type(DbColumnType::get_base_type())
+    }
+}
+
+impl AnalysedTypeMerger for RangeType {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
     }
 }
 
@@ -461,6 +479,12 @@ impl ExtIntoValueAndType for Composite {
     }
 }
 
+impl AnalysedTypeMerger for Composite {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct Domain {
     pub name: String,
@@ -505,6 +529,12 @@ impl ExtIntoValueAndType for Domain {
 
     fn get_base_type() -> AnalysedType {
         Self::get_analysed_type(DbColumnType::get_base_type())
+    }
+}
+
+impl AnalysedTypeMerger for Domain {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
     }
 }
 
@@ -588,12 +618,8 @@ impl ExtIntoValueAndType for Range {
         let (value_start, typ_start) = get_bound_value(self.value.start);
         let (value_end, typ_end) = get_bound_value(self.value.end);
 
-        let base_type = match (typ_start, typ_end) {
-            (Some(typ_start), Some(typ_end)) => DbValue::merge_types(typ_start, typ_end),
-            (Some(typ_start), None) => typ_start,
-            (None, Some(typ_end)) => typ_end,
-            (None, None) => DbValue::get_base_type(),
-        };
+        let base_type =
+            DbValue::merge_types_opt(typ_start, typ_end).unwrap_or(DbValue::get_base_type());
 
         let typ = Self::get_analysed_type(base_type);
 
@@ -606,6 +632,12 @@ impl ExtIntoValueAndType for Range {
 
     fn get_base_type() -> AnalysedType {
         Self::get_analysed_type(DbValue::get_base_type())
+    }
+}
+
+impl AnalysedTypeMerger for Range {
+    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
+        first
     }
 }
 
@@ -891,6 +923,49 @@ impl ExtIntoValueAndType for DbColumnType {
     }
 }
 
+impl AnalysedTypeMerger for DbColumnType {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Variant(f), AnalysedType::Variant(s)) = (first.clone(), second) {
+            if f.cases.len() == s.cases.len() {
+                let mut cases = Vec::with_capacity(f.cases.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.cases.into_iter().zip(s.cases.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+
+                    if fc.name == "composite" {
+                        let t = CompositeType::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "range" {
+                        let t = RangeType::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "domain" {
+                        let t = DomainType::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "array" {
+                        let t = <Vec<DbColumnType>>::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else {
+                        cases.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::variant(cases)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum DbValue {
     Character(i8),
@@ -1119,7 +1194,7 @@ impl DbValue {
             analysed_type::case("time", analysed_type::str()),
             analysed_type::case("timetz", analysed_type::str()),
             analysed_type::case("date", analysed_type::str()),
-            analysed_type::case("interval", analysed_type::str()),
+            analysed_type::case("interval", Interval::get_type()),
             analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
             analysed_type::case("json", analysed_type::str()),
             analysed_type::case("jsonb", analysed_type::str()),
@@ -1253,6 +1328,49 @@ impl ExtIntoValueAndType for DbValue {
     }
 }
 
+impl AnalysedTypeMerger for DbValue {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Variant(f), AnalysedType::Variant(s)) = (first.clone(), second) {
+            if f.cases.len() == s.cases.len() {
+                let mut cases = Vec::with_capacity(f.cases.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.cases.into_iter().zip(s.cases.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+
+                    if fc.name == "composite" {
+                        let t = Composite::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "range" {
+                        let t = Range::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "domain" {
+                        let t = Domain::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else if fc.name == "array" {
+                        let t = <Vec<DbValue>>::merge_types_opt(fc.typ, sc.typ);
+                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
+                    } else {
+                        cases.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::variant(cases)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct DbColumn {
     pub ordinal: u64,
@@ -1290,20 +1408,35 @@ impl ExtIntoValueAndType for DbColumn {
     }
 }
 
-impl AnalysedTypeMerger for DbColumnType {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first // TODO implement merge
-    }
-}
-
-impl AnalysedTypeMerger for DbValue {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first // TODO implement merge
-    }
-}
-
 impl AnalysedTypeMerger for DbColumn {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        first // TODO implement merge
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
+            if f.fields.len() == s.fields.len() {
+                let mut fields = Vec::with_capacity(f.fields.len());
+                let mut ok = true;
+
+                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
+                    if fc.name != sc.name {
+                        ok = false;
+                        break;
+                    }
+                    if fc.name == "db-type" {
+                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
+                        fields.push(analysed_type::field(fc.name.as_str(), t));
+                    } else {
+                        fields.push(fc);
+                    }
+                }
+                if ok {
+                    analysed_type::record(fields)
+                } else {
+                    first
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }
     }
 }
