@@ -79,7 +79,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 ..
             } => {
                 internal::handle_option(inner_expr, copied, inferred_type)?;
-                queue.push_back(outer_expr);
+                queue.push_back(inner_expr);
             }
 
             Expr::Result {
@@ -663,24 +663,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::{Expr, FunctionTypeRegistry, InferredType};
-
-
-    #[test]
-    fn test_push_down_ambiguous() {
-        let expr = r#"
-          let x: u64 = some(1);
-          x
-        "#;
-
-        let mut expr = Expr::from_text(expr).unwrap();
-
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
-        dbg!(result);
-
-        assert!(false)
-    }
-
-
+    
     #[test]
     fn test_push_down_for_record() {
         let mut expr = Expr::record(vec![(
