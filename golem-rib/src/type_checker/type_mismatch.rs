@@ -23,8 +23,13 @@ pub fn check_type_mismatch(
                         let actual_field_type =
                             actual_record_type.inner_type_by_name(&expected_field_name);
 
-                        check_type_mismatch(expr, parent_expr, &expected_field_type, &actual_field_type)
-                            .map_err(|e| e.at_field(expected_field_name.clone()))?;
+                        check_type_mismatch(
+                            expr,
+                            parent_expr,
+                            &expected_field_type,
+                            &actual_field_type,
+                        )
+                        .map_err(|e| e.at_field(expected_field_name.clone()))?;
                     }
 
                     Ok(())
@@ -81,7 +86,12 @@ pub fn check_type_mismatch(
                             actual_variant.inner_type_by_name(&expected_case_name);
 
                         if let Some(expected_case_typ) = expected_case.typ.clone() {
-                            check_type_mismatch(expr, parent_expr, &expected_case_typ, &actual_case_type)?;
+                            check_type_mismatch(
+                                expr,
+                                parent_expr,
+                                &expected_case_typ,
+                                &actual_case_type,
+                            )?;
                         }
                     }
 
@@ -272,7 +282,7 @@ impl TypeMismatchError {
             parent_expr: parent_expr.cloned(),
             expected_type,
             actual_type,
-            field_path: Path::default()
+            field_path: Path::default(),
         }
     }
 }

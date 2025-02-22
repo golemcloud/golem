@@ -108,10 +108,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Number { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::from(expr, parent)
-                        .with_help_message(
-                        "possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32"
-                    ));
+                    return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
 
@@ -452,11 +449,8 @@ mod internal {
         original_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in exprs_in_tuple.iter().enumerate() {
-            check_unresolved_types(field_expr).map_err(|error| {
-                error
-                    .at_index(index)
-                    .with_parent_expr(original_expr)
-            })?;
+            check_unresolved_types(field_expr)
+                .map_err(|error| error.at_index(index).with_parent_expr(original_expr))?;
         }
 
         Ok(())
@@ -489,7 +483,10 @@ mod internal {
         let left_type = left.inferred_type();
         let right_type = right.inferred_type();
         if left_type.un_resolved() {
-            return Err(UnResolvedTypesError::from(left, Some(original_expr.clone())));
+            return Err(UnResolvedTypesError::from(
+                left,
+                Some(original_expr.clone()),
+            ));
         } else {
             check_unresolved_types(left)?;
         }
@@ -589,13 +586,19 @@ mod internal {
         }
 
         if if_type.un_resolved() {
-            return Err(UnResolvedTypesError::from(if_expr, Some(outer_expr.clone())));
+            return Err(UnResolvedTypesError::from(
+                if_expr,
+                Some(outer_expr.clone()),
+            ));
         } else {
             check_unresolved_types(if_expr)?;
         }
 
         if else_type.un_resolved() {
-            return Err(UnResolvedTypesError::from(if_expr, Some(outer_expr.clone())));
+            return Err(UnResolvedTypesError::from(
+                if_expr,
+                Some(outer_expr.clone()),
+            ));
         } else {
             check_unresolved_types(else_expr)?;
         }
@@ -695,7 +698,10 @@ mod unresolved_types_tests {
     fn strip_spaces(input: &str) -> String {
         let mut lines = input.lines();
 
-        let first_line = lines.clone().find(|line| !line.trim().is_empty()).unwrap_or("");
+        let first_line = lines
+            .clone()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
         let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
 
         let result = lines
@@ -746,7 +752,6 @@ mod unresolved_types_tests {
         unresolved type at path: `a`
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-        help: possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32
         "#;
         assert_eq!(error, strip_spaces(expected));
     }
@@ -765,7 +770,6 @@ mod unresolved_types_tests {
         unresolved type at path: `foo.a`
         help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-        help: possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32
         "#;
 
         assert_eq!(error_msg, strip_spaces(expected));
@@ -788,10 +792,7 @@ mod unresolved_types_tests {
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
         "#;
 
-        assert_eq!(
-            error_msg,
-            strip_spaces(expected)
-        );
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -810,11 +811,7 @@ mod unresolved_types_tests {
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
         "#;
 
-
-        assert_eq!(
-            error_msg,
-            strip_spaces(expected)
-        );
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -834,10 +831,6 @@ mod unresolved_types_tests {
         help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
         "#;
 
-
-        assert_eq!(
-            error_msg,
-            strip_spaces(expected)
-        );
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 }

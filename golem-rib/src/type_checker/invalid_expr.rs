@@ -1,6 +1,6 @@
+use crate::type_inference::kind::TypeKind;
 use crate::{Expr, InferredType, TypeName};
 use std::collections::VecDeque;
-use crate::type_inference::kind::TypeKind;
 
 // Check all exprs that cannot be the type it is tagged against
 pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
@@ -18,7 +18,6 @@ pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
                         found: inferred_type.clone(),
                         message: msg,
                     });
-
                 }
             },
             _ => expr.visit_children_bottom_up(&mut queue),
@@ -32,5 +31,5 @@ pub struct InvalidExpr {
     pub expr: Expr,
     pub expected_type: TypeKind,
     pub found: InferredType,
-    pub message: String
+    pub message: String,
 }

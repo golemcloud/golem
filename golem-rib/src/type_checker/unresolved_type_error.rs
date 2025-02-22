@@ -1,7 +1,7 @@
-use std::collections::VecDeque;
 use crate::type_checker::{Path, PathElem, PathType};
 use crate::{Expr, InferredType, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Display;
 
@@ -11,7 +11,7 @@ pub struct UnResolvedTypesError {
     pub parent_expr: Option<Expr>,
     pub additional_messages: Vec<String>,
     pub help_messages: Vec<String>,
-    pub path: Path
+    pub path: Path,
 }
 
 impl UnResolvedTypesError {
@@ -21,7 +21,7 @@ impl UnResolvedTypesError {
             additional_messages: Vec::new(),
             parent_expr: parent_expr.clone(),
             help_messages: Vec::new(),
-            path: Path::default()
+            path: Path::default(),
         };
 
         unresolved_types.with_default_help_messages()
@@ -29,9 +29,10 @@ impl UnResolvedTypesError {
 
     pub fn with_default_help_messages(&self) -> Self {
         self.with_help_message(
-            "consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`"
-        ).with_help_message(
-            "or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]"
+            "consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`",
+        )
+        .with_help_message(
+            "or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]",
         )
     }
 
@@ -43,20 +44,26 @@ impl UnResolvedTypesError {
 
     pub fn with_additional_error_detail(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.additional_messages.push(message.as_ref().to_string());
+        unresolved_error
+            .additional_messages
+            .push(message.as_ref().to_string());
         unresolved_error
     }
 
     pub fn with_help_message(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.help_messages.push(message.as_ref().to_string());
+        unresolved_error
+            .help_messages
+            .push(message.as_ref().to_string());
 
         unresolved_error
     }
 
     pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.path.push_front(PathElem::Field(field_name));
+        unresolved_error
+            .path
+            .push_front(PathElem::Field(field_name));
         unresolved_error
     }
 
@@ -74,7 +81,8 @@ impl Display for UnResolvedTypesError {
         writeln!(
             f,
             "cannot determine the type of the following rib expression found at line {}, column {}",
-            span.start_line(), span.start_column()
+            span.start_line(),
+            span.start_column()
         )?;
 
         writeln!(f, "`{}`", self.unresolved_expr)?;

@@ -1,34 +1,34 @@
 pub(crate) use check_instance_returns::*;
+pub(crate) use exhaustive_pattern_match::*;
+pub(crate) use invalid_expr::*;
+pub(crate) use invalid_math_expr::*;
+pub(crate) use invalid_worker_name::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
-pub(crate) use unresolved_type_error::*;
-pub(crate) use type_mismatch::*;
-pub(crate) use unresolved_types::*;
 pub(crate) use type_check_in_function_calls::*;
-pub(crate) use invalid_expr::*;
-pub(crate) use invalid_worker_name::*;
-pub(crate) use invalid_math_expr::*;
-pub(crate) use exhaustive_pattern_match::*;
+pub(crate) use type_mismatch::*;
+pub(crate) use unresolved_type_error::*;
+pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
-mod invalid_expr;
-mod invalid_worker_name;
 mod exhaustive_pattern_match;
+mod invalid_expr;
 mod invalid_math_expr;
+mod invalid_worker_name;
 mod missing_fields;
 mod path;
-mod unresolved_type_error;
-mod type_mismatch;
 mod type_check_in_function_calls;
+mod type_mismatch;
+mod unresolved_type_error;
 mod unresolved_types;
 
-use crate::type_checker::invalid_expr::check_invalid_expr;
-use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
+use crate::rib_compilation_error::RibCompilationError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
+use crate::type_checker::invalid_expr::check_invalid_expr;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
+use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
 use crate::{Expr, FunctionTypeRegistry};
-use crate::rib_compilation_error::RibCompilationError;
 
 pub fn type_check(
     expr: &mut Expr,
@@ -51,6 +51,7 @@ mod type_check_tests {
         use test_r::test;
 
         use crate::type_checker::type_check_tests::internal;
+        use crate::type_checker::type_check_tests::internal::strip_spaces;
         use crate::{compile, Expr};
 
         #[test]
@@ -64,10 +65,21 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_message = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, string>>, b: u64, c: list<s32>, d: record<da: s32>>. cannot determine the type of `3` in `x`. Number literals must have a type annotation. Example: `1: u64`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 32
+            `3`
+            found within:
+            `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
+            cause: cannot determine the type
+            unresolved type at path: `x`
+            invalid argument to `foo`. expected record{a: record{aa: s32, ab: s32, ac: list<s32>, ad: record{ada: s32}, ae: tuple<s32, string>}, b: u64, c: list<s32>, d: record{da: s32}}
+            help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+            help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
         }
     }
 
@@ -75,6 +87,7 @@ mod type_check_tests {
         use test_r::test;
 
         use crate::type_checker::type_check_tests::internal;
+        use crate::type_checker::type_check_tests::internal::strip_spaces;
         use crate::{compile, Expr};
 
         #[test]
@@ -88,10 +101,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `b`. Expected `u64`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
+            found within:
+            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}})`
+            cause: type mismatch at path: `b`. expected u64
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
@@ -105,10 +126,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: 2, c: [\"foo\", \"bar\"], d: {da: 4}}`. Type mismatch for `c`. Expected `list<s32>`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}}`
+            found within:
+            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}})`
+            cause: type mismatch at path: `c`. expected list<s32>
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
@@ -122,10 +151,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: 2, c: [1, 2], d: {da: \"foo\"}}`. Type mismatch for `d.da`. Expected `s32`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}}`
+            found within:
+            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}})`
+            cause: type mismatch at path: `d.da`. expected s32
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
@@ -139,10 +176,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: \"foo\", ab: 2, ac: [1, 2], ad: {ada: \"1\"}, ae: (1, \"foo\")}, b: 3, c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `a.aa`. Expected `s32`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}}`
+            found within:
+            `foo({a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}})`
+            cause: type mismatch at path: `a.aa`. expected s32
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
@@ -156,16 +201,24 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: \"1\"}, ae: (1, \"foo\")}, b: 3, c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `a.ad.ada`. Expected `s32`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}}`
+            found within:
+            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}})`
+            cause: type mismatch at path: `a.ad.ada`. expected s32
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
         fn test_type_mismatch_in_nested_record_in_function_call3() {
             let expr = r#"
-            let bar = {a: {aa: 1, ab: 2, ac: some(1), ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
+            let bar = {a: {aa: 1, ab: 2, ac: 1, ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
             let result = foo(bar);
             result
         "#;
@@ -174,12 +227,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            println!("{}", result.clone());
+            let expected = r#"
+            error in the following rib found at line 3, column 30
+            `bar`
+            found within:
+            `foo(bar)`
+            cause: type mismatch at path: `a.ac`. expected list<s32>
+            invalid argument to the function `foo`
+            "#;
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: 1, ad: {ada: 1}, ae: (1, \"foo\")}, b: 3, c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `a.ac`. Expected `list<s32>`";
-            assert_eq!(result, expected);
+            assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
@@ -193,10 +252,18 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let result = compile(&expr, &metadata).unwrap_err();
+            let error_msg = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `a.ae[1]`. Expected `string`";
-            assert_eq!(result, expected);
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`
+            found within:
+            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}})`
+            cause: type mismatch at path: `a.ae`. expected string
+            invalid argument to the function `foo`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
         }
     }
 
@@ -206,6 +273,29 @@ mod type_check_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             NameTypePair,
         };
+
+        pub(crate) fn strip_spaces(input: &str) -> String {
+            let mut lines = input.lines();
+
+            let first_line = lines
+                .clone()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+            let result = lines
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        String::new()
+                    } else {
+                        line[margin_width..].to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            result.strip_prefix("\n").unwrap_or(&result).to_string()
+        }
 
         pub(crate) fn get_metadata_with_record_input_params() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {

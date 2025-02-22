@@ -55,7 +55,8 @@ mod internal {
         arms: &[ArmPattern],
         function_registry: &FunctionTypeRegistry,
     ) -> Result<(), ExhaustivePatternMatchError> {
-        let mut exhaustive_check_result = check_exhaustive(predicate, arms, ConstructorDetail::option());
+        let mut exhaustive_check_result =
+            check_exhaustive(predicate, arms, ConstructorDetail::option());
 
         let variants = function_registry.get_variants();
 
@@ -70,29 +71,32 @@ mod internal {
         constructor_details.push(ConstructorDetail::result());
 
         for detail in constructor_details {
-            exhaustive_check_result = exhaustive_check_result.unwrap_or_run_with(predicate, arms, detail);
+            exhaustive_check_result =
+                exhaustive_check_result.unwrap_or_run_with(predicate, arms, detail);
         }
 
         let inner_constructors = exhaustive_check_result.value()?;
 
         for (field, patterns) in inner_constructors.inner() {
-            check_exhaustive_pattern_match(predicate, patterns, function_registry).map_err(|e| match e {
-                ExhaustivePatternMatchError::MissingConstructors{
-                    missing_constructors,
-                    ..
-                } => {
-                    let mut new_missing_constructors = vec![];
-                    missing_constructors.iter().for_each(|missing_constructor| {
-                        new_missing_constructors
-                            .push(format!("{}({})", field, missing_constructor));
-                    });
+            check_exhaustive_pattern_match(predicate, patterns, function_registry).map_err(
+                |e| match e {
                     ExhaustivePatternMatchError::MissingConstructors {
-                        predicate: predicate.clone(),
-                        missing_constructors: new_missing_constructors,
+                        missing_constructors,
+                        ..
+                    } => {
+                        let mut new_missing_constructors = vec![];
+                        missing_constructors.iter().for_each(|missing_constructor| {
+                            new_missing_constructors
+                                .push(format!("{}({})", field, missing_constructor));
+                        });
+                        ExhaustivePatternMatchError::MissingConstructors {
+                            predicate: predicate.clone(),
+                            missing_constructors: new_missing_constructors,
+                        }
                     }
-                }
-                other_errors => other_errors,
-            })?;
+                    other_errors => other_errors,
+                },
+            )?;
         }
 
         Ok(())
@@ -156,24 +160,6 @@ mod internal {
         }
     }
 
-    impl Display for ExhaustivePatternMatchError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                ExhaustivePatternMatchError::MissingConstructors{missing_constructors, ..} => {
-                    let constructors = missing_constructors.join(", ");
-                    write!(f, "Error: Non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", constructors)
-                }
-                ExhaustivePatternMatchError::DeadCode {
-                    predicate,
-                    cause,
-                    dead_pattern,
-                } => {
-                    write!(f, "Error: Dead code detected. The pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
-                }
-            }
-        }
-    }
-
     fn check_exhaustive(
         predicate: &Expr,
         patterns: &[ArmPattern],
@@ -194,7 +180,8 @@ mod internal {
 
         for pattern in patterns {
             if !detected_wild_card_or_identifier.is_empty() {
-                return ExhaustiveCheckResult::dead_code(predicate,
+                return ExhaustiveCheckResult::dead_code(
+                    predicate,
                     detected_wild_card_or_identifier
                         .last()
                         .unwrap_or(&ArmPattern::WildCard),
@@ -271,7 +258,10 @@ mod internal {
 
                 missing_constructors.extend(missing_no_arg_constructors.clone());
 
-                return ExhaustiveCheckResult::missing_constructors(predicate.clone(), missing_constructors);
+                return ExhaustiveCheckResult::missing_constructors(
+                    predicate.clone(),
+                    missing_constructors,
+                );
             }
         }
 
@@ -412,6 +402,7 @@ mod internal {
 
 #[cfg(test)]
 mod pattern_match_exhaustive_tests {
+    use crate::type_checker::exhaustive_pattern_match::pattern_match_exhaustive_tests::internal::strip_spaces;
     use crate::{compile, Expr};
     use test_r::test;
 
@@ -533,9 +524,16 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Dead code detected. The pattern `some(_)` is unreachable due to the existence of the pattern `_` prior to it")
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  _ => "none", some(_) => a } `
+        cause: dead code detected, pattern `some(_)` is unreachable due to the existence of the pattern `_` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected))
     }
 
     #[test]
@@ -549,8 +547,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `none` is unreachable due to the existence of the pattern `_` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  _ => "none", none => "a" } `
+        cause: dead code detected, pattern `none` is unreachable due to the existence of the pattern `_` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected))
     }
 
     #[test]
@@ -564,8 +571,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `some(_)` is unreachable due to the existence of the pattern `something` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  something => "none", some(_) => a } `
+        cause: dead code detected, pattern `some(_)` is unreachable due to the existence of the pattern `something` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected))
     }
 
     #[test]
@@ -577,10 +593,18 @@ mod pattern_match_exhaustive_tests {
             none => "a"
         }
         "#;
-
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `none` is unreachable due to the existence of the pattern `something` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  something => "none", none => "a" } `
+        cause: dead code detected, pattern `none` is unreachable due to the existence of the pattern `something` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected))
     }
 
     #[test]
@@ -593,9 +617,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `none`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  some(a) => a } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `none`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -608,9 +640,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  none => "none" } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `some`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -624,12 +664,19 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some(none)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  some(some(a)) => a, none => "bar" } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `some(none)`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
-    /// Result
     #[test]
     fn test_result_pattern_match1() {
         let expr = r#"
@@ -748,9 +795,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Dead code detected. The pattern `ok(_)` is unreachable due to the existence of the pattern `_` prior to it")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  _ => "none", ok(_) => a } `
+        cause: dead code detected, pattern `ok(_)` is unreachable due to the existence of the pattern `_` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -764,8 +819,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `err(msg)` is unreachable due to the existence of the pattern `_` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  _ => "none", err(msg) => "a" } `
+        cause: dead code detected, pattern `err(msg)` is unreachable due to the existence of the pattern `_` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -779,8 +843,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `ok(_)` is unreachable due to the existence of the pattern `something` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  something => "none", ok(_) => "a" } `
+        cause: dead code detected, pattern `ok(_)` is unreachable due to the existence of the pattern `something` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -794,11 +867,19 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(result, "Error: Dead code detected. The pattern `err(msg)` is unreachable due to the existence of the pattern `something` prior to it")
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  something => "none", err(msg) => "a" } `
+        cause: dead code detected, pattern `err(msg)` is unreachable due to the existence of the pattern `something` prior to it
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
-    /// Result
     #[test]
     fn test_result_err_absent() {
         let expr = r#"
@@ -809,9 +890,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `err`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  ok(a) => a } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `err`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -825,9 +914,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  err(str) => str } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `ok`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -841,9 +938,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok(ok)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  ok(err(a)) => a, err(_) => "bar" } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `ok(ok)`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -857,9 +962,17 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]).unwrap_err();
 
-        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok(err)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 3, column 9
+        `match x {  ok(ok(a)) => a, err(_) => "bar" } `
+        cause: non-exhaustive pattern match: the following patterns are not covered: `ok(err)`
+        help: to ensure a complete match, add missing patterns or use wildcard (`_`)
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
@@ -908,5 +1021,30 @@ mod pattern_match_exhaustive_tests {
         let result = compile(&expr, &vec![]);
 
         assert!(result.is_ok());
+    }
+
+    mod internal {
+        pub(crate) fn strip_spaces(input: &str) -> String {
+            let mut lines = input.lines();
+
+            let first_line = lines
+                .clone()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+            let result = lines
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        String::new()
+                    } else {
+                        line[margin_width..].to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            result.strip_prefix("\n").unwrap_or(&result).to_string()
+        }
     }
 }

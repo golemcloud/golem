@@ -73,7 +73,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 
             Expr::InvokeMethodLazy { lhs, method, .. } => {
                 let lhs = lhs.to_string();
-                return Err(format!("Invalid method invocation `{}.{}`. Make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs));
+                return Err(format!("invalid method invocation `{}.{}`. Make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs));
             }
 
             Expr::SelectField {

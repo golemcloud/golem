@@ -25,9 +25,12 @@ pub fn check_type_error_in_function_calls(
                 call_type, args, ..
             } => match call_type {
                 CallType::InstanceCreation(_) => {}
-                call_type => {
-                    internal::check_type_mismatch_in_function_call(call_type, args, type_registry, parent_copy)?
-                }
+                call_type => internal::check_type_mismatch_in_function_call(
+                    call_type,
+                    args,
+                    type_registry,
+                    parent_copy,
+                )?,
             },
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
@@ -68,7 +71,7 @@ mod internal {
         call_type: &mut CallType,
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
-        parent_expr: Expr // The actual function call expression
+        parent_expr: Expr, // The actual function call expression
     ) -> Result<(), FunctionCallTypeError> {
         let registry_key = RegistryKey::from_call_type(call_type).ok_or(
             FunctionCallTypeError::InvalidFunctionCall {
@@ -121,13 +124,17 @@ mod internal {
                 });
             }
 
-            type_checker::check_type_mismatch(actual_arg, Some(&parent_expr), &expected_arg_type, actual_arg_type).map_err(
-                |e| FunctionCallTypeError::TypeMisMatch {
-                    function_call_name: call_type.to_string(),
-                    argument: actual_arg.clone(),
-                    error: e,
-                },
-            )?;
+            type_checker::check_type_mismatch(
+                actual_arg,
+                Some(&parent_expr),
+                &expected_arg_type,
+                actual_arg_type,
+            )
+            .map_err(|e| FunctionCallTypeError::TypeMisMatch {
+                function_call_name: call_type.to_string(),
+                argument: actual_arg.clone(),
+                error: e,
+            })?;
         }
 
         Ok(())

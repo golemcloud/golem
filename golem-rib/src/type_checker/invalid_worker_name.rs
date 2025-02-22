@@ -32,13 +32,15 @@ pub fn check_invalid_worker_name(expr: &Expr) -> Result<(), InvalidWorkerName> {
 }
 
 mod internal {
-    use std::ops::Deref;
+    use crate::type_checker::InvalidWorkerName;
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, TypeName};
-    use crate::type_checker::InvalidWorkerName;
+    use std::ops::Deref;
 
-    pub(crate) fn check_worker_name(worker_name: &Option<Box<Expr>>) -> Result<(), InvalidWorkerName> {
+    pub(crate) fn check_worker_name(
+        worker_name: &Option<Box<Expr>>,
+    ) -> Result<(), InvalidWorkerName> {
         match worker_name {
             None => {}
             Some(expr) => {
@@ -53,10 +55,7 @@ mod internal {
                             .unwrap_or_else(|_| "unknown".to_string());
                         return Err(InvalidWorkerName {
                             worker_name_expr: expr.deref().clone(),
-                            message: format!(
-                                "expected a string type but found a {} type",
-                                type_name
-                            ),
+                            message: format!("expected string, found {}", type_name),
                         });
                     }
                 }

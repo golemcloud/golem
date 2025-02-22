@@ -33,6 +33,7 @@ mod inferred_type;
 mod instance_type;
 mod interpreter;
 mod parser;
+mod rib_compilation_error;
 mod rib_source_span;
 mod text;
 mod type_checker;
@@ -42,7 +43,6 @@ mod type_parameter_parser;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
-mod rib_compilation_error;
 
 #[cfg(test)]
 test_r::enable!();

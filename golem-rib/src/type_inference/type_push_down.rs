@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::type_inference::kind::{GetTypeKind, TypeKind};
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
-use crate::type_inference::kind::{GetTypeKind, TypeKind};
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
@@ -201,7 +201,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 // and what is being pushed down
 pub struct AmbiguousTypeError {
     pub expr: Expr,
-    pub message: String
+    pub message: String,
 }
 
 impl AmbiguousTypeError {
@@ -210,17 +210,25 @@ impl AmbiguousTypeError {
 
         match kind {
             TypeKind::Ambiguous { possibilities } => {
-                let error_message = format!("ambiguous types inferred {}", possibilities.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(", "));
+                let error_message = format!(
+                    "ambiguous types inferred {}",
+                    possibilities
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 AmbiguousTypeError {
                     expr: expr.clone(),
-                    message: error_message
+                    message: error_message,
                 }
             }
             _ => {
-                let error_message = format!("ambiguous types inferred , {},{}",  TypeKind::Option, kind);
+                let error_message =
+                    format!("ambiguous types inferred , {},{}", TypeKind::Option, kind);
                 AmbiguousTypeError {
                     expr: expr.clone(),
-                    message: error_message
+                    message: error_message,
                 }
             }
         }
@@ -229,11 +237,11 @@ impl AmbiguousTypeError {
 
 mod internal {
     use crate::call_type::CallType;
+    use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType, VariableId};
     use std::collections::VecDeque;
-    use crate::type_inference::kind::{GetTypeKind, TypeKind};
 
     pub(crate) fn handle_list_comprehension(
         variable_id: &mut VariableId,
@@ -381,7 +389,6 @@ mod internal {
                     }
                 }
             })?;
-
 
         let inner_type = refined_optional_type.inner_type();
 
@@ -655,7 +662,6 @@ mod internal {
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]

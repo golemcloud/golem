@@ -1,14 +1,19 @@
+use crate::call_type::CallType;
+use crate::parser::call::call;
+use crate::type_checker::{
+    ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError,
+    InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError,
+};
+use crate::{Expr, TypeName};
 use std::fmt;
 use std::fmt::{format, Display};
-use crate::{Expr, TypeName};
-use crate::type_checker::{ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError};
 
 pub struct RibCompilationError {
     pub cause: String,
     pub expr: Expr,
     pub immediate_parent: Option<Expr>,
     pub additional_error_details: Vec<String>,
-    pub help_messages: Vec<String>
+    pub help_messages: Vec<String>,
 }
 
 impl Display for RibCompilationError {
@@ -18,7 +23,8 @@ impl Display for RibCompilationError {
         writeln!(
             f,
             "error in the following rib found at line {}, column {}",
-            span.start_line(), span.start_column()
+            span.start_line(),
+            span.start_column()
         )?;
 
         writeln!(f, "`{}`", self.expr)?;
@@ -36,7 +42,6 @@ impl Display for RibCompilationError {
             }
         }
 
-
         if !self.help_messages.is_empty() {
             for message in &self.help_messages {
                 writeln!(f, "help: {}", message)?;
@@ -49,17 +54,18 @@ impl Display for RibCompilationError {
 
 impl From<UnResolvedTypesError> for RibCompilationError {
     fn from(value: UnResolvedTypesError) -> Self {
-
         let mut rib_compilation_error = RibCompilationError {
             cause: "cannot determine the type".to_string(),
             expr: value.unresolved_expr,
             immediate_parent: value.parent_expr,
             additional_error_details: value.additional_messages,
-            help_messages: value.help_messages
+            help_messages: value.help_messages,
         };
 
         if !value.path.is_empty() {
-            rib_compilation_error.additional_error_details.push(format!("unresolved type at path: `{}`", value.path));
+            rib_compilation_error
+                .additional_error_details
+                .push(format!("unresolved type at path: `{}`", value.path));
         }
 
         rib_compilation_error
@@ -68,21 +74,25 @@ impl From<UnResolvedTypesError> for RibCompilationError {
 
 impl From<TypeMismatchError> for RibCompilationError {
     fn from(value: TypeMismatchError) -> Self {
+        let expected = TypeName::try_from(value.expected_type)
+            .map(|x| format!("expected {}", x))
+            .ok();
 
-        let expected =
-            TypeName::try_from(value.expected_type).map(|x| format!("Expected {}", x)).ok();
-
-        let actual =
-            TypeName::try_from(value.actual_type).map(|x| format!("Found {}", x)).ok();
+        let actual = TypeName::try_from(value.actual_type)
+            .map(|x| format!("found {}", x))
+            .ok();
 
         let cause_suffix = match (expected, actual) {
             (Some(expected), Some(actual)) => format!("{}. {}", expected, actual),
-            (Some(expected), None) => format!("{}. Found unknown type. Specify types and try again", expected),
-            _ => "".to_string()
+            (Some(expected), None) => format!("{}", expected),
+            _ => "".to_string(),
         };
 
         let cause = if !value.field_path.is_empty() {
-            format!("type mismatch at path: `{}`. {}", value.field_path, cause_suffix)
+            format!(
+                "type mismatch at path: `{}`. {}",
+                value.field_path, cause_suffix
+            )
         } else {
             format!("type mismatch. {}", cause_suffix)
         };
@@ -91,8 +101,8 @@ impl From<TypeMismatchError> for RibCompilationError {
             cause,
             expr: value.expr_with_wrong_type,
             immediate_parent: value.parent_expr,
-            additional_error_details:vec![],
-            help_messages: vec![]
+            additional_error_details: vec![],
+            help_messages: vec![],
         }
     }
 }
@@ -102,34 +112,32 @@ impl From<FunctionCallTypeError> for RibCompilationError {
         match value {
             FunctionCallTypeError::InvalidFunctionCall {
                 function_call_name: function_name,
-            } => {
-                RibCompilationError {
-                    cause: format!("Invalid function call: `{}`", function_name),
-                    expr: Expr::identifier_global(function_name, None),
-                    immediate_parent: None,
-                    additional_error_details: vec![],
-                    help_messages: vec![]
-                }
-            }
+            } => RibCompilationError {
+                cause: format!("Invalid function call: `{}`", function_name),
+                expr: Expr::identifier_global(function_name, None),
+                immediate_parent: None,
+                additional_error_details: vec![],
+                help_messages: vec![],
+            },
             FunctionCallTypeError::TypeMisMatch {
                 function_call_name: call_type,
                 error,
                 ..
             } => {
-                let mut original_compilation : RibCompilationError = error.into();
+                let mut original_compilation: RibCompilationError = error.into();
 
-                let error_detail = format!(
-                    "Invalid argument to the function `{}`", call_type
-                );
+                let error_detail = format!("invalid argument to the function `{}`", call_type);
 
-                original_compilation.additional_error_details.push(error_detail);
+                original_compilation
+                    .additional_error_details
+                    .push(error_detail);
 
                 original_compilation
             }
             FunctionCallTypeError::MissingRecordFields {
                 function_call_name: call_type,
                 missing_fields,
-                argument
+                argument,
             } => {
                 let missing_fields = missing_fields
                     .iter()
@@ -139,13 +147,13 @@ impl From<FunctionCallTypeError> for RibCompilationError {
 
                 let rib_compilation_error = RibCompilationError {
                     cause: format!(
-                        "Invalid argument to the function `{}`:  Missing field(s) in record `{}`",
+                        "invalid argument to the function `{}`:  missing field(s) in record `{}`",
                         call_type, missing_fields
                     ),
                     expr: argument,
                     immediate_parent: None,
                     additional_error_details: vec![],
-                    help_messages: vec![]
+                    help_messages: vec![],
                 };
 
                 rib_compilation_error
@@ -157,19 +165,15 @@ impl From<FunctionCallTypeError> for RibCompilationError {
                 expected_type,
                 ..
             } => {
-
                 let expected = TypeName::try_from(expected_type.clone())
-                    .map(|t| format!("Expected {}", t))
+                    .map(|t| format!("expected {}", t))
                     .unwrap_or_default();
 
-                let mut rib_compilation_error =
-                    RibCompilationError::from(unresolved_error);
+                let mut rib_compilation_error = RibCompilationError::from(unresolved_error);
 
-                rib_compilation_error.additional_error_details.push(format!(
-                    "Invalid argument to `{}`. {}",
-                    call_type,
-                    expected
-                ));
+                rib_compilation_error
+                    .additional_error_details
+                    .push(format!("invalid argument to `{}`. {}", call_type, expected));
 
                 rib_compilation_error
             }
@@ -179,15 +183,14 @@ impl From<FunctionCallTypeError> for RibCompilationError {
 
 impl From<InvalidExpr> for RibCompilationError {
     fn from(value: InvalidExpr) -> Self {
-
-       let cause = format!("cannot be a {}", value.expected_type);
+        let cause = format!("cannot be a {}", value.expected_type);
 
         RibCompilationError {
             cause,
             expr: value.expr,
             immediate_parent: None,
             additional_error_details: vec![],
-            help_messages: vec![]
+            help_messages: vec![],
         }
     }
 }
@@ -199,7 +202,7 @@ impl From<InvalidProgramReturn> for RibCompilationError {
             expr: value.return_expr,
             immediate_parent: None,
             additional_error_details: vec![],
-            help_messages: vec![]
+            help_messages: vec![],
         }
     }
 }
@@ -211,29 +214,25 @@ impl From<InvalidWorkerName> for RibCompilationError {
             expr: value.worker_name_expr,
             immediate_parent: None,
             additional_error_details: vec![],
-            help_messages: vec![]
+            help_messages: vec![],
         }
     }
 }
 
-
 impl From<InvalidMathExprError> for RibCompilationError {
     fn from(value: InvalidMathExprError) -> Self {
-
         let expr = match value {
-            InvalidMathExprError::Both { math_expr, ..}
+            InvalidMathExprError::Both { math_expr, .. }
             | InvalidMathExprError::Left { math_expr, .. }
-            | InvalidMathExprError::Right { math_expr, .. } => {
-                math_expr
-            }
+            | InvalidMathExprError::Right { math_expr, .. } => math_expr,
         };
 
         RibCompilationError {
-            cause:  "invalid math expression".to_string(),
+            cause: "invalid math expression".to_string(),
             expr,
             immediate_parent: None,
             additional_error_details: vec![],
-            help_messages: vec![]
+            help_messages: vec![],
         }
     }
 }
@@ -242,17 +241,25 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
     fn from(value: ExhaustivePatternMatchError) -> Self {
         let expr = match &value {
             ExhaustivePatternMatchError::MissingConstructors { predicate, .. }
-            | ExhaustivePatternMatchError::DeadCode { predicate, .. } => {
-                predicate.clone()
-            }
+            | ExhaustivePatternMatchError::DeadCode { predicate, .. } => predicate.clone(),
         };
 
         let cause = match value {
-            ExhaustivePatternMatchError::MissingConstructors { missing_constructors, .. } => {
-                format!("non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", missing_constructors.join(", "))
+            ExhaustivePatternMatchError::MissingConstructors {
+                missing_constructors,
+                ..
+            } => {
+                format!(
+                    "non-exhaustive pattern match: the following patterns are not covered: `{}`",
+                    missing_constructors.join(", ")
+                )
             }
-            ExhaustivePatternMatchError::DeadCode { dead_pattern, cause, .. } => {
-                format!("Error: Dead code detected. The pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
+            ExhaustivePatternMatchError::DeadCode {
+                dead_pattern,
+                cause,
+                ..
+            } => {
+                format!("dead code detected, pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
             }
         };
 
@@ -261,7 +268,10 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
             expr,
             immediate_parent: None,
             additional_error_details: vec![],
-            help_messages: vec![]
+            help_messages: vec![
+                "to ensure a complete match, add missing patterns or use wildcard (`_`)"
+                    .to_string(),
+            ],
         }
     }
 }

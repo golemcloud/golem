@@ -2259,12 +2259,12 @@ mod interpreter_tests {
 
     mod first_class_worker_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal::strip_spaces;
         use crate::{compiler, Expr, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{field, option, record, str};
         use golem_wasm_rpc::{parse_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
-        use crate::interpreter::rib_interpreter::interpreter_tests::internal::strip_spaces;
 
         #[test]
         async fn test_first_class_worker_0() {
@@ -2551,10 +2551,7 @@ mod interpreter_tests {
             cause: program is invalid as it returns a resource constructor
             "#;
 
-            assert_eq!(
-                compiled,
-                strip_spaces(expected)
-            );
+            assert_eq!(compiled, strip_spaces(expected));
         }
 
         // This resource construction is a Noop, and compiler can give warnings
@@ -2669,9 +2666,18 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error_message = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(compiled, "Invalid argument in `golem:it/api.{cart(\"bar\").add-item}`: `{product-id: \"mac\", name: 1, quantity: 1, price: 1}`. Type mismatch for `name`. Expected `string`".to_string());
+            let expected = r#"
+            error in the following rib found at line 4, column 31
+            `{product-id: "mac", name: 1, quantity: 1, price: 1}`
+            found within:
+            `golem:it/api.{cart("bar").add-item}({product-id: "mac", name: 1, quantity: 1, price: 1})`
+            cause: type mismatch at path: `name`. expected string
+            invalid argument to the function `golem:it/api.{cart("bar").add-item}`
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
         }
 
         #[test]
@@ -2864,7 +2870,7 @@ mod interpreter_tests {
 
             let error = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(error, "Invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
+            assert_eq!(error, "invalid method invocation `worker.qux`. Make sure `worker` is defined and is a valid instance type (i.e, resource or worker)");
         }
 
         #[test]
@@ -2879,7 +2885,13 @@ mod interpreter_tests {
 
             let error = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(error, "Worker name expression `1u32` is invalid. Worker name must be of the type string. Obtained u32");
+            let expected = r#"
+            error in the following rib found at line 2, column 39
+            `1: u32`
+            cause: expected string, found u32
+            "#;
+
+            assert_eq!(error, strip_spaces(expected));
         }
 
         #[test]
@@ -2942,7 +2954,10 @@ mod interpreter_tests {
         pub(crate) fn strip_spaces(input: &str) -> String {
             let mut lines = input.lines();
 
-            let first_line = lines.clone().find(|line| !line.trim().is_empty()).unwrap_or("");
+            let first_line = lines
+                .clone()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
             let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
 
             let result = lines

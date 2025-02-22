@@ -195,6 +195,7 @@ impl<W: Write> Writer<W> {
             } => {
                 self.write_display(number.value.to_string())?;
                 if let Some(type_name) = type_annotation {
+                    self.write_str(": ")?;
                     self.write_display(type_name)?;
                 }
                 Ok(())
@@ -456,7 +457,6 @@ impl<W: Write> Writer<W> {
                     self.write_expr(param)?;
                 }
                 self.write_display(")")
-
             }
         }
     }

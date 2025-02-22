@@ -1399,7 +1399,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid type for the argument in function `foo`. Expected type `str`, but provided argument `1u64` is a `number`"
+                "Invalid type for the argument in function `foo`. Expected type `str`, but provided argument `1: u64` is a `number`"
             );
         }
 

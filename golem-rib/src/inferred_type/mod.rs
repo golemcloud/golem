@@ -280,7 +280,7 @@ impl InferredType {
             InferredType::OneOf(_) => false,
             InferredType::Unknown => false,
             InferredType::Bool => true,
-            InferredType::S8 =>  true,
+            InferredType::S8 => true,
             InferredType::U8 => true,
             InferredType::S16 => true,
             InferredType::U16 => true,

@@ -18,7 +18,6 @@ impl SourceSpan {
         self.start.column
     }
 
-
     pub fn new(start: SourcePosition, end: SourcePosition) -> SourceSpan {
         SourceSpan { start, end }
     }
