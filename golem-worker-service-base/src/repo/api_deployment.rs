@@ -75,11 +75,7 @@ pub trait ApiDeploymentRepo {
         definition_version: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
-    async fn get_by_site(
-        &self,
-        namespace: &str,
-        site: &str,
-    ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
     async fn get_definitions_by_site(
         &self,
@@ -173,12 +169,8 @@ impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<
         Self::logged_with_id("get_by_id_and_version", namespace, definition_id, result)
     }
 
-    async fn get_by_site(
-        &self,
-        namespace: &str,
-        site: &str,
-    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        let result = self.repo.get_by_site(namespace, site).await;
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        let result = self.repo.get_by_site(site).await;
         Self::logged("get_by_site", result)
     }
 
@@ -385,18 +377,16 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     #[when(sqlx::Postgres -> get_by_site)]
     async fn get_by_site_postgres(
         &self,
-        namespace: &str,
         site: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz
                 FROM api_deployments
-                WHERE namespace = $1 AND site = $2
+                WHERE site = $1
                 ORDER BY namespace, host, subdomain, definition_id, definition_version
                 "#,
         )
-        .bind(namespace)
         .bind(site)
         .fetch_all(self.db_pool.deref())
         .await
@@ -404,20 +394,15 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     }
 
     #[when(sqlx::Sqlite -> get_by_site)]
-    async fn get_by_site_sqlite(
-        &self,
-        namespace: &str,
-        site: &str,
-    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+    async fn get_by_site_sqlite(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
-                WHERE namespace = $1 AND site = $2
+                WHERE site = $1
                 ORDER BY namespace, host, subdomain, definition_id, definition_version
                 "#,
         )
-            .bind(namespace)
             .bind(site)
             .fetch_all(self.db_pool.deref())
             .await

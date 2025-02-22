@@ -17,6 +17,7 @@ use crate::services::component::ComponentMetadata;
 use crate::services::HasComponentService;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use crate::GolemTypes;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::{TargetWorkerId, WorkerId};
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerMetadata};
@@ -326,8 +327,8 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersio
     version
 }
 
-fn resolve_function<'t>(
-    component: &'t ComponentMetadata,
+fn resolve_function<'t, T: GolemTypes>(
+    component: &'t ComponentMetadata<T>,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), GolemError> {
     let parsed = ParsedFunctionName::parse(function).map_err(GolemError::invalid_request)?;
@@ -382,7 +383,7 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
             Some(assumed_component_version),
         )
         .await?;
-    let (function, parsed) = resolve_function(&component_metadata, function_name)?;
+    let (function, parsed) = resolve_function::<Ctx::Types>(&component_metadata, function_name)?;
 
     let expected_params: Vec<&AnalysedFunctionParameter> =
         if parsed.function().is_indexed_resource() {

@@ -15,7 +15,7 @@
 use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 
@@ -48,4 +48,22 @@ pub struct SerializableScheduleInvocationRequest {
     pub function_name: String,
     pub function_params: Vec<ValueAndType>,
     pub datetime: SerializableDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct SerializableScheduleId {
+    pub data: Vec<u8>,
+}
+
+impl SerializableScheduleId {
+    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
+        let data = golem_common::serialization::serialize(schedule_id)
+            .unwrap()
+            .to_vec();
+        Self { data }
+    }
+
+    pub fn as_domain(&self) -> Result<ScheduleId, String> {
+        golem_common::serialization::deserialize(&self.data)
+    }
 }
