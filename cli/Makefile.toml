@@ -1,0 +1,130 @@
+# List of top-level tasks intended for use:
+#
+# - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests
+# - `cargo make build`: builds everything in debug mode
+# - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
+# - `cargo make check`: runs rustfmt and clippy checks without applying any fix
+# - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
+# - `cargo make test`: runs all tests
+# - `cargo make unit-tests`: runs unit test tests
+# - `cargo make publish`: publishes packages to crates.io
+
+[config]
+default_to_workspace = false # by default, we run cargo commands on top level instead of per member
+skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
+
+[env]
+JUNIT_OPTS = ""
+
+[env.ci]
+CARGO_INCREMENTAL = "false"
+JUNIT_OPTS = "--format junit --logfile target/report.xml"
+
+[tasks.default]
+description = "This is the task that gets executed by 'cargo make' when no task is specified"
+run_task = "dev-flow"
+
+[tasks.dev]
+description = "Alias to the dev-flow task"
+alias = "dev-flow"
+
+[tasks.dev-flow]
+description = "Runs a full development flow, including fixing format and clippy, building and running tests"
+dependencies = [
+    "fix",
+    "check",
+    "build",
+    "test"
+]
+
+[tasks.build]
+description = "Builds everything in debug mode"
+command = "cargo"
+args = ["build", "--workspace", "--all-targets"]
+
+[tasks.build-release]
+description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
+to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
+for docker images."""
+dependencies = [
+    "set-version",
+    "build-release-default",
+    "build-release-override-linux-amd64",
+    "build-release-override-linux-arm64",
+]
+
+# There are three variants of build-release, and only one of them will run based on the value of
+# the PLATFORM_OVERRIDE environment variable
+
+[tasks.build-release-default]
+description = "Build the project in release mode"
+condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.build-release-override-linux-amd64]
+description = "Build the project in release mode with target platform override to linux/amd64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
+command = "cargo"
+args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
+
+[tasks.build-release-override-linux-arm64]
+description = "Build the project in release mode with target platform override to linux/arm64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
+install_crate = "cross"
+command = "cross"
+args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
+
+## ** CHECK **
+
+[tasks.check]
+description = "Runs rustfmt and clippy checks without applying any fix"
+dependencies = ["check-clippy", "check-rustfmt"]
+
+[tasks.check-rustfmt]
+description = "Runs rustfmt checks without applying any fix"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.check-clippy]
+description = "Runs clippy checks without applying any fix"
+install_crate = "clippy"
+command = "cargo"
+args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
+
+## ** FIX **
+
+[tasks.fix]
+description = "Runs rustfmt and clippy checks and applies fixes"
+dependencies = ["fix-clippy", "fix-rustfmt"]
+
+[tasks.fix-rustfmt]
+description = "Runs rustfmt checks and applies fixes"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.fix-clippy]
+description = "Runs clippy checks and applies fixes"
+install_crate = "clippy"
+command = "cargo"
+args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "--no-deps", "-Dwarnings"]
+
+## ** TEST **
+[tasks.test]
+dependencies = ["unit-tests", "integration-tests"]
+
+[tasks.unit-tests]
+description = "Run unit tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --workspace --lib --all-features -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.integration-tests]
+description = "Run integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen --tests -- --nocapture --report-time %{JUNIT_OPTS}
+'''

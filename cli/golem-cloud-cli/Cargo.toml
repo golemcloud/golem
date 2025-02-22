@@ -1,0 +1,72 @@
+[package]
+name = "golem-cloud-cli"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem-cli"
+readme = "README.md"
+description = "Command line interface for Golem."
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "golem-cloud-cli"
+path = "src/cloud_main.rs"
+test = false
+
+[[bin]]
+name = "golem-universal-cli"
+path = "src/universal_main.rs"
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+harness = false
+
+[dependencies]
+golem-cli = { path = "../golem-cli", version = "=0.0.0" }
+golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
+
+golem-client = { workspace = true }
+golem-cloud-client = { workspace = true }
+golem-common = { workspace = true }
+golem-test-framework = { workspace = true }
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+
+anyhow.workspace = true
+assert2 = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+cli-table = { workspace = true }
+colored = { workspace = true }
+derive_more = { workspace = true }
+futures-util = { workspace = true }
+indoc = { workspace = true }
+itertools = { workspace = true }
+native-tls = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+textwrap = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json_path = { workspace = true }
+test-r = { workspace = true }
+tokio-postgres = { workspace = true }

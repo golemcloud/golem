@@ -1,0 +1,18 @@
+// Example of exported resources with constructors, methods and static methods
+
+package test:main;
+
+interface iface1 {
+   resource resource1 {
+    constructor(name: string);
+    func1: func();
+    func2: func(a: u32) -> f32;
+    func3: func(b: u32) -> option<f32>;
+    func4: func(c: option<u32>) -> option<f32>;
+    // TODO: static functions, currently it seems that implementation has faulty checks on these
+  }
+}
+
+world api {
+  export iface1;
+}

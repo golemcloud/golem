@@ -1,0 +1,59 @@
+[package]
+name = "golem"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem-cli"
+readme = "README.md"
+description = "Single Golem executable for testing"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+# Repo deps
+golem-cli = { path = "../golem-cli", version = "=0.0.0" }
+
+# Golem - git deps
+golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.1.20" }
+
+# External deps
+anyhow = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+dirs = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+futures = { workspace = true }
+include_dir = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+prometheus = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

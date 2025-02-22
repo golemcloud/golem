@@ -1,0 +1,89 @@
+[package]
+name = "golem-cli"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem-cli"
+description = "Command line interface for Golem."
+autotests = false
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem-cli"
+path = "src/main.rs"
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+harness = false
+
+[dependencies]
+# Workspace deps
+golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
+
+# Golem deps
+golem-client = { workspace = true }
+golem-common = { workspace = true }
+golem-examples = { workspace = true }
+golem-rib = { workspace = true }
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+
+# External deps
+anyhow = { workspace = true }
+assert2 = { workspace = true }
+async-trait = { workspace = true }
+async_zip = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+clap_complete = { workspace = true }
+cli-table = { workspace = true }
+colored = { workspace = true }
+derive_more = { workspace = true }
+dirs = { workspace = true }
+futures-util = { workspace = true }
+humansize = { workspace = true }
+indoc = { workspace = true }
+inquire = { workspace = true }
+iso8601 = { workspace = true }
+itertools = { workspace = true }
+lenient_bool = { workspace = true }
+log = { workspace = true }
+native-tls = { workspace = true }
+phf = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+tempfile = { workspace = true }
+textwrap = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+version-compare = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+# Golem deps
+golem-test-framework = { workspace = true }
+
+# External deps
+log = { workspace = true }
+reqwest = { workspace = true }
+serde_json_path = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+test-r = { workspace = true }

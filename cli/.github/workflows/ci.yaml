@@ -1,98 +1,59 @@
 name: CI
 on:
   push:
-    tags:
-      - "v*.*.*"
+    # TODO: Tag and publishing is not enabled until merging history
+    # tags:
+    # - "v*.*.*"
     branches:
-      - main
+    - main
   pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  checks: write
+  pull-requests: write
+
+env:
+  BUILD_TARGET: "x86_64-unknown-linux-gnu"
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-and-test:
+    runs-on: ubuntu-latest-xlarge
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-is
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check formatting
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy -- -Dwarnings
-      - name: Build
-        run: cargo build
-      - name: Integration tests
-        env:
-          GOLEM_DOCKER_SERVICES: true
-          GOLEM_TEST_TEMPLATES: ./test-templates
-          RUST_LOG: info
-          CI: true
-        run: cargo test --test integration
-      - name: Sharding tests
-        env:
-          GOLEM_DOCKER_SERVICES: true
-          GOLEM_TEST_TEMPLATES: ./test-templates
-          RUST_LOG: info
-          CI: true
-        run: cargo test --test sharding
-        timeout-minutes: 10
-  publish:
-    needs: [build]
-    if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-is
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - id: get_version
-        uses: battila7/get-version-action@v2
-      - name: Publish crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" Cargo.toml
-          cargo publish --all-features --allow-dirty
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        submodules: recursive
+    - name: Fetch tag
+      run: git fetch origin --deepen=1
+    - name: Setup Rust
+      run: rustup update stable --no-self-update && rustup default stable
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: debug
+        cache-all-crates: true
+        save-if: true
+    - uses: davidB/rust-cargo-make@v1
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build all targets
+      run: cargo make --profile ci build
+    - name: Unit tests
+      run: cargo make --profile ci unit-tests
+    - name: Integration tests
+      run: cargo make --profile ci integration-tests
+    - name: Check formatting and clippy rules
+      run: cargo make --profile ci check
+    - name: Publish Test Report
+      uses: mikepenz/action-junit-report@v4
+      if: always()
+      with:
+        report_paths: '**/target/report-*.xml'
+        detailed_summary: true
+        include_passed: true
