@@ -16,10 +16,13 @@ use crate::type_inference::kind::{GetTypeKind, TypeKind};
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError, MatchArm};
+use crate::{
+    AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError,
+    MatchArm,
+};
 use std::collections::VecDeque;
 
-pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
+pub fn push_types_down(expr: &mut Expr) -> Result<(), TypePushDownError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -87,7 +90,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_ok(expr, inferred_type)?;
+                internal::handle_ok(expr, copied, inferred_type)?;
                 queue.push_back(expr);
             }
 
@@ -96,7 +99,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_err(expr, inferred_type)?;
+                internal::handle_err(expr, copied, inferred_type)?;
                 queue.push_back(expr);
             }
 
@@ -112,7 +115,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 } in match_arms
                 {
                     let predicate_type = predicate.inferred_type();
-                    internal::update_arm_pattern_type(arm_pattern, &predicate_type, predicate)?;
+                    internal::update_arm_pattern_type(&copied, arm_pattern, &predicate_type, predicate)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
@@ -123,14 +126,14 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_tuple(exprs, inferred_type, &mut queue)?;
+                internal::handle_tuple(exprs, copied, inferred_type, &mut queue)?;
             }
             Expr::Sequence {
                 exprs,
                 inferred_type,
                 ..
             } => {
-                internal::handle_sequence(exprs, inferred_type, &mut queue)?;
+                internal::handle_sequence(exprs, copied, inferred_type, &mut queue)?;
             }
 
             Expr::Record {
@@ -138,7 +141,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_record(exprs, inferred_type, &mut queue)?;
+                internal::handle_record(exprs, copied, inferred_type, &mut queue)?;
             }
 
             Expr::Call {
@@ -213,13 +216,15 @@ impl From<InvalidPatternMatchError> for TypePushDownError {
     }
 }
 
-
 mod internal {
     use crate::call_type::CallType;
     use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
-    use crate::{AmbiguousTypeError, ArmPattern, Expr, InferredType, TypePushDownError, VariableId};
+    use crate::{
+        AmbiguousTypeError, ArmPattern, Expr, InferredType,
+        InvalidPatternMatchError, TypePushDownError, VariableId,
+    };
     use std::collections::VecDeque;
 
     pub(crate) fn handle_list_comprehension(
@@ -227,7 +232,7 @@ mod internal {
         iterable_expr: &mut Expr,
         yield_expr: &mut Expr,
         comprehension_result_type: &InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
         update_yield_expr_in_list_comprehension(
             variable_id,
@@ -237,7 +242,7 @@ mod internal {
 
         // If the outer inferred_type is List<X> this implies, the yield expression should be X
         let refined_list_type = ListType::refine(comprehension_result_type)
-            .ok_or("The result of a comprehension should be of type list".to_string())?;
+            .ok_or(AmbiguousTypeError::new(comprehension_result_type, yield_expr).with_additional_error_detail("the result of a comprehension should be of type list"))?;
 
         let inner_type = refined_list_type.inner_type();
 
@@ -353,7 +358,7 @@ mod internal {
         outer_inferred_type: &InferredType,
     ) -> Result<(), TypePushDownError> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type)
-            .ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
 
         let inner_type = refined_optional_type.inner_type();
 
@@ -366,9 +371,8 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), TypePushDownError> {
-        let refined_ok_type =
-            OkType::refine(outer_inferred_type)
-                .ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+        let refined_ok_type = OkType::refine(outer_inferred_type)
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
 
         let inner_type = refined_ok_type.inner_type();
 
@@ -382,8 +386,8 @@ mod internal {
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), TypePushDownError> {
-        let refined_err_type =
-            ErrType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+        let refined_err_type = ErrType::refine(outer_inferred_type)
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
         let inner_type = refined_err_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -397,8 +401,8 @@ mod internal {
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), TypePushDownError> {
-        let refined_list_type =
-            ListType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+        let refined_list_type = ListType::refine(outer_inferred_type)
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
         let inner_type = refined_list_type.inner_type();
 
         for expr in inner_expressions.iter_mut() {
@@ -415,8 +419,8 @@ mod internal {
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), TypePushDownError> {
-        let refined_tuple_type =
-            TupleType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+        let refined_tuple_type = TupleType::refine(outer_inferred_type)
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
         let inner_types = refined_tuple_type.inner_types();
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
@@ -433,8 +437,8 @@ mod internal {
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), TypePushDownError> {
-        let refined_record_type = RecordType::refine(outer_inferred_type).ok_or(
-            AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+        let refined_record_type = RecordType::refine(outer_inferred_type)
+            .ok_or(AmbiguousTypeError::new(outer_inferred_type, &outer_expr))?;
 
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
@@ -496,30 +500,44 @@ mod internal {
     }
 
     pub(crate) fn update_arm_pattern_type(
+        pattern_match_expr: &Expr,
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
         original_predicate: &Expr,
-    ) -> Result<(), AmbiguousTypeError> {
+    ) -> Result<(), TypePushDownError> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
                 //expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(pattern, predicate_type, original_predicate)?;
+                update_arm_pattern_type(
+                    pattern_match_expr,
+                    pattern,
+                    predicate_type,
+                    original_predicate,
+                )?;
             }
 
             ArmPattern::Constructor(constructor_name, patterns) => {
                 if constructor_name == "some" || constructor_name == "none" {
-                    let resolved = OptionalType::refine(predicate_type).ok_or(format!(
-                        "Invalid pattern match. Cannot match {} to {}",
-                        original_predicate, constructor_name
-                    ))?;
+                    let resolved = OptionalType::refine(predicate_type).ok_or(
+                        InvalidPatternMatchError::constructor_type_mismatch(
+                            original_predicate,
+                            pattern_match_expr,
+                            constructor_name,
+                        ),
+                    )?;
 
                     let inner = resolved.inner_type();
 
                     for pattern in patterns {
-                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                        update_arm_pattern_type(
+                            pattern_match_expr,
+                            pattern,
+                            &inner,
+                            original_predicate,
+                        )?;
                     }
                 } else if constructor_name == "ok" {
                     let resolved = OkType::refine(predicate_type);
@@ -529,23 +547,23 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                                update_arm_pattern_type(
+                                    pattern_match_expr,
+                                    pattern,
+                                    &inner,
+                                    original_predicate,
+                                )?;
                             }
                         }
 
                         None => {
-                            let refined_type = ErrType::refine(predicate_type)
-                                .ok_or(AmbiguousTypeError::from(predicate_type, original_predicate))?;
-
-                            match refined_type {
-                                Some(_) => {}
-                                None => {
-                                    return Err(format!(
-                                        "Invalid pattern match. Cannot match {} to ok",
-                                        original_predicate
-                                    ));
-                                }
-                            }
+                            ErrType::refine(predicate_type).ok_or(
+                                InvalidPatternMatchError::constructor_type_mismatch(
+                                    original_predicate,
+                                    pattern_match_expr,
+                                    "ok",
+                                ),
+                            )?;
                         }
                     }
                 } else if constructor_name == "err" {
@@ -556,70 +574,107 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                                update_arm_pattern_type(
+                                    pattern_match_expr,
+                                    pattern,
+                                    &inner,
+                                    original_predicate,
+                                )?;
                             }
                         }
 
                         None => {
-                            let refined_type = OkType::refine(predicate_type);
-
-                            match refined_type {
-                                Some(_) => {}
-                                None => {
-                                    return Err(format!(
-                                        "Invalid pattern match. Cannot match {} to err",
-                                        original_predicate
-                                    ));
-                                }
-                            }
+                            OkType::refine(predicate_type).ok_or(
+                                InvalidPatternMatchError::constructor_type_mismatch(
+                                    original_predicate,
+                                    pattern_match_expr,
+                                    "err",
+                                ),
+                            )?;
                         }
                     }
                 } else if let Some(variant_type) = VariantType::refine(predicate_type) {
                     let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
                     for pattern in patterns {
-                        update_arm_pattern_type(pattern, &variant_arg_type, original_predicate)?;
+                        update_arm_pattern_type(
+                            pattern_match_expr,
+                            pattern,
+                            &variant_arg_type,
+                            original_predicate,
+                        )?;
                     }
                 }
             }
 
             ArmPattern::TupleConstructor(patterns) => {
-                let tuple_type = TupleType::refine(predicate_type).ok_or(format!(
-                    "Invalid pattern match. Cannot match {} to tuple",
-                    original_predicate
-                ))?;
+                let tuple_type = TupleType::refine(predicate_type).ok_or(
+                    InvalidPatternMatchError::constructor_type_mismatch(
+                        original_predicate,
+                        pattern_match_expr,
+                        "tuple",
+                    ),
+                )?;
+
                 let inner_types = tuple_type.inner_types();
 
                 if patterns.len() == inner_types.len() {
                     for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
-                        update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
+                        update_arm_pattern_type(
+                            pattern_match_expr,
+                            pattern,
+                            &inner_type,
+                            original_predicate,
+                        )?;
                     }
                 } else {
-                    return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
+                    return Err(InvalidPatternMatchError::arg_size_mismatch(
+                        original_predicate,
+                        pattern_match_expr,
+                        inner_types.len(),
+                        patterns.len(),
+                    )
+                    .into());
                 }
             }
 
             ArmPattern::ListConstructor(patterns) => {
-                let list_type = ListType::refine(predicate_type).ok_or(format!(
-                    "Invalid pattern match. Cannot match {} to list",
-                    original_predicate
-                ))?;
+                let list_type = ListType::refine(predicate_type).ok_or(
+                    InvalidPatternMatchError::constructor_type_mismatch(
+                        original_predicate,
+                        pattern_match_expr,
+                        "list",
+                    ),
+                )?;
 
                 let list_elem_type = list_type.inner_type();
 
                 for pattern in &mut *patterns {
-                    update_arm_pattern_type(pattern, &list_elem_type, original_predicate)?;
+                    update_arm_pattern_type(
+                        pattern_match_expr,
+                        pattern,
+                        &list_elem_type,
+                        original_predicate,
+                    )?;
                 }
             }
 
             ArmPattern::RecordConstructor(fields) => {
-                let record_type = RecordType::refine(predicate_type).ok_or(AmbiguousTypeError::from(
-                    predicate_type,
-                    original_predicate,
-                ))?;
+                let record_type = RecordType::refine(predicate_type).ok_or(
+                    InvalidPatternMatchError::constructor_type_mismatch(
+                        original_predicate,
+                        pattern_match_expr,
+                        "record",
+                    ),
+                )?;
 
                 for (field, pattern) in fields {
                     let type_of_field = record_type.inner_type_by_name(field);
-                    update_arm_pattern_type(pattern, &type_of_field, original_predicate)?;
+                    update_arm_pattern_type(
+                        pattern_match_expr,
+                        pattern,
+                        &type_of_field,
+                        original_predicate,
+                    )?;
                 }
             }
 
