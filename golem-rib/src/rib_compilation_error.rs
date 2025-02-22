@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fmt::Display;
 use crate::{Expr, TypeName};
-use crate::type_checker::{TypeMismatchError, UnResolvedTypesError};
+use crate::type_checker::{FunctionCallTypeError, TypeMismatchError, UnResolvedTypesError};
 
 pub struct RibCompilationError {
     pub cause: String,
@@ -87,6 +87,89 @@ impl From<TypeMismatchError> for RibCompilationError {
             immediate_parent: value.parent_expr,
             additional_error_details:vec![],
             help_messages: vec![]
+        }
+    }
+}
+
+impl From<FunctionCallTypeError> for RibCompilationError {
+    fn from(value: FunctionCallTypeError) -> Self {
+
+        let mut error_details = vec![];
+
+        match value {
+            FunctionCallTypeError::InvalidFunctionCall {
+                function_call_name: function_name,
+            } => {
+                RibCompilationError {
+                    cause: format!("Invalid function call: `{}`", function_name),
+                    expr: Expr::identifier_global(function_name, None),
+                    immediate_parent: None,
+                    additional_error_details: vec![],
+                    help_messages: vec![]
+                }
+            }
+            FunctionCallTypeError::TypeMisMatch {
+                function_call_name: call_type,
+                error,
+                ..
+            } => {
+                let mut original_compilation : RibCompilationError = error.into();
+
+                let error_detail = format!(
+                    "Invalid argument to the function `{}`", call_type
+                );
+
+                original_compilation.additional_error_details.push(error_detail);
+
+                original_compilation
+            }
+            FunctionCallTypeError::MissingRecordFields {
+                function_call_name: call_type,
+                missing_fields,
+                argument
+            } => {
+                let missing_fields = missing_fields
+                    .iter()
+                    .map(|path| path.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                let rib_compilation_error = RibCompilationError {
+                    cause: format!(
+                        "Invalid argument to the function `{}`:  Missing field(s) in record `{}`",
+                        call_type, missing_fields
+                    ),
+                    expr: argument,
+                    immediate_parent: None,
+                    additional_error_details: vec![],
+                    help_messages: vec![]
+                };
+
+                rib_compilation_error
+            }
+
+            FunctionCallTypeError::UnResolvedTypes {
+                function_call_name: call_type,
+                unresolved_error,
+                expected_type,
+                ..
+            } => {
+
+                let expected = TypeName::try_from(expected_type.clone())
+                    .map(|t| format!("Expected {}", t))
+                    .unwrap_or_default();
+
+                let mut rib_compilation_error =
+                    RibCompilationError::from(unresolved_error);
+
+                rib_compilation_error.additional_error_details.push(format!(
+                    "Invalid argument to `{}`. {}",
+                    call_type,
+                    expected
+                ));
+
+                rib_compilation_error
+            }
         }
     }
 }

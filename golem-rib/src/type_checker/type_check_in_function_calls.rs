@@ -10,7 +10,7 @@ use std::fmt::Display;
 // This is grab as many errors as possible.
 // Refer `FunctionCallTypeCheckError`.
 #[allow(clippy::result_large_err)]
-pub fn check_type_errors_in_function_call(
+pub fn check_type_error_in_function_calls(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
 ) -> Result<(), FunctionCallTypeError> {
