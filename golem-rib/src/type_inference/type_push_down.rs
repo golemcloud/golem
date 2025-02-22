@@ -17,6 +17,7 @@ use crate::type_inference::type_push_down::internal::{
 };
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
+use crate::type_inference::kind::{GetTypeKind, TypeKind};
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
@@ -195,6 +196,37 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     Ok(())
 }
 
+// Ambiguous type error occurs when we are unable to push down an inferred type
+// to the inner expression since there is an ambiguity between what the expression is
+// and what is being pushed down
+pub struct AmbiguousTypeError {
+    pub expr: Expr,
+    pub message: String
+}
+
+impl AmbiguousTypeError {
+    pub fn from(inferred_expr: &InferredType, expr: &Expr) -> AmbiguousTypeError {
+        let kind = inferred_expr.get_type_kind();
+
+        match kind {
+            TypeKind::Ambiguous { possibilities } => {
+                let error_message = format!("ambiguous types inferred {}", possibilities.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(", "));
+                AmbiguousTypeError {
+                    expr: expr.clone(),
+                    message: error_message
+                }
+            }
+            _ => {
+                let error_message = format!("ambiguous types inferred , {},{}",  TypeKind::Option, kind);
+                AmbiguousTypeError {
+                    expr: expr.clone(),
+                    message: error_message
+                }
+            }
+        }
+    }
+}
+
 mod internal {
     use crate::call_type::CallType;
     use crate::type_refinement::precise_types::*;
@@ -335,7 +367,6 @@ mod internal {
     ) -> Result<(), String> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type)
             .ok_or({
-                dbg!(outer_inferred_type.clone());
                 let kind = outer_inferred_type.get_type_kind();
                 let span = outer_expr.source_span();
 
