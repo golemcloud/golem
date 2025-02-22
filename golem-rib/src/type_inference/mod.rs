@@ -14,6 +14,7 @@
 
 pub use call_arguments_inference::*;
 pub use enum_resolution::*;
+pub use errors::*;
 pub use expr_visitor::*;
 pub use global_input_inference::*;
 pub use global_variable_type_binding::*;
@@ -35,10 +36,10 @@ pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 pub use worker_function_invocation::*;
-pub use errors::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
+mod errors;
 mod expr_visitor;
 mod global_input_inference;
 mod global_variable_type_binding;
@@ -61,7 +62,6 @@ mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 mod worker_function_invocation;
-mod errors;
 
 #[cfg(test)]
 mod type_inference_tests {

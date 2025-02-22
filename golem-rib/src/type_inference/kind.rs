@@ -6,7 +6,7 @@ pub trait GetTypeKind {
     fn get_type_kind(&self) -> TypeKind;
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum TypeKind {
     Record,
     Tuple,

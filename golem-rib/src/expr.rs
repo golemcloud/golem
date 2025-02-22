@@ -16,6 +16,7 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
+use crate::rib_compilation_error::RibCompilationError;
 use crate::rib_source_span::SourceSpan;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
@@ -1114,7 +1115,8 @@ impl Expr {
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {
-        type_inference::push_types_down(self)
+        type_inference::push_types_down(self).map_err(|x| RibCompilationError::from(x).to_string())
+        // TODO
     }
 
     pub fn infer_all_identifiers(&mut self) -> Result<(), String> {

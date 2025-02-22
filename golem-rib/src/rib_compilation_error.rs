@@ -2,7 +2,7 @@ use crate::type_checker::{
     ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError,
     InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError,
 };
-use crate::{AmbiguousTypeError, Expr, TypeName};
+use crate::{AmbiguousTypeError, Expr, InvalidPatternMatchError, TypeName, TypePushDownError};
 use std::fmt;
 use std::fmt::Display;
 
@@ -179,13 +179,18 @@ impl From<FunctionCallTypeError> for RibCompilationError {
 
 impl From<InvalidExpr> for RibCompilationError {
     fn from(value: InvalidExpr) -> Self {
-        let cause = format!("cannot be a {}", value.expected_type);
+        let expr_inferred_type = value.found.printable();
+
+        let cause = format!(
+            "inferred a {} to be `{}` which is invalid",
+            value.expected_type, expr_inferred_type
+        );
 
         RibCompilationError {
             cause,
             expr: value.expr,
             immediate_parent: None,
-            additional_error_details: vec![],
+            additional_error_details: vec![value.message],
             help_messages: vec![],
         }
     }
@@ -274,12 +279,73 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
 
 impl From<AmbiguousTypeError> for RibCompilationError {
     fn from(value: AmbiguousTypeError) -> Self {
+        let cause = "ambiguous types inferred".to_string();
+
         RibCompilationError {
-            cause: "ambiguous types inferred".to_string(),
+            cause,
             expr: value.expr,
             immediate_parent: None,
-            additional_error_details: vec![value.message],
+            additional_error_details: value.additional_error_details,
             help_messages: vec![],
+        }
+    }
+}
+
+impl From<InvalidPatternMatchError> for RibCompilationError {
+    fn from(value: InvalidPatternMatchError) -> Self {
+        let (cause, expr) = match &value {
+            InvalidPatternMatchError::ConstructorMismatch {
+                predicate_expr,
+                constructor_name,
+                ..
+            } => {
+                (
+                    format!(
+                        "invalid pattern match: cannot match to constructor `{}`",
+                        constructor_name
+                    ),
+                    predicate_expr,
+                )
+            }
+            InvalidPatternMatchError::ArgSizeMismatch {
+                predicate_expr,
+                expected_arg_size,
+                actual_arg_size,
+                constructor_name,
+                ..
+            } => {
+                (
+                    format!(
+                        "invalid pattern match: missing arguments in constructor `{}`. expected {} arguments, found {}",
+                        constructor_name, expected_arg_size, actual_arg_size
+                    ),
+                    predicate_expr,
+                )
+            }
+        };
+
+        let immediate_parent = match &value {
+            InvalidPatternMatchError::ConstructorMismatch { match_expr, .. } => Some(match_expr),
+            InvalidPatternMatchError::ArgSizeMismatch { match_expr, .. } => Some(match_expr),
+        };
+
+        RibCompilationError {
+            cause,
+            expr: expr.clone(),
+            immediate_parent: immediate_parent.cloned(),
+            additional_error_details: vec![],
+            help_messages: vec![],
+        }
+    }
+}
+
+impl From<TypePushDownError> for RibCompilationError {
+    fn from(value: TypePushDownError) -> Self {
+        match value {
+            TypePushDownError::AmbiguousType(ambiguous_type_error) => ambiguous_type_error.into(),
+            TypePushDownError::InvalidPatternMatch(invalid_pattern_match) => {
+                invalid_pattern_match.into()
+            }
         }
     }
 }

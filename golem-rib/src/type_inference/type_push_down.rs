@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::kind::{GetTypeKind, TypeKind};
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{
-    AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError,
-    MatchArm,
-};
+use crate::{AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError, MatchArm};
 use std::collections::VecDeque;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), TypePushDownError> {
@@ -115,7 +111,12 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), TypePushDownError> {
                 } in match_arms
                 {
                     let predicate_type = predicate.inferred_type();
-                    internal::update_arm_pattern_type(&copied, arm_pattern, &predicate_type, predicate)?;
+                    internal::update_arm_pattern_type(
+                        &copied,
+                        arm_pattern,
+                        &predicate_type,
+                        predicate,
+                    )?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
@@ -218,12 +219,11 @@ impl From<InvalidPatternMatchError> for TypePushDownError {
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{
-        AmbiguousTypeError, ArmPattern, Expr, InferredType,
-        InvalidPatternMatchError, TypePushDownError, VariableId,
+        AmbiguousTypeError, ArmPattern, Expr, InferredType, InvalidPatternMatchError,
+        TypePushDownError, VariableId,
     };
     use std::collections::VecDeque;
 
@@ -234,15 +234,15 @@ mod internal {
         comprehension_result_type: &InferredType,
     ) -> Result<(), TypePushDownError> {
         // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
-        update_yield_expr_in_list_comprehension(
-            variable_id,
-            &iterable_expr.inferred_type(),
-            yield_expr,
-        )?;
+        update_yield_expr_in_list_comprehension(variable_id, &iterable_expr, yield_expr)?;
 
         // If the outer inferred_type is List<X> this implies, the yield expression should be X
-        let refined_list_type = ListType::refine(comprehension_result_type)
-            .ok_or(AmbiguousTypeError::new(comprehension_result_type, yield_expr).with_additional_error_detail("the result of a comprehension should be of type list"))?;
+        let refined_list_type = ListType::refine(comprehension_result_type).ok_or(
+            AmbiguousTypeError::new(comprehension_result_type, yield_expr)
+                .with_additional_error_detail(
+                    "the result of a comprehension should be of type list",
+                ),
+        )?;
 
         let inner_type = refined_list_type.inner_type();
 
@@ -258,7 +258,7 @@ mod internal {
         init_value_expr: &mut Expr,
         yield_expr: &mut Expr,
         aggregation_result_type: &InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
         update_yield_expr_in_list_reduce(
             result_variable_id,
@@ -277,12 +277,18 @@ mod internal {
 
     fn update_yield_expr_in_list_comprehension(
         variable: &mut VariableId,
-        iterable_type: &InferredType,
+        iterable_expr: &Expr,
         yield_expr: &mut Expr,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
+        let iterable_type: InferredType = iterable_expr.inferred_type();
+
         if !iterable_type.is_unknown() {
-            let refined_iterable =
-                ListType::refine(iterable_type).ok_or("Expected list type".to_string())?;
+            let refined_iterable = ListType::refine(&iterable_type).ok_or(
+                AmbiguousTypeError::new(&iterable_type, iterable_expr)
+                    .with_additional_error_detail(
+                        "the iterable expression in list comprehension should be of type list",
+                    ),
+            )?;
 
             let iterable_variable_type = refined_iterable.inner_type();
 
@@ -314,12 +320,16 @@ mod internal {
         iterable_expr: &Expr,
         yield_expr: &mut Expr,
         init_value_expr: &mut Expr,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let iterable_inferred_type = iterable_expr.inferred_type();
 
         if !iterable_expr.inferred_type().is_unknown() {
-            let refined_iterable = ListType::refine(&iterable_inferred_type)
-                .ok_or("Expected list type".to_string())?;
+            let refined_iterable = ListType::refine(&iterable_inferred_type).ok_or(
+                AmbiguousTypeError::new(&iterable_inferred_type, iterable_expr)
+                    .with_additional_error_detail(
+                        "the iterable expression in list reduction should be of type list",
+                    ),
+            )?;
 
             let iterable_variable_type = refined_iterable.inner_type();
 
@@ -630,6 +640,7 @@ mod internal {
                     return Err(InvalidPatternMatchError::arg_size_mismatch(
                         original_predicate,
                         pattern_match_expr,
+                        "tuple",
                         inner_types.len(),
                         patterns.len(),
                     )

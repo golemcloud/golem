@@ -1,5 +1,5 @@
-use crate::{Expr, InferredType};
 use crate::type_inference::kind::{GetTypeKind, TypeKind};
+use crate::{Expr, InferredType};
 
 // Ambiguous type error occurs when we are unable to push down an inferred type
 // to the inner expression since there is an ambiguity between what the expression is
@@ -18,33 +18,19 @@ impl AmbiguousTypeError {
 
         match kind {
             TypeKind::Ambiguous { possibilities } => {
-                let error_message = format!(
-                    "ambiguous types inferred {}",
-                    possibilities
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-
-                let possibilities = possibilities
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
+                let possibilities = possibilities.into_iter().collect::<Vec<_>>();
 
                 AmbiguousTypeError {
                     expr: expr.clone(),
                     ambiguous_types: possibilities,
-                    additional_error_details: vec![error_message],
+                    additional_error_details: vec![],
                 }
             }
-            _ => {
-                AmbiguousTypeError {
-                    expr: expr.clone(),
-                    ambiguous_types: vec![TypeKind::Option, kind],
-                    additional_error_details: vec![]
-                }
-            }
+            _ => AmbiguousTypeError {
+                expr: expr.clone(),
+                ambiguous_types: vec![TypeKind::Option, kind],
+                additional_error_details: vec![],
+            },
         }
     }
 
@@ -55,7 +41,6 @@ impl AmbiguousTypeError {
     }
 }
 
-
 pub enum InvalidPatternMatchError {
     ConstructorMismatch {
         predicate_expr: Expr,
@@ -65,26 +50,38 @@ pub enum InvalidPatternMatchError {
     ArgSizeMismatch {
         predicate_expr: Expr,
         match_expr: Expr,
+        constructor_name: String,
         expected_arg_size: usize,
         actual_arg_size: usize,
     },
 }
 
 impl InvalidPatternMatchError {
-    pub fn constructor_type_mismatch(predicate_expr: &Expr, match_expr: &Expr, constructor_name: &str) -> InvalidPatternMatchError {
+    pub fn constructor_type_mismatch(
+        predicate_expr: &Expr,
+        match_expr: &Expr,
+        constructor_name: &str,
+    ) -> InvalidPatternMatchError {
         InvalidPatternMatchError::ConstructorMismatch {
             predicate_expr: predicate_expr.clone(),
             match_expr: match_expr.clone(),
-            constructor_name: constructor_name.to_string()
+            constructor_name: constructor_name.to_string(),
         }
     }
 
-    pub fn arg_size_mismatch(predicate_expr: &Expr, match_expr: &Expr, expected_arg_size: usize, actual_arg_size: usize) -> InvalidPatternMatchError {
+    pub fn arg_size_mismatch(
+        predicate_expr: &Expr,
+        match_expr: &Expr,
+        constructor_name: &str,
+        expected_arg_size: usize,
+        actual_arg_size: usize,
+    ) -> InvalidPatternMatchError {
         InvalidPatternMatchError::ArgSizeMismatch {
             predicate_expr: predicate_expr.clone(),
             match_expr: match_expr.clone(),
             expected_arg_size,
-            actual_arg_size
+            actual_arg_size,
+            constructor_name: constructor_name.to_string(),
         }
     }
 }
