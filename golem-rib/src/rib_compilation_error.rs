@@ -17,7 +17,7 @@ impl Display for RibCompilationError {
 
         writeln!(
             f,
-            "Error at the following rib found at line {}, column {}",
+            "error in the following rib found at line {}, column {}",
             span.start_line(), span.start_column()
         )?;
 

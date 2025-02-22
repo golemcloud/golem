@@ -2264,6 +2264,7 @@ mod interpreter_tests {
         use golem_wasm_rpc::{parse_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::collections::HashMap;
         use test_r::test;
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal::strip_spaces;
 
         #[test]
         async fn test_first_class_worker_0() {
@@ -2545,11 +2546,14 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
             let expected = r#"
-
+            error in the following rib found at line 3, column 17
+            `cart("bar")`
+            cause: program is invalid as it returns a resource constructor
             "#;
+
             assert_eq!(
                 compiled,
-                "Resource constructor instance cannot be returned".to_string()
+                strip_spaces(expected)
             );
         }
 
@@ -2934,6 +2938,26 @@ mod interpreter_tests {
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
+
+        pub(crate) fn strip_spaces(input: &str) -> String {
+            let mut lines = input.lines();
+
+            let first_line = lines.clone().find(|line| !line.trim().is_empty()).unwrap_or("");
+            let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+            let result = lines
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        String::new()
+                    } else {
+                        line[margin_width..].to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            result.strip_prefix("\n").unwrap_or(&result).to_string()
+        }
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
             variant(vec![
