@@ -28,8 +28,8 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use tempfile::tempdir;
 use golem_wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
+use tempfile::tempdir;
 
 test_r::enable!();
 

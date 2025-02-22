@@ -25,9 +25,9 @@ use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
+use golem_wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use golem_wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
 test_r::enable!();
 

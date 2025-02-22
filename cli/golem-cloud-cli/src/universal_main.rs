@@ -37,7 +37,7 @@ async fn async_main() -> ExitCode {
 
                 let format = parsed.format.unwrap_or(profile.config.default_format);
 
-                init_tracing(parsed.verbosity.clone());
+                init_tracing(parsed.verbosity);
 
                 // TODO: We probably want to use some auth here. The oss cli uses a DummyProfileAuth here.
                 let result = golem_cli::oss::cli::run_with_profile(
@@ -52,7 +52,7 @@ async fn async_main() -> ExitCode {
 
                 let format = parsed.format.unwrap_or(profile.config.default_format);
 
-                init_tracing(parsed.verbosity.clone());
+                init_tracing(parsed.verbosity);
 
                 let result = crate::cloud::cli::run(
                     config_dir,
@@ -73,7 +73,7 @@ async fn async_main() -> ExitCode {
 
         let format = parsed.format.unwrap_or_default();
 
-        init_tracing(parsed.verbosity.clone());
+        init_tracing(parsed.verbosity);
 
         // TODO: We probably want to use some auth here. The oss cli uses a DummyProfileAuth here.
         let result =

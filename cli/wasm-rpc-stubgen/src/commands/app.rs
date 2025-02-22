@@ -1231,7 +1231,7 @@ where
     fn max_modified(path: &Path) -> Option<SystemTime> {
         let mut max_modified: Option<SystemTime> = None;
         let mut update_max_modified = |modified: SystemTime| {
-            if max_modified.map_or(true, |max_mod| max_mod.cmp(&modified) == Ordering::Less) {
+            if max_modified.is_none_or(|max_mod| max_mod.cmp(&modified) == Ordering::Less) {
                 max_modified = Some(modified)
             }
         };
