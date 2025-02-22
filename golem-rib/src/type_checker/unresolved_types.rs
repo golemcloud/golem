@@ -109,7 +109,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Number { inferred_type, .. } => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::from(expr, parent)
-                        .with_additional_error_detail(
+                        .with_help_message(
                         "possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32"
                     ));
                 }
@@ -456,7 +456,6 @@ mod internal {
                 error
                     .at_index(index)
                     .with_parent_expr(original_expr)
-                    .with_additional_error_detail("Invalid element in Tuple")
             })?;
         }
 
@@ -693,13 +692,43 @@ mod unresolved_types_tests {
     use crate::{compile, Expr};
     use test_r::test;
 
+    fn strip_spaces(input: &str) -> String {
+        let mut lines = input.lines();
+
+        let first_line = lines.clone().find(|line| !line.trim().is_empty()).unwrap_or("");
+        let margin_width = first_line.chars().take_while(|c| c.is_whitespace()).count();
+
+        let result = lines
+            .map(|line| {
+                if line.trim().is_empty() {
+                    String::new()
+                } else {
+                    line[margin_width..].to_string()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        result.strip_prefix("\n").unwrap_or(&result).to_string()
+    }
+
     #[test]
     fn test_unresolved_types_identifier() {
         let expr = Expr::from_text("hello").unwrap();
         compile(&expr, &vec![]).unwrap_err();
+
+        let error = r#"
+        error in the following rib found at line 1, column 1
+        `hello`
+        cause: cannot determine the type
+        `hello` is unknown identifier
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        "#;
+
         assert_eq!(
             compile(&expr, &vec![]).unwrap_err().to_string(),
-            "cannot determine the type of `hello`. `hello` is unknown identifier"
+            strip_spaces(error)
         );
     }
 
@@ -709,50 +738,106 @@ mod unresolved_types_tests {
         let error = compile(&expr, &vec![]).unwrap_err();
 
         let expected = r#"
-cannot determine the type of the following rib expression at line 1, column 5
-`1`
-found within:
-`{a: 1, b: "hello"}`
-unrecognized type at field: `a`
-possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32
-help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
-help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
-"#.strip_prefix("\n").unwrap();
-        assert_eq!(error,expected);
+        error in the following rib found at line 1, column 5
+        `1`
+        found within:
+        `{a: 1, b: "hello"}`
+        cause: cannot determine the type
+        unresolved type at path: `a`
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32
+        "#;
+        assert_eq!(error, strip_spaces(expected));
     }
 
     #[test]
-    fn test_unresolved_type_nested_record() {
+    fn test_unresolved_type_nested_record_field() {
         let expr = Expr::from_text("{foo: {a: 1, b: \"hello\"}}").unwrap();
-        compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "cannot determine the type of `1` in `foo.a`. Number literals must have a type annotation. Example: `1: u64`");
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 1, column 11
+        `1`
+        found within:
+        `{foo: {a: 1, b: "hello"}}`
+        cause: cannot determine the type
+        unresolved type at path: `foo.a`
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        help: possible types: u64, u32, u16, u8, i64, i32, i16, i8, f64, f32
+        "#;
+
+        assert_eq!(error_msg, strip_spaces(expected));
     }
 
     #[test]
     fn test_unresolved_type_nested_record_index() {
         let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
-        compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 1, column 29
+        `hello`
+        found within:
+        `{foo: {a: "bar", b: ("foo", hello)}}`
+        cause: cannot determine the type
+        `hello` is unknown identifier
+        unresolved type at path: `foo.b[1]`
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        "#;
+
         assert_eq!(
-            compile(&expr, &vec![]).unwrap_err().to_string(),
-            "cannot determine the type of `hello` in `foo.b[1]`. `hello` is unknown identifier. Invalid element in Tuple"
+            error_msg,
+            strip_spaces(expected)
         );
     }
 
     #[test]
     fn test_unresolved_type_result_ok() {
         let expr = Expr::from_text("ok(hello)").unwrap();
+        let error_msg = compile(&expr, &vec![]).unwrap_err();
+
+        let expected = r#"
+        error in the following rib found at line 1, column 4
+        `hello`
+        found within:
+        `ok(hello)`
+        cause: cannot determine the type
+        `hello` is unknown identifier
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        "#;
+
+
         assert_eq!(
-            compile(&expr, &vec![]).unwrap_err().to_string(),
-            "cannot determine the type of `hello` in ok(hello). `hello` is unknown identifier"
+            error_msg,
+            strip_spaces(expected)
         );
     }
 
     #[test]
     fn test_unresolved_type_result_err() {
         let expr = Expr::from_text("err(hello)").unwrap();
+
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
+
+        let expected = r#"
+        error in the following rib found at line 1, column 5
+        `hello`
+        found within:
+        `err(hello)`
+        cause: cannot determine the type
+        `hello` is unknown identifier
+        help: consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`
+        help: or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]
+        "#;
+
+
         assert_eq!(
-            compile(&expr, &vec![]).unwrap_err().to_string(),
-            "cannot determine the type of `hello` in err(hello). `hello` is unknown identifier"
+            error_msg,
+            strip_spaces(expected)
         );
     }
 }

@@ -11,6 +11,7 @@ pub struct UnResolvedTypesError {
     pub parent_expr: Option<Expr>,
     pub additional_messages: Vec<String>,
     pub help_messages: Vec<String>,
+    pub path: Path
 }
 
 impl UnResolvedTypesError {
@@ -20,6 +21,7 @@ impl UnResolvedTypesError {
             additional_messages: Vec::new(),
             parent_expr: parent_expr.clone(),
             help_messages: Vec::new(),
+            path: Path::default()
         };
 
         unresolved_types.with_default_help_messages()
@@ -54,12 +56,13 @@ impl UnResolvedTypesError {
 
     pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.with_additional_error_detail(format!("unrecognized type at field: `{}`", field_name))
+        unresolved_error.path.push_front(PathElem::Field(field_name));
+        unresolved_error
     }
 
     pub fn at_index(&self, index: usize) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.with_additional_error_detail(format!("unrecognized type at sequence/tuple index: {}", index));
+        unresolved_error.path.push_front(PathElem::Index(index));
         unresolved_error
     }
 }

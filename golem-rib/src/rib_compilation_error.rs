@@ -36,6 +36,7 @@ impl Display for RibCompilationError {
             }
         }
 
+
         if !self.help_messages.is_empty() {
             for message in &self.help_messages {
                 writeln!(f, "help: {}", message)?;
@@ -48,13 +49,20 @@ impl Display for RibCompilationError {
 
 impl From<UnResolvedTypesError> for RibCompilationError {
     fn from(value: UnResolvedTypesError) -> Self {
-        RibCompilationError {
+
+        let mut rib_compilation_error = RibCompilationError {
             cause: "cannot determine the type".to_string(),
             expr: value.unresolved_expr,
             immediate_parent: value.parent_expr,
             additional_error_details: value.additional_messages,
             help_messages: value.help_messages
+        };
+
+        if !value.path.is_empty() {
+            rib_compilation_error.additional_error_details.push(format!("unresolved type at path: `{}`", value.path));
         }
+
+        rib_compilation_error
     }
 }
 
@@ -73,10 +81,8 @@ impl From<TypeMismatchError> for RibCompilationError {
             _ => "".to_string()
         };
 
-        let cause = if value.field_path.is_field_name() {
-            format!("type mismatch at field: `{}`. {}", value.field_path, cause_suffix)
-        } else if value.field_path.is_index() {
-            format!("type mismatch at index: `{}`. {}", value.field_path, cause_suffix)
+        let cause = if !value.field_path.is_empty() {
+            format!("type mismatch at path: `{}`. {}", value.field_path, cause_suffix)
         } else {
             format!("type mismatch. {}", cause_suffix)
         };
