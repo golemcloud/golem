@@ -1,0 +1,59 @@
+name: CI
+on:
+  push:
+    # TODO: Tag and publishing is not enabled until merging history
+    # tags:
+    # - "v*.*.*"
+    branches:
+    - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  checks: write
+  pull-requests: write
+
+env:
+  BUILD_TARGET: "x86_64-unknown-linux-gnu"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest-xlarge
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        submodules: recursive
+    - name: Fetch tag
+      run: git fetch origin --deepen=1
+    - name: Setup Rust
+      run: rustup update stable --no-self-update && rustup default stable
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: debug
+        cache-all-crates: true
+        save-if: true
+    - uses: davidB/rust-cargo-make@v1
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build all targets
+      run: cargo make --profile ci build
+    - name: Unit tests
+      run: cargo make --profile ci unit-tests
+    - name: Integration tests
+      run: cargo make --profile ci integration-tests
+    - name: Check formatting and clippy rules
+      run: cargo make --profile ci check
+    - name: Publish Test Report
+      uses: mikepenz/action-junit-report@v4
+      if: always()
+      with:
+        report_paths: '**/target/report-*.xml'
+        detailed_summary: true
+        include_passed: true
