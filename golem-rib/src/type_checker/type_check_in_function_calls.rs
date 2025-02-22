@@ -58,69 +58,6 @@ pub enum FunctionCallTypeError {
     },
 }
 
-impl Display for FunctionCallTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FunctionCallTypeError::InvalidFunctionCall {
-                function_call_name: function_name,
-            } => {
-                write!(
-                    f,
-                    "Function {} is not defined in the registry",
-                    function_name
-                )
-            }
-            FunctionCallTypeError::TypeMisMatch {
-                function_call_name: call_type,
-                error,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Invalid argument to the function `{}`. {}",
-                    call_type, error
-                )
-            }
-            FunctionCallTypeError::MissingRecordFields {
-                function_call_name: call_type,
-                argument,
-                missing_fields,
-                ..
-            } => {
-                let missing_fields = missing_fields
-                    .iter()
-                    .map(|path| path.to_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
-
-                write!(
-                    f,
-                    "Invalid argument in `{}`: `{}`. Missing field `{}`",
-                    call_type, argument, missing_fields
-                )
-            }
-
-            FunctionCallTypeError::UnResolvedTypes {
-                function_call_name: call_type,
-                argument,
-                unresolved_error,
-                expected_type,
-            } => {
-                write!(
-                    f,
-                    "Invalid argument in `{}`: `{}`. Expected type: {}. {}",
-                    call_type,
-                    argument,
-                    TypeName::try_from(expected_type.clone())
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                    unresolved_error
-                )
-            }
-        }
-    }
-}
-
 mod internal {
     use super::*;
     use crate::call_type::CallType;

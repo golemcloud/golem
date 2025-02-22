@@ -93,9 +93,6 @@ impl From<TypeMismatchError> for RibCompilationError {
 
 impl From<FunctionCallTypeError> for RibCompilationError {
     fn from(value: FunctionCallTypeError) -> Self {
-
-        let mut error_details = vec![];
-
         match value {
             FunctionCallTypeError::InvalidFunctionCall {
                 function_call_name: function_name,
@@ -174,3 +171,4 @@ impl From<FunctionCallTypeError> for RibCompilationError {
     }
 }
 
+impl From<InvalidTypeCast>

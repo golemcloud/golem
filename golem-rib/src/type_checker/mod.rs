@@ -5,10 +5,11 @@ pub(crate) use unresolved_type_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 pub(crate) use type_check_in_function_calls::*;
+pub(crate) use invalid_type_cast::*;
 
 mod check_instance_returns;
-mod check_number_types;
-mod check_worker_name;
+mod invalid_type_cast;
+mod invalid_worker_name;
 mod exhaustive_pattern_match;
 mod math;
 mod missing_fields;
@@ -18,21 +19,21 @@ mod type_mismatch;
 mod type_check_in_function_calls;
 mod unresolved_types;
 
-use crate::type_checker::check_number_types::check_number_types;
-use crate::type_checker::check_worker_name::check_worker_name;
+use crate::type_checker::invalid_type_cast::check_invalid_type_cast;
+use crate::type_checker::invalid_worker_name::check_worker_name;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::math::check_types_in_math_expr;
 use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
 use crate::{Expr, FunctionTypeRegistry};
+use crate::rib_compilation_error::RibCompilationError;
 
 pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), String> {
-    check_type_error_in_function_calls(expr, function_type_registry)
-        .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
-    check_unresolved_types(expr).map_err(|unresolved_error| unresolved_error.to_string())?;
-    check_number_types(expr)?;
+) -> Result<(), RibCompilationError> {
+    check_type_error_in_function_calls(expr, function_type_registry)?;
+    check_unresolved_types(expr)?;
+    check_invalid_type_cast(expr)?;
     check_instance_returns(expr)?;
     check_worker_name(expr)?;
     check_types_in_math_expr(expr).map_err(|invalid_math_error| invalid_math_error.to_string())?;
