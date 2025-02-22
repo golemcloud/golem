@@ -132,6 +132,7 @@ impl CloudEnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedComponentService::new_base(
+                    config.golem_test_components.clone(),
                     Box::new(env_vars),
                     Path::new("../target/debug/cloud-component-service"),
                     Path::new("../cloud-component-service"),
@@ -142,7 +143,7 @@ impl CloudEnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_stderr_level(),
-                    false,
+                    config.golem_client_protocol,
                 )
                 .await,
             )
@@ -198,7 +199,7 @@ impl CloudEnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_verbosity(),
-                    false,
+                    config.golem_client_protocol,
                 )
                 .await,
             )

@@ -262,9 +262,9 @@ async fn run_component_service(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<golem_component_service::TrafficReadyEndpoints, anyhow::Error> {
     let prometheus_registry = golem_component_service::metrics::register_all();
-    let migration_path = IncludedMigrationsDir::new(ComponentService::db_migrations());
+    let migrations_dir = IncludedMigrationsDir::new(ComponentService::db_migrations());
     let span = tracing::info_span!("component-service", component = "component-service");
-    ComponentService::new(config, prometheus_registry, migration_path)
+    ComponentService::new(config, prometheus_registry, migrations_dir)
         .instrument(span.clone())
         .await?
         .start_endpoints(join_set)

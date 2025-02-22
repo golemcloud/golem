@@ -61,16 +61,23 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
 
     async fn list(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_id: Option<&ApiDefinitionId>,
         project: &Self::ProjectContext,
     ) -> Result<Vec<ApiDeployment>, GolemError> {
-        info!("List api deployments with definition {api_definition_id}");
+        info!("List api deployments with definition {api_definition_id:?}");
 
-        let deployments = self
-            .client
-            .list_deployments(&project.0, &api_definition_id.0)
-            .await
-            .map_err(CloudGolemError::from)?;
+        // TODO:
+        let deployments = match api_definition_id {
+            Some(api_definition_id) => self
+                .client
+                .list_deployments(&project.0, &api_definition_id.0)
+                .await
+                .map_err(CloudGolemError::from)?,
+            None => {
+                // TODO: update in cloud (client)
+                todo!()
+            }
+        };
 
         Ok(deployments.into_iter().map(|d| d.to_cli()).collect())
     }

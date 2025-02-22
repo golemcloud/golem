@@ -22,8 +22,10 @@ path = "tests/main.rs"
 harness = false
 
 [dependencies]
+# Workspace deps
 golem-wasm-rpc-stubgen = { path = "../wasm-rpc-stubgen", version = "=0.0.0" }
 
+# Golem deps
 golem-client = { workspace = true }
 golem-common = { workspace = true }
 golem-examples = { workspace = true }
@@ -31,6 +33,7 @@ golem-rib = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
+# External deps
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
@@ -84,8 +87,10 @@ walkdir = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]
+# Golem deps
 golem-test-framework = { workspace = true }
 
+# External deps
 async-recursion = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }

@@ -3,6 +3,7 @@ use crate::cloud::model::to_cli::ToCli;
 use crate::cloud::model::to_cloud::ToCloud;
 use crate::cloud::model::to_oss::ToOss;
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_cli::clients::worker::{worker_name_required, WorkerClient};
 use golem_cli::command::worker::WorkerConnectOptions;
@@ -10,7 +11,7 @@ use golem_cli::connect_output::ConnectOutput;
 use golem_cli::model::{
     Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
 };
-use golem_client::model::ScanCursor;
+use golem_client::model::{RevertWorkerTarget, ScanCursor};
 use golem_cloud_client::api::WorkerError;
 use golem_cloud_client::model::{WorkerCreationRequest, WorkersMetadataRequest};
 use golem_cloud_client::Context;
@@ -311,6 +312,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .push("connect");
 
         let mut request = url
+            .to_string()
             .into_client_request()
             .map_err(|e| GolemError(format!("Can't create request: {e}")))?;
         let headers = request.headers_mut();
@@ -339,7 +341,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| match e {
-                tungstenite::error::Error::Http(http_error_response) => {
+                tokio_tungstenite::tungstenite::Error::Http(http_error_response) => {
                     let status = http_error_response.status().as_u16();
                     match http_error_response.body().clone() {
                         Some(body) => get_worker_golem_error(status, body),
@@ -359,7 +361,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
                 interval.tick().await;
 
                 let ping_result = write
-                    .send(Message::Ping(cnt.to_ne_bytes().to_vec()))
+                    .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
                     .await
                     .map_err(|err| GolemError(format!("Worker connection ping failure: {err}")));
 
@@ -579,6 +581,24 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         }
 
         Ok(entries)
+    }
+
+    async fn revert(
+        &self,
+        _worker_urn: WorkerUrn,
+        _target: RevertWorkerTarget,
+    ) -> Result<(), GolemError> {
+        // TODO: add to cloud (client)
+        todo!()
+    }
+
+    async fn cancel_invocation(
+        &self,
+        _worker_urn: WorkerUrn,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<bool, GolemError> {
+        // TODO: add to cloud (client)
+        todo!()
     }
 }
 
