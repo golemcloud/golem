@@ -49,11 +49,7 @@ colored = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
-glob = { workspace = true }
-h2 = { workspace = true }
-http = { workspace = true }
 humansize = { workspace = true }
-hyper = { workspace = true }
 indoc = { workspace = true }
 inquire = { workspace = true }
 iso8601 = { workspace = true }
@@ -61,9 +57,7 @@ itertools = { workspace = true }
 lenient_bool = { workspace = true }
 log = { workspace = true }
 native-tls = { workspace = true }
-openapiv3 = { workspace = true }
 phf = { workspace = true }
-rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -72,37 +66,24 @@ serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
-testcontainers-modules = { workspace = true }
 textwrap = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
-tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }
 walkdir = { workspace = true }
-wasm-wave = { workspace = true }
 
 [dev-dependencies]
 # Golem deps
 golem-test-framework = { workspace = true }
 
 # External deps
-async-recursion = { workspace = true }
-env_logger = { workspace = true }
 log = { workspace = true }
-postgres = { workspace = true }
-rand = { workspace = true }
-redis = { workspace = true }
 reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
-tokio-postgres = { workspace = true }
-tonic = { workspace = true }
-tonic-health = { workspace = true }

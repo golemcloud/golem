@@ -2830,16 +2830,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_filter"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "186e05a59d4c50738528153b83b0b0194d3a29507dfec16eccd4b342903397d0"
-dependencies = [
- "log",
- "regex",
-]
-
-[[package]]
 name = "env_logger"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2850,19 +2840,6 @@ dependencies = [
  "log",
  "regex",
  "termcolor",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcaee3d8e3cfc3fd92428d477bc97fc29ec8716d180c0d74c643bb26166660e0"
-dependencies = [
- "anstream",
- "anstyle",
- "env_filter",
- "humantime",
- "log",
 ]
 
 [[package]]
@@ -3535,7 +3512,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert2",
- "async-recursion",
  "async-trait",
  "async_zip",
  "base64 0.22.1",
@@ -3548,9 +3524,7 @@ dependencies = [
  "colored 3.0.0",
  "derive_more 2.0.1",
  "dirs 6.0.0",
- "env_logger 0.11.6",
  "futures-util",
- "glob",
  "golem-client",
  "golem-common 1.1.20",
  "golem-examples",
@@ -3559,10 +3533,7 @@ dependencies = [
  "golem-wasm-ast 1.1.20",
  "golem-wasm-rpc 1.1.20",
  "golem-wasm-rpc-stubgen",
- "h2 0.4.8",
- "http 1.2.0",
  "humansize",
- "hyper 1.6.0",
  "indoc",
  "inquire",
  "iso8601",
@@ -3570,11 +3541,7 @@ dependencies = [
  "lenient_bool",
  "log",
  "native-tls",
- "openapiv3",
  "phf",
- "postgres",
- "rand 0.9.0",
- "redis 0.29.0",
  "regex",
  "reqwest 0.12.12",
  "serde",
@@ -3586,23 +3553,16 @@ dependencies = [
  "strum_macros 0.27.1",
  "tempfile",
  "test-r",
- "testcontainers",
- "testcontainers-modules",
  "textwrap",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
  "tokio-tungstenite 0.26.2",
- "tonic",
- "tonic-health",
- "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "url",
  "uuid",
  "version-compare",
  "walkdir",
- "wasm-wave 0.225.0",
 ]
 
 [[package]]
@@ -3635,65 +3595,41 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert2",
- "async-recursion",
  "async-trait",
  "bytes 1.10.0",
  "chrono",
  "clap",
  "clap-verbosity-flag",
- "clap_complete",
  "cli-table",
  "colored 3.0.0",
  "derive_more 2.0.1",
- "dirs 6.0.0",
- "env_logger 0.11.6",
  "futures-util",
- "golem-api-grpc 1.1.20",
  "golem-cli",
  "golem-client",
  "golem-cloud-client",
  "golem-common 1.1.20",
- "golem-examples",
  "golem-test-framework",
  "golem-wasm-ast 1.1.20",
  "golem-wasm-rpc 1.1.20",
  "golem-wasm-rpc-stubgen",
- "h2 0.4.8",
- "http 1.2.0",
- "hyper 1.6.0",
  "indoc",
- "inquire",
  "itertools 0.14.0",
- "log",
  "native-tls",
- "openapiv3",
- "postgres",
- "rand 0.9.0",
- "redis 0.29.0",
- "regex",
  "reqwest 0.12.12",
  "serde",
  "serde_json",
  "serde_json_path",
- "serde_yaml",
- "strip-ansi-escapes",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "test-r",
- "testcontainers",
- "testcontainers-modules",
  "textwrap",
  "tokio",
  "tokio-postgres",
  "tokio-tungstenite 0.26.2",
- "tonic",
- "tonic-health",
- "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "url",
  "uuid",
- "version-compare",
 ]
 
 [[package]]
@@ -4215,7 +4151,7 @@ dependencies = [
  "log",
  "once_cell",
  "postgres",
- "redis 0.27.6",
+ "redis",
  "reqwest 0.12.12",
  "serde",
  "serde_json",
@@ -4250,7 +4186,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.221.3",
  "wasm-metadata 0.221.3",
- "wasm-wave 0.222.1",
+ "wasm-wave",
  "wasmparser 0.221.3",
  "wit-parser 0.221.3",
 ]
@@ -4272,7 +4208,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.221.3",
  "wasm-metadata 0.221.3",
- "wasm-wave 0.222.1",
+ "wasm-wave",
  "wasmparser 0.221.3",
  "wit-parser 0.221.3",
 ]
@@ -4297,7 +4233,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
- "wasm-wave 0.222.1",
+ "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen-rt 0.36.0",
@@ -4324,7 +4260,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
- "wasm-wave 0.222.1",
+ "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen-rt 0.36.0",
@@ -4628,7 +4564,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "wasm-wave 0.222.1",
+ "wasm-wave",
 ]
 
 [[package]]
@@ -7432,7 +7368,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "865724d4dbe39d9f3dd3b52b88d859d66bcb2d6a0acfd5ea68a65fb66d4bdc1c"
 dependencies = [
- "env_logger 0.10.2",
+ "env_logger",
  "log",
 ]
 
@@ -7966,23 +7902,6 @@ dependencies = [
  "socket2",
  "tokio",
  "tokio-util",
- "url",
-]
-
-[[package]]
-name = "redis"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9568894e8bdefd16512bca9e286a9d2abc27773609aa4eb7f428497d64df4373"
-dependencies = [
- "arc-swap",
- "combine",
- "itoa",
- "num-bigint",
- "percent-encoding",
- "ryu",
- "sha1_smol",
- "socket2",
  "url",
 ]
 
@@ -11068,18 +10987,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-wave"
-version = "0.225.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6264128a1e3248008f413d82772f546abfb2ec18024b8553b4517cbe82ff0ba"
-dependencies = [
- "indexmap 2.7.1",
- "logos",
- "thiserror 1.0.69",
- "wit-parser 0.225.0",
-]
-
-[[package]]
 name = "wasmparser"
 version = "0.121.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12239,24 +12146,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.224.1",
-]
-
-[[package]]
-name = "wit-parser"
-version = "0.225.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebefaa234e47224f10ce60480c5bfdece7497d0f3b87a12b41ff39e5c8377a78"
-dependencies = [
- "anyhow",
- "id-arena",
- "indexmap 2.7.1",
- "log",
- "semver",
- "serde",
- "serde_derive",
- "serde_json",
- "unicode-xid",
- "wasmparser 0.225.0",
 ]
 
 [[package]]
