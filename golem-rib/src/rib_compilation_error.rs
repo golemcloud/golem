@@ -2,7 +2,7 @@ use crate::type_checker::{
     ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError,
     InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError,
 };
-use crate::{Expr, TypeName};
+use crate::{AmbiguousTypeError, Expr, TypeName};
 use std::fmt;
 use std::fmt::Display;
 
@@ -268,6 +268,18 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
                 "to ensure a complete match, add missing patterns or use wildcard (`_`)"
                     .to_string(),
             ],
+        }
+    }
+}
+
+impl From<AmbiguousTypeError> for RibCompilationError {
+    fn from(value: AmbiguousTypeError) -> Self {
+        RibCompilationError {
+            cause: "ambiguous types inferred".to_string(),
+            expr: value.expr,
+            immediate_parent: None,
+            additional_error_details: vec![value.message],
+            help_messages: vec![],
         }
     }
 }

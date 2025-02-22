@@ -16,7 +16,7 @@ use crate::type_inference::kind::{GetTypeKind, TypeKind};
 use crate::type_inference::type_push_down::internal::{
     handle_list_comprehension, handle_list_reduce,
 };
-use crate::{Expr, InferredType, MatchArm};
+use crate::{AmbiguousTypeError, Expr, InferredType, InvalidPatternMatchError, MatchArm};
 use std::collections::VecDeque;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
@@ -196,51 +196,30 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     Ok(())
 }
 
-// Ambiguous type error occurs when we are unable to push down an inferred type
-// to the inner expression since there is an ambiguity between what the expression is
-// and what is being pushed down
-pub struct AmbiguousTypeError {
-    pub expr: Expr,
-    pub message: String,
+pub enum TypePushDownError {
+    AmbiguousType(AmbiguousTypeError),
+    InvalidPatternMatch(InvalidPatternMatchError),
 }
 
-impl AmbiguousTypeError {
-    pub fn from(inferred_expr: &InferredType, expr: &Expr) -> AmbiguousTypeError {
-        let kind = inferred_expr.get_type_kind();
-
-        match kind {
-            TypeKind::Ambiguous { possibilities } => {
-                let error_message = format!(
-                    "ambiguous types inferred {}",
-                    possibilities
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                AmbiguousTypeError {
-                    expr: expr.clone(),
-                    message: error_message,
-                }
-            }
-            _ => {
-                let error_message =
-                    format!("ambiguous types inferred , {},{}", TypeKind::Option, kind);
-                AmbiguousTypeError {
-                    expr: expr.clone(),
-                    message: error_message,
-                }
-            }
-        }
+impl From<AmbiguousTypeError> for TypePushDownError {
+    fn from(value: AmbiguousTypeError) -> Self {
+        TypePushDownError::AmbiguousType(value)
     }
 }
+
+impl From<InvalidPatternMatchError> for TypePushDownError {
+    fn from(value: InvalidPatternMatchError) -> Self {
+        TypePushDownError::InvalidPatternMatch(value)
+    }
+}
+
 
 mod internal {
     use crate::call_type::CallType;
     use crate::type_inference::kind::{GetTypeKind, TypeKind};
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, Expr, InferredType, VariableId};
+    use crate::{AmbiguousTypeError, ArmPattern, Expr, InferredType, TypePushDownError, VariableId};
     use std::collections::VecDeque;
 
     pub(crate) fn handle_list_comprehension(
@@ -372,23 +351,9 @@ mod internal {
         inner_expr: &mut Expr,
         outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type)
-            .ok_or({
-                let kind = outer_inferred_type.get_type_kind();
-                let span = outer_expr.source_span();
-
-                match kind {
-                    TypeKind::Ambiguous { possibilities } => {
-                        let error_message = format!("Ambiguous types in the following rib expression found at line {}, column {}.\n `{}` . `{}`", span.start_line(), span.start_column(), outer_expr, possibilities.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(", "));
-                        error_message
-                    }
-                    _ => {
-                        let error_message = format!("Ambiguous types in the following rib expression found at line {}, column {}.\n `{}`, {},{}", span.start_line(), span.start_column(), outer_expr,  TypeKind::Option, kind);
-                         error_message
-                    }
-                }
-            })?;
+            .ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
 
         let inner_type = refined_optional_type.inner_type();
 
@@ -398,10 +363,13 @@ mod internal {
 
     pub(crate) fn handle_ok(
         inner_expr: &mut Expr,
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let refined_ok_type =
-            OkType::refine(outer_inferred_type).ok_or("Expected ok type".to_string())?;
+            OkType::refine(outer_inferred_type)
+                .ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
+
         let inner_type = refined_ok_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -411,10 +379,11 @@ mod internal {
 
     pub(crate) fn handle_err(
         inner_expr: &mut Expr,
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let refined_err_type =
-            ErrType::refine(outer_inferred_type).ok_or("Expected err type".to_string())?;
+            ErrType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
         let inner_type = refined_err_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -424,11 +393,12 @@ mod internal {
 
     pub(crate) fn handle_sequence<'a>(
         inner_expressions: &'a mut [Expr],
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let refined_list_type =
-            ListType::refine(outer_inferred_type).ok_or("Expected list type".to_string())?;
+            ListType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
         let inner_type = refined_list_type.inner_type();
 
         for expr in inner_expressions.iter_mut() {
@@ -441,11 +411,12 @@ mod internal {
 
     pub(crate) fn handle_tuple<'a>(
         inner_expressions: &'a mut [Expr],
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
-    ) -> Result<(), String> {
+    ) -> Result<(), TypePushDownError> {
         let refined_tuple_type =
-            TupleType::refine(outer_inferred_type).ok_or("Expected tuple type".to_string())?;
+            TupleType::refine(outer_inferred_type).ok_or(AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
         let inner_types = refined_tuple_type.inner_types();
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
@@ -458,18 +429,12 @@ mod internal {
 
     pub(crate) fn handle_record<'a>(
         inner_expressions: &'a mut [(String, Box<Expr>)],
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
-    ) -> Result<(), String> {
-        let refined_record_type = RecordType::refine(outer_inferred_type).ok_or({
-            let inner_expressions = inner_expressions
-                .iter()
-                .map(|(_, expr)| expr.to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
-
-            format!("{} is invalid. Expected record", inner_expressions)
-        })?;
+    ) -> Result<(), TypePushDownError> {
+        let refined_record_type = RecordType::refine(outer_inferred_type).ok_or(
+            AmbiguousTypeError::from(outer_inferred_type, &outer_expr))?;
 
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
@@ -534,7 +499,7 @@ mod internal {
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
         original_predicate: &Expr,
-    ) -> Result<(), String> {
+    ) -> Result<(), AmbiguousTypeError> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
@@ -569,7 +534,8 @@ mod internal {
                         }
 
                         None => {
-                            let refined_type = ErrType::refine(predicate_type);
+                            let refined_type = ErrType::refine(predicate_type)
+                                .ok_or(AmbiguousTypeError::from(predicate_type, original_predicate))?;
 
                             match refined_type {
                                 Some(_) => {}
@@ -646,9 +612,9 @@ mod internal {
             }
 
             ArmPattern::RecordConstructor(fields) => {
-                let record_type = RecordType::refine(predicate_type).ok_or(format!(
-                    "Invalid pattern match. Cannot match {} to record",
-                    original_predicate
+                let record_type = RecordType::refine(predicate_type).ok_or(AmbiguousTypeError::from(
+                    predicate_type,
+                    original_predicate,
                 ))?;
 
                 for (field, pattern) in fields {

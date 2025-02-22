@@ -35,6 +35,7 @@ pub use variable_binding_list_reduce::*;
 pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 pub use worker_function_invocation::*;
+pub use errors::*;
 
 mod call_arguments_inference;
 mod enum_resolution;
@@ -60,6 +61,7 @@ mod variable_binding_list_reduce;
 mod variable_binding_pattern_match;
 mod variant_resolution;
 mod worker_function_invocation;
+mod errors;
 
 #[cfg(test)]
 mod type_inference_tests {
