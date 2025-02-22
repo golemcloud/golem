@@ -2,7 +2,8 @@ use crate::{Expr, InferredType, TypeName};
 use std::collections::VecDeque;
 use crate::type_inference::kind::TypeKind;
 
-pub fn check_invalid_type_cast(expr: &Expr) -> Result<(), InvalidTypeCast> {
+// Check all exprs that cannot be the type it is tagged against
+pub fn check_invalid_expr(expr: &Expr) -> Result<(), InvalidExpr> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -11,9 +12,9 @@ pub fn check_invalid_type_cast(expr: &Expr) -> Result<(), InvalidTypeCast> {
             Expr::Number { inferred_type, .. } => match inferred_type.as_number() {
                 Ok(_) => {}
                 Err(msg) => {
-                    return Err(InvalidTypeCast {
+                    return Err(InvalidExpr {
                         expr: expr.clone(),
-                        expected: TypeKind::Number,
+                        expected_type: TypeKind::Number,
                         found: inferred_type.clone(),
                         message: msg,
                     });
@@ -27,9 +28,9 @@ pub fn check_invalid_type_cast(expr: &Expr) -> Result<(), InvalidTypeCast> {
     Ok(())
 }
 
-pub struct InvalidTypeCast {
+pub struct InvalidExpr {
     pub expr: Expr,
-    pub expected: TypeKind,
+    pub expected_type: TypeKind,
     pub found: InferredType,
     pub message: String
 }

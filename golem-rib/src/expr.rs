@@ -1139,7 +1139,7 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_checker::type_check(self, function_type_registry)
+        type_checker::type_check(self, function_type_registry).map_err(|x| x.to_string())
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {

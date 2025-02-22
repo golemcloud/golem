@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 pub fn check_exhaustive_pattern_match(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), ExhaustiveCheckError> {
+) -> Result<(), ExhaustivePatternMatchError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -19,7 +19,7 @@ pub fn check_exhaustive_pattern_match(
                     .iter()
                     .map(|p| p.arm_pattern.clone())
                     .collect::<Vec<_>>();
-                internal::check_exhaustive_pattern_match(&match_arm, function_type_registry)?;
+                internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
             }
 
             expr => expr.visit_children_mut_bottom_up(&mut queue),
@@ -30,16 +30,20 @@ pub fn check_exhaustive_pattern_match(
 }
 
 #[derive(Debug, Clone)]
-pub enum ExhaustiveCheckError {
-    MissingConstructors(Vec<String>),
+pub enum ExhaustivePatternMatchError {
+    MissingConstructors {
+        predicate: Expr,
+        missing_constructors: Vec<String>,
+    },
     DeadCode {
+        predicate: Expr,
         cause: ArmPattern,
         dead_pattern: ArmPattern,
     },
 }
 
 mod internal {
-    use crate::type_checker::exhaustive_pattern_match::ExhaustiveCheckError;
+    use crate::type_checker::exhaustive_pattern_match::ExhaustivePatternMatchError;
     use crate::{ArmPattern, Expr, FunctionTypeRegistry};
     use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
@@ -47,10 +51,11 @@ mod internal {
     use std::ops::Deref;
 
     pub(crate) fn check_exhaustive_pattern_match(
+        predicate: &Expr,
         arms: &[ArmPattern],
         function_registry: &FunctionTypeRegistry,
-    ) -> Result<(), ExhaustiveCheckError> {
-        let mut exhaustive_check_result = check_exhaustive(arms, ConstructorDetail::option());
+    ) -> Result<(), ExhaustivePatternMatchError> {
+        let mut exhaustive_check_result = check_exhaustive(predicate, arms, ConstructorDetail::option());
 
         let variants = function_registry.get_variants();
 
@@ -65,20 +70,26 @@ mod internal {
         constructor_details.push(ConstructorDetail::result());
 
         for detail in constructor_details {
-            exhaustive_check_result = exhaustive_check_result.unwrap_or_run_with(arms, detail);
+            exhaustive_check_result = exhaustive_check_result.unwrap_or_run_with(predicate, arms, detail);
         }
 
         let inner_constructors = exhaustive_check_result.value()?;
 
         for (field, patterns) in inner_constructors.inner() {
-            check_exhaustive_pattern_match(patterns, function_registry).map_err(|e| match e {
-                ExhaustiveCheckError::MissingConstructors(missing_constructors) => {
+            check_exhaustive_pattern_match(predicate, patterns, function_registry).map_err(|e| match e {
+                ExhaustivePatternMatchError::MissingConstructors{
+                    missing_constructors,
+                    ..
+                } => {
                     let mut new_missing_constructors = vec![];
                     missing_constructors.iter().for_each(|missing_constructor| {
                         new_missing_constructors
                             .push(format!("{}({})", field, missing_constructor));
                     });
-                    ExhaustiveCheckError::MissingConstructors(new_missing_constructors)
+                    ExhaustivePatternMatchError::MissingConstructors {
+                        predicate: predicate.clone(),
+                        missing_constructors: new_missing_constructors,
+                    }
                 }
                 other_errors => other_errors,
             })?;
@@ -102,36 +113,39 @@ mod internal {
 
     #[derive(Debug, Clone)]
     pub(crate) struct ExhaustiveCheckResult(
-        pub(crate) Result<ConstructorPatterns, ExhaustiveCheckError>,
+        pub(crate) Result<ConstructorPatterns, ExhaustivePatternMatchError>,
     );
 
     impl ExhaustiveCheckResult {
         fn unwrap_or_run_with(
             &self,
+            predicate: &Expr,
             patterns: &[ArmPattern],
             constructor_details: ConstructorDetail,
         ) -> ExhaustiveCheckResult {
             match self {
                 ExhaustiveCheckResult(Ok(result)) if result.is_empty() => {
-                    check_exhaustive(patterns, constructor_details)
+                    check_exhaustive(predicate, patterns, constructor_details)
                 }
                 ExhaustiveCheckResult(Ok(_)) => self.clone(),
                 ExhaustiveCheckResult(Err(e)) => ExhaustiveCheckResult(Err(e.clone())),
             }
         }
 
-        fn value(&self) -> Result<ConstructorPatterns, ExhaustiveCheckError> {
+        fn value(&self) -> Result<ConstructorPatterns, ExhaustivePatternMatchError> {
             self.0.clone()
         }
 
-        fn missing_constructors(missing_constructors: Vec<String>) -> Self {
-            ExhaustiveCheckResult(Err(ExhaustiveCheckError::MissingConstructors(
+        fn missing_constructors(predicate: Expr, missing_constructors: Vec<String>) -> Self {
+            ExhaustiveCheckResult(Err(ExhaustivePatternMatchError::MissingConstructors {
+                predicate: predicate,
                 missing_constructors,
-            )))
+            }))
         }
 
-        fn dead_code(cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
-            ExhaustiveCheckResult(Err(ExhaustiveCheckError::DeadCode {
+        fn dead_code(predicate: &Expr, cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
+            ExhaustiveCheckResult(Err(ExhaustivePatternMatchError::DeadCode {
+                predicate: predicate.clone(),
                 cause: cause.clone(),
                 dead_pattern: dead_pattern.clone(),
             }))
@@ -142,14 +156,15 @@ mod internal {
         }
     }
 
-    impl Display for ExhaustiveCheckError {
+    impl Display for ExhaustivePatternMatchError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                ExhaustiveCheckError::MissingConstructors(constructors) => {
-                    let constructors = constructors.join(", ");
+                ExhaustivePatternMatchError::MissingConstructors{missing_constructors, ..} => {
+                    let constructors = missing_constructors.join(", ");
                     write!(f, "Error: Non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", constructors)
                 }
-                ExhaustiveCheckError::DeadCode {
+                ExhaustivePatternMatchError::DeadCode {
+                    predicate,
                     cause,
                     dead_pattern,
                 } => {
@@ -160,6 +175,7 @@ mod internal {
     }
 
     fn check_exhaustive(
+        predicate: &Expr,
         patterns: &[ArmPattern],
         pattern_mach_args: ConstructorDetail,
     ) -> ExhaustiveCheckResult {
@@ -178,7 +194,7 @@ mod internal {
 
         for pattern in patterns {
             if !detected_wild_card_or_identifier.is_empty() {
-                return ExhaustiveCheckResult::dead_code(
+                return ExhaustiveCheckResult::dead_code(predicate,
                     detected_wild_card_or_identifier
                         .last()
                         .unwrap_or(&ArmPattern::WildCard),
@@ -255,7 +271,7 @@ mod internal {
 
                 missing_constructors.extend(missing_no_arg_constructors.clone());
 
-                return ExhaustiveCheckResult::missing_constructors(missing_constructors);
+                return ExhaustiveCheckResult::missing_constructors(predicate.clone(), missing_constructors);
             }
         }
 

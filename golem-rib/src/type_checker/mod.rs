@@ -5,13 +5,16 @@ pub(crate) use unresolved_type_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 pub(crate) use type_check_in_function_calls::*;
-pub(crate) use invalid_type_cast::*;
+pub(crate) use invalid_expr::*;
+pub(crate) use invalid_worker_name::*;
+pub(crate) use invalid_math_expr::*;
+pub(crate) use exhaustive_pattern_match::*;
 
 mod check_instance_returns;
-mod invalid_type_cast;
+mod invalid_expr;
 mod invalid_worker_name;
 mod exhaustive_pattern_match;
-mod math;
+mod invalid_math_expr;
 mod missing_fields;
 mod path;
 mod unresolved_type_error;
@@ -19,10 +22,10 @@ mod type_mismatch;
 mod type_check_in_function_calls;
 mod unresolved_types;
 
-use crate::type_checker::invalid_type_cast::check_invalid_type_cast;
-use crate::type_checker::invalid_worker_name::check_worker_name;
+use crate::type_checker::invalid_expr::check_invalid_expr;
+use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
-use crate::type_checker::math::check_types_in_math_expr;
+use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
 use crate::{Expr, FunctionTypeRegistry};
 use crate::rib_compilation_error::RibCompilationError;
@@ -33,12 +36,11 @@ pub fn type_check(
 ) -> Result<(), RibCompilationError> {
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
-    check_invalid_type_cast(expr)?;
-    check_instance_returns(expr)?;
-    check_worker_name(expr)?;
-    check_types_in_math_expr(expr).map_err(|invalid_math_error| invalid_math_error.to_string())?;
-    check_exhaustive_pattern_match(expr, function_type_registry)
-        .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
+    check_invalid_expr(expr)?;
+    check_invalid_program_return(expr)?;
+    check_invalid_worker_name(expr)?;
+    check_invalid_math_expr(expr)?;
+    check_exhaustive_pattern_match(expr, function_type_registry)?;
     Ok(())
 }
 

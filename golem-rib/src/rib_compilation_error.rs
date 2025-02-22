@@ -1,7 +1,7 @@
 use std::fmt;
-use std::fmt::Display;
+use std::fmt::{format, Display};
 use crate::{Expr, TypeName};
-use crate::type_checker::{FunctionCallTypeError, TypeMismatchError, UnResolvedTypesError};
+use crate::type_checker::{ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError};
 
 pub struct RibCompilationError {
     pub cause: String,
@@ -17,7 +17,7 @@ impl Display for RibCompilationError {
 
         writeln!(
             f,
-            "Error at the following rib-expression found at line {}, column {}",
+            "Error at the following rib found at line {}, column {}",
             span.start_line(), span.start_column()
         )?;
 
@@ -171,4 +171,91 @@ impl From<FunctionCallTypeError> for RibCompilationError {
     }
 }
 
-impl From<InvalidTypeCast>
+impl From<InvalidExpr> for RibCompilationError {
+    fn from(value: InvalidExpr) -> Self {
+
+       let cause = format!("cannot be a {}", value.expected_type);
+
+        RibCompilationError {
+            cause,
+            expr: value.expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: vec![]
+        }
+    }
+}
+
+impl From<InvalidProgramReturn> for RibCompilationError {
+    fn from(value: InvalidProgramReturn) -> Self {
+        RibCompilationError {
+            cause: value.message,
+            expr: value.return_expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: vec![]
+        }
+    }
+}
+
+impl From<InvalidWorkerName> for RibCompilationError {
+    fn from(value: InvalidWorkerName) -> Self {
+        RibCompilationError {
+            cause: value.message,
+            expr: value.worker_name_expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: vec![]
+        }
+    }
+}
+
+
+impl From<InvalidMathExprError> for RibCompilationError {
+    fn from(value: InvalidMathExprError) -> Self {
+
+        let expr = match value {
+            InvalidMathExprError::Both { math_expr, ..}
+            | InvalidMathExprError::Left { math_expr, .. }
+            | InvalidMathExprError::Right { math_expr, .. } => {
+                math_expr
+            }
+        };
+
+        RibCompilationError {
+            cause:  "invalid math expression".to_string(),
+            expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: vec![]
+        }
+    }
+}
+
+impl From<ExhaustivePatternMatchError> for RibCompilationError {
+    fn from(value: ExhaustivePatternMatchError) -> Self {
+        let expr = match &value {
+            ExhaustivePatternMatchError::MissingConstructors { predicate, .. }
+            | ExhaustivePatternMatchError::DeadCode { predicate, .. } => {
+                predicate.clone()
+            }
+        };
+
+        let cause = match value {
+            ExhaustivePatternMatchError::MissingConstructors { missing_constructors, .. } => {
+                format!("non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", missing_constructors.join(", "))
+            }
+            ExhaustivePatternMatchError::DeadCode { dead_pattern, cause, .. } => {
+                format!("Error: Dead code detected. The pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
+            }
+        };
+
+        RibCompilationError {
+            cause,
+            expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: vec![]
+        }
+    }
+}
