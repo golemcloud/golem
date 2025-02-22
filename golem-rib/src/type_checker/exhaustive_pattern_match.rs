@@ -47,7 +47,7 @@ mod internal {
     use crate::{ArmPattern, Expr, FunctionTypeRegistry};
     use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
-    
+
     use std::ops::Deref;
 
     pub(crate) fn check_exhaustive_pattern_match(

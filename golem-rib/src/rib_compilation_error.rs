@@ -143,8 +143,6 @@ impl From<FunctionCallTypeError> for RibCompilationError {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                
-
                 RibCompilationError {
                     cause: format!(
                         "invalid argument to the function `{}`:  missing field(s) in record `{}`",
