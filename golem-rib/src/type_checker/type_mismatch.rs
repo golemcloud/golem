@@ -1,8 +1,7 @@
 use crate::type_refinement::precise_types::*;
-use crate::type_refinement::{RefinedType, TypeRefinement};
-use crate::{Expr, InferredType, Path, PathElem, TypeName};
+use crate::type_refinement::TypeRefinement;
+use crate::{Expr, InferredType, Path, PathElem};
 use golem_wasm_ast::analysis::AnalysedType;
-use std::fmt::Display;
 use std::ops::Deref;
 
 pub fn check_type_mismatch(

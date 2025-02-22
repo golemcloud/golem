@@ -1,7 +1,5 @@
-use crate::type_checker::{Path, PathElem, PathType};
-use crate::{Expr, InferredType, TypeName};
-use golem_wasm_ast::analysis::AnalysedType;
-use std::collections::VecDeque;
+use crate::type_checker::{Path, PathElem};
+use crate::Expr;
 use std::fmt;
 use std::fmt::Display;
 

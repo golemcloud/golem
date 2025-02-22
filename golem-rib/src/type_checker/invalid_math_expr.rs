@@ -1,6 +1,5 @@
 use crate::Expr;
 use std::collections::VecDeque;
-use std::fmt::Display;
 
 pub enum InvalidMathExprError {
     Both {

@@ -1,12 +1,10 @@
-use crate::call_type::CallType;
-use crate::parser::call::call;
 use crate::type_checker::{
     ExhaustivePatternMatchError, FunctionCallTypeError, InvalidExpr, InvalidMathExprError,
     InvalidProgramReturn, InvalidWorkerName, TypeMismatchError, UnResolvedTypesError,
 };
 use crate::{Expr, TypeName};
 use std::fmt;
-use std::fmt::{format, Display};
+use std::fmt::Display;
 
 pub struct RibCompilationError {
     pub cause: String,
@@ -84,7 +82,7 @@ impl From<TypeMismatchError> for RibCompilationError {
 
         let cause_suffix = match (expected, actual) {
             (Some(expected), Some(actual)) => format!("{}. {}", expected, actual),
-            (Some(expected), None) => format!("{}", expected),
+            (Some(expected), None) => expected.to_string(),
             _ => "".to_string(),
         };
 
@@ -145,7 +143,9 @@ impl From<FunctionCallTypeError> for RibCompilationError {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                let rib_compilation_error = RibCompilationError {
+                
+
+                RibCompilationError {
                     cause: format!(
                         "invalid argument to the function `{}`:  missing field(s) in record `{}`",
                         call_type, missing_fields
@@ -154,9 +154,7 @@ impl From<FunctionCallTypeError> for RibCompilationError {
                     immediate_parent: None,
                     additional_error_details: vec![],
                     help_messages: vec![],
-                };
-
-                rib_compilation_error
+                }
             }
 
             FunctionCallTypeError::UnResolvedTypes {

@@ -1,9 +1,8 @@
 use crate::call_type::CallType;
 use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
-use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
+use crate::{Expr, FunctionTypeRegistry, RegistryKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
-use std::fmt::Display;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
 // we have this special phase to grab errors in the context function calls.

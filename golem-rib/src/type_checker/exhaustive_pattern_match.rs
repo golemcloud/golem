@@ -47,7 +47,7 @@ mod internal {
     use crate::{ArmPattern, Expr, FunctionTypeRegistry};
     use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
-    use std::fmt::Display;
+    
     use std::ops::Deref;
 
     pub(crate) fn check_exhaustive_pattern_match(
@@ -142,7 +142,7 @@ mod internal {
 
         fn missing_constructors(predicate: Expr, missing_constructors: Vec<String>) -> Self {
             ExhaustiveCheckResult(Err(ExhaustivePatternMatchError::MissingConstructors {
-                predicate: predicate,
+                predicate,
                 missing_constructors,
             }))
         }
@@ -1025,7 +1025,7 @@ mod pattern_match_exhaustive_tests {
 
     mod internal {
         pub(crate) fn strip_spaces(input: &str) -> String {
-            let mut lines = input.lines();
+            let lines = input.lines();
 
             let first_line = lines
                 .clone()

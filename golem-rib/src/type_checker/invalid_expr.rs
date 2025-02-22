@@ -1,5 +1,5 @@
 use crate::type_inference::kind::TypeKind;
-use crate::{Expr, InferredType, TypeName};
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 
 // Check all exprs that cannot be the type it is tagged against

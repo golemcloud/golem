@@ -696,7 +696,7 @@ mod unresolved_types_tests {
     use test_r::test;
 
     fn strip_spaces(input: &str) -> String {
-        let mut lines = input.lines();
+        let lines = input.lines();
 
         let first_line = lines
             .clone()

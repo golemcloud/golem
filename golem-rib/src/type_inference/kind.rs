@@ -1,4 +1,4 @@
-use crate::{Expr, InferredType};
+use crate::InferredType;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
 
