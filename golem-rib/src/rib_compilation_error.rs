@@ -279,14 +279,28 @@ impl From<ExhaustivePatternMatchError> for RibCompilationError {
 
 impl From<AmbiguousTypeError> for RibCompilationError {
     fn from(value: AmbiguousTypeError) -> Self {
-        let cause = "ambiguous types inferred".to_string();
+        dbg!(value.clone());
+        let cause = format!(
+            "cannot determine the type due to ambiguous types: {}",
+            value
+                .ambiguous_types
+                .iter()
+                .map(|t| format!("`{}`", t))
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+
+        let help_messages = vec![
+            "this happens when the same rib is used as two or more different types".to_string(),
+            "example: `let x: tuple<1, 2> = foo` results in type ambiguity for `foo` if `foo` was used as a list elsewhere".to_string(),
+        ];
 
         RibCompilationError {
             cause,
             expr: value.expr,
             immediate_parent: None,
             additional_error_details: value.additional_error_details,
-            help_messages: vec![],
+            help_messages,
         }
     }
 }

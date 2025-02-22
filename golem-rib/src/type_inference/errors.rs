@@ -5,7 +5,7 @@ use crate::{Expr, InferredType};
 // to the inner expression since there is an ambiguity between what the expression is
 // and what is being pushed down
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AmbiguousTypeError {
     pub expr: Expr,
     pub ambiguous_types: Vec<TypeKind>, // At this point, the max resolution is only until a kind
@@ -13,10 +13,14 @@ pub struct AmbiguousTypeError {
 }
 
 impl AmbiguousTypeError {
-    pub fn new(inferred_expr: &InferredType, expr: &Expr) -> AmbiguousTypeError {
-        let kind = inferred_expr.get_type_kind();
+    pub fn new(
+        inferred_expr: &InferredType,
+        expr: &Expr,
+        expected: &TypeKind,
+    ) -> AmbiguousTypeError {
+        let actual_kind = inferred_expr.get_type_kind();
 
-        match kind {
+        match actual_kind {
             TypeKind::Ambiguous { possibilities } => {
                 let possibilities = possibilities.into_iter().collect::<Vec<_>>();
 
@@ -26,9 +30,9 @@ impl AmbiguousTypeError {
                     additional_error_details: vec![],
                 }
             }
-            _ => AmbiguousTypeError {
+            actual_kind => AmbiguousTypeError {
                 expr: expr.clone(),
-                ambiguous_types: vec![TypeKind::Option, kind],
+                ambiguous_types: vec![expected.clone(), actual_kind],
                 additional_error_details: vec![],
             },
         }
