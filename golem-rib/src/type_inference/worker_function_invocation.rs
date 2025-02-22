@@ -17,6 +17,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
             method,
             generic_type_parameter,
             args,
+            source_span,
             ..
         } = expr
         {
@@ -49,7 +50,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                 None,
                                 worker_name,
                                 args.clone(),
-                            );
+                            ).with_source_span(source_span.clone());
                             *expr = new_call;
                         }
                         // We are yet to be able to create a call_type
@@ -71,7 +72,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                 });
 
                             *expr = Expr::call(new_call_type, None, args.clone())
-                                .with_inferred_type(new_inferred_type);
+                                .with_inferred_type(new_inferred_type).with_source_span(source_span.clone());
                         }
                         // If resource method is called, we could convert to strict call
                         // however it can only be possible if the instance type of LHS is
@@ -107,7 +108,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), String> {
                                         None,
                                         worker_name,
                                         method_args,
-                                    );
+                                    ).with_source_span(source_span.clone());
 
                                     *expr = new_call
                                 }

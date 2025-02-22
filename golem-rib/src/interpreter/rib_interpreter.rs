@@ -2544,6 +2544,9 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
+            let expected = r#"
+
+            "#;
             assert_eq!(
                 compiled,
                 "Resource constructor instance cannot be returned".to_string()

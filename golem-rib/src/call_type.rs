@@ -91,8 +91,15 @@ impl Display for CallType {
             CallType::Function { function_name, .. } => write!(f, "{}", function_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
-            CallType::InstanceCreation(_) => {
-                write!(f, "InstanceCreation")
+            CallType::InstanceCreation(instance_creation_type) => {
+                match instance_creation_type {
+                    InstanceCreationType::Worker { .. } => {
+                        write!(f, "instance")
+                    }
+                    InstanceCreationType::Resource {  resource_name, .. } => {
+                        write!(f, "{}", resource_name.resource_name)
+                    }
+                }
             }
         }
     }

@@ -663,7 +663,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::{Expr, FunctionTypeRegistry, InferredType};
-    
+
     #[test]
     fn test_push_down_for_record() {
         let mut expr = Expr::record(vec![(

@@ -432,8 +432,31 @@ impl<W: Write> Writer<W> {
                 self.write_display(" } ")
             }
 
-            Expr::InvokeMethodLazy { .. } => {
-                todo!("Invoke write back not yet supported")
+            Expr::InvokeMethodLazy {
+                lhs,
+                method,
+                generic_type_parameter,
+                args,
+                ..
+            } => {
+                self.write_expr(lhs)?;
+                self.write_str(".")?;
+                self.write_str(method)?;
+                if let Some(type_parameter) = generic_type_parameter {
+                    self.write_str("[")?;
+                    self.write_str(type_parameter.value.clone())?;
+                    self.write_str("]")?;
+                }
+                self.write_display("(")?;
+                for (idx, param) in args.iter().enumerate() {
+                    if idx != 0 {
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
+                    }
+                    self.write_expr(param)?;
+                }
+                self.write_display(")")
+
             }
         }
     }
