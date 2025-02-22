@@ -5,6 +5,14 @@ use std::fmt::Display;
 pub struct Path(Vec<PathElem>);
 
 impl Path {
+    pub fn is_index(&self) -> bool {
+        self.0.last().map(|elem| elem.is_index()).unwrap_or(false)
+    }
+
+    pub fn is_field_name(&self) -> bool {
+        self.0.last().map(|elem| elem.is_field()).unwrap_or(false)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

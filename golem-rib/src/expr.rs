@@ -1065,7 +1065,9 @@ impl Expr {
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
     pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
+        dbg!(self.clone());
         self.push_types_down()?;
+        dbg!(self.clone());
         self.infer_all_identifiers()?;
         let expr = self.pull_types_up()?;
         *self = expr;

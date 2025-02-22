@@ -42,6 +42,7 @@ mod type_parameter_parser;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
+mod rib_compilation_error;
 
 #[cfg(test)]
 test_r::enable!();

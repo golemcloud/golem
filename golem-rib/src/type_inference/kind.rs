@@ -22,6 +22,7 @@ pub enum TypeKind {
     Resource,
     Variant,
     Unknown,
+    Ambiguous { possibilities: Vec<TypeKind> },
 }
 
 impl Display for TypeKind {
@@ -41,6 +42,16 @@ impl Display for TypeKind {
             TypeKind::Resource => write!(f, "resource"),
             TypeKind::Variant => write!(f, "variant"),
             TypeKind::Unknown => write!(f, "unknown"),
+            TypeKind::Ambiguous { possibilities } => {
+                write!(f, "ambiguous: ")?;
+                for (i, kind) in possibilities.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", kind)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -118,7 +129,9 @@ mod internal {
             if possibilities.iter().all(|p| p.get_type_kind() == first) {
                 first
             } else {
-                TypeKind::Unknown
+                TypeKind::Ambiguous {
+                    possibilities: possibilities.iter().map(|p| p.get_type_kind()).collect(),
+                }
             }
         } else {
             TypeKind::Unknown

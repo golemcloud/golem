@@ -22,8 +22,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
-    while let Some(expr) = queue.pop_back() {
-        match expr {
+    while let Some(outer_expr) = queue.pop_back() {
+        let copied = outer_expr.clone();
+        match outer_expr {
             Expr::SelectField {
                 expr,
                 field,
@@ -72,12 +73,12 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
             Expr::Option {
-                expr: Some(expr),
+                expr: Some(inner_expr),
                 inferred_type,
                 ..
             } => {
-                internal::handle_option(expr, inferred_type)?;
-                queue.push_back(expr);
+                internal::handle_option(inner_expr, copied, inferred_type)?;
+                queue.push_back(outer_expr);
             }
 
             Expr::Result {
@@ -187,7 +188,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(yield_expr);
             }
 
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
+            _ => outer_expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
 
@@ -200,6 +201,7 @@ mod internal {
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType, VariableId};
     use std::collections::VecDeque;
+    use crate::type_inference::kind::{GetTypeKind, TypeKind};
 
     pub(crate) fn handle_list_comprehension(
         variable_id: &mut VariableId,
@@ -328,10 +330,28 @@ mod internal {
 
     pub(crate) fn handle_option(
         inner_expr: &mut Expr,
+        outer_expr: Expr,
         outer_inferred_type: &InferredType,
     ) -> Result<(), String> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type)
-            .ok_or("Expected optional type".to_string())?;
+            .ok_or({
+                dbg!(outer_inferred_type.clone());
+                let kind = outer_inferred_type.get_type_kind();
+                let span = outer_expr.source_span();
+
+                match kind {
+                    TypeKind::Ambiguous { possibilities } => {
+                        let error_message = format!("Ambiguous types in the following rib expression found at line {}, column {}.\n `{}` . `{}`", span.start_line(), span.start_column(), outer_expr, possibilities.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(", "));
+                        error_message
+                    }
+                    _ => {
+                        let error_message = format!("Ambiguous types in the following rib expression found at line {}, column {}.\n `{}`, {},{}", span.start_line(), span.start_column(), outer_expr,  TypeKind::Option, kind);
+                         error_message
+                    }
+                }
+            })?;
+
+
         let inner_type = refined_optional_type.inner_type();
 
         inner_expr.add_infer_type_mut(inner_type.clone());
@@ -604,13 +624,31 @@ mod internal {
 
         Ok(())
     }
+
 }
 
 #[cfg(test)]
 mod type_push_down_tests {
     use test_r::test;
 
-    use crate::{Expr, InferredType};
+    use crate::{Expr, FunctionTypeRegistry, InferredType};
+
+
+    #[test]
+    fn test_push_down_ambiguous() {
+        let expr = r#"
+          let x: u64 = some(1);
+          x
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+
+        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        dbg!(result);
+
+        assert!(false)
+    }
+
 
     #[test]
     fn test_push_down_for_record() {

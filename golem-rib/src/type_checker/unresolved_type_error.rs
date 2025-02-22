@@ -8,8 +8,9 @@ use std::fmt::Display;
 #[derive(Clone, Debug)]
 pub struct UnResolvedTypesError {
     pub unresolved_expr: Expr,
-    pub additional_messages: Vec<String>,
     pub parent_expr: Option<Expr>,
+    pub additional_messages: Vec<String>,
+    pub help_messages: Vec<String>,
 }
 
 impl UnResolvedTypesError {
@@ -18,6 +19,7 @@ impl UnResolvedTypesError {
             unresolved_expr: expr.clone(),
             additional_messages: Vec::new(),
             parent_expr: parent_expr.clone(),
+            help_messages: Vec::new(),
         };
 
         unresolved_types.with_default_help_messages()
@@ -39,18 +41,14 @@ impl UnResolvedTypesError {
 
     pub fn with_additional_error_detail(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        let mut new_message = vec![message.as_ref().to_string()];
-        new_message.extend(self.additional_messages.clone());
-        unresolved_error.additional_messages = new_message;
-
+        unresolved_error.additional_messages.push(message.as_ref().to_string());
         unresolved_error
     }
 
     pub fn with_help_message(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error
-            .additional_messages
-            .push(format!("help: {}", message.as_ref()));
+        unresolved_error.help_messages.push(message.as_ref().to_string());
+
         unresolved_error
     }
 

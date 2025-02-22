@@ -1,7 +1,7 @@
 pub(crate) use check_instance_returns::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
-pub(crate) use errors::*;
+pub(crate) use unresolved_type_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
@@ -12,7 +12,7 @@ mod exhaustive_pattern_match;
 mod math;
 mod missing_fields;
 mod path;
-mod errors;
+mod unresolved_type_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
@@ -161,7 +161,7 @@ mod type_check_tests {
         #[test]
         fn test_type_mismatch_in_nested_record_in_function_call3() {
             let expr = r#"
-            let bar = {a: {aa: 1, ab: 2, ac: {foo: "bar"}, ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
+            let bar = {a: {aa: 1, ab: 2, ac: some(1), ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
             let result = foo(bar);
             result
         "#;
