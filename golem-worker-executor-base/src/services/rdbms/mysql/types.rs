@@ -634,3 +634,151 @@ impl AnalysedTypeMerger for DbColumn {
         first
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use crate::services::rdbms::mysql::types as mysql_types;
+    use assert2::check;
+    use bigdecimal::BigDecimal;
+    use bit_vec::BitVec;
+    use golem_common::serialization::{serialize, try_deserialize};
+    use golem_wasm_rpc::IntoValueAndType;
+    use serde_json::json;
+    use std::str::FromStr;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn check_db_value(value: mysql_types::DbValue) {
+        let bin_value = serialize(&value).unwrap().to_vec();
+        let value2: Option<mysql_types::DbValue> =
+            try_deserialize(bin_value.as_slice()).ok().flatten();
+        check!(value2.unwrap() == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
+    }
+
+    #[test]
+    fn test_db_values_conversions() {
+        for param in get_test_db_values() {
+            check_db_value(param);
+        }
+    }
+
+    fn check_db_column_type(value: mysql_types::DbColumnType) {
+        let bin_value = serialize(&value).unwrap().to_vec();
+        let value2: Option<mysql_types::DbColumnType> =
+            try_deserialize(bin_value.as_slice()).unwrap();
+        check!(value2.unwrap() == value);
+
+        let value_and_type = value.into_value_and_type();
+        let value_and_type_json = serde_json::to_string(&value_and_type);
+        check!(value_and_type_json.is_ok());
+    }
+
+    #[test]
+    fn test_db_column_types_conversions() {
+        for value in get_test_db_column_types() {
+            check_db_column_type(value);
+        }
+    }
+
+    pub(crate) fn get_test_db_column_types() -> Vec<mysql_types::DbColumnType> {
+        vec![
+            mysql_types::DbColumnType::Boolean,
+            mysql_types::DbColumnType::Tinyint,
+            mysql_types::DbColumnType::Smallint,
+            mysql_types::DbColumnType::Mediumint,
+            mysql_types::DbColumnType::Int,
+            mysql_types::DbColumnType::Bigint,
+            mysql_types::DbColumnType::TinyintUnsigned,
+            mysql_types::DbColumnType::SmallintUnsigned,
+            mysql_types::DbColumnType::MediumintUnsigned,
+            mysql_types::DbColumnType::IntUnsigned,
+            mysql_types::DbColumnType::BigintUnsigned,
+            mysql_types::DbColumnType::Float,
+            mysql_types::DbColumnType::Double,
+            mysql_types::DbColumnType::Decimal,
+            mysql_types::DbColumnType::Date,
+            mysql_types::DbColumnType::Datetime,
+            mysql_types::DbColumnType::Timestamp,
+            mysql_types::DbColumnType::Time,
+            mysql_types::DbColumnType::Year,
+            mysql_types::DbColumnType::Fixchar,
+            mysql_types::DbColumnType::Varchar,
+            mysql_types::DbColumnType::Tinytext,
+            mysql_types::DbColumnType::Text,
+            mysql_types::DbColumnType::Mediumtext,
+            mysql_types::DbColumnType::Longtext,
+            mysql_types::DbColumnType::Binary,
+            mysql_types::DbColumnType::Varbinary,
+            mysql_types::DbColumnType::Tinyblob,
+            mysql_types::DbColumnType::Blob,
+            mysql_types::DbColumnType::Mediumblob,
+            mysql_types::DbColumnType::Longblob,
+            mysql_types::DbColumnType::Enumeration,
+            mysql_types::DbColumnType::Set,
+            mysql_types::DbColumnType::Bit,
+            mysql_types::DbColumnType::Json,
+        ]
+    }
+
+    pub(crate) fn get_test_db_values() -> Vec<mysql_types::DbValue> {
+        vec![
+            mysql_types::DbValue::Tinyint(1),
+            mysql_types::DbValue::Smallint(2),
+            mysql_types::DbValue::Mediumint(3),
+            mysql_types::DbValue::Int(4),
+            mysql_types::DbValue::Bigint(5),
+            mysql_types::DbValue::Float(6.0),
+            mysql_types::DbValue::Double(7.0),
+            mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
+            mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+            mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
+                chrono::NaiveDateTime::new(
+                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                ),
+                chrono::Utc,
+            )),
+            mysql_types::DbValue::Fixchar("0123456789".to_string()),
+            mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
+            mysql_types::DbValue::Tinytext("Tinytext".to_string()),
+            mysql_types::DbValue::Text("text".to_string()),
+            mysql_types::DbValue::Mediumtext("Mediumtext".to_string()),
+            mysql_types::DbValue::Longtext("Longtext".to_string()),
+            mysql_types::DbValue::Binary(vec![66, 105, 110, 97, 114, 121]),
+            mysql_types::DbValue::Varbinary("Varbinary".as_bytes().to_vec()),
+            mysql_types::DbValue::Tinyblob("Tinyblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Blob("Blob".as_bytes().to_vec()),
+            mysql_types::DbValue::Mediumblob("Mediumblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Longblob("Longblob".as_bytes().to_vec()),
+            mysql_types::DbValue::Enumeration("value2".to_string()),
+            mysql_types::DbValue::Set("value1,value2".to_string()),
+            mysql_types::DbValue::Json(
+                json!(
+                       {
+                          "id": 100
+                       }
+                )
+                .to_string(),
+            ),
+            mysql_types::DbValue::Bit(BitVec::from_iter([true, false, false])),
+            mysql_types::DbValue::TinyintUnsigned(10),
+            mysql_types::DbValue::SmallintUnsigned(20),
+            mysql_types::DbValue::MediumintUnsigned(30),
+            mysql_types::DbValue::IntUnsigned(40),
+            mysql_types::DbValue::BigintUnsigned(50),
+            mysql_types::DbValue::Year(2020),
+            mysql_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+        ]
+    }
+}

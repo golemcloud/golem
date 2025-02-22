@@ -306,18 +306,6 @@ where
                     if fc.name == "values" {
                         let t = <Vec<T>>::merge_types(fc.typ, sc.typ);
                         fields.push(analysed_type::field(fc.name.as_str(), t));
-
-                        // if let (AnalysedType::List(f), AnalysedType::List(s)) =
-                        //     (fc.typ.clone(), sc.typ)
-                        // {
-                        //     let t = T::merge_types(*f.inner, *s.inner);
-                        //     fields.push(analysed_type::field(
-                        //         fc.name.as_str(),
-                        //         analysed_type::list(t),
-                        //     ));
-                        // } else {
-                        //     fields.push(fc);
-                        // }
                     } else {
                         fields.push(fc);
                     }
@@ -487,8 +475,8 @@ pub trait RdbmsIntoValueAndType {
 impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Option<T> {
     fn into_value_and_type(self) -> ValueAndType {
         match self {
-            Some(t) => {
-                let v = t.into_value_and_type();
+            Some(v) => {
+                let v = v.into_value_and_type();
                 ValueAndType::new(
                     Value::Option(Some(Box::new(v.value))),
                     analysed_type::option(v.typ),
@@ -506,8 +494,8 @@ impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Option<T> {
 impl<S: RdbmsIntoValueAndType, E: IntoValue> RdbmsIntoValueAndType for Result<S, E> {
     fn into_value_and_type(self) -> ValueAndType {
         match self {
-            Ok(t) => {
-                let v = t.into_value_and_type();
+            Ok(v) => {
+                let v = v.into_value_and_type();
                 ValueAndType::new(
                     Value::Result(Ok(Some(Box::new(v.value)))),
                     analysed_type::result(v.typ, E::get_type()),
@@ -554,28 +542,22 @@ impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
 
 impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Vec<T> {
     fn into_value_and_type(self) -> ValueAndType {
-        get_value_and_type(self)
+        let mut vs = Vec::with_capacity(self.len());
+        let mut t: Option<AnalysedType> = None;
+        for v in self {
+            let v = v.into_value_and_type();
+            t = match t {
+                None => Some(v.typ),
+                Some(t) => Some(T::merge_types(t, v.typ)),
+            };
+            vs.push(v.value);
+        }
+
+        let t = t.unwrap_or(T::get_base_type());
+        ValueAndType::new(Value::List(vs), analysed_type::list(t))
     }
 
     fn get_base_type() -> AnalysedType {
         analysed_type::list(T::get_base_type())
     }
-}
-
-pub(crate) fn get_value_and_type<T: RdbmsIntoValueAndType + AnalysedTypeMerger>(
-    values: Vec<T>,
-) -> ValueAndType {
-    let mut vs = Vec::with_capacity(values.len());
-    let mut t: Option<AnalysedType> = None;
-    for v in values {
-        let v = v.into_value_and_type();
-        t = match t {
-            None => Some(v.typ),
-            Some(t) => Some(T::merge_types(t, v.typ)),
-        };
-        vs.push(v.value);
-    }
-
-    let t = t.unwrap_or(T::get_base_type());
-    ValueAndType::new(Value::List(vs), analysed_type::list(t))
 }
