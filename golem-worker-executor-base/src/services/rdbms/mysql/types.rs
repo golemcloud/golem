@@ -289,6 +289,16 @@ impl IntoValue for DbColumnType {
     }
 }
 
+impl RdbmsIntoValueAndType for DbColumnType {
+    fn into_value_and_type(self) -> ValueAndType {
+        IntoValueAndType::into_value_and_type(self)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        DbColumnType::get_type()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum DbValue {
     Boolean(bool),
@@ -435,19 +445,19 @@ impl IntoValue for DbValue {
             },
             DbValue::Date(v) => Value::Variant {
                 case_idx: 14,
-                case_value: Some(Box::new(v.to_string().into_value())),
+                case_value: Some(Box::new(v.into_value_and_type().value)),
             },
             DbValue::Datetime(v) => Value::Variant {
                 case_idx: 15,
-                case_value: Some(Box::new(v.to_string().into_value())),
+                case_value: Some(Box::new(v.naive_utc().into_value_and_type().value)),
             },
             DbValue::Timestamp(v) => Value::Variant {
                 case_idx: 16,
-                case_value: Some(Box::new(v.to_string().into_value())),
+                case_value: Some(Box::new(v.naive_utc().into_value_and_type().value)),
             },
             DbValue::Time(v) => Value::Variant {
                 case_idx: 17,
-                case_value: Some(Box::new(v.to_string().into_value())),
+                case_value: Some(Box::new(v.into_value_and_type().value)),
             },
             DbValue::Year(v) => Value::Variant {
                 case_idx: 18,
@@ -540,10 +550,10 @@ impl IntoValue for DbValue {
             analysed_type::case("float", analysed_type::f32()),
             analysed_type::case("double", analysed_type::f64()),
             analysed_type::case("decimal", analysed_type::str()),
-            analysed_type::case("date", analysed_type::str()),
-            analysed_type::case("datetime", analysed_type::str()),
-            analysed_type::case("timestamp", analysed_type::str()),
-            analysed_type::case("time", analysed_type::str()),
+            analysed_type::case("date", chrono::NaiveDate::get_base_type()),
+            analysed_type::case("datetime", chrono::NaiveDateTime::get_base_type()),
+            analysed_type::case("timestamp", chrono::NaiveDateTime::get_base_type()),
+            analysed_type::case("time", chrono::NaiveTime::get_base_type()),
             analysed_type::case("year", analysed_type::u16()),
             analysed_type::case("fixchar", analysed_type::str()),
             analysed_type::case("varchar", analysed_type::str()),
@@ -637,51 +647,76 @@ impl AnalysedTypeMerger for DbColumn {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::services::rdbms::mysql::types as mysql_types;
+    use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
+    use crate::services::rdbms::{DbResult, DbRow, RdbmsIntoValueAndType};
     use assert2::check;
     use bigdecimal::BigDecimal;
+    use bincode::{Decode, Encode};
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
-    use golem_wasm_rpc::IntoValueAndType;
     use serde_json::json;
+    use std::fmt::Debug;
     use std::str::FromStr;
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_db_value(value: mysql_types::DbValue) {
+    fn check_value<T: RdbmsIntoValueAndType + Encode + Decode + Clone + PartialEq + Debug>(
+        value: T,
+    ) {
         let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<mysql_types::DbValue> =
-            try_deserialize(bin_value.as_slice()).ok().flatten();
+        let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
 
-        let value_and_type = value.into_value_and_type();
+        let value_and_type = value.clone().into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
+
+        if value_and_type_json.is_err() {
+            println!("VALUE:  {:?}", value);
+        }
         check!(value_and_type_json.is_ok());
+        // println!("{}", value_and_type_json.unwrap());
     }
 
     #[test]
     fn test_db_values_conversions() {
-        for param in get_test_db_values() {
-            check_db_value(param);
+        for value in get_test_db_values() {
+            check_value(value);
         }
-    }
-
-    fn check_db_column_type(value: mysql_types::DbColumnType) {
-        let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<mysql_types::DbColumnType> =
-            try_deserialize(bin_value.as_slice()).unwrap();
-        check!(value2.unwrap() == value);
-
-        let value_and_type = value.into_value_and_type();
-        let value_and_type_json = serde_json::to_string(&value_and_type);
-        check!(value_and_type_json.is_ok());
     }
 
     #[test]
     fn test_db_column_types_conversions() {
         for value in get_test_db_column_types() {
-            check_db_column_type(value);
+            check_value(value);
         }
+    }
+
+    #[test]
+    fn test_db_result_conversions() {
+        let value = DbResult::<MysqlType>::new(
+            get_test_db_columns(),
+            vec![DbRow {
+                values: get_test_db_values(),
+            }],
+        );
+
+        check_value(value);
+    }
+
+    pub(crate) fn get_test_db_columns() -> Vec<mysql_types::DbColumn> {
+        let types = get_test_db_column_types();
+        let mut columns: Vec<mysql_types::DbColumn> = Vec::with_capacity(types.len());
+
+        for (i, ct) in types.iter().enumerate() {
+            let c = mysql_types::DbColumn {
+                ordinal: i as u64,
+                name: format!("column-{}", i),
+                db_type: ct.clone(),
+                db_type_name: ct.to_string(),
+            };
+            columns.push(c);
+        }
+        columns
     }
 
     pub(crate) fn get_test_db_column_types() -> Vec<mysql_types::DbColumnType> {

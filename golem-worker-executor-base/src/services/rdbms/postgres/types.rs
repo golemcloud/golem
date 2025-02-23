@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
+use crate::services::rdbms::{
+    get_bound_analysed_type, get_bound_value, AnalysedTypeMerger, RdbmsIntoValueAndType,
+};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
@@ -400,6 +402,13 @@ impl<T> ValuesRange<T> {
 
         Ok(ValuesRange::new(start, end))
     }
+
+    fn get_analysed_type(bound_type: AnalysedType) -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("start", bound_type.clone()),
+            analysed_type::field("end", bound_type.clone()),
+        ])
+    }
 }
 
 impl<T: Debug> Display for ValuesRange<T> {
@@ -414,10 +423,7 @@ impl<T: IntoValue> IntoValue for ValuesRange<T> {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("start", Bound::<T>::get_type()),
-            analysed_type::field("end", Bound::<T>::get_type()),
-        ])
+        Self::get_analysed_type(Bound::<T>::get_type())
     }
 }
 
@@ -487,14 +493,14 @@ impl Display for TimeTz {
 impl IntoValue for TimeTz {
     fn into_value(self) -> Value {
         Value::Record(vec![
-            self.time.to_string().into_value(),
+            self.time.into_value_and_type().value,
             self.offset.into_value(),
         ])
     }
 
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![
-            analysed_type::field("time", analysed_type::str()),
+            analysed_type::field("time", chrono::NaiveTime::get_base_type()),
             analysed_type::field("offset", analysed_type::s32()),
         ])
     }
@@ -713,18 +719,8 @@ impl Range {
     }
 
     fn get_value_analysed_type(base_type: AnalysedType) -> AnalysedType {
-        fn get_bound_type(base_type: AnalysedType) -> AnalysedType {
-            analysed_type::variant(vec![
-                analysed_type::case("included", base_type.clone()),
-                analysed_type::case("excluded", base_type.clone()),
-                analysed_type::unit_case("unbounded"),
-            ])
-        }
-
-        analysed_type::record(vec![
-            analysed_type::field("start", get_bound_type(base_type.clone())),
-            analysed_type::field("end", get_bound_type(base_type.clone())),
-        ])
+        let base_type = get_bound_analysed_type(base_type);
+        ValuesRange::<DbValue>::get_analysed_type(base_type)
     }
 
     fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
@@ -751,34 +747,6 @@ impl Display for Range {
 
 impl RdbmsIntoValueAndType for Range {
     fn into_value_and_type(self) -> ValueAndType {
-        fn get_bound_value(value: Bound<DbValue>) -> (Value, Option<AnalysedType>) {
-            match value {
-                Bound::Included(t) => {
-                    let v = t.into_value_and_type();
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(v.value)),
-                    };
-                    (value, Some(v.typ))
-                }
-                Bound::Excluded(t) => {
-                    let v = t.into_value_and_type();
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(v.value)),
-                    };
-                    (value, Some(v.typ))
-                }
-                Bound::Unbounded => {
-                    let value = Value::Variant {
-                        case_idx: 2,
-                        case_value: None,
-                    };
-                    (value, None)
-                }
-            }
-        }
-
         let (value_start, typ_start) = get_bound_value(self.value.start);
         let (value_end, typ_end) = get_bound_value(self.value.end);
 
@@ -1415,21 +1383,30 @@ impl DbValue {
             analysed_type::case("text", analysed_type::str()),
             analysed_type::case("varchar", analysed_type::str()),
             analysed_type::case("bpchar", analysed_type::str()),
-            analysed_type::case("timestamp", analysed_type::str()),
-            analysed_type::case("timestamptz", analysed_type::str()),
-            analysed_type::case("time", analysed_type::str()),
-            analysed_type::case("timetz", analysed_type::str()),
-            analysed_type::case("date", analysed_type::str()),
+            analysed_type::case("timestamp", chrono::NaiveDateTime::get_base_type()),
+            analysed_type::case(
+                "timestamptz",
+                chrono::DateTime::<chrono::Utc>::get_base_type(),
+            ),
+            analysed_type::case("date", chrono::NaiveDate::get_base_type()),
+            analysed_type::case("time", chrono::NaiveTime::get_base_type()),
+            analysed_type::case("timetz", TimeTz::get_type()),
             analysed_type::case("interval", Interval::get_type()),
             analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
             analysed_type::case("json", analysed_type::str()),
             analysed_type::case("jsonb", analysed_type::str()),
             analysed_type::case("jsonpath", analysed_type::str()),
             analysed_type::case("xml", analysed_type::str()),
-            analysed_type::case("uuid", analysed_type::str()),
-            analysed_type::case("inet", analysed_type::str()),
-            analysed_type::case("cidr", analysed_type::str()),
-            analysed_type::case("macaddr", analysed_type::str()),
+            analysed_type::case(
+                "uuid",
+                analysed_type::record(vec![
+                    analysed_type::field("high-bits", analysed_type::u64()),
+                    analysed_type::field("low-bits", analysed_type::u64()),
+                ]),
+            ),
+            analysed_type::case("inet", IpAddr::get_base_type()),
+            analysed_type::case("cidr", IpAddr::get_base_type()),
+            analysed_type::case("macaddr", MacAddress::get_base_type()),
             analysed_type::case("bit", analysed_type::list(analysed_type::bool())),
             analysed_type::case("varbit", analysed_type::list(analysed_type::bool())),
             analysed_type::case("int4range", ValuesRange::<i32>::get_type()),
@@ -1473,21 +1450,25 @@ impl RdbmsIntoValueAndType for DbValue {
             DbValue::Text(v) => get_variant(8, Some(v.into_value())),
             DbValue::Varchar(v) => get_variant(9, Some(v.into_value())),
             DbValue::Bpchar(v) => get_variant(10, Some(v.into_value())),
-            DbValue::Timestamp(v) => get_variant(11, Some(v.to_string().into_value())),
-            DbValue::Timestamptz(v) => get_variant(12, Some(v.to_string().into_value())),
-            DbValue::Date(v) => get_variant(13, Some(v.to_string().into_value())),
-            DbValue::Time(v) => get_variant(14, Some(v.to_string().into_value())),
-            DbValue::Timetz(v) => get_variant(15, Some(v.to_string().into_value())),
+            DbValue::Timestamp(v) => get_variant(11, Some(v.into_value_and_type().value)),
+            DbValue::Timestamptz(v) => get_variant(12, Some(v.into_value_and_type().value)),
+            DbValue::Date(v) => get_variant(13, Some(v.into_value_and_type().value)),
+            DbValue::Time(v) => get_variant(14, Some(v.into_value_and_type().value)),
+            DbValue::Timetz(v) => get_variant(15, Some(v.into_value())),
             DbValue::Interval(v) => get_variant(16, Some(v.into_value())),
             DbValue::Bytea(v) => get_variant(17, Some(v.into_value())),
             DbValue::Json(v) => get_variant(18, Some(v.into_value())),
             DbValue::Jsonb(v) => get_variant(19, Some(v.into_value())),
             DbValue::Jsonpath(v) => get_variant(20, Some(v.into_value())),
             DbValue::Xml(v) => get_variant(21, Some(v.into_value())),
-            DbValue::Uuid(v) => get_variant(22, Some(v.to_string().into_value())),
-            DbValue::Inet(v) => get_variant(23, Some(v.to_string().into_value())),
-            DbValue::Cidr(v) => get_variant(24, Some(v.to_string().into_value())),
-            DbValue::Macaddr(v) => get_variant(25, Some(v.to_string().into_value())),
+            DbValue::Uuid(v) => {
+                let (h, l) = v.as_u64_pair();
+                let v = Value::Record(vec![Value::U64(h), Value::U64(l)]);
+                get_variant(22, Some(v))
+            }
+            DbValue::Inet(v) => get_variant(23, Some(v.into_value_and_type().value)),
+            DbValue::Cidr(v) => get_variant(24, Some(v.into_value_and_type().value)),
+            DbValue::Macaddr(v) => get_variant(25, Some(v.into_value_and_type().value)),
             DbValue::Bit(v) => get_variant(26, Some(v.iter().collect::<Vec<bool>>().into_value())),
             DbValue::Varbit(v) => {
                 get_variant(27, Some(v.iter().collect::<Vec<bool>>().into_value()))
@@ -1669,30 +1650,33 @@ impl AnalysedTypeMerger for DbColumn {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::services::rdbms::postgres::types as postgres_types;
-    use crate::services::rdbms::RdbmsIntoValueAndType;
+    use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
+    use crate::services::rdbms::{DbResult, DbRow, RdbmsIntoValueAndType};
     use assert2::check;
     use bigdecimal::BigDecimal;
+    use bincode::{Decode, Encode};
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
+    use std::fmt::Debug;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_db_value(value: postgres_types::DbValue) {
+    fn check_value<T: RdbmsIntoValueAndType + Encode + Decode + Clone + PartialEq + Debug>(
+        value: T,
+    ) {
         let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<postgres_types::DbValue> =
-            try_deserialize(bin_value.as_slice()).ok().flatten();
+        let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
 
         let value_and_type = value.clone().into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
 
         if value_and_type_json.is_err() {
-            println!("VALUE:  {}", value);
+            println!("VALUE:  {:?}", value);
         }
         check!(value_and_type_json.is_ok());
 
@@ -1704,23 +1688,8 @@ pub mod tests {
         let values = get_test_db_values();
 
         for value in values {
-            check_db_value(value);
+            check_value(value);
         }
-    }
-
-    fn check_db_column_type(value: postgres_types::DbColumnType) {
-        let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<postgres_types::DbColumnType> =
-            try_deserialize(bin_value.as_slice()).unwrap();
-        check!(value2.unwrap() == value);
-
-        let value_and_type = value.clone().into_value_and_type();
-        let value_and_type_json = serde_json::to_string(&value_and_type);
-        if value_and_type_json.is_err() {
-            println!("TYPE: {}", value);
-        }
-        check!(value_and_type_json.is_ok());
-        // println!("{}", value_and_type_json.unwrap());
     }
 
     #[test]
@@ -1728,8 +1697,36 @@ pub mod tests {
         let values = get_test_db_column_types();
 
         for value in values {
-            check_db_column_type(value);
+            check_value(value);
         }
+    }
+
+    #[test]
+    fn test_db_result_conversions() {
+        let value = DbResult::<PostgresType>::new(
+            get_test_db_columns(),
+            vec![DbRow {
+                values: get_test_db_values(),
+            }],
+        );
+
+        check_value(value);
+    }
+
+    pub(crate) fn get_test_db_columns() -> Vec<postgres_types::DbColumn> {
+        let types = get_test_db_column_types();
+        let mut columns: Vec<postgres_types::DbColumn> = Vec::with_capacity(types.len());
+
+        for (i, ct) in types.iter().enumerate() {
+            let c = postgres_types::DbColumn {
+                ordinal: i as u64,
+                name: format!("column-{}", i),
+                db_type: ct.clone(),
+                db_type_name: ct.to_string(),
+            };
+            columns.push(c);
+        }
+        columns
     }
 
     pub(crate) fn get_test_db_column_types() -> Vec<postgres_types::DbColumnType> {

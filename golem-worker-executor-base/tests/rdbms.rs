@@ -402,10 +402,15 @@ async fn rdbms_postgres_idempotency(
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
         vec![],
-        Some(expected),
+        Some(expected.clone()),
+    );
+    let select_test2 = StatementTest::query_test(
+        "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
+        vec![],
+        Some(expected.clone()),
     );
 
-    let test = RdbmsTest::new(vec![select_test1.clone()], None);
+    let test = RdbmsTest::new(vec![select_test1.clone(), select_test2.clone()], None);
 
     let idempotency_key = IdempotencyKey::fresh();
 
@@ -423,7 +428,10 @@ async fn rdbms_postgres_idempotency(
 
     let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
 
-    let test = RdbmsTest::new(vec![select_test1, delete], Some(TransactionEnd::Commit));
+    let test = RdbmsTest::new(
+        vec![select_test1, select_test2, delete],
+        Some(TransactionEnd::Commit),
+    );
 
     let idempotency_key = IdempotencyKey::fresh();
 
@@ -944,10 +952,15 @@ async fn rdbms_mysql_idempotency(
     let select_test1 = StatementTest::query_stream_test(
         "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
         vec![],
-        Some(expected),
+        Some(expected.clone()),
+    );
+    let select_test2 = StatementTest::query_test(
+        "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
+        vec![],
+        Some(expected.clone()),
     );
 
-    let test = RdbmsTest::new(vec![select_test1.clone()], None);
+    let test = RdbmsTest::new(vec![select_test1.clone(), select_test2.clone()], None);
 
     let idempotency_key = IdempotencyKey::fresh();
 
@@ -962,7 +975,10 @@ async fn rdbms_mysql_idempotency(
 
     let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
 
-    let test = RdbmsTest::new(vec![select_test1, delete], Some(TransactionEnd::Commit));
+    let test = RdbmsTest::new(
+        vec![select_test1, select_test2, delete],
+        Some(TransactionEnd::Commit),
+    );
 
     let idempotency_key = IdempotencyKey::fresh();
 

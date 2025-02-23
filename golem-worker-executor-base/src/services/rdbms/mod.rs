@@ -26,12 +26,15 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
+use chrono::{Datelike, Offset, Timelike};
 use golem_common::model::WorkerId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use mac_address::MacAddress;
+use std::collections::{Bound, HashMap, HashSet};
 use std::fmt::{Debug, Display};
+use std::net::IpAddr;
 use std::sync::Arc;
 use url::Url;
 
@@ -466,6 +469,33 @@ impl From<GolemError> for Error {
     }
 }
 
+pub trait AnalysedTypeMerger {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType;
+
+    fn merge_types_opt(
+        first: Option<AnalysedType>,
+        second: Option<AnalysedType>,
+    ) -> Option<AnalysedType> {
+        match (first, second) {
+            (Some(f), Some(s)) => Some(Self::merge_types(f, s)),
+            (None, Some(s)) => Some(s),
+            (Some(f), None) => Some(f),
+            _ => None,
+        }
+    }
+}
+
+impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
+    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
+        if let (AnalysedType::List(f), AnalysedType::List(s)) = (first.clone(), second) {
+            let t = T::merge_types(*f.inner, *s.inner);
+            analysed_type::list(t)
+        } else {
+            first
+        }
+    }
+}
+
 pub trait RdbmsIntoValueAndType {
     fn into_value_and_type(self) -> ValueAndType;
 
@@ -513,33 +543,6 @@ impl<S: RdbmsIntoValueAndType, E: IntoValue> RdbmsIntoValueAndType for Result<S,
     }
 }
 
-pub trait AnalysedTypeMerger {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType;
-
-    fn merge_types_opt(
-        first: Option<AnalysedType>,
-        second: Option<AnalysedType>,
-    ) -> Option<AnalysedType> {
-        match (first, second) {
-            (Some(f), Some(s)) => Some(Self::merge_types(f, s)),
-            (None, Some(s)) => Some(s),
-            (Some(f), None) => Some(f),
-            _ => None,
-        }
-    }
-}
-
-impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::List(f), AnalysedType::List(s)) = (first.clone(), second) {
-            let t = T::merge_types(*f.inner, *s.inner);
-            analysed_type::list(t)
-        } else {
-            first
-        }
-    }
-}
-
 impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Vec<T> {
     fn into_value_and_type(self) -> ValueAndType {
         let mut vs = Vec::with_capacity(self.len());
@@ -560,4 +563,179 @@ impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Ve
     fn get_base_type() -> AnalysedType {
         analysed_type::list(T::get_base_type())
     }
+}
+
+impl RdbmsIntoValueAndType for chrono::NaiveDate {
+    fn into_value_and_type(self) -> ValueAndType {
+        let year = self.year();
+        let month = self.month() as u8;
+        let day = self.day() as u8;
+        ValueAndType::new(
+            Value::Record(vec![Value::S32(year), Value::U8(month), Value::U8(day)]),
+            Self::get_base_type(),
+        )
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("year", analysed_type::s32()),
+            analysed_type::field("month", analysed_type::u8()),
+            analysed_type::field("day", analysed_type::u8()),
+        ])
+    }
+}
+
+impl RdbmsIntoValueAndType for chrono::NaiveTime {
+    fn into_value_and_type(self) -> ValueAndType {
+        let hour = self.hour() as u8;
+        let minute = self.minute() as u8;
+        let second = self.second() as u8;
+        let nanosecond = self.nanosecond();
+        ValueAndType::new(
+            Value::Record(vec![
+                Value::U8(hour),
+                Value::U8(minute),
+                Value::U8(second),
+                Value::U32(nanosecond),
+            ]),
+            Self::get_base_type(),
+        )
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("hours", analysed_type::u8()),
+            analysed_type::field("minutes", analysed_type::u8()),
+            analysed_type::field("seconds", analysed_type::u8()),
+            analysed_type::field("nanoseconds", analysed_type::u32()),
+        ])
+    }
+}
+
+impl RdbmsIntoValueAndType for chrono::NaiveDateTime {
+    fn into_value_and_type(self) -> ValueAndType {
+        let date = self.date().into_value_and_type();
+        let time = self.time().into_value_and_type();
+        ValueAndType::new(
+            Value::Record(vec![date.value, time.value]),
+            Self::get_base_type(),
+        )
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("date", chrono::NaiveDate::get_base_type()),
+            analysed_type::field("time", chrono::NaiveTime::get_base_type()),
+        ])
+    }
+}
+
+impl RdbmsIntoValueAndType for chrono::DateTime<chrono::Utc> {
+    fn into_value_and_type(self) -> ValueAndType {
+        let timestamp = self.naive_utc().into_value_and_type();
+        let offset = self.offset().fix().local_minus_utc();
+        ValueAndType::new(
+            Value::Record(vec![timestamp.value, Value::S32(offset)]),
+            Self::get_base_type(),
+        )
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("timestamp", chrono::NaiveDateTime::get_base_type()),
+            analysed_type::field("offset", analysed_type::s32()),
+        ])
+    }
+}
+
+impl RdbmsIntoValueAndType for MacAddress {
+    fn into_value_and_type(self) -> ValueAndType {
+        let vs = self.bytes().into_iter().map(Value::U8).collect();
+        ValueAndType::new(Value::Record(vec![Value::Tuple(vs)]), Self::get_base_type())
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field(
+            "octets",
+            analysed_type::tuple(vec![analysed_type::u8(); 6]),
+        )])
+    }
+}
+
+impl RdbmsIntoValueAndType for IpAddr {
+    fn into_value_and_type(self) -> ValueAndType {
+        let v = match self {
+            IpAddr::V4(v) => {
+                let vs = v.octets().into_iter().map(Value::U8).collect();
+                Value::Variant {
+                    case_idx: 0,
+                    case_value: Some(Box::new(Value::Tuple(vs))),
+                }
+            }
+            IpAddr::V6(v) => {
+                let vs = v.segments().into_iter().map(Value::U16).collect();
+                Value::Variant {
+                    case_idx: 1,
+                    case_value: Some(Box::new(Value::Tuple(vs))),
+                }
+            }
+        };
+
+        ValueAndType::new(v, Self::get_base_type())
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::variant(vec![
+            analysed_type::case("ipv4", analysed_type::tuple(vec![analysed_type::u8(); 4])),
+            analysed_type::case("ipv6", analysed_type::tuple(vec![analysed_type::u16(); 8])),
+        ])
+    }
+}
+
+impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Bound<T> {
+    fn into_value_and_type(self) -> ValueAndType {
+        let (v, t) = get_bound_value(self);
+        let t = t.unwrap_or(Self::get_base_type());
+        ValueAndType::new(v, t)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        get_bound_analysed_type(T::get_base_type())
+    }
+}
+
+fn get_bound_value<T: RdbmsIntoValueAndType>(value: Bound<T>) -> (Value, Option<AnalysedType>) {
+    match value {
+        Bound::Included(t) => {
+            let v = t.into_value_and_type();
+            let value = Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(v.value)),
+            };
+            (value, Some(v.typ))
+        }
+        Bound::Excluded(t) => {
+            let v = t.into_value_and_type();
+            let value = Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(v.value)),
+            };
+            (value, Some(v.typ))
+        }
+        Bound::Unbounded => {
+            let value = Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            };
+            (value, None)
+        }
+    }
+}
+
+fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
+    analysed_type::variant(vec![
+        analysed_type::case("included", base_type.clone()),
+        analysed_type::case("excluded", base_type.clone()),
+        analysed_type::unit_case("unbounded"),
+    ])
 }
