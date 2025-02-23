@@ -16,8 +16,7 @@
 
 // TODO: test compose with multiple stubs
 
-use test_r::test;
-
+use crate::{test_data_path, wasm_rpc_override};
 use fs_extra::dir::CopyOptions;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::DefaultAst;
@@ -25,11 +24,9 @@ use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use golem_wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-
-test_r::enable!();
+use test_r::test;
 
 #[test]
 async fn compose_with_single_stub() {

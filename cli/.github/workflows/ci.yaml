@@ -32,16 +32,19 @@ jobs:
       run: git fetch origin --deepen=1
     - name: Setup Rust
       run: rustup update stable --no-self-update && rustup default stable
+    - uses: davidB/rust-cargo-make@v1
+    - uses: cargo-bins/cargo-binstall@main
+    - name: Install cargo-component
+      run: cargo binstall --no-confirm cargo-component@0.20.0
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
     - uses: Swatinem/rust-cache@v2
       with:
         shared-key: debug
         cache-all-crates: true
         save-if: true
-    - uses: davidB/rust-cargo-make@v1
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
     - name: Build all targets
       run: cargo make --profile ci build
     - name: Unit tests

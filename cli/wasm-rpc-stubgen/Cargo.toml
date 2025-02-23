@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem-cli"
 description = "Golem WASM RPC stub generator"
 
+autotests = false
+
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -17,11 +19,8 @@ path = "src/main.rs"
 test = false
 
 [[test]]
-name = "wit"
-harness = false
-
-[[test]]
-name = "add_dep"
+name = "integration"
+path = "tests/lib.rs"
 harness = false
 
 [dependencies]
@@ -36,10 +35,8 @@ cargo-component-core = { workspace = true }
 cargo_toml = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
-dir-diff = { workspace = true }
 fs_extra = { workspace = true }
 heck = { workspace = true }
-id-arena = { workspace = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 itertools = { workspace = true }
@@ -48,7 +45,6 @@ pretty_env_logger = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-regex = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

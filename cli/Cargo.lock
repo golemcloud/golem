@@ -4298,13 +4298,11 @@ dependencies = [
  "cargo_toml",
  "clap",
  "colored 3.0.0",
- "dir-diff",
  "fs_extra",
  "golem-wasm-ast 1.1.20",
  "golem-wasm-rpc 1.1.20",
  "golem-wit 0.0.0",
  "heck 0.5.0",
- "id-arena",
  "indexmap 2.7.1",
  "indoc",
  "itertools 0.14.0",
@@ -4313,7 +4311,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "regex",
  "semver",
  "serde",
  "serde_json",
@@ -4330,19 +4327,6 @@ dependencies = [
  "wit-bindgen-rust 0.26.0",
  "wit-encoder",
  "wit-parser 0.221.3",
-]
-
-[[package]]
-name = "golem-wasm-rpc-stubgen-tests-integration"
-version = "0.0.0"
-dependencies = [
- "assert2",
- "fs_extra",
- "golem-wasm-ast 1.1.20",
- "golem-wasm-rpc-stubgen",
- "tempfile",
- "test-r",
- "tokio",
 ]
 
 [[package]]

@@ -6,7 +6,9 @@
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make test`: runs all tests
-# - `cargo make unit-tests`: runs unit test tests
+# - `cargo make unit-tests`: runs all unit tests
+# - `cargo make integrations-tests`: runs all integrations tests
+# - `cargo make stubgen-integrations-tests`: runs stubgen integrations tests only
 # - `cargo make publish`: publishes packages to crates.io
 
 [config]
@@ -124,7 +126,12 @@ exec --fail-on-error cargo test --workspace --lib --all-features -- --nocapture 
 
 [tasks.integration-tests]
 description = "Run integration tests"
+dependencies = ["stubgen-integration-tests"]
+
+[tasks.stubgen-integration-tests]
+description = "Run stubgen integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen --tests -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag: --tests -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-wasm-rpc-stubgen :tag:uses_cargo --tests -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
