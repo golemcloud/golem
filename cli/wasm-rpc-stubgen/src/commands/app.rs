@@ -22,7 +22,6 @@ use crate::{commands, naming, WasmRpcOverride};
 use anyhow::{anyhow, bail, Context, Error};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use glob::{glob_with, MatchOptions};
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use serde::Serialize;
@@ -35,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 use walkdir::WalkDir;
+use wax::{Glob, LinkBehavior, WalkBehavior};
 
 pub struct Config<CPE: ComponentPropertiesExtensions> {
     pub app_source_mode: ApplicationSourceMode,
@@ -1289,25 +1289,29 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
     globs
         .iter()
         .map(|pattern| {
-            glob_with(
-                &format!("{}/{}", root_dir.to_string_lossy(), pattern),
-                MatchOptions {
-                    case_sensitive: true,
-                    require_literal_separator: false,
-                    require_literal_leading_dot: true,
+            Glob::new(pattern)
+                .with_context(|| format!("Failed to compile glob expression: {}", pattern))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| anyhow!(err))?
+        .iter()
+        .flat_map(|glob| {
+            glob.walk_with_behavior(
+                root_dir,
+                WalkBehavior {
+                    link: LinkBehavior::ReadFile,
+                    ..WalkBehavior::default()
                 },
             )
-            .with_context(|| format!("Failed to compile glob expression: {}", pattern))
+            .collect::<Vec<_>>()
+        })
+        .map(|walk_item| {
+            walk_item
+                .map(|entry| entry.path().to_path_buf())
+                .with_context(|| "Failed to get path from item when evaluating glob expressions")
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| anyhow!(err))
-        .and_then(|paths| {
-            paths
-                .into_iter()
-                .flatten()
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|err| anyhow!(err))
-        })
 }
 
 fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
