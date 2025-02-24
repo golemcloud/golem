@@ -524,9 +524,13 @@ impl InvocationManagement for TestWorkerCtx {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn set_current_invocation_context(&mut self, invocation_context: InvocationContextStack)  -> Result<(), GolemError> {
+    async fn set_current_invocation_context(
+        &mut self,
+        invocation_context: InvocationContextStack,
+    ) -> Result<(), GolemError> {
         self.durable_ctx
-            .set_current_invocation_context(invocation_context).await
+            .set_current_invocation_context(invocation_context)
+            .await
     }
 
     async fn get_current_invocation_context(&self) -> InvocationContextStack {

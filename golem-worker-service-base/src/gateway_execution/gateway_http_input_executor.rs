@@ -35,12 +35,12 @@ use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay
 use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
-use crate::headers::TraceContextHeaders;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
+use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

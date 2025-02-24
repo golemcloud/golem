@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::Arc;
-use std::u128;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -115,7 +114,10 @@ impl InvocationContextSpan {
         })
     }
 
-    pub fn new_with_attributes(span_id: Option<SpanId>, attributes: HashMap<String, AttributeValue>) -> Arc<Self> {
+    pub fn new_with_attributes(
+        span_id: Option<SpanId>,
+        attributes: HashMap<String, AttributeValue>,
+    ) -> Arc<Self> {
         let span_id = span_id.unwrap_or(SpanId::generate());
         Arc::new(Self {
             span_id,

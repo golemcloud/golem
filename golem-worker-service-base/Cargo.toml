@@ -30,7 +30,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
-bitflags = "2.8.0"
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }

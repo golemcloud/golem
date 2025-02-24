@@ -40,6 +40,7 @@ use crate::services::{
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::model::component::ComponentOwner;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::{
@@ -54,7 +55,6 @@ use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_common::model::invocation_context::InvocationContextStack;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -226,7 +226,10 @@ pub trait InvocationManagement {
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
 
-    async fn set_current_invocation_context(&mut self, invocation_context: InvocationContextStack) -> Result<(), GolemError>;
+    async fn set_current_invocation_context(
+        &mut self,
+        invocation_context: InvocationContextStack,
+    ) -> Result<(), GolemError>;
 
     async fn get_current_invocation_context(&self) -> InvocationContextStack;
 
