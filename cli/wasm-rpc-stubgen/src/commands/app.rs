@@ -1286,14 +1286,13 @@ where
 }
 
 fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<PathBuf>, Error> {
-    globs
+    Ok(globs
         .iter()
         .map(|pattern| {
             Glob::new(pattern)
-                .with_context(|| format!("Failed to compile glob expression: {}", pattern))
+                .with_context(|| anyhow!("Failed to compile glob expression: {}", pattern))
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| anyhow!(err))?
+        .collect::<Result<Vec<_>, _>>()?
         .iter()
         .flat_map(|glob| {
             glob.walk_with_behavior(
@@ -1303,15 +1302,10 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
                     ..WalkBehavior::default()
                 },
             )
-            .collect::<Vec<_>>()
+            .filter_map(|entry| entry.ok())
+            .map(|walk_item| walk_item.path().to_path_buf())
         })
-        .map(|walk_item| {
-            walk_item
-                .map(|entry| entry.path().to_path_buf())
-                .with_context(|| "Failed to get path from item when evaluating glob expressions")
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| anyhow!(err))
+        .collect::<Vec<_>>())
 }
 
 fn create_generated_base_wit<CPE: ComponentPropertiesExtensions>(
