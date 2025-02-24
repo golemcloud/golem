@@ -524,7 +524,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -548,7 +548,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -572,7 +572,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -595,7 +595,7 @@ mod pattern_match_exhaustive_tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -618,7 +618,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -641,7 +641,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -665,7 +665,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -796,7 +796,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -820,7 +820,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -844,7 +844,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -868,7 +868,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -891,7 +891,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -915,7 +915,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -939,7 +939,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9
@@ -963,7 +963,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 3, column 9

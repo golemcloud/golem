@@ -752,9 +752,8 @@ impl Expr {
     pub fn bind_global_variable_types(
         &self,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<Self, String> {
-        let result_expr = type_inference::bind_global_variable_types(self, type_spec)?;
-        Ok(result_expr)
+    ) -> Result<Self, RibCompilationError> {
+        type_inference::bind_global_variable_types(self, type_spec)
     }
 
     pub fn bind_instance_types(&mut self) {
@@ -1007,30 +1006,20 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), Vec<String>> {
+    ) -> Result<(), RibCompilationError> {
         self.infer_types_initial_phase(function_type_registry, type_spec)?;
         self.bind_instance_types();
-
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
-        type_inference::type_inference_fix_point(Self::resolve_method_calls, self)
-            .map_err(|x| vec![x.to_string()])?;
-
-        self.infer_worker_function_invokes()
-            .map_err(|x| vec![x.to_string()])?;
+        type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
+        self.infer_worker_function_invokes()?;
         self.bind_instance_types();
-        self.infer_worker_function_invokes()
-            .map_err(|x| vec![x.to_string()])?;
-        self.infer_function_call_types(function_type_registry)
-            .map_err(|x| vec![x.to_string()])?;
-
-        type_inference::type_inference_fix_point(Self::inference_scan, self)
-            .map_err(|x| vec![x.to_string()])?;
-
-        self.check_types(function_type_registry)
-            .map_err(|x| vec![x.to_string()])?;
+        self.infer_worker_function_invokes()?;
+        self.infer_function_call_types(function_type_registry)?;
+        type_inference::type_inference_fix_point(Self::inference_scan, self)?;
+        self.check_types(function_type_registry)?;
         self.unify_types()?;
         Ok(())
     }
@@ -1039,12 +1028,9 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), Vec<String>> {
-        self.identify_instance_creation(function_type_registry)
-            .map_err(|x| vec![x.to_string()])?;
-        *self = self
-            .bind_global_variable_types(type_spec)
-            .map_err(|x| vec![x])?;
+    ) -> Result<(), RibCompilationError> {
+        self.identify_instance_creation(function_type_registry)?;
+        *self = self.bind_global_variable_types(type_spec)?;
 
         self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
@@ -1143,8 +1129,9 @@ impl Expr {
         type_checker::type_check(self, function_type_registry)
     }
 
-    pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
-        type_inference::unify_types(self)
+    pub fn unify_types(&mut self) -> Result<(), RibCompilationError> {
+        type_inference::unify_types(self)?;
+        Ok(())
     }
 
     pub fn merge_inferred_type(&self, new_inferred_type: InferredType) -> Expr {

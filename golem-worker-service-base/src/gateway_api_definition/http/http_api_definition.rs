@@ -39,6 +39,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
+use rib::RibError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -550,7 +551,7 @@ pub struct CompiledRoute {
 #[derive(Debug)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
-    RibCompilationError(String),
+    RibError(RibError),
 }
 
 #[derive(Clone, Debug)]
@@ -594,7 +595,7 @@ impl CompiledRoute {
 
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibCompilationError)?;
+                        .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -614,7 +615,7 @@ impl CompiledRoute {
 
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibCompilationError)?;
+                        .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -636,7 +637,7 @@ impl CompiledRoute {
                     http_handler_binding,
                     metadata,
                 )
-                .map_err(RouteCompilationErrors::RibCompilationError)?;
+                .map_err(RouteCompilationErrors::RibError)?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),

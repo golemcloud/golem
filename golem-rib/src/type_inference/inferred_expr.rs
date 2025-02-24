@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::rib_compilation_error::RibCompilationError;
 use crate::{
     DynamicParsedFunctionName, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, RegistryKey,
 };
@@ -30,12 +31,11 @@ impl InferredExpr {
         expr: &Expr,
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<InferredExpr, String> {
+    ) -> Result<InferredExpr, RibCompilationError> {
         let mut mutable_expr = expr.clone();
 
-        mutable_expr
-            .infer_types(function_type_registry, type_spec)
-            .map_err(|err| err.join("\n"))?;
+        mutable_expr.infer_types(function_type_registry, type_spec)?;
+
         Ok(InferredExpr(mutable_expr))
     }
 

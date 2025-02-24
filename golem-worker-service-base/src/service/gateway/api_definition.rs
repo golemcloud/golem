@@ -102,7 +102,7 @@ impl SafeDisplay for ApiDefinitionError {
 impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
-            RouteCompilationErrors::RibCompilationError(e) => {
+            RouteCompilationErrors::RibError(e) => {
                 ApiDefinitionError::RibCompilationErrors(e)
             }
             RouteCompilationErrors::MetadataNotFoundError(e) => {

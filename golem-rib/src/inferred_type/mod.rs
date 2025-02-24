@@ -150,7 +150,7 @@ impl InferredType {
                                 Some(previous) => {
                                     if previous != current {
                                         return Err(format!(
-                                            "Expected the same type of number. But found {}, {}",
+                                            "expected the same type of number. But found {}, {}",
                                             current, previous
                                         ));
                                     }
@@ -159,7 +159,7 @@ impl InferredType {
                                 }
                             }
                         } else {
-                            return Err("Failed to get a number".to_string());
+                            return Err("failed to get a number".to_string());
                         }
                     }
 

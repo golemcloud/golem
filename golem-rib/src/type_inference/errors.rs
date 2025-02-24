@@ -159,6 +159,8 @@ impl TypeMismatchError {
     }
 }
 
+pub struct MultipleUnResolvedTypesError(pub Vec<UnResolvedTypesError>);
+
 #[derive(Clone)]
 pub struct UnResolvedTypesError {
     pub unresolved_expr: Expr,

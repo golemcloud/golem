@@ -719,7 +719,7 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_types_identifier() {
         let expr = Expr::from_text("hello").unwrap();
-        compile(&expr, &vec![]).unwrap_err();
+        compile(&expr, &vec![]).unwrap_err().to_string();
 
         let error = r#"
         error in the following rib found at line 1, column 1
@@ -739,7 +739,7 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_record() {
         let expr = Expr::from_text("{a: 1, b: \"hello\"}").unwrap();
-        let error = compile(&expr, &vec![]).unwrap_err();
+        let error = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 5
@@ -757,7 +757,7 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_nested_record_field() {
         let expr = Expr::from_text("{foo: {a: 1, b: \"hello\"}}").unwrap();
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 11
@@ -776,7 +776,7 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_nested_record_index() {
         let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 29
@@ -796,7 +796,7 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_result_ok() {
         let expr = Expr::from_text("ok(hello)").unwrap();
-        let error_msg = compile(&expr, &vec![]).unwrap_err();
+        let error_msg = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 4

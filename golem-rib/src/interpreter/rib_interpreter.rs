@@ -2296,7 +2296,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(compiled, "error in the following rib found at line 2, column 37\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
         }
@@ -2310,7 +2312,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
@@ -2328,7 +2332,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compilation_error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compilation_error,
@@ -2388,7 +2394,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compilation_error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compilation_error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compilation_error,
@@ -2486,7 +2494,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
@@ -2543,7 +2553,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             let expected = r#"
             error in the following rib found at line 3, column 17
@@ -2608,7 +2620,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
         }
@@ -2624,7 +2638,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let compiled = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(
                 compiled,
@@ -2666,7 +2682,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata_with_resource_with_params();
 
-            let error_message = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error_message = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             let expected = r#"
             error in the following rib found at line 4, column 31
@@ -2868,7 +2886,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             assert_eq!(error, "error in the following rib found at line 3, column 30\n`worker.qux[amazon:shopping-cart](\"bar\")`\ncause: invalid method invocation `worker.qux`. make sure `worker` is defined and is a valid instance type (i.e, resource or worker)\n");
         }
@@ -2883,7 +2903,9 @@ mod interpreter_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = internal::get_metadata();
 
-            let error = compiler::compile(&expr, &component_metadata).unwrap_err();
+            let error = compiler::compile(&expr, &component_metadata)
+                .unwrap_err()
+                .to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 39

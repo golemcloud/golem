@@ -818,7 +818,7 @@ mod type_push_down_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_message = compile(&expr, &vec![]).unwrap_err();
+        let error_message = compile(&expr, &vec![]).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 2, column 36
