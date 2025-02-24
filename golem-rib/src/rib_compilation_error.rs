@@ -2,7 +2,7 @@ use crate::type_checker::{
     ExhaustivePatternMatchError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn,
 };
 use crate::{
-    ActualType, AmbiguousTypeError, ExpectedType, Expr, FunctionCallTypeError,
+    ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
     InvalidPatternMatchError, InvalidWorkerName, TypeMismatchError, TypeName, UnResolvedTypesError,
 };
 use std::fmt;
@@ -122,19 +122,21 @@ impl From<TypeMismatchError> for RibCompilationError {
     }
 }
 
-impl From<FunctionCallTypeError> for RibCompilationError {
-    fn from(value: FunctionCallTypeError) -> Self {
+impl From<FunctionCallError> for RibCompilationError {
+    fn from(value: FunctionCallError) -> Self {
         match value {
-            FunctionCallTypeError::InvalidFunctionCall {
+            FunctionCallError::InvalidFunctionCall {
                 function_call_name: function_name,
+                expr,
+                message,
             } => RibCompilationError {
-                cause: format!("Invalid function call: `{}`", function_name),
-                expr: Expr::identifier_global(function_name, None),
+                cause: format!("invalid function call: `{}`", function_name),
+                expr,
                 immediate_parent: None,
-                additional_error_details: vec![],
+                additional_error_details: vec![message],
                 help_messages: vec![],
             },
-            FunctionCallTypeError::TypeMisMatch {
+            FunctionCallError::TypeMisMatch {
                 function_call_name: call_type,
                 error,
                 ..
@@ -149,7 +151,7 @@ impl From<FunctionCallTypeError> for RibCompilationError {
 
                 original_compilation
             }
-            FunctionCallTypeError::MissingRecordFields {
+            FunctionCallError::MissingRecordFields {
                 function_call_name: call_type,
                 missing_fields,
                 argument,
@@ -172,7 +174,7 @@ impl From<FunctionCallTypeError> for RibCompilationError {
                 }
             }
 
-            FunctionCallTypeError::UnResolvedTypes {
+            FunctionCallError::UnResolvedTypes {
                 function_call_name: call_type,
                 unresolved_error,
                 expected_type,
@@ -190,6 +192,27 @@ impl From<FunctionCallTypeError> for RibCompilationError {
 
                 rib_compilation_error
             }
+            FunctionCallError::InvalidResourceMethodCall {
+                invalid_lhs,
+                function_call_name,
+            } => RibCompilationError {
+                cause: format!("invalid resource method call: `{}`", function_call_name),
+                expr: invalid_lhs,
+                immediate_parent: None,
+                additional_error_details: vec![],
+                help_messages: vec![],
+            },
+            FunctionCallError::InvalidGenericTypeParameter {
+                generic_type_parameter,
+                message,
+                expr,
+            } => RibCompilationError {
+                cause: format!("invalid generic type parameter {}", generic_type_parameter),
+                expr,
+                immediate_parent: None,
+                additional_error_details: vec![message],
+                help_messages: vec![],
+            },
         }
     }
 }
@@ -365,6 +388,18 @@ impl From<InvalidPatternMatchError> for RibCompilationError {
             immediate_parent: immediate_parent.cloned(),
             additional_error_details: vec![],
             help_messages: vec![],
+        }
+    }
+}
+
+impl From<CustomError> for RibCompilationError {
+    fn from(value: CustomError) -> Self {
+        RibCompilationError {
+            cause: value.message,
+            expr: value.expr,
+            immediate_parent: None,
+            additional_error_details: vec![],
+            help_messages: value.help_message,
         }
     }
 }

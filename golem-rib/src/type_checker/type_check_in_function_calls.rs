@@ -1,5 +1,5 @@
 use crate::call_type::CallType;
-use crate::{Expr, FunctionCallTypeError, FunctionTypeRegistry, RegistryKey};
+use crate::{Expr, FunctionCallError, FunctionTypeRegistry, RegistryKey};
 use std::collections::VecDeque;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 pub fn check_type_error_in_function_calls(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
-) -> Result<(), FunctionCallTypeError> {
+) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
 
     queue.push_back(expr);
@@ -46,17 +46,21 @@ mod internal {
         call_type: &mut CallType,
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
-        parent_expr: Expr, // The actual function call expression
-    ) -> Result<(), FunctionCallTypeError> {
+        function_call_expr: Expr, // The actual function call expression
+    ) -> Result<(), FunctionCallError> {
         let registry_key = RegistryKey::from_call_type(call_type).ok_or(
-            FunctionCallTypeError::InvalidFunctionCall {
+            FunctionCallError::InvalidFunctionCall {
                 function_call_name: call_type.to_string(),
+                expr: function_call_expr.clone(),
+                message: "invalid function call type".to_string(),
             },
         )?;
 
         let registry_value = type_registry.types.get(&registry_key).ok_or(
-            FunctionCallTypeError::InvalidFunctionCall {
+            FunctionCallError::InvalidFunctionCall {
                 function_call_name: call_type.to_string(),
+                expr: function_call_expr.clone(),
+                message: "missing function in component metadata".to_string(),
             },
         )?;
 
@@ -79,7 +83,7 @@ mod internal {
             let unresolved_type = type_checker::check_unresolved_types(actual_arg);
 
             if let Err(unresolved_error) = unresolved_type {
-                return Err(FunctionCallTypeError::UnResolvedTypes {
+                return Err(FunctionCallError::UnResolvedTypes {
                     function_call_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     unresolved_error,
@@ -92,7 +96,7 @@ mod internal {
                 type_checker::find_missing_fields_in_record(actual_arg, &expected_arg_type);
 
             if !missing_fields.is_empty() {
-                return Err(FunctionCallTypeError::MissingRecordFields {
+                return Err(FunctionCallError::MissingRecordFields {
                     function_call_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     missing_fields,
@@ -101,11 +105,11 @@ mod internal {
 
             type_checker::check_type_mismatch(
                 actual_arg,
-                Some(&parent_expr),
+                Some(&function_call_expr),
                 &expected_arg_type,
                 actual_arg_type,
             )
-            .map_err(|e| FunctionCallTypeError::TypeMisMatch {
+            .map_err(|e| FunctionCallError::TypeMisMatch {
                 function_call_name: call_type.to_string(),
                 argument: actual_arg.clone(),
                 error: e,

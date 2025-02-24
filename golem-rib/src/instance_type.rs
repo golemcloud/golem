@@ -1,7 +1,9 @@
 use crate::parser::{PackageName, TypeParameter};
+use crate::rib_compilation_error::RibCompilationError;
 use crate::type_parameter::InterfaceName;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+    DynamicParsedFunctionName, Expr, FunctionCallError, FunctionTypeRegistry, InferredType,
+    RegistryKey, RegistryValue,
 };
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
@@ -190,9 +192,10 @@ impl InstanceType {
     }
     pub fn get_function(
         &self,
+        expr: Expr,
         method_name: &str,
         type_parameter: Option<TypeParameter>,
-    ) -> Result<Function, String> {
+    ) -> Result<Function, FunctionCallError> {
         match type_parameter {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
@@ -204,7 +207,11 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if interfaces.is_empty() {
-                        return Err(format!("Interface '{}' not found", iface));
+                        return Err(FunctionCallError::InvalidFunctionCall {
+                            function_call_name: method_name.to_string(),
+                            expr,
+                            message: format!("Interface '{}' not found", iface),
+                        });
                     }
 
                     let functions = interfaces
@@ -213,10 +220,14 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(format!(
-                            "Function '{}' not found in interface '{}'",
-                            method_name, iface
-                        ));
+                        return Err(FunctionCallError::InvalidFunctionCall {
+                            function_call_name: method_name.to_string(),
+                            expr,
+                            message: format!(
+                                "Function '{}' not found in interface '{}'",
+                                method_name, iface
+                            ),
+                        });
                     }
 
                     // There is only 1 interface, and there cannot exist any more conflicts
@@ -228,7 +239,13 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name)
+                        search_function_in_instance(self, method_name).map_err(|err| {
+                            FunctionCallError::InvalidFunctionCall {
+                                function_call_name: method_name.to_string(),
+                                expr,
+                                message: err,
+                            }
+                        })
                     }
                 }
 
@@ -241,7 +258,11 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if packages.is_empty() {
-                        return Err(format!("Package '{}' not found", pkg));
+                        return Err(FunctionCallError::InvalidFunctionCall {
+                            function_call_name: method_name.to_string(),
+                            expr,
+                            message: format!("package '{}' not found", pkg),
+                        });
                     }
 
                     let functions = packages
@@ -250,10 +271,14 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(format!(
-                            "Function '{}' not found in package {}",
-                            method_name, pkg
-                        ));
+                        return Err(FunctionCallError::InvalidFunctionCall {
+                            function_call_name: method_name.to_string(),
+                            expr,
+                            message: format!(
+                                "function '{}' not found in package '{}'",
+                                method_name, pkg
+                            ),
+                        });
                     }
 
                     if functions.len() == 1 {
@@ -263,7 +288,13 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name)
+                        search_function_in_instance(self, method_name).map_err(|err| {
+                            FunctionCallError::InvalidFunctionCall {
+                                function_call_name: method_name.to_string(),
+                                expr,
+                                message: err,
+                            }
+                        })
                     }
                 }
 
@@ -280,10 +311,14 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
-                        return Err(format!(
-                            "Function '{}' not found in interface '{}'",
-                            method_name, fq_iface
-                        ));
+                        return Err(FunctionCallError::InvalidFunctionCall {
+                            function_call_name: method_name.to_string(),
+                            expr,
+                            message: format!(
+                                "function '{}' not found in interface '{}'",
+                                method_name, fq_iface
+                            ),
+                        });
                     }
 
                     if functions.len() == 1 {
@@ -293,11 +328,23 @@ impl InstanceType {
                             function_type: ftype.clone(),
                         })
                     } else {
-                        search_function_in_instance(self, method_name)
+                        search_function_in_instance(self, method_name).map_err(|err| {
+                            FunctionCallError::InvalidFunctionCall {
+                                function_call_name: method_name.to_string(),
+                                expr,
+                                message: err,
+                            }
+                        })
                     }
                 }
             },
-            None => search_function_in_instance(self, method_name),
+            None => search_function_in_instance(self, method_name).map_err(|err| {
+                FunctionCallError::InvalidFunctionCall {
+                    function_call_name: method_name.to_string(),
+                    expr,
+                    message: err,
+                }
+            }),
         }
     }
 
@@ -330,8 +377,9 @@ impl InstanceType {
         registry: FunctionTypeRegistry,
         worker_name: Option<Expr>,
         type_parameter: Option<TypeParameter>,
-    ) -> Result<InstanceType, String> {
-        let function_dict = FunctionDictionary::from_function_type_registry(registry)?;
+        expr: Expr,
+    ) -> Result<InstanceType, RibCompilationError> {
+        let function_dict = FunctionDictionary::from_function_type_registry(registry, expr)?;
 
         match type_parameter {
             None => Ok(InstanceType::Global {
@@ -431,7 +479,8 @@ pub struct ResourceMethod {
 impl FunctionDictionary {
     pub fn from_function_type_registry(
         registry: FunctionTypeRegistry,
-    ) -> Result<FunctionDictionary, String> {
+        expr: Expr,
+    ) -> Result<FunctionDictionary, RibCompilationError> {
         let mut map = vec![];
 
         for (key, value) in registry.types {
@@ -441,7 +490,12 @@ impl FunctionDictionary {
                     return_types,
                 } => match key {
                     RegistryKey::FunctionName(function_name) => {
-                        let function_name = resolve_function_name(None, None, &function_name);
+                        let function_name = resolve_function_name(None, None, &function_name)
+                            .map_err(|err| FunctionCallError::InvalidFunctionCall {
+                                function_call_name: function_name.clone(),
+                                message: err,
+                                expr: expr.clone(),
+                            })?;
 
                         map.push((
                             function_name,
@@ -459,13 +513,23 @@ impl FunctionDictionary {
                         interface_name,
                         function_name,
                     } => {
-                        let type_parameter = TypeParameter::from_str(interface_name.as_str())?;
+                        let type_parameter = TypeParameter::from_str(interface_name.as_str())
+                            .map_err(|err| FunctionCallError::InvalidGenericTypeParameter {
+                                generic_type_parameter: interface_name.clone(),
+                                message: err,
+                                expr: expr.clone(),
+                            })?;
 
                         let interface_name = type_parameter.get_interface_name();
                         let package_name = type_parameter.get_package_name();
 
                         let function_name =
-                            resolve_function_name(package_name, interface_name, &function_name);
+                            resolve_function_name(package_name, interface_name, &function_name)
+                                .map_err(|err| FunctionCallError::InvalidFunctionCall {
+                                    function_call_name: function_name.clone(),
+                                    message: err,
+                                    expr: expr.clone(),
+                                })?;
 
                         map.push((
                             function_name,
@@ -492,31 +556,31 @@ fn resolve_function_name(
     package_name: Option<PackageName>,
     interface_name: Option<InterfaceName>,
     function_name: &str,
-) -> FunctionName {
+) -> Result<FunctionName, String> {
     match get_resource_name(function_name) {
-        Some(resource_name) => {
-            FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+        Some(resource_name) => Ok(FunctionName::ResourceConstructor(
+            FullyQualifiedResourceConstructor {
                 package_name,
                 interface_name,
                 resource_name,
-            })
-        }
+            },
+        )),
         None => match get_resource_method_name(function_name) {
             Ok(Some((constructor, method))) => {
-                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                Ok(FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
                     package_name,
                     interface_name,
                     resource_name: constructor,
                     method_name: method,
-                })
+                }))
             }
-            Ok(None) => FunctionName::Function(FullyQualifiedFunctionName {
+            Ok(None) => Ok(FunctionName::Function(FullyQualifiedFunctionName {
                 package_name,
                 interface_name,
                 function_name: function_name.to_string(),
-            }),
+            })),
 
-            Err(e) => panic!("{}", e),
+            Err(e) => Err(format!("Invalid function call. {}", e)),
         },
     }
 }
@@ -690,7 +754,7 @@ fn search_function_in_instance(
         .collect();
 
     if functions.is_empty() {
-        return Err(format!("Function '{}' not found", function_name));
+        return Err(format!("function '{}' not found", function_name));
     }
 
     let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
@@ -733,7 +797,7 @@ fn search_function_in_single_package(
 
         // Multiple interfaces in the same package -> Ask for an interface name
         Err(format!(
-            "Multiple interfaces contain function '{}'. Specify an interface name as type parameter from: {}",
+            "multiple interfaces contain function '{}'. specify an interface name as type parameter from: {}",
             function_name,
             interfaces
                 .join(", ")
@@ -746,7 +810,7 @@ fn search_function_in_multiple_packages(
     package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>,
 ) -> Result<Function, String> {
     let mut error_msg = format!(
-        "Function '{}' exists in multiple packages. Specify a package name as type parameter from: ",
+        "function '{}' exists in multiple packages. specify a package name as type parameter from: ",
         function_name
     );
 
@@ -805,10 +869,10 @@ impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
         for resource_method_entry in proto.map {
             let resource_method = resource_method_entry
                 .key
-                .ok_or("Resource method not found")?;
+                .ok_or("resource method not found")?;
             let function_type = resource_method_entry
                 .value
-                .ok_or("Function type not found")?;
+                .ok_or("function type not found")?;
             let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
             let function_type = FunctionType::try_from(function_type)?;
             map.push((resource_method, function_type));

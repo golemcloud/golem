@@ -16,6 +16,7 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
+use crate::rib_compilation_error::RibCompilationError;
 use crate::rib_source_span::SourceSpan;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
@@ -1015,12 +1016,13 @@ impl Expr {
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)
-            .map_err(|x| vec![x])?;
+            .map_err(|x| vec![x.to_string()])?;
 
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
-
+        self.infer_worker_function_invokes()
+            .map_err(|x| vec![x.to_string()])?;
         self.bind_instance_types();
-        self.infer_worker_function_invokes().map_err(|x| vec![x])?;
+        self.infer_worker_function_invokes()
+            .map_err(|x| vec![x.to_string()])?;
         self.infer_function_call_types(function_type_registry)
             .map_err(|x| vec![x])?;
 
@@ -1039,7 +1041,7 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), Vec<String>> {
         self.identify_instance_creation(function_type_registry)
-            .map_err(|x| vec![x])?;
+            .map_err(|x| vec![x.to_string()])?;
         *self = self
             .bind_global_variable_types(type_spec)
             .map_err(|x| vec![x])?;
@@ -1055,7 +1057,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn resolve_method_calls(&mut self) -> Result<(), String> {
+    pub fn resolve_method_calls(&mut self) -> Result<(), RibCompilationError> {
         self.bind_instance_types();
         self.infer_worker_function_invokes()
     }
@@ -1073,7 +1075,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn infer_worker_function_invokes(&mut self) -> Result<(), String> {
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibCompilationError> {
         type_inference::infer_worker_function_invokes(self)
     }
 
@@ -1102,7 +1104,7 @@ impl Expr {
     pub fn identify_instance_creation(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), String> {
+    ) -> Result<(), RibCompilationError> {
         type_inference::identify_instance_creation(self, function_type_registry)
     }
 

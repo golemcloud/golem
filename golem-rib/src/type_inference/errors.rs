@@ -253,9 +253,11 @@ impl Display for UnResolvedTypesError {
     }
 }
 
-pub enum FunctionCallTypeError {
+pub enum FunctionCallError {
     InvalidFunctionCall {
         function_call_name: String,
+        expr: Expr,
+        message: String,
     },
     TypeMisMatch {
         function_call_name: String,
@@ -273,9 +275,43 @@ pub enum FunctionCallTypeError {
         unresolved_error: UnResolvedTypesError,
         expected_type: AnalysedType,
     },
+
+    InvalidResourceMethodCall {
+        function_call_name: String,
+        invalid_lhs: Expr,
+    },
+
+    InvalidGenericTypeParameter {
+        generic_type_parameter: String,
+        expr: Expr,
+        message: String,
+    },
 }
 
 pub struct InvalidWorkerName {
     pub worker_name_expr: Expr,
     pub message: String,
+}
+
+#[derive(Clone)]
+pub struct CustomError {
+    pub expr: Expr,
+    pub message: String,
+    pub help_message: Vec<String>,
+}
+
+impl CustomError {
+    pub fn new(expr: &Expr, message: impl AsRef<str>) -> CustomError {
+        CustomError {
+            expr: expr.clone(),
+            message: message.as_ref().to_string(),
+            help_message: Vec::new(),
+        }
+    }
+
+    pub fn with_help_message(&self, message: impl AsRef<str>) -> CustomError {
+        let mut custom_error: CustomError = self.clone();
+        custom_error.help_message.push(message.as_ref().to_string());
+        custom_error
+    }
 }

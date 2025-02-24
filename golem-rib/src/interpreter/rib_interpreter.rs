@@ -2298,7 +2298,7 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(compiled, "`instance` is a reserved keyword.\n note: Use `instance()` instead of `instance` to create an ephemeral worker instance.\n note: For a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 2, column 37\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
         }
 
         #[test]
@@ -2314,7 +2314,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "`instance` is a reserved keyword and cannot be used as a variable.".to_string()
+                "error in the following rib found at line 2, column 15\n`let instance = instance.foo(\"bar\")`\ncause: `instance` is a reserved keyword and cannot be used as a variable.\n".to_string()
             );
         }
 
@@ -2332,7 +2332,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compilation_error,
-                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+                "error in the following rib found at line 3, column 30\n`x.bar(\"bar\")`\ncause: invalid function call: `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2392,7 +2392,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compilation_error,
-                "Multiple interfaces contain function 'bar'. Specify an interface name as type parameter from: api1, api2".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.bar(\"bar\")`\ncause: invalid function call: `bar`\nmultiple interfaces contain function 'bar'. specify an interface name as type parameter from: api1, api2\n".to_string()
             );
         }
 
@@ -2490,7 +2490,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "Function 'qux' exists in multiple packages. Specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)".to_string()
+                "error in the following rib found at line 3, column 30\n`worker.qux(\"bar\")`\ncause: invalid function call: `qux`\nfunction 'qux' exists in multiple packages. specify a package name as type parameter from: amazon:shopping-cart (interfaces: api1), wasi:clocks (interfaces: monotonic-clock)\n".to_string()
             );
         }
 
@@ -2610,7 +2610,7 @@ mod interpreter_tests {
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap_err();
 
-            assert_eq!(compiled, "Function 'add-items' not found".to_string());
+            assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call: `add-items`\nfunction 'add-items' not found\n".to_string());
         }
 
         #[test]
@@ -2628,7 +2628,7 @@ mod interpreter_tests {
 
             assert_eq!(
                 compiled,
-                "Function 'carts' not found in package golem:it".to_string()
+                "error in the following rib found at line 3, column 28\n`worker.carts[golem:it](\"bar\")`\ncause: invalid function call: `carts`\nFunction 'carts' not found in package 'golem:it'\n".to_string()
             );
         }
 
