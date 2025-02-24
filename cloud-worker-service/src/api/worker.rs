@@ -1206,6 +1206,83 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Revert a worker
+    ///
+    /// Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/revert",
+        method = "post",
+        operation_id = "revert_worker"
+    )]
+    async fn revert_worker(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        target: Json<RevertWorkerTarget>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<RevertWorkerResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
+
+        let namespace = self
+            .worker_auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .revert_worker(&worker_id, target.0, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(RevertWorkerResponse {}));
+
+        record.result(response)
+    }
+
+    /// Cancels a pending invocation if it has not started yet
+    ///
+    /// The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/invocations/:idempotency_key",
+        method = "delete",
+        operation_id = "cancel_invocation"
+    )]
+    async fn cancel_invocation(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        idempotency_key: Path<IdempotencyKey>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<CancelInvocationResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!(
+            "cancel_invocation",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.to_string(),
+        );
+
+        let namespace = self
+            .worker_auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+
+        let response = self
+            .worker_service
+            .cancel_invocation(&worker_id, &idempotency_key.0, namespace)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|canceled| Json(CancelInvocationResponse { canceled }));
+
+        record.result(response)
+    }
 }
 
 // TODO: should be in a base library
