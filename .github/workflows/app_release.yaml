@@ -44,7 +44,7 @@ jobs:
 
       - name: install frontend dependencies
         run: npm install --force # change this to npm, pnpm or bun depending on which one you use.
-        working-directory: ./crates/app/
+        working-directory: ./app/desktop/
 
       - name: build tauri app
         uses: tauri-apps/tauri-action@v0
@@ -52,7 +52,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: ${{ matrix.args }}
-          projectPath: "./crates/app/"
+          projectPath: "./app/desktop/"
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
