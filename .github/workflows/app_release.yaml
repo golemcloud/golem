@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - release
+      - main
 
 jobs:
   test-tauri:
